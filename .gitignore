@@ -249,3 +249,6 @@ build_packtest38/
 
 # 打包时生成的版本/提交/构建时间戳；开发态缺失属正常（appinfo 会退回查 git）
 build_stamp.py
+
+# 填了真实口令的本地连接配置永不入库（模板是 assets/conn.ini，那份要提交）
+/conn.ini

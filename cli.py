@@ -14,6 +14,7 @@ GUI 版（main.py）要求 Windows 10 1809+，两者共用推断/建表/导入�
 输入 .xlsx / .xls / .zip（压缩包自动展开包内 Excel）；给目录则递归收集。
 `.sql` 也算一类输入，但只登记不执行——加 --run-sql 才真的执行到目标库（免得顺手把库清了）。
 连接信息优先级：命令行参数 > 环境变量（E2M_HOST/E2M_PORT/E2M_USER/E2M_PASS/E2M_DB）> 配置文件。
+不带 `-c` 时会自动读程序同级的 `conn.ini`（产物里默认带一份，源文件 assets/conn.ini）。
 
 退出码：
     0  全部成功
@@ -150,7 +151,8 @@ def build_parser():
     p.add_argument("inputs", nargs="*", metavar="文件或目录",
                    help="要处理的 .xlsx / .xls / .zip / .sql 文件，或包含它们的目录")
     p.add_argument("-c", "--config", metavar="FILE",
-                   help="连接配置文件（INI，段名 [mysql]，键 host/port/user/password/database）")
+                   help="连接配置文件（INI，段名 [mysql]，键 host/port/user/password/database）；"
+                        "不给时自动读程序同级的 conn.ini")
     p.add_argument("--host", help="MySQL 主机，默认 127.0.0.1")
     p.add_argument("--port", type=int, help="MySQL 端口，默认 3306")
     p.add_argument("--user", help="MySQL 用户名")
@@ -204,14 +206,45 @@ def read_config_file(path):
             if cp.has_option(section, k)}
 
 
+def default_config_paths():
+    """不带 `-c` 时会自动尝试读取的位置：程序所在目录优先，其次当前工作目录。
+
+    打包后"程序所在目录"就是产物根目录，那里由 spec 放进一份 `conn.ini` 默认配置
+    （源文件是 assets/conn.ini），拷走整个文件夹就能直接跑。
+    开发态这个目录是仓库根，只有 `assets/conn.ini` 模板、没有根级 conn.ini，
+    所以不会把模板误当成用户填好的配置读进来，用例里的默认值断言仍然是确定的。
+    """
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return [os.path.join(base, "conn.ini"), os.path.join(os.getcwd(), "conn.ini")]
+
+
 def resolve_cfg(args, log):
-    """按 命令行 > 环境变量 > 配置文件 > 默认 的顺序合成连接配置。"""
+    """按 命令行 > 环境变量 > 配置文件 > 默认 的顺序合成连接配置。
+
+    没给 `-c` 时会自动找随包带的 conn.ini（见 default_config_paths），日志里写明来源。
+    """
     cfg = {"host": "127.0.0.1", "port": 3306, "user": "root",
            "password": "", "database": ""}
     used = []
-    if args.config:
-        cfg.update(read_config_file(args.config))
-        used.append("配置文件 %s" % args.config)
+    cfg_path = args.config
+    auto = False
+    if not cfg_path:
+        cfg_path = next((p for p in default_config_paths() if os.path.isfile(p)), None)
+        auto = bool(cfg_path)
+    if cfg_path:
+        try:
+            cfg.update(read_config_file(cfg_path))
+        except ValueError as e:
+            # 自动发现的文件写坏了不该让整条命令起不来：丢掉它、退回内置默认值继续，
+            # 但必须报一句，否则用户会以为自己填的配置生效了
+            if not auto:
+                raise
+            log.warn("默认配置忽略 | %s | %s（这一项改用内置默认值；"
+                     "想确认配置就显式 -c 指定文件）" % (cfg_path, e))
+        used.append("配置文件 %s%s" % (cfg_path, "（自动发现）" if auto else ""))
     for key, env in ENV_KEYS.items():
         val = os.environ.get(env)
         if val:
@@ -223,7 +256,7 @@ def resolve_cfg(args, log):
             cfg[key] = val
             used.append("命令行 --%s" % key)
     cfg["port"] = int(cfg["port"])
-    src = "、".join(used) if used else "全部用默认值"
+    src = "、".join(used) if used else "内置默认值（没找到 conn.ini）"
     shown = "%s@%s:%s/%s" % (cfg["user"], cfg["host"], cfg["port"], cfg["database"] or "(未选库)")
     log.info("连接目标 | %s | 来源：%s | 密码%s"
              % (shown, src, "取自环境变量/配置文件，不回显" if not args.password else "来自命令行 --password"))
