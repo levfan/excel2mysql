@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import time
+import time
 from ctypes import wintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -122,6 +123,7 @@ def check_env():
                            "_pack_common.py", "main.py", "core/zip_import.py", "core/merge_check.py",
                            "core/infer.py", "core/mysql_io.py", "core/sql_script.py",
                            "core/naming.py", "ui_help.py", "help_doc.py",
+                           "version.py", "appinfo.py",
                            "assets/app_icon.ico")
                if not os.path.isfile(os.path.join(ROOT, p))]
     if missing:
@@ -149,6 +151,44 @@ def run_dev_tests():
     run([VENV_PY, "pack_test.py"], env=env)
     return "全部用例通过"
 
+
+def write_build_stamp():
+    """把版本、提交号、构建时间烧进 build_stamp.py（该文件不入库）。
+
+    exe 跑在别人机器上没有 .git，提交号只能在打包这台机器上取好写死；
+    开发态没有这个文件也正常，appinfo 会现场问 git。git 不可用时写 unknown，
+    不因此中断打包。
+    """
+    sys.path.insert(0, ROOT)
+    from version import APP_VERSION
+
+    def git(*args):
+        try:
+            r = subprocess.run(("git",) + args, cwd=ROOT, capture_output=True,
+                               text=True, timeout=10, encoding="utf-8", errors="replace")
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    commit = git("rev-parse", "--short", "HEAD")
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    dirty = bool(git("status", "--porcelain"))
+    built = time.strftime("%Y-%m-%d %H:%M:%S")
+    q = chr(34)
+    doc_open = q * 3
+    body = [doc_open + "打包时由 build_exe.py 自动生成：不要手改，也不要入库（.gitignore 已排除）。",
+            "", "开发态缺这个文件属正常，appinfo 会退回现场查 git。" + doc_open,
+            "APP_VERSION = " + q + APP_VERSION + q,
+            "COMMIT = " + q + (commit or "unknown") + q,
+            "BRANCH = " + q + (branch or "unknown") + q,
+            "DIRTY = " + str(bool(dirty)),
+            "BUILT_AT = " + q + built + q]
+    with open(os.path.join(ROOT, "build_stamp.py"), "w", encoding="utf-8", newline="") as fh:
+        fh.write(chr(10).join(body) + chr(10))
+    if not commit:
+        say(f"{YELLOW}取不到 git 提交号（没装 git 或不是仓库），「关于」里会显示 unknown{RESET}")
+    say(f"  build_stamp.py: v{APP_VERSION}  commit={commit or 'unknown'}  "
+        f"branch={branch or 'unknown'}  dirty={bool(dirty)}  built={built}")
 
 def build_app():
     rmtree_retry(APP_DIST)
@@ -277,6 +317,7 @@ def main():
     step("检查打包环境", check_env)
     step("确认产品 exe 未在运行", check_not_running)
     step("开发态功能用例集", run_dev_tests)
+    step("生成 build_stamp.py（版本/提交/构建时间）", write_build_stamp)
     step("构建产品包（onedir + GUI）", build_app)
     if not (fast or app_only):
         step("构建并运行冻结态用例集", build_and_run_frozen_tests)

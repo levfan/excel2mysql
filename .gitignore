@@ -237,3 +237,6 @@ build_packtest/
 
 # Excel 临时锁文件
 ~$*
+
+# 打包时生成的版本/提交/构建时间戳；开发态缺失属正常（appinfo 会退回查 git）
+build_stamp.py

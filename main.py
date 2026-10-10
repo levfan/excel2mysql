@@ -51,7 +51,9 @@ from core.zip_import import (
     extract_excel_archive, count_excel_entries, ZipArchiveError, EXCEL_EXTS,
 )
 from core.merge_check import MergedCellsError
-from ui_help import HelpDialog
+from ui_help import HelpDialog, AboutDialog
+from appinfo import build_info, title_text
+from version import APP_VERSION
 
 IMPORT_EXTS = EXCEL_EXTS + (".zip",)   # 拖拽区与文件选择框共同接受的扩展名
 
@@ -813,7 +815,7 @@ class DropArea(QWidget):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Excel → MySQL 批量导入工具")
+        self.setWindowTitle(title_text())     # 标题带版本号，不点开对话框也能看见
         self.resize(1100, 780)
         self.tables = []            # 解析后的表定义列表
         self.worker = None
@@ -845,6 +847,13 @@ class MainWindow(QWidget):
         self.btn_help.setCursor(Qt.PointingHandCursor)
         self.btn_help.setToolTip("使用说明（按 F1 也可打开）")
         self.btn_help.clicked.connect(self.on_help)
+        self.btn_about = QPushButton("i")
+        self.btn_about.setFont(font_help)
+        self.btn_about.setFixedSize(26, 22)
+        self.btn_about.setCursor(Qt.PointingHandCursor)
+        self.btn_about.setToolTip("关于：版本、提交号与构建日期")
+        self.btn_about.clicked.connect(self.on_about)
+        head.addWidget(self.btn_about)
         head.addWidget(self.btn_help)
         root.addLayout(head)
 
@@ -1016,9 +1025,12 @@ class MainWindow(QWidget):
         self.lbl_imp_db.setStyleSheet(style)
         self.lbl_sql_db.setStyleSheet(style)
 
-    # -------------------- 使用说明 --------------------
+    # -------------------- 使用说明 / 关于 --------------------
     def on_help(self):
         HelpDialog(self).exec()
+
+    def on_about(self):
+        AboutDialog(self).exec()
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_F1:
