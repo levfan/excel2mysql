@@ -387,10 +387,13 @@ rate/ratio/percent 的列不算金额（<code>年利率</code> 按实测小数�
 <table class="t">
 <tr><th>现象</th><th>原因与处理</th></tr>
 <tr><td>在 <b>Windows 7 / 8</b> 上双击 exe 打不开，弹"找不到指定的程序/入口点"</td>
-<td>本工具要求 <b>64 位 Windows 10（1809 及以上）或 Windows 11</b>：界面用的 Qt 6 不支持
+<td>这个图形版要求 <b>64 位 Windows 10（1809 及以上）或 Windows 11</b>：界面用的 Qt 6 不支持
 Win7/8.1，Python 3.9+ 与打包器也不支持，这是<b>缺依赖装不回来</b>的硬限制。
-导入不必在 Win7 本机做——找任意一台 Win10/11 电脑跑本工具即可，
-它只要<b>网络能连上目标 MySQL</b>，Excel 放共享目录一样能读</td></tr>
+两种办法：① <b>导入不必在 Win7 本机做</b>——找任意一台 Win10/11 电脑跑本工具即可，
+它只要<b>网络能连上目标 MySQL</b>，Excel 放共享目录一样能读；
+② 只能在 Win7 上跑时，改用同源的<b>命令行版 <code>excel2mysql-cli.exe</code></b>
+（解析、推断、建表、导入用的是同一套 core 逻辑，建出来的表结构一致），
+用法见项目 README 的「Windows 7 命令行版」一节</td></tr>
 <tr><td>提示 <code>1054 Unknown column</code></td>
 <td>字段命名规则变更后列名与旧表不一致。勾「覆盖已存在表」重建，
 或在表结构预览里改回旧列名</td></tr>

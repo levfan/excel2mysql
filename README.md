@@ -1,7 +1,8 @@
 # Excel → MySQL 批量导入工具
 
 **当前版本 v1.0.1** —— 版本号的唯一来源是 `version.py` 里的 `APP_VERSION`，改版本只改那一行（README、窗口标题、程序内《关于》都从它取）。
-运行环境要求见下方「运行环境要求」一节：**64 位 Windows 10 1809+ / Windows 11**。
+运行环境要求见下方「运行环境要求」一节：图形版要 **64 位 Windows 10 1809+ / Windows 11**；
+必须在 Windows 7 上干活，用同一份 `core/` 的**命令行版**（见「Windows 7 命令行版」一节）。
 
 把几十张关系型数据库导出的 Excel（中文表头）批量导入指定 MySQL 库：
 - 自动建表（InnoDB），**字段注释 = 中文表头**
@@ -21,9 +22,24 @@
 
 ## 运行环境要求
 
-**64 位 Windows 10（版本 1809 及以上）或 Windows 11。不支持 Windows 7 / 8 / 8.1。**
+本项目现在有**两条发布线，共用同一份 `core/`（解析、类型推断、DDL、导入逻辑）**：
 
-这不是"少装了某个依赖"能解决的，而是四层硬限制叠在一起（本机 venv 实测 + 官方文档）：
+| | 图形版（GUI） | 命令行版（CLI） |
+| --- | --- | --- |
+| 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` |
+| 能跑的系统 | **64 位 Windows 10 1809+ / Windows 11** | **Windows 7 SP1 及以上** |
+| Python | 3.10+（本机 `.venv` 用 3.12.8） | 3.8.10（本机 `.venv38`） |
+| 依赖清单 | `requirements.txt` | `requirements38.txt` |
+| 打包闸门 | `一键打包.bat` → `build_exe.py` | `一键打包38.bat` → `build_exe38.py` |
+| 用例集 | `pack_test.py`（394 项，含 GUI 各组） | `pack_test38.py`（171 项，含真库读写；同一份在旧栈与新栈各跑一遍） |
+| 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 |
+
+两条线各自的环境与产物互不影响：GUI 包该多大还多大（154 MB）、该要 Win10 还 Win10；
+命令行包不含任何 Qt，产物 79 MB，能在 Windows 7 SP1 上跑。
+
+### 为什么图形版跑不了 Windows 7
+
+这不是"少装了某个依赖"能解决的，而是下面五条硬限制叠在一起（本机 venv 实测 + 官方文档）：
 
 | 组件 | 最低要求 | 依据 |
 | --- | --- | --- |
@@ -33,38 +49,207 @@
 | `pandas` 3.0.6 | `Requires-Python >=3.11` | 已装包元数据 |
 | `PyInstaller` 6.x | 文档写 "Windows 8 and newer" | 打包器官方 Requirements 页 |
 
-在 Win7 上双击 exe 的表现：还没进到 Python 代码就被系统拦下（缺 UCRT / API set），
+在 Win7 上双击 GUI exe 的表现：还没进到 Python 代码就被系统拦下（缺 UCRT / API set），
 报的是"找不到指定的程序 / 入口点"这类系统弹窗，**程序自己没机会给出友好提示**，
 所以只能靠本节和《使用说明》的常见问题提前挡一句。
 
-**要在 Win7 机器上完成导入怎么办**：换任意一台 Win10/11 机器跑本工具即可——
-它只需要**网络能连到目标 MySQL**，Excel 放在共享目录一样能读，
-"导入"这件事不需要在 Win7 本机完成，也不需要在目标机上装任何东西。
+### 必须 Win7 本机跑的时候怎么办
 
-**如果确实必须 Win7 本机跑**（改造量较大，当前未做，路线记录在此）：
-需要另建一套旧环境 —— Python 3.8.10 + `PySide2` 5.15.2.1（Qt 5.15 支持 Win7 SP1）
-+ `pandas` 2.0.3 + `numpy` 1.24.4 + `PyInstaller` 5.x，并给 `main.py` 的 Qt 导入加
-PySide6/PySide2 双分支 shim（界面代码本身用的 API 基本 Qt5 也有，改动集中在导入段与
-枚举写法）。代价是：多一套打包口径、275 项用例要在旧 pandas/numpy 下重跑一遍并修差异，
-**而且必须在真 Win7 SP1（装好 UCRT / KB4019990）上验收**——在 Win10 上用 PySide2
-"能跑起来"不能当成 Win7 支持的证据。
+**优先方案（不需要改造、不需要旧机器）**：换任意一台 Win10/11 机器跑图形版即可——
+它只需要**网络能连到目标 MySQL**，Excel 放在共享目录一样能读，
+"导入"这件事本身不必在 Win7 本机完成，目标机上也不用装任何东西。
+
+**确实只能在 Win7 上跑**（例如数据不能出那台机器、或只有它连着内网库）：
+用命令行版 `excel2mysql-cli.exe`。走的是"给同一份 `core/` 加一个无界面入口"这条路，
+比给 GUI 加 PySide2 双分支 shim 小得多，也不用维护两套 Qt 代码：
+
+- Python 3.8.10 是 python.org 明确支持 Win7 的最后一个版本；3.8 跑不了 PySide6/Qt6，
+  但 `core/` 只依赖 pandas/numpy/pymysql/openpyxl/xlrd/pypinyin，全部有 3.8 可用的版本
+- 界面换成命令行后不需要 Qt，也就绕开了那张支持矩阵；`PyInstaller 5.13.2` 是仍支持旧系统的版本
+- 详细用法、退出码、配置文件格式见下一节「Windows 7 命令行版」
+
+> **验收状态说清楚**：命令行版已经在 Python 3.8.10 + pandas 2.0.3 + numpy 1.24.4 这套旧栈上
+> 全绿（`pack_test38.py` 在旧栈跑通 170 项、失败 0，剩 1 项因本机没有 `.xls` 样本显式记 SKIP），
+> 并且**同一份用例在 3.12 新栈上逐条一致**——这是"旧栈行为没变"
+> 的实测证据，不是推测。打包闸门还会额外取证：产物里没有任何 Qt 文件、带的是 `python38.dll`、
+> PE 头声明的最低系统版本不高于 6.1（Win7）。
+> 但**手上没有真 Win7 SP1 机器可跑**，所以"双击就能用"这句不能拍胸脯：
+> 真机验收前，本节按"已按官方支持矩阵与旧栈实测准备好，待真机确认"理解。
+> Win7 需要 SP1 且装好 UCRT（KB2999226 / KB4019990），缺它同样是系统先拦下进程、程序没机会报错。
+
+## Windows 7 命令行版（`cli.py` → `excel2mysql-cli.exe`）
+
+给同一份 `core/` 加的无界面入口：**表名/字段名推断、类型与精度、主键选择、DDL 生成、
+分批插入、ZIP 展开、合并单元格拒绝，全部走 GUI 版同一批函数**，所以两边建出来的表结构一致。
+
+### 怎么用最省事的三条
+
+```bat
+:: 1) 先只看会建成什么样，不碰数据库（现场排障、给客户预览都用它）
+excel2mysql-cli.exe --dry-run 数据目录
+
+:: 2) 只测连接通不通，顺便把能导入的库列出来
+excel2mysql-cli.exe -c conn.ini --check
+
+:: 3) 真正导入：展开压缩包、给全部表名加 ods_ 前缀、日志另存一份
+excel2mysql-cli.exe -c conn.ini 数据包.zip --prefix ods_ --log 导入.log
+```
+
+### 输入
+
+- 可以混着给：`.xlsx` / `.xls` / `.zip` 文件、或装着它们的目录（默认递归，`--no-recursive` 只取一层）
+- 压缩包按 GUI 同口径展开：只取包内 Excel、忽略非 Excel、嵌套 zip 不递归、
+  带密码或损坏的包整条报失败；日志里写成 `包名!包内路径`，能一眼看出文件从哪个包来
+- 含合并单元格的表**直接拒绝**，日志给合并区位置和原因（不静默丢数据）
+
+### 连接信息（三处来源，优先级从高到低）
+
+1. 命令行：`--host --port --user --password -d/--database`
+2. 环境变量：`E2M_HOST E2M_PORT E2M_USER E2M_PASS E2M_DB`
+3. 配置文件：`-c conn.ini`
+
+```ini
+; conn.ini —— 段名 [mysql]（也接受 [connection]）
+[mysql]
+host = 127.0.0.1
+port = 3306
+user = root
+password = 改成你的密码
+database = testdb
+```
+
+密码建议走 `E2M_PASS` 或配置文件而不是 `--password`：命令行参数会留在 cmd 历史和
+任务管理器的进程列表里。**日志与错误输出里永不回显密码**，只写"取自环境变量/配置文件"。
+
+### 动作与选项
+
+| 选项 | 作用 |
+| --- | --- |
+| `--dry-run` | 只解析并打印建表 DDL，完全不连库 |
+| `--check` | 只连接并列出可导入的库名；指定的 `-d` 库不存在时报错退出 |
+| `--prefix ods_` | 给全部表名加前缀（基于原名重算，重复使用不叠加）。**需要分隔符就自己写上下划线**，与 GUI「批量应用前缀」同一口径；末尾没写 `_` 时日志会警告一句 |
+| `--swap-prefix change` | 替换表名第一个下划线之前的首段：`ods_t_order` → `change_t_order`；名里没有下划线或以 `_` 开头的**不改并逐条列在日志里**（拼音表名如 `shui_ku_...` 该用 `--prefix`） |
+| `--drop-if-exists` | 建表前先 `DROP TABLE IF EXISTS`。**会删掉目标库里的同名表和它的数据**，开启时日志额外警告一句 |
+| `--batch N` | 每批插入行数，默认 500 |
+| `--log FILE` | 另存 UTF-8 日志文件（追加写，可反复跑多轮） |
+| `-q, --quiet` | 控制台只留警告、错误和汇总；日志文件仍记全量 |
+| `--keep-temp` | 保留压缩包解出来的临时 Excel |
+
+### 日志形态与退出码
+
+一行读完整件事，行首是符号 + 大写分级标签，分段用 `|`，方便单独 `findstr` 出一档：
+
+```
++ [OK] 解析成功 | 订单（ods_t_order）.xlsx → 表 `ods_t_order` | 字段 5 列 | 数据 3 行 | 主键 `ding_dan_bian_hao`（…）
+! [WARN] 数据警告 | `t`.`amount`（DECIMAL(16,2)）共 2 个值无法转换，示例：第 7 行 'abc'；已按 NULL 写入
+x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错误码 1064）：You have an error in your SQL syntax…
+```
+
+- 符号只有 `+ ! x -` 四种 ASCII：Win7 `cmd` 默认 cp936 码页，打勾打叉这类符号会变成乱码或方块
+- MySQL 报错统一展开成「异常类型 + **MySQL 错误码** + 原文」，跟 GUI 版一个口径
+- 建表失败的日志会附上那条 DDL 原文，并提醒 `CREATE/DROP/ALTER` 属 DDL，MySQL 隐式提交、**不随事务回滚**
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 全部成功 |
+| 1 | 用法或配置错误（参数冲突/非法、配置文件缺失、未指定目标库、没有任何可解析的文件） |
+| 2 | 有输入文件解析失败（其余文件照常处理；动作本身是成功的） |
+| 3 | 无法连接 MySQL，或目标库不可用 |
+| 4 | 有表建表或导入失败（其余表照常处理） |
+| 130 | 按 Ctrl+C 中止 |
+
+同时出现多种问题时取**最严重的一档**（解析失败 + 导入失败 → 报 4），
+所以批处理脚本里 `if errorlevel 4 ... else if errorlevel 3 ...` 从大到小判就够了。
+
+### 表名撞了怎么办
+
+同一批里两个文件算出同名表，会自动加 `_2`、`_3`（与 GUI 用同一个 `make_unique_names`），
+所以不会发生后一张表覆盖前一张的情况。加/换前缀之后同样再去重一次。
+
+### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
+
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.0.1` 就说明系统层面进程起得来。
+   起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
+   跟本工具无关，程序也没机会报错
+2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
+   `CREATE TABLE ...` 与 `+ [OK] 解析成功`，说明 pandas / openpyxl / xlrd / pypinyin 词典
+   在这个包里是齐的（冻结态最容易缺的就是这类运行时按名字加载的东西）
+3. `excel2mysql-cli.exe -c conn.ini --check` —— 能列出库名，说明 pymysql、网络、凭据三件事都通
+
+三步都过了再做真实导入。任何一步失败，把 `--log` 那个文件整份拿出来看，
+里面的 `x [ERROR]` 行自带 MySQL 错误码，够定位了。
+
+### 打这个包（Win7 线专用闸门）
+
+```bat
+:: 一次性准备旧栈环境（pyenv-win 已装好 3.8.10）
+"C:\Users\<你>\.pyenv\pyenv-win\versions\3.8.10\python.exe" -m venv .venv38
+.venv38\Scripts\python -m pip install --upgrade pip
+.venv38\Scripts\python -m pip install -r requirements38.txt
+
+:: 打包 + 全部验收
+一键打包38.bat
+```
+
+闸门顺序与 GUI 那条一样是"任一步失败就非 0 退出"：
+检查环境（**必须** 3.8 + PyInstaller 5.x，版本不对直接拦住）→ 确认 `excel2mysql-cli.exe`
+没在运行 → 旧栈开发态用例集 → **新栈跑同一份用例集做跨栈比对** → 构建 →
+产物体检（没有 Qt 文件 / 带 `python38.dll` / PE 头要求的系统版本 ≤ 6.1）→
+构建并运行冻结态用例集 → 真跑产品 exe（`--version` / `--help` / `--dry-run`，
+断退出码和落盘日志里的 DDL）→ 脱离项目目录再跑一次（证明自包含）→ 汇总打勾表。
+
+辅助开关：`--fast`（只打产品包）、`--no-parity`（跳过 3.12 那轮跨栈）、`--keep-cache`。
+
+**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **79 MB / 1380 个文件**（GUI 线那个包是 154 MB）。
+这条线用的是 PyInstaller **5.x**，onedir 是**平铺布局**——`excel2mysql-cli.exe`、`python38.dll`、
+`*.pyd`、`base_library.zip` 全在同一层，**没有 GUI 线的 `_internal` 目录**（那是 6.x 才改的布局）。
+整个文件夹一起拷走或压成 zip，只拷 exe 跑不起来。
+
+> 冻结态测试包（`packtest38.spec`）会把各依赖的 `*.dist-info` 元数据一起收进包里
+> （`copy_metadata`），这样"旧栈装的到底是不是 `requirements38.txt` 钉的那几个版本"
+> 这组用例在 exe 里也能真跑，而不是 SKIP 掉当没这回事。
+
+> **`requirements38.txt` 与 `requirements.txt` 都必须纯 ASCII**。
+> Python 3.8 出厂自带的 pip 21.1.1 是按系统首选码页（zh-CN 是 cp936）解 requirements 的，
+> 文件里出现 UTF-8 中文注释会直接 `UnicodeDecodeError: 'gbk' codec can't decode…`，
+> 依赖一个都装不上；新版 pip 只是碰巧容忍了这件事。
+> `pack_test38.py` 的 U18/U19 两个用例就是这条的守卫，往这两个文件里写中文会当场变红。
 
 ## 安装
 
+两条线各装各的环境，互不干扰（本机分别是 `.venv` 与 `.venv38`）：
+
 ```bash
+# 图形版：Windows 10 1809+ / 11，Python 3.10+（本机 .venv = 3.12.8）
 pip install -r requirements.txt
 # 即 PySide6 pymysql pandas openpyxl xlrd pypinyin
 # 只想要更小体积可把 PySide6 换成 PySide6-Essentials：代码只用到 QtCore/QtGui/QtWidgets，
 # 装成完整 PySide6 也不会被打进产物（打包时 WebEngine/Pdf 等已显式排除）
+
+# 命令行版：Windows 7 SP1+，Python 3.8.10（本机 .venv38）
+# 版本必须钉在 requirements38.txt 那一组上，别拿新栈的 pandas/numpy 顶——
+# 3.8 上根本装不了 numpy 1.25+ / pandas 2.1+ / PyInstaller 6.x，装了就把 Win7 支持弄没了
+.venv38\Scripts\python -m pip install -r requirements38.txt
 ```
 
 ## 运行
 
 ```bash
-python main.py
+python main.py              # 图形版
+python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 ```
 
 ## 打包为 Windows 免安装 exe
+
+**有两套打包闸门，各产一条线的包，跑在不同 Python 上，互不影响：**
+
+| 产物 | 双击入口 | 实际执行 | 用什么环境 |
+| --- | --- | --- | --- |
+| 图形版 `dist\excel2mysql\`（154 MB，带 `_internal`） | `一键打包.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
+| 命令行版 `dist\excel2mysql-cli\`（79 MB，平铺无 `_internal`） | `一键打包38.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
+
+下面「一键打包」到「已知限制」讲的是**图形版**那条闸门；
+命令行版的完整步骤、产物体检项与分发说明在本文件前面的「Windows 7 命令行版」一节。
 
 ### 一键打包（推荐，改完代码就用它）
 
@@ -223,7 +408,13 @@ qtvirtualkeyboardplugin`。后两个是插件文件本身——它们依赖的 D
 
 - 杀毒软件 / Windows SmartScreen 可能对未签名的 exe 弹拦截提示，选"仍要运行"即可；
   要彻底消除需要代码签名证书
-- 打包机与目标机都需 **64 位 Windows 10/11**（PyInstaller 不做跨平台交叉打包，也不产出 32 位包）
+- **图形版**的打包机与目标机都需 64 位 Windows 10/11（PyInstaller 不做跨平台交叉打包，也不产出 32 位包）。
+  命令行版不受这条限制：它在 Python 3.8 上打包，产物面向 Windows 7 SP1+，
+  但**打包机本身仍需一台 64 位 Windows**（32 位系统要另找）
+- **Windows 7 真机还没验收过**：命令行版目前的证据是"旧栈 3.8 全绿 + 新栈同口径逐条一致 +
+  产物无任何 Qt + PE 头要求的系统版本 ≤ 6.1"，这些挡得住已知硬限制，
+  但不等于在某一具体 Win7 SP1 上一键双击就能起（还取决于该机装没装 UCRT / KB2999226、
+  是不是 32 位系统、杀软怎么配）。拿到真机后按「Windows 7 命令行版」的三步最小验证走一遍再交付
 - ZIP 展开的文件落在系统临时目录（`%TEMP%\excel2mysql_zip_*`），关闭窗口即清理；
   因此**关掉程序后**失败列表里来自 ZIP 的文件无法重试，需重新拖入压缩包
 
