@@ -114,7 +114,7 @@ def check_env():
         raise RuntimeError(
             f"未找到虚拟环境 {VENV_PY}\n"
             "  请先创建并装依赖：python -m venv .venv && .venv\\Scripts\\python "
-            "-m pip install -r requirements.txt pyinstaller")
+            "-m pip install -r requirements.txt")
     if not os.path.isfile(PYINSTALLER):
         raise RuntimeError(
             "未安装 PyInstaller。\n"

@@ -17,6 +17,6 @@ exit /b %RC%
 echo [ERROR] .venv\Scripts\python.exe not found.
 echo Create the venv first, from this folder:
 echo     python -m venv .venv
-echo     .venv\Scripts\python -m pip install -r requirements.txt pyinstaller
+echo     .venv\Scripts\python -m pip install -r requirements.txt
 pause
 exit /b 1

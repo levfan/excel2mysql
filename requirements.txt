@@ -14,3 +14,10 @@ pandas
 openpyxl
 xlrd
 pypinyin
+
+# Build tool as well, on purpose: the packaging gate (build_exe.py, run by
+# the GUI .bat entry) needs PyInstaller. Listing it here means "recreate the
+# venv from this file" leaves you with a gate-ready environment in one command
+# instead of a green install that silently cannot build the exe.
+# It is a dev-time tool only - PyInstaller is never bundled into the product.
+pyinstaller
