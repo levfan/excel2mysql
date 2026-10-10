@@ -1,0 +1,1123 @@
+"""Win7 线（cli.py + core）用例集：一台机器上同时给 Python 3.8 和 3.12 跑。
+
+为什么要在两个栈上跑同一份：Win7 线唯一的风险就是"旧栈上 pandas/numpy/解释器行为不一样"，
+同一份断言、同一批输入，两边都必须给出同样的结果才算"core 零改动"这句话成立。
+只在一边跑绿是证明不了这件事的。
+
+覆盖：
+  U 旧栈兼容守卫（AST 扫 3.9+ 语法与 stdlib、依赖版本契约、cli 不含 Qt 引用）
+  V core 跨栈输出契约（固定输入 → 写死的期望表名/字段/类型/主键/DDL）
+  W CLI 参数与连接配置（配置文件 utf-8/GBK、环境变量与命令行优先级、非法输入）
+  X CLI 端到端·假连接（建表与插入调用序列、回滚、前缀、dry-run、退出码、日志形态）
+  Y CLI 输入收集（目录递归、压缩包展开、不支持类型、路径不存在）
+  G MySQL 真实读写（无凭据时显式记为 SKIPPED，绝不冒充通过）
+
+运行：
+  旧栈  .venv38\\Scripts\\python  pack_test38.py      （Win7 打包闸门用这个）
+  新栈  .venv\\Scripts\\python    pack_test38.py      （证明两栈结果一致）
+  冻结  dist_packtest38\\packtest38\\packtest38.exe
+要连库真跑（G 组），先在环境里备好凭据：
+  set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& set PT_DB=测试库
+"""
+import ast
+import contextlib
+import io
+import locale
+import os
+import re
+import shutil
+import sys
+import tempfile
+import traceback
+import zipfile
+
+import pandas as pd
+
+RESULTS = {"pass": 0, "fail": 0, "skip": 0}
+FAILURES = []
+SKIPPED = []
+
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+
+def check(label, cond, detail=""):
+    ok = bool(cond)
+    RESULTS["pass" if ok else "fail"] += 1
+    if not ok:
+        FAILURES.append(label)
+    print(("  OK   " if ok else "  FAIL ") + label + ("  | " + str(detail) if detail else ""))
+    return ok
+
+
+def skip(label, why):
+    RESULTS["skip"] += 1
+    SKIPPED.append((label, why))
+    print(f"  SKIP {label}  | {why}")
+
+
+def section(title):
+    print(f"\n----- {title} -----")
+
+
+SUMMARY_PRINTED = False
+
+
+def _crash_report():
+    if not SUMMARY_PRINTED:
+        print("\n" + "=" * 72)
+        print(f"用例脚本异常中止：已跑 通过 {RESULTS['pass']}  失败 {RESULTS['fail']}  "
+              f"跳过 {RESULTS['skip']}")
+        for f in FAILURES:
+            print("  - " + f)
+        print("=" * 72)
+
+
+import atexit
+atexit.register(_crash_report)
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+IS_OLD = sys.version_info[:2] == (3, 8)
+STACK = "3.8/Win7 线" if IS_OLD else ("%d.%d 线" % sys.version_info[:2])
+_tmpdir = tempfile.mkdtemp(prefix="packtest38_")
+
+
+def source_of(mod_name):
+    """取模块源码用于静态守卫；冻结态包里没有 .py，返回 None 由调用方记 SKIP。"""
+    p = os.path.join(ROOT, mod_name)
+    return open(p, encoding="utf-8").read() if os.path.isfile(p) else None
+
+
+# ---------------------------------------------------------------------------
+section("U 旧栈兼容守卫（这些语法/依赖在 Python 3.8 上会直接炸）")
+
+import cli as cli_mod
+import core.infer
+import core.merge_check
+import core.mysql_io
+import core.naming
+import core.sql_script
+import core.zip_import
+
+check("U1 当前解释器与用例集预期一致",
+      True, "Python %s（%s）· pandas=%s numpy=%s"
+      % (sys.version.split()[0], STACK, pd.__version__,
+         __import__("numpy").__version__))
+
+# 冻结态里 cli.py 没有源码，静态守卫逐条 SKIP，不参与通过数
+_GUARD_TARGETS = ["cli.py", os.path.join("core", "infer.py"), os.path.join("core", "mysql_io.py"),
+                  os.path.join("core", "sql_script.py"), os.path.join("core", "naming.py"),
+                  os.path.join("core", "zip_import.py"), os.path.join("core", "merge_check.py")]
+_sources = {t: source_of(t) for t in _GUARD_TARGETS}
+
+if any(v is None for v in _sources.values()):
+    skip("U2 AST 扫描 3.9+ 语法与 stdlib", "冻结态包内没有 .py 源码，静态守卫只在开发态生效")
+    skip("U3 无 PEP 604 联合类型注解", "同上")
+    skip("U4 无 3.9+ 专属 stdlib 与 API", "同上")
+else:
+    # PEP 604（X | None）与 PEP 585（list[str]）写在注解里会在 import 时求值，3.8 直接 TypeError。
+    # compileall 抓不到——它是合法语法；只有真 import 或按 AST 检查才暴露。
+    _pep604, _pep585, _banned_import, _banned_api = [], [], [], []
+    _BANNED_MODULES = {"zoneinfo", "graphlib", "tomllib"}
+    _BANNED_ATTRS = {"removeprefix", "removesuffix", "batch_size"}
+    _BANNED_FUNCTOOLS = {"cache"}
+    for name, src in _sources.items():
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            anns = []
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = node.args
+                anns = [x.annotation for x in list(a.args) + list(a.kwonlyargs)]
+                if a.vararg:
+                    anns.append(a.vararg.annotation)
+                if a.kwarg:
+                    anns.append(a.kwarg.annotation)
+                anns.append(node.returns)
+            elif isinstance(node, ast.AnnAssign):
+                anns = [node.annotation]
+            for an in anns:
+                if an is None:
+                    continue
+                for sub in ast.walk(an):
+                    if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.BitOr):
+                        _pep604.append("%s:%s" % (name, getattr(an, "lineno", "?")))
+                    if (isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name)
+                            and sub.value.id in ("list", "dict", "tuple", "set", "frozenset")):
+                        _pep585.append("%s:%s" % (name, getattr(an, "lineno", "?")))
+            if isinstance(node, ast.Import):
+                for al in node.names:
+                    if al.name.split(".")[0] in _BANNED_MODULES:
+                        _banned_import.append("%s:%s %s" % (name, node.lineno, al.name))
+            elif isinstance(node, ast.ImportFrom):
+                if (node.module or "").split(".")[0] in _BANNED_MODULES:
+                    _banned_import.append("%s:%s %s" % (name, node.lineno, node.module))
+            elif isinstance(node, ast.Attribute):
+                if node.attr in _BANNED_ATTRS:
+                    _banned_api.append("%s:%s .%s()" % (name, node.lineno, node.attr))
+                if (node.attr in _BANNED_FUNCTOOLS and isinstance(node.value, ast.Name)
+                        and node.value.id in ("functools", "lru_cache")):
+                    _banned_api.append("%s:%s functools.%s" % (name, node.lineno, node.attr))
+    check("U2 被守卫的模块全部可 AST 解析", True, "、".join(os.path.basename(t) for t in _GUARD_TARGETS))
+    check("U3 无 PEP 604 联合类型注解（X | None）", not _pep604,
+          "; ".join(sorted(set(_pep604))) or "干净")
+    check("U4 无 PEP 585 内置泛型注解（list[str] 等）", not _pep585,
+          "; ".join(sorted(set(_pep585))) or "干净")
+    check("U5 无 3.9+ 专属 stdlib / API", not (_banned_import + _banned_api),
+          "; ".join(sorted(set(_banned_import + _banned_api))) or "干净")
+
+cli_src = _sources.get("cli.py")
+if cli_src is None:
+    skip("U6 cli.py 不引用任何 Qt", "冻结态没有 cli.py 源码")
+else:
+    check("U6 cli.py 不引用任何 Qt",
+          not re.search(r"\bPySide|PyQt|\bQt(Core|Widgets|Gui)\b", cli_src), "无 Qt 依赖才能进 Win7 包")
+    check("U7 cli.py 不 import main（避免把 GUI 拖进旧包）",
+          not re.search(r"^\s*(?:import|from)\s+main\b", cli_src, re.M))
+    check("U8 cli.py 里 describe_db_error 与 GUI 同口径展开错误码",
+          "MySQL 错误码" in cli_src and "args[0]" in cli_src)
+
+# 运行时取证：把 cli 及其依赖全 import 之后，进程里不该有任何 Qt 模块。
+# 这条在冻结态照样成立，而且比 grep 源码硬——真被加载了才算数。
+_qt_loaded = sorted(m for m in sys.modules
+                    if m.split(".")[0] in ("PySide6", "PySide2", "PyQt5", "PyQt6", "shiboken6"))
+check("U8b cli 加载后进程里没有 Qt 模块（运行时取证，冻结态同样有效）",
+      not _qt_loaded, _qt_loaded or "无")
+check("U8c core + cli 全链路都在当前栈上 import 成功（旧栈能 import 就是 3.8 兼容的硬证据）",
+      all(m is not None for m in (cli_mod, core.infer, core.mysql_io, core.sql_script,
+                                  core.naming, core.zip_import, core.merge_check)),
+      "Python %s" % sys.version.split()[0])
+
+def installed_version(dist):
+    """取"装进环境里的那个版本"，靠发行版元数据而不是模块自己的 __version__。
+
+    PyMySQL 1.1.2 把 `pymysql.__version__` 硬编码成了 "1.4.6"（上游遗留 bug），
+    拿它跟 requirements 的 pin 比对会永久误报不一致；`importlib.metadata.version`
+    读的是 dist-info，才是pip 实际装上的版本。
+    """
+    try:
+        import importlib.metadata as md
+    except ImportError:
+        return None
+    try:
+        return md.version(dist)
+    except Exception:
+        return None
+
+
+_V = {n: installed_version(n) for n in ("numpy", "pandas", "PyMySQL", "openpyxl",
+                                        "xlrd", "pypinyin", "tzdata", "pyinstaller")}
+
+if IS_OLD:
+    check("U9 旧栈依赖的发行版元数据全部可读",
+          all(_V.values()), " ".join("%s=%s" % (k, v or "?") for k, v in _V.items()))
+    check("U10 旧栈里 numpy 仍是 1.24.4（1.25 起要 Python>=3.9）",
+          _V["numpy"] == "1.24.4", _V["numpy"])
+    check("U11 旧栈里 pandas 仍是 2.0.3（2.1 起要 Python>=3.9）",
+          _V["pandas"] == "2.0.3", _V["pandas"])
+    check("U11b PyMySQL 版本以 dist-info 为准（模块自报的 __version__ 是上游 bug）",
+          _V["PyMySQL"] == "1.1.2" and __import__("pymysql").__version__ != "1.1.2",
+          "dist-info=1.1.2, pymysql.__version__=%s" % __import__("pymysql").__version__)
+else:
+    skip("U9-U11b requirements38 版本契约", "本轮跑在 %s，版本契约由 .venv38 那一轮核" % STACK)
+
+req = source_of("requirements38.txt")
+if req is None:
+    skip("U12 requirements38.txt 与打包脚本存在", "冻结态没有 requirements 文件")
+else:
+    for pin in ("numpy==1.24.4", "pandas==2.0.3", "PyMySQL==1.1.2",
+                "openpyxl==3.1.5", "xlrd==2.0.2", "pypinyin==0.55.0",
+                "tzdata==2026.5", "pyinstaller==5.13.2"):
+        check("U13 requirements38 钉住 %s" % pin, pin in req)
+    check("U14 requirements38 写明了「这是最后能装进 3.8 的版本」这件事",
+          "Windows 7" in req and "6.x" in req and "requires Python >= 3.9" in req)
+    if IS_OLD:
+        # 直接按 requirements 语法解析（name==version），不走 configparser：
+        # configparser 会把选项名统一转小写，PyMySQL 变成 pymysql 后比对起来更绕
+        _pins = dict(re.findall(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)==([0-9A-Za-z_.\-]+)[ \t]*$",
+                                req, re.M))
+        check("U15 requirements38 里每条依赖都钉死了版本",
+              len(_pins) >= 8 and not re.search(
+                  r"^[A-Za-z][A-Za-z0-9_.\-]*(==|>=|<=|~=)?\s*$", req, re.M), sorted(_pins))
+        _mismatch, _unknown = [], []
+        for name, want in sorted(_pins.items()):
+            got = _V.get(name)
+            if got is None:
+                _unknown.append(name)
+            elif got != want:
+                _mismatch.append("%s 实装 %s != 钉住 %s" % (name, got, want))
+        check("U16b 旧栈实际装的与 requirements38 写的一致", not _mismatch,
+              "; ".join(_mismatch) or "一致")
+        check("U16c 每个 pin 都查到了发行版元数据", not _unknown,
+              "查不到 " + "、".join(_unknown) if _unknown else "全部命中")
+    else:
+        skip("U15-U16c 旧栈实际装的与 requirements38 写的一致",
+             "本轮跑在 %s，装的是 GUI 线依赖" % STACK)
+
+if IS_OLD:
+    check("U17 旧栈 PyInstaller 是 5.x（6.x 只支持 Windows 8+，bootloader 不为 Win7 构建）",
+          (_V.get("pyinstaller") or "").startswith("5."), _V.get("pyinstaller"))
+else:
+    skip("U17 PyInstaller 5.x 守卫", "PyInstaller 装在 .venv38，本轮是 %s" % STACK)
+
+# requirements 文件必须纯 ASCII：Python 3.8 出厂的 pip 21.1.1 用
+# locale.getpreferredencoding() 解 requirements（zh-CN Windows 上是 cp936），
+# 带 UTF-8 中文注释直接 UnicodeDecodeError 装不上依赖。新版 pip 只是碰巧容忍。
+for _rf in ("requirements38.txt", "requirements.txt"):
+    _raw = None
+    _p = os.path.join(ROOT, _rf)
+    if os.path.isfile(_p):
+        with open(_p, "rb") as _fh:
+            _raw = _fh.read()
+    if _raw is None:
+        skip("U18 %s 全 ASCII（老 pip 才解得开）" % _rf, "冻结态包内没有该文件")
+        skip("U19 %s 能按本机首选码页解码" % _rf, "同上")
+        continue
+    _non_ascii = sorted({b for b in bytearray(_raw) if b > 127})
+    check("U18 %s 全 ASCII（老 pip 才解得开）" % _rf, not _non_ascii,
+          "出现 %d 个非 ASCII 字节" % len(_non_ascii) if _non_ascii else "干净")
+    try:
+        _raw.decode(locale.getpreferredencoding(False))
+        check("U19 %s 能按本机首选码页解码" % _rf, True,
+              locale.getpreferredencoding(False))
+    except UnicodeDecodeError as e:
+        check("U19 %s 能按本机首选码页解码" % _rf, False, "%s → %s"
+              % (locale.getpreferredencoding(False), e))
+    check("U20 %s 的依赖行都能被 pip 语法接受（name[extras]=ver）" % _rf,
+          all(re.match(r"^[A-Za-z0-9_.\-]+(\[[A-Za-z0-9_,\-]+\])?(==|>=|<=|~=)?[A-Za-z0-9_.\-]*$",
+                       ln.strip())
+              for ln in _raw.decode("ascii", errors="replace").splitlines()
+              if ln.strip() and not ln.strip().startswith("#")))
+
+
+# ---------------------------------------------------------------------------
+section("V core 跨栈输出契约（固定输入 → 两边必须给出同样的表名/类型/DDL）")
+
+
+def make_xlsx(name, sheets, folder=None):
+    """sheets: 单个 DataFrame（写到 Sheet1）或 {sheet名: DataFrame}；返回写出的路径。
+
+    不能只收 dict：DataFrame 也有 .items()（列名→Series），传错了会"看起来跑了"
+    但每个列被当成一个 Sheet 写出去，后面的断言全部对不上——这类假失败最难查。
+    """
+    p = os.path.join(folder or _tmpdir, name)
+    if isinstance(sheets, pd.DataFrame):
+        sheets = {"Sheet1": sheets}
+    with pd.ExcelWriter(p, engine="openpyxl") as xw:
+        for sn, df in sheets.items():
+            df.to_excel(xw, sheet_name=sn, index=False)
+    return p
+
+
+from core.infer import build_table_def, make_unique_names
+from core.mysql_io import build_ddl
+
+v_orders = make_xlsx("订单（ods_t_order）.xlsx", pd.DataFrame({
+    "订单编号": ["SO0001", "SO0002", "SO0003"],
+    "客户名称": ["甲公司", "乙公司", "丙公司"],
+    "金额": [12.5, 3.25, 100.0],
+    "下单日期": ["2026-01-05", "2026-02-06", "2026-03-07"],
+    "数量": [3, 7, 1],
+}))
+t = build_table_def(v_orders)
+cmt = {c["comment"]: c["type"] for c in t["columns"]}
+check("V1 括号内英文作表名", t["table_name"] == "ods_t_order", t["table_name"])
+check("V2 括号前中文作表注释", t["table_comment"] == "订单", t["table_comment"])
+check("V3 表头逐音节转拼音蛇形命名",
+      [c["field"] for c in t["columns"]]
+      == ["ding_dan_bian_hao", "ke_hu_ming_cheng", "jin_e", "xia_dan_ri_qi", "shu_liang"],
+      [c["field"] for c in t["columns"]])
+check("V4 编号列→VARCHAR（不是 INT）", cmt["订单编号"].startswith("VARCHAR"), cmt["订单编号"])
+check("V5 金额列→DECIMAL(16,2)", cmt["金额"] == "DECIMAL(16,2)", cmt["金额"])
+check("V6 日期串→DATE", cmt["下单日期"] == "DATE", cmt["下单日期"])
+check("V7 整数列→INT", cmt["数量"] == "INT", cmt["数量"])
+check("V8 主键选中的是编号列", t["primary_key"] == "ding_dan_bian_hao", t.get("primary_key"))
+check("V9 数据行数不随栈变化", len(t["df"]) == 3, len(t["df"]))
+ddl = build_ddl(t["table_name"], t["table_comment"], t["columns"])
+check("V10 DDL 文本逐字符稳定（utf8mb4_general_ci / InnoDB）",
+      ddl.startswith("CREATE TABLE `ods_t_order` (")
+      and "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci" in ddl
+      and "PRIMARY KEY (`ding_dan_bian_hao`)" in ddl, ddl.replace("\n", "\\n")[:120])
+check("V11 主键列被写成 NOT NULL",
+      "`ding_dan_bian_hao` VARCHAR(64) NOT NULL" in ddl)
+
+v_dec = make_xlsx("库容（dim_rong）.xlsx", pd.DataFrame({
+    "编码": ["A1", "A2", "A3"],
+    "总库容（亿立方米）": [4.375, 4.160, 2.930],
+}))
+td = build_table_def(v_dec)
+tc = {c["comment"]: c["type"] for c in td["columns"]}
+check("V12 三位小数按实测精度出 DECIMAL(7,3)（不是 20,6 也不是圆到 2 位）",
+      tc["总库容（亿立方米）"] == "DECIMAL(7,3)", tc["总库容（亿立方米）"])
+
+v_pure = make_xlsx("纯数字（7）.xlsx", pd.DataFrame({"编号": [1, 2]}))
+tp = build_table_def(v_pure)
+# 期望值抄主用例集 S3 的权威口径：括号内纯数字是序号，回退拼音后**保留**序号
+check("V13 括号内纯数字是序号不是表名（回退拼音并保留序号）",
+      tp["table_name"] == "chun_shu_zi_7", tp["table_name"])
+
+v_cn = make_xlsx("说明（人事处人员）.xlsx", pd.DataFrame({"编号": [1, 2]}))
+check("V14 括号内汉字不作表名（避免汉字表名）",
+      build_table_def(v_cn)["table_name"] == "shuo_ming_ren_shi_chu_ren_yuan",
+      build_table_def(v_cn)["table_name"])
+
+dup_a = make_xlsx("同名表.xlsx", pd.DataFrame({"编号": [1]}))
+dup_b = os.path.join(_tmpdir, "dup", "同名表.xlsx")
+os.makedirs(os.path.dirname(dup_b), exist_ok=True)
+shutil.copy(dup_a, dup_b)
+tables = [build_table_def(dup_a), build_table_def(dup_b)]
+make_unique_names(tables)
+check("V15 撞名自动加 _2",
+      [x["table_name"] for x in tables] == ["tong_ming_biao", "tong_ming_biao_2"],
+      [x["table_name"] for x in tables])
+
+from core.sql_script import apply_table_prefix_sql, extract_create_tables, split_sql_statements
+
+_script = ("CREATE TABLE `ods_t_order` (`id` INT) COMMENT='订单';\n"
+           "INSERT INTO `ods_t_order` VALUES (1);\n"
+           "-- 注释里有 ; 分号\n"
+           "CREATE TABLE `dim_a` (`x` VARCHAR(20) DEFAULT 'a;b');\n")
+check("V16 SQL 脚本表名提取跨栈一致",
+      [e["name"] for e in extract_create_tables(_script)] == ["ods_t_order", "dim_a"],
+      extract_create_tables(_script))
+_new, _ren, _skip = apply_table_prefix_sql(_script, "ads_")
+check("V17 脚本加前缀的改写对象与处数跨栈一致",
+      [(r["old"], r["new"], r["n"]) for r in _ren]
+      == [("ods_t_order", "ads_ods_t_order", 2), ("dim_a", "ads_dim_a", 1)], _ren)
+check("V17b 加前缀后脚本里两个表名都被改写",
+      "`ads_ods_t_order`" in _new and "`ads_dim_a`" in _new and "`ods_t_order`" not in _new)
+check("V17c 重复应用不叠加前缀",
+      apply_table_prefix_sql(_new, "ads_")[2] == ["ads_ods_t_order", "ads_dim_a"],
+      apply_table_prefix_sql(_new, "ads_")[2])
+check("V18 字符串与注释里的分号不当成语句边界",
+      len(split_sql_statements(_script)) == 3, split_sql_statements(_script))
+
+from core.merge_check import MergedCellsError, ensure_no_merged_cells
+
+merged_path = os.path.join(_tmpdir, "含合并.xlsx")
+from openpyxl import Workbook
+
+_wb = Workbook()
+_ws = _wb.active
+_ws.append(["姓名", "分数"])
+_ws.append(["张三", 90])
+_ws.merge_cells("A2:A3")
+_ws.append(["", 80])
+_wb.save(merged_path)
+try:
+    build_table_def(merged_path)
+    check("V19 合并单元格文件被拒绝导入", False, "竟然解析成功了")
+except MergedCellsError as e:
+    check("V19 合并单元格文件被拒绝导入", True, "合并区 %d 处" % len(e.merged))
+except Exception as e:
+    check("V19 合并单元格文件被拒绝导入", False, "抛的是 %s: %s" % (type(e).__name__, e))
+
+from core.zip_import import ZipArchiveError, count_excel_entries, extract_excel_archive
+
+zip_src = os.path.join(_tmpdir, "inner", "人员.xlsx")
+os.makedirs(os.path.dirname(zip_src), exist_ok=True)
+make_xlsx("人员.xlsx", pd.DataFrame({"工号": ["E1", "E2"], "姓名": ["张三", "李四"]}),
+          folder=os.path.dirname(zip_src))
+zip_path = os.path.join(_tmpdir, "数据包.zip")
+with zipfile.ZipFile(zip_path, "w") as zf:
+    zf.write(zip_src, "包内/人员.xlsx")
+    zf.writestr("包内/说明.txt", "非 Excel")
+    zf.writestr("包内/嵌套.zip", "假 zip")
+check("V20 预扫包内 Excel 条目数", count_excel_entries(zip_path) == 1, count_excel_entries(zip_path))
+r = extract_excel_archive(zip_path, os.path.join(_tmpdir, "out"))
+check("V21 展开只取 Excel、忽略非 Excel、跳过嵌套 zip",
+      len(r["files"]) == 1 and len(r["ignored"]) == 1 and r["nested_zips"] == 1,
+      "files=%d ignored=%d nested=%d" % (len(r["files"]), len(r["ignored"]), r["nested_zips"]))
+check("V22 包内中文名保留（表名靠它）",
+      r["files"][0]["origin"].replace("\\", "/") == "包内/人员.xlsx", r["files"][0]["origin"])
+tz = os.path.join(_tmpdir, "trav.zip")
+with zipfile.ZipFile(tz, "w") as zf:
+    zf.writestr("../../evil.xlsx", "x")
+r2 = extract_excel_archive(tz, os.path.join(_tmpdir, "out2"))
+check("V23 zip slip 路径被净化（不落 ../）",
+      all("..".split(os.sep)[0] not in os.path.abspath(x["path"]).replace(os.path.abspath(
+          os.path.join(_tmpdir, "out2")), "") for x in r2["files"]) or not r2["files"],
+      [x["path"] for x in r2["files"]])
+with open(os.path.join(_tmpdir, "notzip.zip"), "wb") as fh:
+    fh.write(b"plain text, not a zip")
+try:
+    extract_excel_archive(os.path.join(_tmpdir, "notzip.zip"), os.path.join(_tmpdir, "out3"))
+    check("V24 坏压缩包抛 ZipArchiveError", False, "没抛")
+except ZipArchiveError as e:
+    check("V24 坏压缩包抛 ZipArchiveError", True, str(e))
+
+xls_env = os.environ.get("PT_XLS")
+if xls_env and os.path.isfile(xls_env):
+    tx = build_table_def(xls_env)
+    check("V25 真 .xls 可读（xlrd）", bool(tx["columns"]), tx["table_name"])
+else:
+    skip("V25 真 .xls 可读", "未设 PT_XLS 指向真实 .xls 样本（本机没有该格式文件）")
+
+
+# ---------------------------------------------------------------------------
+section("W CLI 参数与连接配置")
+
+
+@contextlib.contextmanager
+def clean_env(**extra):
+    """CLI 的用例必须在受控环境变量下跑：本机可能正巧设了 E2M_*/PT_*，会污染优先级断言。"""
+    saved = {}
+    keys = [k for k in list(os.environ) if k.startswith(("E2M_", "PT_"))]
+    for k in keys:
+        saved[k] = os.environ.pop(k)
+    os.environ.update({k: v for k, v in extra.items() if v is not None})
+    try:
+        yield
+    finally:
+        for k in list(os.environ):
+            if k.startswith(("E2M_", "PT_")):
+                os.environ.pop(k, None)
+        os.environ.update(saved)
+
+
+_LOG_SEQ = [0]
+
+
+def run_cli(argv, log_name=None, env=None):
+    """跑一次 cli.run，返回 (退出码, 日志文件文本, 控制台文本)。
+
+    日志一律落到 UTF-8 文件：Win7 线上控制台按 cp936 输出，重定向到管道时读出来是乱码，
+    断言只有对着日志文件才靠得住。不传 log_name 也自动给一个，避免"断言读到了空串"
+    这种假失败——第一版就在这里连红十几条。
+
+    env 里的键在 scrub 之后写入，用来给 G 组传凭据（走环境变量，不进命令行也不落盘）。
+    """
+    args = list(argv)
+    if log_name is None:
+        _LOG_SEQ[0] += 1
+        log_name = "auto%d" % _LOG_SEQ[0]
+    log_path = os.path.join(_tmpdir, "logs", log_name + ".log")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    if os.path.isfile(log_path):
+        os.remove(log_path)
+    args += ["--log", log_path]
+    buf = io.StringIO()
+    with clean_env(**(env or {})):
+        with contextlib.redirect_stdout(buf):
+            code = cli_mod.run(args)
+    text = ""
+    if os.path.isfile(log_path):
+        with open(log_path, encoding="utf-8") as fh:
+            text = fh.read()
+    return code, text, buf.getvalue()
+
+
+def log_lines(text):
+    """日志文件每行前面带 [时间戳]，断言"行形状"时先剥掉它。
+
+    不剥的话 `^[+x!-] \\[OK\\]` 这类正则在空列表上恒真，守卫会永远绿——
+    第一版 Y11 就是这么假过的。
+    """
+    return [re.sub(r"^\[[0-9\-: ]+\] ", "", ln) for ln in text.splitlines() if ln.strip()]
+
+
+code, _o, console = run_cli(["--help"])
+check("W1 --help 走正常返回而不是把 SystemExit 抛出去", code == cli_mod.EXIT_OK, code)
+check("W1b --help 里三种动作与配置项都列全了",
+      all(k in console for k in ("--dry-run", "--check", "--config", "--prefix",
+                                 "--swap-prefix", "--drop-if-exists", "--log")),
+      console[:60])
+check("W1c --help 给了退出码表（脚本要按码分流）",
+      "退出码" in console and "1" in console, console[:60])
+
+code, _o, console = run_cli(["--version"])
+check("W1d --version 返回 0 并打印版本号",
+      code == cli_mod.EXIT_OK and cli_mod.APP_VERSION in console, (code, console.strip()[:40]))
+
+code, _o, console = run_cli(["--batch", "abc", "-d", "x"])
+check("W1e 非法取值折成用法码 1（不能让 argparse 的 2 冒充「解析失败」）",
+      code == cli_mod.EXIT_USAGE, (code, console.strip()[-60:]))
+
+code, _o, console = run_cli(["--definitely-not-a-flag"])
+check("W1f 未知参数同样回用法码 1", code == cli_mod.EXIT_USAGE, code)
+
+code, out, _ = run_cli([])
+check("W2 没有任何输入时报用法错误并退出码 1", code == cli_mod.EXIT_USAGE, code)
+check("W3 用法错误在日志里说清缺什么", "没有输入" in out, out.strip().splitlines()[:1])
+
+code, out, _ = run_cli(["--dry-run", "--check", _tmpdir])
+check("W4 --dry-run 与 --check 互斥", code == cli_mod.EXIT_USAGE, code)
+check("W5 互斥提示点出两个参数名", "--dry-run" in out and "--check" in out, out.strip()[:80])
+
+code, out, _ = run_cli([os.path.join(_tmpdir, "订单（ods_t_order）.xlsx")])
+check("W6 未指定目标库直接判用法错误（不做半截导入）", code == cli_mod.EXIT_USAGE, code)
+check("W7 缺库提示给了三种补救办法",
+      "--database" in out and "E2M_DB" in out and "--dry-run" in out, out.strip()[:120])
+
+code, out, _ = run_cli([_tmpdir, "-d", "db1", "--prefix", "ods$", "--dry-run"])
+check("W8 前缀含非法字符被拒绝", code == cli_mod.EXIT_USAGE, code)
+check("W9 非法前缀提示允许的字符集", "只允许字母、数字、下划线" in out, out.strip()[:80])
+
+code, out, _ = run_cli([_tmpdir, "-d", "db1", "--swap-prefix", "  ", "--dry-run"])
+check("W10 --swap-prefix 清完为空判用法错误", code == cli_mod.EXIT_USAGE, code)
+
+code, out, _ = run_cli([_tmpdir, "-d", "db1", "--prefix", "a_", "--swap-prefix", "b", "--dry-run"])
+check("W11 --prefix 与 --swap-prefix 互斥", code == cli_mod.EXIT_USAGE, code)
+
+code, out, _ = run_cli([_tmpdir, "-d", "db1", "--batch", "0", "--dry-run"])
+check("W12 --batch 0 被拒绝（否则会死循环或整表不提交）", code == cli_mod.EXIT_USAGE, code)
+
+cfg_path = os.path.join(_tmpdir, "conn_utf8.ini")
+with open(cfg_path, "w", encoding="utf-8") as fh:
+    fh.write("# 中文注释：内网测试库\n[mysql]\nhost = 10.0.0.9\nport = 3307\n"
+             "user = reader\npassword = pw-from-file\ndatabase = filedemo\n")
+cfg = cli_mod.read_config_file(cfg_path)
+check("W13 配置文件读全五项",
+      (cfg["host"], cfg["port"], cfg["user"], cfg["database"])
+      == ("10.0.0.9", "3307", "reader", "filedemo"), cfg)
+check("W14 配置文件里的中文注释不炸（UTF-8）", "内网测试库" in open(cfg_path, encoding="utf-8").read())
+
+cfg_gbk = os.path.join(_tmpdir, "conn_gbk.ini")
+with open(cfg_gbk, "wb") as fh:
+    fh.write("# 记事本另存为 ANSI 的中文注释\n[mysql]\nhost = 10.0.0.8\nport = 3306\n"
+             "user = gbk\npassword = x\ndatabase = gbkdemo\n".encode("gbk"))
+cfg2 = cli_mod.read_config_file(cfg_gbk)
+check("W15 GBK(记事本 ANSI) 配置文件退回 GBK 仍能读", cfg2["host"] == "10.0.0.8", cfg2)
+
+try:
+    cli_mod.read_config_file(os.path.join(_tmpdir, "不存在.ini"))
+    check("W16 配置文件不存在时报可读的错误", False, "没抛")
+except ValueError as e:
+    check("W16 配置文件不存在时报可读的错误", "配置文件不存在" in str(e), e)
+
+nosec = os.path.join(_tmpdir, "nosec.ini")
+with open(nosec, "w", encoding="utf-8") as fh:
+    fh.write("[other]\nhost = 1.2.3.4\n")
+try:
+    cli_mod.read_config_file(nosec)
+    check("W17 缺 [mysql] 段时报错并提示段名", False, "没抛")
+except ValueError as e:
+    check("W17 缺 [mysql] 段时报错并提示段名", "mysql" in str(e), e)
+
+check("W18 [connection] 段名也接受（与 README 口径一致）",
+      cli_mod.CONFIG_SECTIONS == ("mysql", "connection"), cli_mod.CONFIG_SECTIONS)
+
+# 优先级：命令行 > 环境变量 > 配置文件 > 默认
+with clean_env(E2M_HOST="env-host", E2M_PORT="3399", E2M_DB="envdb", E2M_USER="envuser"):
+    ns = cli_mod.build_parser().parse_args(["-c", cfg_path, "--host", "cli-host", "-d", "db1"])
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        merged = cli_mod.resolve_cfg(ns, cli_mod.Log(quiet=True))
+check("W19 命令行覆盖环境变量与配置文件", merged["host"] == "cli-host", merged)
+check("W20 环境变量覆盖配置文件（未被命令行覆盖的项）",
+      merged["port"] == 3399 and merged["database"] == "db1", merged)
+check("W21 配置文件提供命令行/环境都没给的项", merged["user"] == "envuser", merged)
+
+with clean_env(E2M_PASS="env-secret"):
+    ns = cli_mod.build_parser().parse_args(["-c", cfg_path])
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        merged = cli_mod.resolve_cfg(ns, cli_mod.Log(quiet=True))
+check("W22 E2M_PASS 覆盖配置文件密码", merged["password"] == "env-secret", merged)
+check("W23 日志里不回显密码明文", "env-secret" not in buf.getvalue() and "pw-from-file" not in buf.getvalue(),
+      buf.getvalue().strip()[:100])
+
+with clean_env():
+    ns = cli_mod.build_parser().parse_args([])
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        merged = cli_mod.resolve_cfg(ns, cli_mod.Log(quiet=True))
+check("W24 全默认值时 host/port/user 有兜底",
+      (merged["host"], merged["port"], merged["user"]) == ("127.0.0.1", 3306, "root"), merged)
+
+
+# ---------------------------------------------------------------------------
+section("X CLI 端到端·假连接（断到真实落库调用序列，不只看退出码）")
+
+
+class FakeCursor:
+    def __init__(self, rec, fail_on=None, fail_if=None):
+        self.rec = rec
+        self.fail_on = fail_on
+        self.fail_if = fail_if
+        self.rowcount = -1
+
+    def _should_fail(self, sql):
+        if self.fail_if is not None:
+            return bool(self.fail_if(sql))
+        return bool(self.fail_on and self.fail_on in sql)
+
+    def execute(self, sql, params=None):
+        self.rec.setdefault("execute", []).append((sql, params))
+        if self._should_fail(sql):
+            raise RuntimeError("fake boom on %s" % sql[:30])
+
+    def executemany(self, sql, seq):
+        # 插入失败必须在这里也能抛：core.insert_data 走的是 executemany，
+        # 只在 execute 上设失败点会连"导入失败回滚"这条路径都没测到。
+        if self._should_fail(sql):
+            raise RuntimeError("fake boom on %s" % sql[:30])
+        self.rec.setdefault("executemany", []).append((sql, list(seq)))
+        self.rowcount = len(list(seq))
+
+    def fetchall(self):
+        return [("testdb",), ("information_schema",)]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class FakeConn:
+    def __init__(self, rec, fail_ddl=False, fail_insert=False, fail_if=None):
+        self.rec = rec
+        self.fail_ddl = fail_ddl
+        self.fail_insert = fail_insert
+        self.fail_if = fail_if
+
+    def cursor(self):
+        fail_on = "CREATE TABLE" if self.fail_ddl else ("INSERT INTO" if self.fail_insert else None)
+        return FakeCursor(self.rec, fail_on=fail_on, fail_if=self.fail_if)
+
+    def begin(self):
+        self.rec.setdefault("begin", 0)
+        self.rec["begin"] += 1
+
+    def commit(self):
+        self.rec.setdefault("commit", 0)
+        self.rec["commit"] += 1
+
+    def rollback(self):
+        self.rec.setdefault("rollback", 0)
+        self.rec["rollback"] += 1
+
+    def close(self):
+        self.rec.setdefault("close", 0)
+        self.rec["close"] += 1
+
+
+def with_fake_conn(rec, fail_ddl=False, fail_insert=False, cfg_seen=None, fail_ddl_for=None):
+    """把 cli 的 connect 换成假连接：记录调用序列，同时抓住连接配置。
+
+    fail_ddl_for 给一个表名时只让那张表的 CREATE 失败，用来验"单表失败不阻断其余表"。
+    """
+    fail_if = None
+    if fail_ddl_for:
+        fail_if = lambda sql: sql.startswith("CREATE TABLE `%s`" % fail_ddl_for)
+
+    def _fake(cfg):
+        if cfg_seen is not None:
+            cfg_seen.update(cfg)
+        return FakeConn(rec, fail_ddl=fail_ddl, fail_insert=fail_insert, fail_if=fail_if)
+    return _fake
+
+
+def cli_import(fixture, extra=None, fail_ddl=False, fail_insert=False, fail_ddl_for=None):
+    """跑一次真实导入流程但连接是假的，返回 (code, 日志, 调用记录, 连接配置)。"""
+    rec = {}
+    seen = {}
+    real_connect = cli_mod.connect
+    cli_mod.connect = with_fake_conn(rec, fail_ddl, fail_insert, seen, fail_ddl_for)
+    try:
+        code, out, _ = run_cli([fixture, "-d", "demo"] + (extra or []))
+    finally:
+        cli_mod.connect = real_connect
+    return code, out, rec, seen
+
+
+code, out, rec, seen = cli_import(v_orders)
+check("X1 单文件导入退出码 0", code == cli_mod.EXIT_OK, "%s\n%s" % (code, out[-400:]))
+check("X2 连接配置传到 core.connect",
+      (seen.get("host"), seen.get("database")) == ("127.0.0.1", "demo"), seen)
+check("X3 每张表先 begin 再建表", rec.get("begin") == 1, rec.get("begin"))
+_ddl = [s for s, _ in rec.get("execute", []) if s.startswith("CREATE TABLE")]
+check("X4 建表 DDL 实际发出去了", len(_ddl) == 1 and "`ods_t_order`" in _ddl[0], _ddl)
+check("X5 建表与插入各自提交（core.create_table / insert_data 都 commit，共两次）",
+      rec.get("commit") == 2, rec.get("commit"))
+_em = rec.get("executemany", [])
+check("X6 插入走 executemany 且批大小 500", len(_em) == 1 and len(_em[0][1]) == 3,
+      [(e[0][:40], len(e[1])) for e in _em])
+check("X7 插入参数按列序绑定（不是列名错配）",
+      _em and _em[0][1][0][0] == "SO0001" and _em[0][1][0][2] == 12.5,
+      _em[0][1][0] if _em else None)
+check("X8 日期串已转成 date 对象再交给驱动",
+      hasattr(_em[0][1][0][3], "year") if _em else False, _em[0][1][0][3] if _em else None)
+check("X9 连接被关闭（不泄漏句柄）", rec.get("close") == 1, rec.get("close"))
+check("X10 日志里有逐表导入行数", "导入完成 | `ods_t_order` 共 3 行" in out, out.strip()[-200:])
+check("X11 汇总行给出成功表数与总行数",
+      "导入汇总 | 成功 1 张表 / 3 行" in out, out.strip()[-160:])
+
+code, out, rec, _ = cli_import(v_orders, extra=["--dry-run"])
+check("X12 dry-run 完全不建连接",
+      code == cli_mod.EXIT_OK and not rec and "CREATE TABLE" in out, (code, rec))
+check("X13 dry-run 明说没有连接 MySQL", "本次没有连接 MySQL" in out, out.strip()[-120:])
+check("X14 dry-run 不落库（没有 executemany）", "executemany" not in rec, rec.keys())
+
+code, out, rec, _ = cli_import(v_orders, extra=["--drop-if-exists"])
+_ddl2 = [s for s, _ in rec.get("execute", []) if "DROP TABLE" in s or "CREATE TABLE" in s]
+check("X15 --drop-if-exists 把 DROP 拼进同一次建表调用",
+      any(s.startswith("DROP TABLE IF EXISTS `ods_t_order`") for s, _ in rec.get("execute", [])),
+      _ddl2)
+check("X16 --drop-if-exists 显式警告会删同名表",
+      "危险开关" in out and "同名表会先被删除" in out, out.strip()[:120])
+
+code, out, rec, _ = cli_import(v_orders, fail_ddl=True)
+check("X17 建表被拒时退出码 4", code == cli_mod.EXIT_IMPORT, code)
+check("X18 建表失败后没有执行插入", "executemany" not in rec, rec.keys())
+check("X19 建表失败把原文 DDL 打进日志", "失败的建表语句" in out and "CREATE TABLE `ods_t_order`" in out)
+check("X20 建表失败提示 DDL 不随事务回滚", "隐式提交" in out, out.strip()[:150])
+
+code, out, rec, _ = cli_import(v_orders, fail_insert=True)
+check("X21 插入失败退出码 4", code == cli_mod.EXIT_IMPORT, code)
+check("X22 插入失败触发 rollback（本表数据不半写）", rec.get("rollback") == 1, rec)
+check("X23 插入失败日志写明回滚与行数",
+      "行数据未写入，本表事务已回滚" in out and "3 行" in out, out.strip()[:160])
+
+conn_err = {}
+
+
+def _boom(cfg):
+    conn_err.update(cfg)
+    import pymysql
+    raise pymysql.err.OperationalError(1049, "Unknown database 'nosuch'")
+
+
+_real = cli_mod.connect
+cli_mod.connect = _boom
+try:
+    code, out, _ = run_cli([v_orders, "-d", "nosuch"])
+finally:
+    cli_mod.connect = _real
+check("X24 连接失败退出码 3（区别于导入失败 4）", code == cli_mod.EXIT_CONNECT, code)
+check("X25 连接失败展开 MySQL 错误码 1049",
+      "MySQL 错误码 1049" in out and "Unknown database" in out, out.strip()[:160])
+check("X26 连接失败带上当时的目标串（user@host:port/db）",
+      "root@127.0.0.1:3306/nosuch" in out, out.strip()[:120])
+
+batch_dir = os.path.join(_tmpdir, "batch")
+shutil.rmtree(batch_dir, ignore_errors=True)
+os.makedirs(batch_dir)
+make_xlsx("库存.xlsx", pd.DataFrame({"物料编码": ["A1", "A2"], "库存量": [10, 20]}),
+          folder=batch_dir)
+make_xlsx("人员名册.xlsx", pd.DataFrame({"工号": ["E1"], "姓名": ["甲"]}), folder=batch_dir)
+code, out, rec, _ = cli_import(batch_dir)
+check("X27 目录批量导入：两张表各自 begin，连接只关一次",
+      code == cli_mod.EXIT_OK and rec.get("begin") == 2 and rec.get("close") == 1,
+      (code, rec.get("begin"), rec.get("close")))
+check("X27b 日志逐表报序号 [1/2] [2/2]（现场能判断卡在哪张）",
+      "开始处理 | [1/2]" in out and "开始处理 | [2/2]" in out, out[:60])
+check("X27c 汇总行给出 2 张表 / 3 行", "导入汇总 | 成功 2 张表 / 3 行" in out,
+      out.strip()[-120:])
+
+code, out, rec, _ = cli_import(batch_dir, fail_ddl_for="ku_cun")
+_create_sqls = [s for s, _ in rec.get("execute", []) if s.startswith("CREATE TABLE")]
+check("X28 单张表建表被拒不阻断其余表（另一张照常建+导入）",
+      code == cli_mod.EXIT_IMPORT and rec.get("begin") == 2 and len(_create_sqls) == 2
+      and "导入完成" in out, (code, rec.get("begin"), len(_create_sqls)))
+check("X28b 失败的那张在汇总里被点名", "失败 1 张" in out and "ku_cun" in out,
+      out.strip()[-160:])
+
+code, out, rec, _ = cli_import(v_orders, extra=["--prefix", "ods_"])
+check("X29 --prefix 保留末尾下划线作分隔符（曾经的真 bug）",
+      any("`ods_ods_t_order`" in s for s, _ in rec.get("execute", [])),
+      [s[:60] for s, _ in rec.get("execute", [])])
+code, out, rec, _ = cli_import(v_orders, extra=["--prefix", "ods"])
+check("X30 --prefix 不带下划线时告警而不是默默连写",
+      "分隔符" in out and "直接接在原名前面" in out, out.strip()[:140])
+code, out, rec, _ = cli_import(v_orders, extra=["--prefix", ""])
+check("X31 --prefix 留空等于移除前缀并提示",
+      "前缀为空" in out and any("`ods_t_order`" in s for s, _ in rec.get("execute", [])), out[:120])
+
+swap_src = make_xlsx("库存（ods_t_stock）.xlsx", pd.DataFrame({"物料编码": ["A1"]}))
+code, out, rec, _ = cli_import(swap_src, extra=["--swap-prefix", "dim_"])
+check("X32 --swap-prefix 换掉首段：ods_t_stock → dim_t_stock",
+      any("CREATE TABLE `dim_t_stock`" in s for s, _ in rec.get("execute", [])),
+      [s[:60] for s, _ in rec.get("execute", [])])
+check("X33 换首段在日志里报告改了哪张", "首段前缀替换" in out and "ods_t_stock" in out, out[:160])
+
+nosep = make_xlsx("无下划线（users）.xlsx", pd.DataFrame({"编号": [1]}))
+code, out, rec, _ = cli_import(nosep, extra=["--swap-prefix", "dim"])
+check("X34 名里没有下划线的表不改并逐条说明",
+      "跳过 1 张" in out, out[out.find("首段") if "首段" in out else 0:][:200])
+
+two_same = os.path.join(_tmpdir, "两同名")
+shutil.rmtree(two_same, ignore_errors=True)
+os.makedirs(two_same, exist_ok=True)
+shutil.copy(v_orders, os.path.join(two_same, "a-订单（ods_t_order）.xlsx"))
+shutil.copy(v_orders, os.path.join(two_same, "b-订单（ods_t_order）.xlsx"))
+code, out, rec, _ = cli_import(two_same)
+_x35 = [s.split(" (")[0] for s, _ in rec.get("execute", []) if s.startswith("CREATE TABLE")]
+check("X35 同批撞名自动 _2（断真实发出去的表名，不是另算一遍）",
+      _x35 == ["CREATE TABLE `ods_t_order`", "CREATE TABLE `ods_t_order_2`"], _x35)
+check("X36 撞名两张表都真的建了（begin 两次、退出码 0）",
+      rec.get("begin") == 2 and code == cli_mod.EXIT_OK, (rec.get("begin"), code))
+
+code, out, _ = run_cli([os.path.join(_tmpdir, "没有这个文件.xlsx"), "-d", "demo"])
+check("X37 路径不存在判用法错误并点名", code == cli_mod.EXIT_USAGE, (code, out[:200]))
+check("X38 路径不存在时日志里点名「路径不存在」", "路径不存在" in out, out[:200])
+
+bad_ext = os.path.join(_tmpdir, "readme.txt")
+with open(bad_ext, "w", encoding="utf-8") as fh:
+    fh.write("not excel")
+code, out, _ = run_cli([bad_ext, "-d", "demo"])
+check("X39 直接指定非 Excel 文件：不支持类型 → 退出码 1",
+      code == cli_mod.EXIT_USAGE and "不支持的类型" in out, (code, out[:120]))
+
+
+# ---------------------------------------------------------------------------
+section("Y CLI 输入收集、压缩包与日志形态")
+
+demo_dir = os.path.join(_tmpdir, "demo_tree")
+shutil.rmtree(demo_dir, ignore_errors=True)
+os.makedirs(os.path.join(demo_dir, "子目录"))
+make_xlsx("一层.xlsx", pd.DataFrame({"编号": [1]}), folder=demo_dir)
+make_xlsx("二层.xlsx", pd.DataFrame({"编号": [2]}), folder=os.path.join(demo_dir, "子目录"))
+with open(os.path.join(demo_dir, "忽略.csv"), "w", encoding="utf-8") as fh:
+    fh.write("a,b\n")
+
+entries, zips = cli_mod.collect_inputs([demo_dir], True, cli_mod.Log(quiet=True))
+check("Y1 递归目录收齐 xlsx", len(entries) == 2, [e[1] for e in entries])
+check("Y2 目录里的 zip 单独归类", zips == [], zips)
+check("Y3 非 Excel 文件不进待处理列表",
+      all(not e[0].endswith(".csv") for e in entries), [e[0] for e in entries])
+entries2, _ = cli_mod.collect_inputs([demo_dir], False, cli_mod.Log(quiet=True))
+check("Y4 --no-recursive 只收一层", len(entries2) == 1, [e[1] for e in entries2])
+
+zip_tree = os.path.join(_tmpdir, "ziptree")
+os.makedirs(zip_tree, exist_ok=True)
+zpath = os.path.join(zip_tree, "批量.zip")
+inner = make_xlsx("包内一层.xlsx", pd.DataFrame({"编号": [3]}), folder=_tmpdir)
+with zipfile.ZipFile(zpath, "w") as zf:
+    zf.write(inner, "深层/包内一层.xlsx")
+code, out, rec, _ = cli_import(zpath)
+check("Y5 压缩包直接作为入参：展开后成功导入", code == cli_mod.EXIT_OK, (code, out[-300:]))
+check("Y6 日志把包内路径写成 包名!包内/文件", "批量.zip!深层/包内一层.xlsx" in out, out[:260])
+
+entries3, zips3 = cli_mod.collect_inputs([zip_tree], True, cli_mod.Log(quiet=True))
+check("Y7 目录里的 zip 被收进 zips 而不是当 Excel",
+      len(zips3) == 1 and not entries3, (entries3, zips3))
+check("Y8 不存在的输入路径被显式报错（不静默跳过）", True, "见 X37")
+
+code, out, rec, _ = cli_import(merged_path)
+check("Y9 合并单元格文件不静默丢：退出码 2 且日志给原因",
+      code == cli_mod.EXIT_PARSE and "合并单元格" in out, (code, out[:200]))
+check("Y10 合并单元格拒绝后没有建任何表", "execute" not in rec, rec.keys())
+
+# 日志形态：一行自带判读，行首符号 + 大写标签，分段 | ；错误档必须能单独 grep
+code, out, _ = run_cli([v_orders, "-d", "demo", "--dry-run"])
+lines = log_lines(out)
+_records = [ln for ln in lines if not ln.startswith("      ")]
+check("Y10b 每条记录行都带时间戳（缩进的详情行除外，事后能对上发生时刻）",
+      bool(_records) and all(
+          re.match(r"^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] ", ln)
+          for ln in out.splitlines() if ln.strip() and not ln.startswith("      ")),
+      out.splitlines()[:1])
+check("Y11 每条记录行都以「符号 [大写标签]」开头（详情行另计）",
+      all(re.match(r"^[+x!-] \[[A-Z_]+\] ", ln) for ln in _records),
+      [ln for ln in _records if not re.match(r"^[+x!-] \[[A-Z_]+\] ", ln)][:2])
+check("Y12 成功与错误分档不同符号",
+      any(ln.startswith("+ [OK]") for ln in lines) and "x [ERROR]" not in "\n".join(lines))
+check("Y13 详情行用缩进跟在记录后，不冒充新记录",
+      any(ln.startswith("      ") for ln in lines))
+code, out, _ = run_cli([merged_path, "-d", "demo"])
+check("Y14 错误可单独 grep：x [ERROR] 一档捞得出来",
+      sum(1 for ln in log_lines(out) if ln.startswith("x [ERROR]")) >= 1, out[:200])
+
+qcode, qout, qconsole = run_cli([v_orders, "-d", "demo", "--dry-run", "-q"])
+check("Y15 --quiet 压掉控制台的记录行，日志文件仍记全量",
+      qcode == cli_mod.EXIT_OK
+      and not [ln for ln in qconsole.splitlines() if re.match(r"^[+x!-] \[", ln)]
+      and any(ln.startswith("+ [OK]") for ln in log_lines(qout)),
+      (qcode, qconsole.strip()[:60]))
+
+qcode, qout, qconsole = run_cli([merged_path, "-d", "demo", "-q"])
+check("Y15b --quiet 不会把错误连同它的详情一起藏掉",
+      qcode == cli_mod.EXIT_PARSE
+      and any(ln.startswith("x [ERROR]") for ln in qconsole.splitlines())
+      and any(ln.startswith("      原因：") for ln in qconsole.splitlines()),
+      qconsole.strip()[:120])
+
+with clean_env():
+    lg = cli_mod.Log(path=os.path.join(_tmpdir, "append.log"))
+    lg.ok("第一次")
+    lg.close()
+    lg2 = cli_mod.Log(path=os.path.join(_tmpdir, "append.log"))
+    lg2.error("第二次")
+    lg2.close()
+    with open(os.path.join(_tmpdir, "append.log"), encoding="utf-8") as fh:
+        alllog = fh.read()
+check("Y16 日志文件是追加不是覆盖（一次任务可能跑多轮）",
+      "第一次" in alllog and "第二次" in alllog and alllog.count("\n") >= 2, alllog)
+check("Y17 日志文件写 UTF-8（中文不乱码）", "建表" in alllog or "第一次" in alllog)
+
+check("Y18 退出码常量互不相同（脚本可按码分流）",
+      len({cli_mod.EXIT_OK, cli_mod.EXIT_USAGE, cli_mod.EXIT_PARSE,
+           cli_mod.EXIT_CONNECT, cli_mod.EXIT_IMPORT}) == 5,
+      [cli_mod.EXIT_OK, cli_mod.EXIT_USAGE, cli_mod.EXIT_PARSE, cli_mod.EXIT_CONNECT, cli_mod.EXIT_IMPORT])
+# 混合输入：两好一坏（坏的是合并单元格那个）。退出码规则在这里钉死——
+# 解析有失败但动作全成功 → 2；解析和动作都失败 → 4，让调用方按"最严重的一档"分流。
+mix_dir = os.path.join(_tmpdir, "mix")
+shutil.rmtree(mix_dir, ignore_errors=True)
+os.makedirs(mix_dir)
+make_xlsx("好1.xlsx", pd.DataFrame({"编号": [1]}), folder=mix_dir)
+make_xlsx("好2.xlsx", pd.DataFrame({"编号": [2]}), folder=mix_dir)
+shutil.copy(merged_path, os.path.join(mix_dir, "坏.xlsx"))
+code, out, rec, _ = cli_import(mix_dir)
+check("Y19 解析有失败但导入全成功 → 退出码 2（不报 0 骗人）",
+      code == cli_mod.EXIT_PARSE and rec.get("begin") == 2, (code, rec.get("begin")))
+check("Y19b 日志同时给出失败项数和继续处理的表数",
+      "解析阶段有失败" in out and "1 项未进入待导入列表" in out, out[:220])
+code, out, rec, _ = cli_import(mix_dir, fail_ddl=True)
+check("Y20 解析失败与建表失败同时发生 → 报更严重的 4（动作失败优先）",
+      code == cli_mod.EXIT_IMPORT, (code, out[-160:]))
+
+# Ctrl+C 要真的模拟一次中断：读源码里有没有 "130" 是个假断言，冻结态没有源码还会误红
+_real_collect = cli_mod.collect_inputs
+
+
+def _interrupt(*a, **k):
+    raise KeyboardInterrupt()
+
+
+cli_mod.collect_inputs = _interrupt
+try:
+    code, out, _ = run_cli([v_orders, "-d", "demo"])
+finally:
+    cli_mod.collect_inputs = _real_collect
+check("Y21 跑到一半按 Ctrl+C 返回 130（与用法错误 1 区分开）", code == 130, (code, out[:120]))
+check("Y21b 中止时日志明说剩余的表未执行", "已中止" in out, out[:160])
+
+# --keep-temp 与 --batch 此前只写在 README 里、没有实测过，这两条把它们钉住
+code, out, _ = run_cli([zpath, "--dry-run", "--keep-temp"])
+kept = re.search(r"临时目录 \| 已保留解压出的 Excel：(.+)$", out.replace("\r", ""), re.M)
+check("Y22 --keep-temp 报出临时目录，且解压出的 Excel 真留在那儿",
+      code == cli_mod.EXIT_OK and bool(kept) and os.path.isdir(kept.group(1).strip())
+      and any(f.endswith(".xlsx") for _, _, fs in os.walk(kept.group(1).strip()) for f in fs),
+      kept.group(1).strip() if kept else out[-200:])
+code, out, _ = run_cli([zpath, "--dry-run"])
+gone = re.search(r"压缩包展开 \| .*?Excel 1 个", out)
+check("Y22b 默认不留临时文件（跑完就清，不越堆越多）",
+      code == cli_mod.EXIT_OK and gone and "已保留" not in out, out[-160:])
+
+code, out, rec, _ = cli_import(v_orders, extra=["--batch", "2"])
+_batches = [len(rows) for _, rows in rec.get("executemany", [])]
+check("Y23 --batch 2 把 3 行真拆成 2 批（2+1），不是整表一次性发过去",
+      _batches == [2, 1], _batches)
+code, out, rec, _ = cli_import(v_orders)
+check("Y23b 默认批大小 500：3 行就是一批",
+      [len(rows) for _, rows in rec.get("executemany", [])] == [3], rec.get("executemany"))
+
+
+# ---------------------------------------------------------------------------
+section("G MySQL 真实读写（探针表跑完必须清零）")
+
+G_LABELS = ("G1 真库连通 + 压缩包展开 + 导入退出码 0",
+            "G1b 真库这一跑也没把密码写进日志",
+            "G2 探针表真的建进库里（不是只没报错）",
+            "G3 每张探针表都有数据",
+            "G4 金额逐值回查：3 位小数没有被服务端圆成 2 位",
+            "G5 日期列落库成 DATE（读回是 date 对象）",
+            "G6 空单元格落成 NULL 而不是空串",
+            "G7 表名带上前缀且分隔符没丢",
+            "G8 探针表全部 DROP",
+            "G9 库里其余表一张没少（没误伤别的表）")
+
+PT = {k: os.environ.get("PT_" + k) for k in ("HOST", "PORT", "USER", "PASS", "DB")}
+if not PT["USER"] or not PT["DB"]:
+    for lbl in G_LABELS:
+        skip(lbl, "未设 PT_USER/PT_DB（G 组要真连 MySQL，绝不冒充通过）")
+else:
+    PROBE = "e2m38probe"
+    import pymysql
+
+    def _db_tables(cur):
+        cur.execute("SELECT TABLE_NAME FROM information_schema.TABLES "
+                    "WHERE TABLE_SCHEMA=%s ORDER BY TABLE_NAME", (PT["DB"],))
+        return [r[0] for r in cur.fetchall()]
+
+    _c = pymysql.connect(host=PT["HOST"] or "127.0.0.1", port=int(PT["PORT"] or 3306),
+                         user=PT["USER"], password=PT["PASS"], database=PT["DB"],
+                         charset="utf8mb4", autocommit=True)
+    with _c.cursor() as _cur:
+        _baseline = _db_tables(_cur)
+    _leftover = [x for x in _baseline if x.startswith(PROBE)]
+    check("G0 开跑前探针表必须不存在（本组会 DROP 同名表）",
+          not _leftover, _leftover or "干净")
+    if not _leftover:
+        g_name = "G探针（g_orders）.xlsx"
+        g_src = make_xlsx(g_name, pd.DataFrame({
+            "订单编号": ["P001", "P002", "P003"],
+            "金额": [3.125, 1.5, 2.25],
+            "下单日期": ["2026-04-01", "2026-04-02", "2026-04-03"],
+            "备注": ["甲", "乙", None],
+        }))
+        g_dir = os.path.join(_tmpdir, "gprobe")
+        os.makedirs(g_dir, exist_ok=True)
+        g_zip = os.path.join(g_dir, "gprobe.zip")
+        with zipfile.ZipFile(g_zip, "w") as zf:
+            zf.write(g_src, g_name)
+        os.remove(g_src)
+        # 凭据走环境变量传给 CLI：命令行里不出现密码，日志里也不回显
+        code, out, _ = run_cli([g_zip, "-d", PT["DB"], "--prefix", PROBE + "_"],
+                               env={"E2M_HOST": PT["HOST"] or "127.0.0.1",
+                                    "E2M_PORT": PT["PORT"] or "3306",
+                                    "E2M_USER": PT["USER"], "E2M_PASS": PT["PASS"]})
+        check("G1 真库连通 + 压缩包展开 + 导入退出码 0", code == cli_mod.EXIT_OK, (code, out[-400:]))
+        check("G1b 真库这一跑也没把密码写进日志",
+              bool(PT["PASS"]) and PT["PASS"] not in out, out[:120])
+        with _c.cursor() as _cur:
+            _now = _db_tables(_cur)
+            _probes = [x for x in _now if x.startswith(PROBE)]
+        check("G2 探针表真的建进库里（不是只没报错）", bool(_probes), _probes)
+        _rows = {}
+        for name in _probes:
+            with _c.cursor() as _cur:
+                _cur.execute("SELECT COUNT(*) FROM `%s`" % name)
+                _rows[name] = _cur.fetchone()[0]
+        check("G3 每张探针表都有数据", all(v > 0 for v in _rows.values()), _rows)
+        _vals = []
+        for name in _probes:
+            with _c.cursor() as _cur:
+                _cur.execute("SELECT `ding_dan_bian_hao`, `jin_e`, `xia_dan_ri_qi`, `bei_zhu` "
+                             "FROM `%s` ORDER BY `ding_dan_bian_hao`" % name)
+                _vals.append(_cur.fetchall())
+        _flat = [r for rows in _vals for r in rows]
+        check("G4 金额逐值回查：3 位小数没有被服务端圆成 2 位",
+              any(str(r[1]) == "3.125" for r in _flat), _flat[:3])
+        check("G5 日期列落库成 DATE（读回是 date 对象）",
+              all(hasattr(r[2], "year") for r in _flat), _flat[:2])
+        check("G6 空单元格落成 NULL 而不是空串",
+              any(r[3] is None for r in _flat), _flat[:3])
+        check("G7 表名带上前缀且分隔符没丢",
+              all(x.startswith(PROBE + "_") for x in _probes), _probes)
+        _cleared = []
+        with _c.cursor() as _cur:
+            for name in _probes:
+                _cur.execute("DROP TABLE `%s`" % name)
+                _cleared.append(name)
+            _after = _db_tables(_cur)
+        check("G8 探针表全部 DROP",
+              not [x for x in _after if x.startswith(PROBE)], _cleared)
+        check("G9 库里其余表一张没少（没误伤别的表）",
+              len(_after) == len(_baseline), "基线 %d → 收尾 %d" % (len(_baseline), len(_after)))
+    else:
+        for lbl in G_LABELS:
+            skip(lbl, "上一轮遗留了探针表 %s，本轮不动库，请先人工确认再删" % _leftover)
+    _c.close()
+
+
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 72)
+print("用例集结束（%s · Python %s）：通过 %d  失败 %d  跳过 %d"
+      % (STACK, sys.version.split()[0], RESULTS["pass"], RESULTS["fail"], RESULTS["skip"]))
+if FAILURES:
+    print("\n失败用例：")
+    for f in FAILURES:
+        print("  - " + f)
+if SKIPPED:
+    print("\n未覆盖（显式记账，不算通过）：")
+    for label, why in SKIPPED:
+        print("  - %s：%s" % (label, why))
+print("=" * 72)
+SUMMARY_PRINTED = True
+shutil.rmtree(_tmpdir, ignore_errors=True)
+sys.exit(1 if RESULTS["fail"] else 0)
