@@ -14,6 +14,10 @@ from .naming import clean_prefix, swap_first_segment
 # 文件名末尾「（表名）」模式：中英文括号均可，如 北京市水务局-水库基础信息（dim_reservoir_info）
 _PAREN_TABLE_RE = re.compile(r"[（(]\s*([^（）()]*)\s*[）)]\s*$")
 
+# 括号内容要形如合法 MySQL 英文标识符（以字母或下划线开头，只含字母/数字/下划线）；
+# 另外还要求至少含一个字母 —— 纯数字括号是序号不是表名，见 parse_table_name_and_comment
+_TABLE_EN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 # VARCHAR 长度算法：常用档位 + 全表字节预算
 # utf8mb4 下 VARCHAR(n) 计入 MySQL 65535 字节行上限按 4n 字节算（n 为字符数），
 # 全表 VARCHAR 总量不加控制会导致 CREATE TABLE 报 Row size too large
@@ -23,6 +27,7 @@ _VARCHAR_MAX_CHARS = 16383      # utf8mb4 VARCHAR 最大字符数（4 × 16383 �
 _ROW_BYTE_BUDGET = 60000        # 全表 VARCHAR 行内字节预算（留出余量防行过大）
 _COL_ROW_COST = 16              # 单个非 VARCHAR 列的行内开销估算（字节）
 _FIELD_MAX_LEN = 30             # 字段名最长 30 字符；全拼超此则整列降级为首字母
+_TABLE_MAX_LEN = 64             # 表名最长 64 字符（MySQL 标识符上限）；全拼超此同样降级为首字母
 
 # ---------------- 金额语义识别 ----------------
 # 纯值判定会把"订单金额"这种列在样本恰好为整数时判成 INT，金额被砍掉小数位；
@@ -134,60 +139,48 @@ def parse_table_name_and_comment(filename: str) -> tuple:
         北京市水务局-水库基础信息（dim_reservoir_info）.xlsx
     则 表名   = 括号内的英文  dim_reservoir_info
        表注释 = 括号前的中文  北京市水务局-水库基础信息
-    中英文括号均可；括号内容须为纯英文（字母/数字/下划线）才视为提取出英文。
-    未提取出英文（无括号、括号内为空/纯符号/中文）时使用默认规则：
-    取括号前文本（无括号则为整个文件名）作为表注释，并由该文本汉字转拼音
-    生成符合 MySQL 规范的英文表名；文本无有效字符时用兜底表名 t_import_data。
+    中英文括号均可；括号内容必须是**可直接当表名用的英文标识符**（以字母或下划线开头、
+    只含字母/数字/下划线、至少含一个字母）才采用，并统一转小写。
+    以下情况一律回退到"由完整文件名汉字转拼音"：括号内是中文（人事处人员）、
+    纯数字序号（7）（2026）、空或纯符号 —— 因此不会产生汉字表名，
+    也不会产生只含数字的表名。
+    回退时表注释保留完整文件名（含括号内容），表名取括号部分转拼音后保留，
+    这样 人员信息表（人事处）与 人员信息表（财务部） 得到两个不同且可辨识的表名。
+    文本无有效字符时用兜底表名 t_import_data。
     """
     stem = os.path.splitext(os.path.basename(filename))[0]
     m = _PAREN_TABLE_RE.search(stem)
     if m:
         raw = m.group(1).strip()
         base = stem[:m.start()].strip() or stem
-        # 括号内须为纯英文标识符且至少含一个字母/数字，否则走默认表名规则
-        if re.fullmatch(r"[A-Za-z0-9_]+", raw) and re.search(r"[A-Za-z0-9]", raw):
-            table_name = raw[:64]
-            if table_name[0].isdigit():
-                table_name = "t_" + table_name
-            return table_name, base
-        return sanitize_table_name(base), base
+        # 只有"能直接当表名用的英文标识符"才取括号内容：必须以字母或下划线开头
+        # 且含字母。（7）（2026）这种纯序号不是表名，中文更不是
+        if _TABLE_EN_RE.fullmatch(raw) and any(c.isascii() and c.isalpha() for c in raw):
+            return raw.lower()[:64], base
+        # 回退时表名与注释都用**完整文件名**（含括号内容）：
+        # 只取括号前的话，人员信息表（人事处）与人员信息表（财务部）会塌成同名加 _2，
+        # 谁也看不出是哪一份；括号里的汉字转拼音进表名，数字序号也保留做区分
+        return sanitize_table_name(stem), stem
     return sanitize_table_name(stem), stem
 
 
-def _cn_to_table_name(text: str, limit: int = 64) -> str:
+def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN) -> str:
     """
     文本 -> 拼音表名组件：小写字母/数字/下划线，符合 MySQL 表名规范。
     各类分隔符（连字符、空格、斜杠、括号等）统一转下划线；连续英文/数字原样保留；
     汉字逐音节转拼音并用下划线分隔（如 水库基础信息 -> shui_ku_ji_chu_xin_xi）。
-    超过 limit 时不做长截断，仅保留前 6 个音节，生成简短干净的表名
-    （如 北京市海淀区水务局下属大型水库枢纽工程… -> bei_jing_shi_hai_dian_qu），
-    同时为批量前缀留出长度余量；数字开头自动补 t 前缀。无法产出有效字符时返回空串。
+    超长处理与字段名同一套规则：全拼不超过 limit 用全拼，超过则整名降级为各音节
+    首字母（如 北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表 -> bjsshdqxsdkscsgjcxxhzbb），
+    这样每个汉字都还在名字里，比"砍掉后半段"更能区分不同文件；
+    数字/英文音节整段保留，数字开头自动补 t_ 前缀。无法产出有效字符时返回空串。
     """
     text = str(text).strip()
     if not text:
         return ""
-    text = re.sub(r"[^\w]+", "_", text, flags=re.UNICODE)
-    parts = []
-    for seg in re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", text):
-        if re.match(r"[\u4e00-\u9fff]", seg):
-            parts.extend(lazy_pinyin(seg))               # 每个音节单独一段
-        else:
-            parts.extend(p for p in seg.lower().split("_") if p)
-    if parts and parts[0][:1].isdigit():
-        parts.insert(0, "t")                             # 数字开头补前缀，保证合法标识符
-    if len("_".join(parts)) > limit:
-        parts = parts[:6]                                # 超长只取前 6 个音节，保持简短
-    out = ""
-    for p in parts:
-        cand = p if not out else out + "_" + p
-        if len(cand) > limit:
-            if not out:
-                out = p[:limit]                          # 单段超长时硬截断兜底
-            break
-        out = cand
-    if not re.search(r"[a-z0-9]", out):
+    syllables = _syllables(text)
+    if not syllables:
         return ""
-    return out
+    return _fit_name(syllables, limit, "t_")
 
 
 def sanitize_table_name(text: str) -> str:
@@ -199,6 +192,53 @@ def sanitize_table_name(text: str) -> str:
     if not name:
         name = "t_import_data"
     return name
+
+
+def _syllables(text):
+    """把任意文本切成 (音节, 是否来自汉字) 序列：汉字逐字一个音节，英文/数字整段保留。
+
+    字段名与表名共用这一套切分，保证同一个中文在两处的转写结果一致。
+    """
+    out = []
+    norm = re.sub(r"[^\w]+", "_", str(text).strip(), flags=re.UNICODE)
+    for seg in re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", norm):
+        if re.match(r"[\u4e00-\u9fff]", seg):
+            out.extend((p, True) for p in lazy_pinyin(seg))     # 每个汉字一个音节
+        else:
+            out.extend((p, False) for p in seg.lower().split("_") if p)
+    cleaned = []
+    for syl, from_hanzi in out:
+        syl = re.sub(r"[^a-z0-9]", "", syl)
+        if syl:
+            cleaned.append((syl, from_hanzi))
+    return cleaned
+
+
+def _fit_name(syllables, limit, digit_prefix):
+    """全拼优先；全拼装不下就整名降级为各音节首字母（仿字段规则）。
+
+    首字母之间不加下划线——单字母加分隔符不增加可读性，却让长度翻倍，
+    把后面的音节挤出 limit 白白丢掉。
+    数字/英文音节必须整段保留：只取首字母会把 "1.0mm" 和 "100.0mm" 都压成 "1"，
+    而这类数字恰恰是名字的区分点。
+    """
+    def _fit(pieces):
+        out = ""
+        for piece in pieces:
+            cand = piece if not out else out + "_" + piece
+            if len(cand) > limit:
+                break
+            out = cand
+        return out[:limit]
+
+    has_cn = any(from_hanzi for _, from_hanzi in syllables)
+    name = _fit([syl for syl, _ in syllables])
+    if has_cn and len("_".join(syl for syl, _ in syllables)) > limit:
+        name = "".join(syl[0] if from_hanzi else syl
+                       for syl, from_hanzi in syllables)[:limit]
+    if name[:1].isdigit():
+        name = digit_prefix + name          # 数字开头补前缀，保证合法标识符
+    return name[:limit]
 
 
 def _col_to_field(cn: str, limit: int = _FIELD_MAX_LEN) -> str:
@@ -213,42 +253,10 @@ def _col_to_field(cn: str, limit: int = _FIELD_MAX_LEN) -> str:
     """
     if cn is None or str(cn).strip() == "":
         return "col"
-    text = re.sub(r"[^\w]+", "_", str(cn).strip(), flags=re.UNICODE)
-    syllables, has_cn = [], False
-    for seg in re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", text):
-        if re.match(r"[\u4e00-\u9fff]", seg):
-            has_cn = True
-            syllables.extend((p, True) for p in lazy_pinyin(seg))   # 每个汉字一个音节
-        else:
-            syllables.extend((p, False) for p in seg.lower().split("_") if p)
-    cleaned = []
-    for s, from_hanzi in syllables:
-        s = re.sub(r"[^a-z0-9]", "", s)
-        if s:
-            cleaned.append((s, from_hanzi))
-    syllables = cleaned
+    syllables = _syllables(cn)
     if not syllables:
         return "col"
-
-    def _fit(pieces):
-        out = ""
-        for p in pieces:
-            cand = p if not out else out + "_" + p
-            if len(cand) > limit:
-                break
-            out = cand
-        return out[:limit]
-
-    name = _fit([s for s, _ in syllables])
-    if has_cn and len("_".join(s for s, _ in syllables)) > limit:
-        # 全拼装不下：改用首字母。首字母之间不加下划线——单字母加分隔符不增加可读性
-        # 却让长度翻倍，把后面的音节挤出 limit 白白丢掉。
-        # 数字/英文音节必须整段保留：只取首字母会把 "1.0mm" 和 "100.0mm" 都压成 "1"，
-        # 而这类数字恰恰是列名的区分点。
-        name = "".join(s[0] if from_hanzi else s for s, from_hanzi in syllables)[:limit]
-    if name[:1].isdigit():
-        name = "f_" + name
-    return name[:limit]
+    return _fit_name(syllables, limit, "f_")
 
 
 def _looks_int(v) -> bool:
