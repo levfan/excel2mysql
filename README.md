@@ -235,10 +235,18 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 辅助开关：`--fast`（只打产品包）、`--no-parity`（跳过 3.12 那轮跨栈）、`--keep-cache`。
 
-**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **79 MB / 1380 个文件**（GUI 线那个包是 154 MB）。
+**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **79 MB / 1382 个文件**（GUI 线那个包是 154 MB）。
 这条线用的是 PyInstaller **5.x**，onedir 是**平铺布局**——`excel2mysql-cli.exe`、`python38.dll`、
-`*.pyd`、`base_library.zip`、默认配置 `conn.ini` 全在同一层，**没有 GUI 线的 `_internal` 目录**
-（那是 6.x 才改的布局）。整个目录一起拷走或压成 zip，只拷 exe 跑不起来。
+`*.pyd`、`base_library.zip`、默认配置 `conn.ini`、使用说明 `README.txt` 全在同一层，
+**没有 GUI 线的 `_internal` 目录**（那是 6.x 才改的布局）。整个目录一起拷走或压成 zip，只拷 exe 跑不起来。
+
+产物同级那份 **`README.txt`**（源文件 `assets/README.txt`）是写给现场使用方的纯文本说明：
+Win7 前置条件（SP1 + UCRT/KB2999226 与缺它时的症状）、四条最省事命令、`conn.ini` 怎么改、
+支持哪些输入与表名字段名规则、开关表、退出码、拷贝方式、跑不通时按错误码查什么。
+用纯文本而不是 markdown，是因为 Win7 上双击 `.md` 未必有能渲染的程序。
+**它有双向守卫**：用例 W29/W29b 拿 `argparse` 的真实长选项清单反着核这份文件——
+写一个不存在的开关、或加了新开关忘了补说明，都会当场变红；W30 核退出码清单与代码常量一一对应，
+W31 保证说明里不会带出口令或内网地址。
 
 > 冻结态测试包（`packtest38.spec`）会把各依赖的 `*.dist-info` 元数据一起收进包里
 > （`copy_metadata`），这样"旧栈装的到底是不是 `requirements38.txt` 钉的那几个版本"
