@@ -3,6 +3,8 @@ import os
 import re
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
+# PEP 604 的 `dict | None` 在 Python 3.8 导入时求值会 TypeError，Win7 线用 typing 写法
+from typing import Optional
 
 import pandas as pd
 from pypinyin import lazy_pinyin
@@ -599,7 +601,7 @@ _META_HEADER_ROLES = (
 )
 
 
-def _match_meta_roles(df) -> dict | None:
+def _match_meta_roles(df) -> Optional[dict]:
     """
     判断一个 Sheet 是否为「字段定义」元数据表。
     命中 field + type 且至少还有一个其他定义列时认为是元数据，返回角色→表头映射。
