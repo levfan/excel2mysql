@@ -1456,6 +1456,7 @@ class MainWindow(QWidget):
         self.tables.clear()
         self.file_table.setRowCount(0)
         self.btn_import.setEnabled(False)
+        self.progress.setValue(0)      # 清空列表后不留上一次的进度残留
 
     def closeEvent(self, e):
         """退出时清掉 ZIP 展开出来的临时文件。"""
@@ -1599,7 +1600,6 @@ class MainWindow(QWidget):
                 + "、".join(os.path.basename(t["filepath"]) for t in kept))
         self.tables = kept
         self._refresh_file_table()
-        self.progress.setValue(100)
         self.btn_import.setEnabled(bool(self.tables))
         self.btn_stop.setEnabled(False)
         msg = f"成功 {ok} 张表，失败 {fail} 张表。"
@@ -1608,6 +1608,9 @@ class MainWindow(QWidget):
         if fail:
             msg += "\n失败文件保留在列表中，可调整后重试。"
         QMessageBox.information(self, "导入完成", msg + "\n详见日志。")
+        # 结果已经由弹窗和日志交代清楚，进度条回到初始的 0%：
+        # 停在 100% 会让人分不清"这是上一批的尾巴，还是这一批的当前进度"
+        self.progress.setValue(0)
 
 
 # ---------------------------------------------------------------------------

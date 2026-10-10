@@ -1778,6 +1778,8 @@ check("Q12 汇总同时写日志与弹窗",
       and any(t == "导入完成" for t, _ in POPUPS),
       [l for l in iw.log.toPlainText().splitlines() if "全部完成" in l])
 check("Q13 列表空后导入按钮自动禁用", iw.btn_import.isEnabled() is False)
+check("Q13b 导入结束后进度条回到初始 0%，不留 100% 残留",
+      iw.progress.value() == 0, iw.progress.value())
 
 
 # ---- 开始导入：建表失败要保留文件、逐条标红 ----
@@ -1797,6 +1799,8 @@ fw.on_start_import()
 _wait_worker(fw)
 app_main.connect = _orig_connect
 check("Q14 建表失败的文件留在列表里可重试", len(fw.tables) == 2, len(fw.tables))
+check("Q14b 导入失败同样把进度条归零（不停在半途也不停在 100%）",
+      fw.progress.value() == 0, fw.progress.value())
 check("Q15 失败逐条标红且汇总记为失败",
       "[建表失败]" in fw.log.toPlainText() and "失败 2 张表" in fw.log.toPlainText(),
       [l for l in fw.log.toPlainText().splitlines() if "建表失败" in l][:1])
@@ -1828,8 +1832,12 @@ cw._add_files([jx1])
 cw.log.appendPlainText("Excel 页占位")
 cw.sql_log.appendPlainText("SQL 页占位")
 cw.btn_clear.click()
+cw.progress.setValue(66)
+cw.btn_clear.click()
 check("Q19 「清空列表」清掉数据与界面并禁用导入按钮",
       cw.tables == [] and cw.file_table.rowCount() == 0 and cw.btn_import.isEnabled() is False)
+check("Q19b 清空列表时进度条一起归零，不留上次跑到一半的痕迹",
+      cw.progress.value() == 0, cw.progress.value())
 cw.btn_clear_log.click()
 check("Q20 「清除日志」只清本页，不影响另一页",
       cw.log.toPlainText() == "" and "SQL 页占位" in cw.sql_log.toPlainText(),
