@@ -646,8 +646,13 @@ class FakeCursor:
 
     def execute(self, sql, params=None):
         self.rec.setdefault("execute", []).append((sql, params))
+        # 模拟驱动：SELECT/SHOW 才有 description，CLI 靠它判断要不要 fetchall
+        self.description = ["id"] if sql.strip().upper().startswith(("SELECT", "SHOW")) else None
         if self._should_fail(sql):
             raise RuntimeError("fake boom on %s" % sql[:30])
+
+    def close(self):
+        self.rec["cursor_closed"] = True
 
     def executemany(self, sql, seq):
         # 插入失败必须在这里也能抛：core.insert_data 走的是 executemany，
@@ -658,6 +663,7 @@ class FakeCursor:
         self.rowcount = len(list(seq))
 
     def fetchall(self):
+        self.rec["fetchall"] = self.rec.get("fetchall", 0) + 1
         return [("testdb",), ("information_schema",)]
 
     def __enter__(self):
@@ -695,13 +701,14 @@ class FakeConn:
         self.rec["close"] += 1
 
 
-def with_fake_conn(rec, fail_ddl=False, fail_insert=False, cfg_seen=None, fail_ddl_for=None):
+def with_fake_conn(rec, fail_ddl=False, fail_insert=False, cfg_seen=None, fail_ddl_for=None,
+                   fail_if=None):
     """把 cli 的 connect 换成假连接：记录调用序列，同时抓住连接配置。
 
-    fail_ddl_for 给一个表名时只让那张表的 CREATE 失败，用来验"单表失败不阻断其余表"。
+    fail_ddl_for 给一个表名时只让那张表的 CREATE 失败，用来验"单表失败不阻断其余表"；
+    fail_if 给一个函数时按语句内容决定失败点（SQL 脚本线要的是"第 N 条语句被拒"）。
     """
-    fail_if = None
-    if fail_ddl_for:
+    if fail_if is None and fail_ddl_for:
         fail_if = lambda sql: sql.startswith("CREATE TABLE `%s`" % fail_ddl_for)
 
     def _fake(cfg):
@@ -709,6 +716,20 @@ def with_fake_conn(rec, fail_ddl=False, fail_insert=False, cfg_seen=None, fail_d
             cfg_seen.update(cfg)
         return FakeConn(rec, fail_ddl=fail_ddl, fail_insert=fail_insert, fail_if=fail_if)
     return _fake
+
+
+def cli_fake(argv, fail_if=None, fail_ddl_for=None):
+    """通用假连接跑法：跑 cli.run，返回 (code, 日志, 调用记录, 连接配置)。"""
+    rec = {}
+    seen = {}
+    real_connect = cli_mod.connect
+    cli_mod.connect = with_fake_conn(rec, cfg_seen=seen, fail_if=fail_if,
+                                     fail_ddl_for=fail_ddl_for)
+    try:
+        code, out, _ = run_cli(argv)
+    finally:
+        cli_mod.connect = real_connect
+    return code, out, rec, seen
 
 
 def cli_import(fixture, extra=None, fail_ddl=False, fail_insert=False, fail_ddl_for=None):
@@ -874,12 +895,12 @@ make_xlsx("二层.xlsx", pd.DataFrame({"编号": [2]}), folder=os.path.join(demo
 with open(os.path.join(demo_dir, "忽略.csv"), "w", encoding="utf-8") as fh:
     fh.write("a,b\n")
 
-entries, zips = cli_mod.collect_inputs([demo_dir], True, cli_mod.Log(quiet=True))
+entries, zips, _sqls = cli_mod.collect_inputs([demo_dir], True, cli_mod.Log(quiet=True))
 check("Y1 递归目录收齐 xlsx", len(entries) == 2, [e[1] for e in entries])
 check("Y2 目录里的 zip 单独归类", zips == [], zips)
 check("Y3 非 Excel 文件不进待处理列表",
       all(not e[0].endswith(".csv") for e in entries), [e[0] for e in entries])
-entries2, _ = cli_mod.collect_inputs([demo_dir], False, cli_mod.Log(quiet=True))
+entries2, _, _ = cli_mod.collect_inputs([demo_dir], False, cli_mod.Log(quiet=True))
 check("Y4 --no-recursive 只收一层", len(entries2) == 1, [e[1] for e in entries2])
 
 zip_tree = os.path.join(_tmpdir, "ziptree")
@@ -892,7 +913,7 @@ code, out, rec, _ = cli_import(zpath)
 check("Y5 压缩包直接作为入参：展开后成功导入", code == cli_mod.EXIT_OK, (code, out[-300:]))
 check("Y6 日志把包内路径写成 包名!包内/文件", "批量.zip!深层/包内一层.xlsx" in out, out[:260])
 
-entries3, zips3 = cli_mod.collect_inputs([zip_tree], True, cli_mod.Log(quiet=True))
+entries3, zips3, _sql3 = cli_mod.collect_inputs([zip_tree], True, cli_mod.Log(quiet=True))
 check("Y7 目录里的 zip 被收进 zips 而不是当 Excel",
       len(zips3) == 1 and not entries3, (entries3, zips3))
 check("Y8 不存在的输入路径被显式报错（不静默跳过）", True, "见 X37")
@@ -1008,6 +1029,147 @@ check("Y23b 默认批大小 500：3 行就是一批",
 
 
 # ---------------------------------------------------------------------------
+section("Z SQL 脚本线（GUI「SQL 脚本」页的命令行版）")
+
+sql_dir = os.path.join(_tmpdir, "sqls")
+shutil.rmtree(sql_dir, ignore_errors=True)
+os.makedirs(sql_dir)
+sql_a = os.path.join(sql_dir, "建表.sql")
+with open(sql_a, "w", encoding="utf-8") as fh:
+    fh.write("-- 中文注释里有个 ; 分号，不该被当成语句边界\n"
+             "CREATE TABLE `ods_t_order` (`id` BIGINT NOT NULL, PRIMARY KEY (`id`));\n"
+             "CREATE TABLE `ods_t_user` (`id` BIGINT);\n"
+             "INSERT INTO `ods_t_user` VALUES (1);\n"
+             "INSERT INTO `ods_t_user` VALUES (2);\n")
+sql_empty = os.path.join(sql_dir, "空脚本.sql")
+with open(sql_empty, "w", encoding="utf-8") as fh:
+    fh.write("-- 只有注释，没有语句\n")
+sql_blank = os.path.join(_tmpdir, "真空白.sql")
+with open(sql_blank, "w", encoding="utf-8") as fh:
+    fh.write("")
+sql_nohd = os.path.join(_tmpdir, "无下划线.sql")
+with open(sql_nohd, "w", encoding="utf-8") as fh:
+    fh.write("CREATE TABLE `lonename` (`id` INT);\n")
+sql_gbk = os.path.join(sql_dir, "gbk脚本.sql")
+with open(sql_gbk, "wb") as fh:
+    fh.write("-- 记事本 ANSI 存的中文注释\nCREATE TABLE `gbk_one` (`id` INT);\n".encode("gbk"))
+sql_sel = os.path.join(_tmpdir, "带查询.sql")
+with open(sql_sel, "w", encoding="utf-8") as fh:
+    fh.write("CREATE TABLE `sel_one` (`id` INT);\nSELECT `id` FROM `sel_one`;\n")
+sql_bad = os.path.join(_tmpdir, "坏语句.sql")
+with open(sql_bad, "w", encoding="utf-8") as fh:
+    fh.write("CREATE TABLE `good_one` (`id` INT);\nTHIS IS NOT SQL;\n"
+             "CREATE TABLE `never_runs` (`id` INT);\n")
+
+ents, zps, sps = cli_mod.collect_inputs([sql_dir], True, cli_mod.Log(quiet=True))
+check("Z1 .sql 归类到脚本，不混进 Excel 列表",
+      len(sps) == 3 and not ents and not zps, (len(ents), len(sps)))
+
+code, out, rec, seen = cli_fake([sql_a, "-d", "demo", "--run-sql"])
+check("Z2 识别 CREATE TABLE 的数量与表名",
+      "CREATE TABLE 2 处 / 表 2 张：ods_t_order(1)、ods_t_user(1)" in out, out[:150])
+check("Z3 注释里的分号没被误切：正好 4 条语句",
+      len(rec.get("execute", [])) == 4, [s[:30] for s, _ in rec.get("execute", [])])
+check("Z4 每个文件一个事务：begin→执行→commit→close",
+      rec.get("begin") == 1 and rec.get("commit") == 1 and rec.get("close") == 1, rec)
+check("Z4b 连接配置照常传下去", seen.get("database") == "demo", seen)
+check("Z4c 全部成功才提交，日志报出提交条数",
+      "脚本提交 | 建表.sql | 4 条语句已提交" in out and "脚本汇总 | 成功 1 个文件，失败 0 个" in out,
+      out[-200:])
+
+code, out, rec, _ = cli_fake([sql_sel, "-d", "demo", "--run-sql"])
+check("Z5 SELECT 语句会取空结果集（游标不挂着）",
+      len(rec.get("execute", [])) == 2 and rec.get("fetchall") == 1,
+      (len(rec.get("execute", [])), rec.get("fetchall")))
+
+code, out, rec, _ = cli_fake([sql_a, "-d", "demo", "--run-sql", "--prefix", "ads_"])
+_ex = [s for s, _ in rec.get("execute", [])]
+check("Z6 --prefix 改写脚本里的表名与所有引用",
+      "ods_t_order→ads_ods_t_order（1 处）" in out and "ods_t_user→ads_ods_t_user（3 处）" in out
+      and all("ods_t_order" not in s.replace("ads_ods_t_order", "") for s in _ex), out[:200])
+code, out, rec, _ = cli_fake([sql_a, "-d", "demo", "--run-sql", "--prefix", "ods_"])
+check("Z6b 已带该前缀的表不叠加（重复跑是幂等的）",
+      "未改写 2 张" in out and not any("ods_ods_" in s for s, _ in rec.get("execute", [])),
+      out[:160])
+code, out, rec, _ = cli_fake([sql_a, "-d", "demo", "--run-sql", "--swap-prefix", "dim"])
+check("Z6c --swap-prefix 换掉脚本表名的首段（ods_t_order → dim_t_order）",
+      any("CREATE TABLE `dim_t_order`" in s for s, _ in rec.get("execute", []))
+      and "ods_t_order→dim_t_order" in out, out[:200])
+code, out, rec, _ = cli_fake([sql_nohd, "-d", "demo", "--run-sql", "--swap-prefix", "dim"])
+check("Z6d 表名里没有下划线的脚本不改，并逐条列出（与 GUI 同口径）",
+      any("lonename" in s for s, _ in rec.get("execute", [])) and "跳过 1 张" in out, out[:200])
+
+code, out, rec, _ = cli_fake([sql_a, "-d", "demo"])
+check("Z7 不加 --run-sql 时 .sql 只登记、绝不连库",
+      code == cli_mod.EXIT_OK and not rec and "脚本未执行" in out, (code, list(rec)))
+code, out, rec, _ = cli_fake([sql_blank, "-d", "demo", "--run-sql"])
+check("Z8 完全空白的脚本显式记为跳过，不开连接",
+      "脚本为空" in out and not rec, (out[:120], list(rec)))
+code, out, rec, _ = cli_fake([sql_empty, "-d", "demo", "--run-sql"])
+check("Z8b 只有注释的脚本按 1 条语句发给 MySQL（MySQL 接受纯注释，不当空文件跳过）",
+      len(rec.get("execute", [])) == 1 and "脚本为空" not in out,
+      (len(rec.get("execute", [])), out[:120]))
+
+code, out, rec, _ = cli_fake([sql_gbk, "-d", "demo", "--run-sql"])
+check("Z9 GBK(记事本 ANSI) 存的脚本读得开、语句完整",
+      any("gbk_one" in s for s, _ in rec.get("execute", [])), out[:150])
+
+code, out, rec, _ = cli_fake([sql_bad, "-d", "demo", "--run-sql"],
+                             fail_if=lambda sql: "NOT SQL" in sql.upper())
+check("Z10 某条语句被拒：退出码 5、整文件回滚、第三条不再执行",
+      code == cli_mod.EXIT_SCRIPT and rec.get("rollback") == 1 and rec.get("commit") is None
+      and len(rec.get("execute", [])) == 2,
+      (code, rec.get("rollback"), rec.get("commit"), len(rec.get("execute", []))))
+check("Z10b 失败日志给出第几条、出错语句原文和回滚说明",
+      "第 2/3 条语句被拒绝" in out and "本文件事务已回滚" in out
+      and "出错语句" in out and "THIS IS NOT SQL" in out
+      and not any("never_runs" in s for s, _ in rec.get("execute", [])),
+      out[:200])
+
+bad_dir = os.path.join(_tmpdir, "两个脚本")
+os.makedirs(bad_dir, exist_ok=True)
+shutil.copy(sql_bad, os.path.join(bad_dir, "坏语句.sql"))
+shutil.copy(sql_a, os.path.join(bad_dir, "建表.sql"))
+code, out, rec, _ = cli_fake([bad_dir, "-d", "demo", "--run-sql"],
+                             fail_if=lambda sql: "NOT SQL" in sql.upper())
+check("Z11 坏脚本不阻断同批其余脚本（成功 1 个 / 失败 1 个）",
+      code == cli_mod.EXIT_SCRIPT and "成功 1 个文件，失败 1 个" in out
+      and any("ods_t_order" in s for s, _ in rec.get("execute", [])), out[-200:])
+
+code, out, _ = run_cli([sql_a, "-d", "demo", "--check", "--run-sql"])
+check("Z12 --check 与 --run-sql 冲突时报用法错误（不静默忽略其中一个）",
+      code == cli_mod.EXIT_USAGE and "参数冲突" in out, (code, out[:120]))
+code, out, _ = run_cli([sql_a, "--run-sql"])
+check("Z12b --run-sql 没给目标库直接判用法错（不会跑半截）",
+      code == cli_mod.EXIT_USAGE, code)
+code, out, _ = run_cli(["-d", "demo", "--run-sql"])
+check("Z12c --run-sql 但输入里没有 .sql：明确警告而不是默默成功",
+      code == cli_mod.EXIT_USAGE and "没有输入" in out, (code, out[:120]))
+
+mix_dir = os.path.join(_tmpdir, "混合")
+shutil.rmtree(mix_dir, ignore_errors=True)
+os.makedirs(mix_dir)
+shutil.copy(v_orders, os.path.join(mix_dir, "订单（ods_t_order）.xlsx"))
+shutil.copy(sql_sel, os.path.join(mix_dir, "带查询.sql"))
+code, out, rec, _ = cli_fake([mix_dir, "-d", "demo", "--run-sql"])
+check("Z13 同一目录里 Excel 建表导入与脚本执行都跑（两条动作互不掺混）",
+      code == cli_mod.EXIT_OK
+      and any("CREATE TABLE `ods_t_order`" in s for s, _ in rec.get("execute", []))
+      and any("CREATE TABLE `sel_one`" in s for s, _ in rec.get("execute", [])),
+      (code, len(rec.get("execute", []))))
+check("Z13b 混合跑的汇总里两边各有交代",
+      "导入汇总" in out and "脚本汇总" in out, out[-220:])
+code, out, rec, _ = cli_fake([mix_dir, "-d", "demo", "--run-sql"],
+                             fail_if=lambda sql: "sel_one" in sql)
+check("Z14 Excel 成功 + 脚本失败 → 取更严重的码 5",
+      code == cli_mod.EXIT_SCRIPT and "导入汇总 | 成功 1 张表" in out, code)
+
+code, out, rec, _ = cli_fake([os.path.join(_tmpdir, "没有这个.sql"), "-d", "demo", "--run-sql"])
+check("Z15 不存在的 .sql 路径：明确报错并退回法码",
+      code == cli_mod.EXIT_USAGE and "路径不存在" in out, (code, out[:120]))
+
+
+# ---------------------------------------------------------------------------
 section("G MySQL 真实读写（探针表跑完必须清零）")
 
 G_LABELS = ("G1 真库连通 + 压缩包展开 + 导入退出码 0",
@@ -1019,7 +1181,10 @@ G_LABELS = ("G1 真库连通 + 压缩包展开 + 导入退出码 0",
             "G6 空单元格落成 NULL 而不是空串",
             "G7 表名带上前缀且分隔符没丢",
             "G8 探针表全部 DROP",
-            "G9 库里其余表一张没少（没误伤别的表）")
+            "G9 库里其余表一张没少（没误伤别的表）",
+            "G10 脚本执行到真库：退出码 0 并报出提交条数",
+            "G11 脚本建的表真在库里",
+            "G11b 脚本里的 INSERT 逐值落了库（含中文，不是只建了空表）")
 
 PT = {k: os.environ.get("PT_" + k) for k in ("HOST", "PORT", "USER", "PASS", "DB")}
 if not PT["USER"] or not PT["DB"]:
@@ -1089,9 +1254,37 @@ else:
               any(r[3] is None for r in _flat), _flat[:3])
         check("G7 表名带上前缀且分隔符没丢",
               all(x.startswith(PROBE + "_") for x in _probes), _probes)
+        # 脚本线真跑：把一个 .sql 执行进真库，确认建表与 INSERT 都落下去
+        g_sql = os.path.join(_tmpdir, "g_script.sql")
+        with open(g_sql, "w", encoding="utf-8") as _fh:
+            _fh.write("CREATE TABLE `%s_sql_orders` (\n"
+                      "  `id` BIGINT NOT NULL,\n"
+                      "  `name` VARCHAR(64) DEFAULT NULL COMMENT '名称',\n"
+                      "  PRIMARY KEY (`id`)\n"
+                      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n"
+                      "INSERT INTO `%s_sql_orders` VALUES (1, '甲'), (2, '乙');\n"
+                      "SELECT `id` FROM `%s_sql_orders`;\n" % (PROBE, PROBE, PROBE))
+        code, out, _ = run_cli([g_sql, "-d", PT["DB"], "--run-sql"],
+                               env={"E2M_HOST": PT["HOST"] or "127.0.0.1",
+                                    "E2M_PORT": PT["PORT"] or "3306",
+                                    "E2M_USER": PT["USER"], "E2M_PASS": PT["PASS"]})
+        check("G10 脚本执行到真库：退出码 0 并报出提交条数",
+              code == cli_mod.EXIT_OK and "脚本提交" in out, (code, out[-200:]))
+        with _c.cursor() as _cur:
+            _sqltab = [x for x in _db_tables(_cur) if x == PROBE + "_sql_orders"]
+            _rows = None
+            if _sqltab:
+                _cur.execute("SELECT `id`, `name` FROM `%s_sql_orders` ORDER BY `id`" % PROBE)
+                _rows = _cur.fetchall()
+        check("G11 脚本建的表真在库里", bool(_sqltab), _sqltab)
+        check("G11b 脚本里的 INSERT 逐值落了库（含中文，不是只建了空表）",
+              _rows == ((1, "甲"), (2, "乙")), _rows)
+
+        # 收尾必须重新按前缀列一遍再 DROP：脚本那一步是中途新增的表，
+        # 只清 _probes 那份早期快照会把 e2m38probe_sql_orders 留在库里
         _cleared = []
         with _c.cursor() as _cur:
-            for name in _probes:
+            for name in [x for x in _db_tables(_cur) if x.startswith(PROBE)]:
                 _cur.execute("DROP TABLE `%s`" % name)
                 _cleared.append(name)
             _after = _db_tables(_cur)
