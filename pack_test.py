@@ -2167,7 +2167,9 @@ else:
         create_table(conn, f"DROP TABLE IF EXISTS `{tname}`")
         probe_cols = [{"field": "id", "comment": "主键ID", "type": "INT", "primary_key": True},
                       {"field": "name", "comment": "名称", "type": "VARCHAR(64)"},
-                      {"field": "amount", "comment": "金额", "type": "DECIMAL(10,2)"},
+                      # 小数位要和写入的数据对得上：写 3 位小数却建 DECIMAL(10,2)，
+                      # MySQL 不报错而是静默四舍五入（见 G5b），断言就会对不上
+                      {"field": "amount", "comment": "金额", "type": "DECIMAL(10,3)"},
                       {"field": "d", "comment": "日期", "type": "DATE"}]
         create_table(conn, build_ddl(tname, "打包探针表", probe_cols, False))
         check("G3 建表成功", True)
@@ -2177,14 +2179,30 @@ else:
         n = insert_data(conn, tname, probe_cols, pdf, batch=2)
         check("G4 分批插入并落库", n == 3, f"{n} 行")
         with conn.cursor() as c:
-            c.execute(f"SELECT COUNT(*), SUM(amount) FROM `{tname}`")
-            cnt, tot = c.fetchone()
-        check("G5 查询确认数据真的写进去了", cnt == 3 and abs(float(tot) - 6.875) < 1e-6,
-              f"count={cnt} sum={tot}")
+            c.execute(f"SELECT `id`, `name`, `amount`, `d` FROM `{tname}` ORDER BY `id`")
+            got = [(r[0], r[1], float(r[2]), str(r[3])) for r in c.fetchall()]
+        check("G5 逐值回查确认写进去的就是原值（数量、文本、小数、日期都不走样）",
+              got == [(1, "甲", 1.5, "2026-01-01"), (2, "乙", 2.25, "2026-02-02"),
+                      (3, "丙", 3.125, "2026-03-03")], got)
         conn.rollback()
         with conn.cursor() as c:
             c.execute(f"SELECT COUNT(*) FROM `{tname}`")
             check("G6 已提交的数据不受后续 rollback 影响", c.fetchone()[0] == 3)
+        # 小数位比列定义多时 MySQL 静默四舍五入（连 STRICT 模式都不报错），这是真实的
+        # 数据丢失模式；两头都验：服务端确实会圆，而类型推断按实测小数位定宽不会建出窄列
+        sc_cols = [{"field": "id", "comment": "主键ID", "type": "INT", "primary_key": True},
+                   {"field": "v", "comment": "金额", "type": "DECIMAL(10,2)"}]
+        create_table(conn, build_ddl(tname + "_sc", "小数位探针表", sc_cols, False))
+        insert_data(conn, tname + "_sc", sc_cols,
+                    pd.DataFrame({"id": [1], "v": [3.125]}), batch=5)
+        with conn.cursor() as c:
+            c.execute(f"SELECT `v` FROM `{tname}_sc`")
+            rounded = float(c.fetchone()[0])
+        wide = {cc["comment"]: cc["type"] for cc in infer_columns(
+            pd.DataFrame({"金额": [1.5, 2.25, 3.125], "编号": ["A", "B", "C"]}))}
+        check("G6b 小数位不足时服务端静默四舍五入(3.125→3.13)；类型推断按实测给 3 位不踩这个坑",
+              rounded == 3.13 and wide["金额"].endswith(",3)"), (rounded, wide["金额"]))
+        create_table(conn, f"DROP TABLE IF EXISTS `{tname}_sc`")
         bad_cols = [{"field": "id", "comment": "主键ID", "type": "INT", "primary_key": True},
                     {"field": "v", "comment": "值", "type": "VARCHAR(2)"}]
         try:
