@@ -147,7 +147,7 @@ def check_env():
             "（6.x 官方只支持 Windows 8+，bootloader 不为 Win7 构建）")
     missing = [p for p in ("excel2mysql_cli38.spec", "packtest38.spec", "pack_test38.py",
                            "cli.py", "_pack_common.py", "requirements38.txt",
-                           "version.py", "assets/app_icon.ico",
+                           "version.py", "assets/app_icon.ico", "assets/conn.ini",
                            os.path.join("core", "infer.py"), os.path.join("core", "mysql_io.py"),
                            os.path.join("core", "zip_import.py"), os.path.join("core", "infer.py"),
                            os.path.join("core", "merge_check.py"), os.path.join("core", "naming.py"),
@@ -217,6 +217,9 @@ def inspect_package():
             "命令行包不该带 GUI 依赖，多半是 cli.py 里 import 了 main/PySide6")
     if not any(n == "python38.dll" for n in names):
         raise RuntimeError("产物里没有 python38.dll，说明不一定是 3.8 打出来的包")
+    if not any(n == "conn.ini" for n in names):
+        raise RuntimeError("产物同级没有 conn.ini 默认配置（spec 的 datas 漏了 assets/conn.ini）——"
+                           "对方不带 -c 时就找不到默认连接配置，只能靠内置默认值")
     if any(n.endswith((".pyc", ".py")) and os.path.basename(n) == "main.py" for n in names):
         raise RuntimeError("产物里出现了 main.py")
 
@@ -305,6 +308,10 @@ def smoke_product_exe():
                      "+ [OK] 解析成功", "dry-run 完成"):
             if must not in text:
                 raise RuntimeError(f"冻结态日志里缺少「{must}」——打包缺库或缺逻辑：\n{text[-600:]}")
+        # 随包的默认连接配置必须真被读到（不带 -c 也能找到 exe 同级那份 conn.ini）
+        if "（自动发现）" not in text:
+            raise RuntimeError("冻结态没自动读到产物同级的 conn.ini，日志里的来源不是它：\n"
+                               + text[:400])
         n, _ = dir_stats(APP_DIST)
         return f"{ver_line} · --help/--dry-run 退出码 0 · 日志含推断出的 DDL（{n} 个文件）"
     finally:
@@ -327,7 +334,13 @@ def check_no_python_needed():
         if r.returncode != 0:
             raise RuntimeError(f"脱离项目目录后 exe 跑不起来（退出码 {r.returncode}）："
                                f"\n{r.stdout}\n{r.stderr}")
-        return "在临时目录里独立跑通（不依赖本机 Python 与项目目录）"
+        # 这个临时目录里没有 conn.ini：仍然要报"自动发现"，说明找的是 exe 同级那份，
+        # 不是靠当前工作目录——分发到别人机器上换个工作目录也不会突然读不到配置
+        with open(log, encoding="utf-8") as fh:
+            text = fh.read()
+        if "（自动发现）" not in text:
+            raise RuntimeError("在别的工作目录下没能自动发现 exe 同级的 conn.ini：\n" + text[:400])
+        return "在临时目录里独立跑通，并自动读到 exe 同级的 conn.ini"
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -356,6 +369,8 @@ def summary():
     say(f"\n{GREEN}打包成功。{RESET}产物：{APP_EXE}  ({size:.0f} MB / {n} 个文件)")
     say(f"分发：把 {APP_DIST} 整个文件夹拷到 Win7 机器（或压成 zip），"
         f"解压后在 cmd 里运行 excel2mysql-cli.exe --help")
+    say(f"  配置：产物同级带了一份 {os.path.join(APP_DIST, 'conn.ini')}（默认 127.0.0.1:3306/root，"
+        f"口令与目标库留空），不带 -c 会自动读它；改这个文件就行")
     say(f"{YELLOW}注意：这条线用的是 PyInstaller 5.x，onedir 是平铺布局——"
         f"python38.dll / *.pyd / base_library.zip 全在 exe 同级目录，没有 GUI 线那个 "
         f"_internal 文件夹。整个目录一起拷，只拷 exe 跑不起来。{RESET}")

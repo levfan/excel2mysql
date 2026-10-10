@@ -19,7 +19,8 @@ a = Analysis(
     ["cli.py"],
     pathex=["."],
     binaries=[],
-    datas=[],
+    # 默认连接配置随包放到 exe 同级：拷走整个目录就能直接跑，不用每次 -c
+    datas=[("assets/conn.ini", ".")],
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
