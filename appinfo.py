@@ -49,7 +49,7 @@ def build_info(project_dir=None):
     info["built_at"] = "开发态（未打包）"
     if commit:
         info.update({"commit": commit, "branch": _run_git(["rev-parse", "--abbrev-ref", "HEAD"], here),
-                     "dirty": bool(_run_git(["status", "--porcelain"], here)),
+                     "dirty": bool(_run_git(["status", "--porcelain", "-uno"], here)),
                      "source": "git"})
     else:
         info["commit"] = "无 git 信息"

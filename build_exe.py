@@ -172,7 +172,8 @@ def write_build_stamp():
 
     commit = git("rev-parse", "--short", "HEAD")
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
-    dirty = bool(git("status", "--porcelain"))
+    # 只看已跟踪文件的改动：未跟踪的遗留文件不该把构建标成 dirty
+    dirty = bool(git("status", "--porcelain", "-uno"))
     built = time.strftime("%Y-%m-%d %H:%M:%S")
     q = chr(34)
     doc_open = q * 3

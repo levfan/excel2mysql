@@ -2272,6 +2272,17 @@ check("T6 关于框三行标签齐备（版本/提交/构建日期）",
       all(t in _labels for t in ("版本", "提交", "构建日期")), _labels[:5])
 _be = None
 _i = _ai.build_info()
+
+
+def _run_git_probe():
+    """已跟踪文件是否真有未提交改动（-uno 忽略未跟踪），与 appinfo 同一口径。"""
+    import subprocess
+    try:
+        return bool(subprocess.run(["git", "status", "--porcelain", "-uno"],
+                                   cwd=os.path.dirname(os.path.abspath(app_main.__file__)),
+                                   capture_output=True, text=True, timeout=10).stdout.strip())
+    except Exception:
+        return True
 check("T7 三行的值来自 appinfo，不是写死的字符串",
       ad.rows["version"].text() == "v" + APP_VERSION
       and ad.rows["commit"].text() == _ai.commit_display(_i)
@@ -2280,6 +2291,8 @@ check("T7 三行的值来自 appinfo，不是写死的字符串",
 check("T8 提交号可鼠标选中复制（要贴给别人时不用手抄）",
       bool(ad.rows["commit"].textInteractionFlags()))
 ad.deleteLater()
+check("T8b 未跟踪文件不把构建标成 dirty（只看已跟踪文件的改动）",
+      _i["dirty"] is False or bool(_run_git_probe()), _i["dirty"])
 check("T9 提交号来源被如实标注（bundle=打包烧入 / git=开发态现取 / unknown）",
       _i["source"] in ("bundle", "git", "unknown"), _i["source"])
 check("T10 任何一项取不到都有占位文本，不会显示空白也不抛异常",
