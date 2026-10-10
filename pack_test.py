@@ -8,7 +8,7 @@ excel2mysql.spec 完全相同的 excludes/hiddenimports 口径冻结成控制台
   A 依赖与静态资源    B Excel 解析与类型推断    C 主键
   D DDL 生成          E SQL 脚本处理            F GUI 构造与交互逻辑
   H ZIP 压缩包导入    I .xls 老格式（xlrd）     J 添加结果弹窗
-  K 三段高度可拖拽    L 字段类型映射            M 字段命名规则
+  K 高度可拖拽(两页)  L 字段类型映射            M 字段命名规则
   N 合并单元格拒绝    O 模态进度框与子线程执行
   P 使用说明          Q 全部按钮入口与事务副作用（假连接实测）
   R 替换首个前缀
@@ -843,7 +843,7 @@ else:
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-section("K 待导入表格高度可拖拽")
+section("K 高度可拖拽（Excel 页三段 + SQL 页两栏）")
 
 from PySide6.QtWidgets import QSplitter
 from PySide6.QtCore import Qt
@@ -885,6 +885,42 @@ check("K8 固定件不在分隔条内（提示条/操作条/进度条不跟着�
       w.lbl_imp_db.parent() is not sp and w.progress.parent() is not sp
       and w.btn_import.parent() is not sp)
 check("K9 初始三段高度都大于 0", all(x > 0 for x in sp.sizes()), sp.sizes())
+# ---- SQL 脚本页：待处理文件表格与日志之间同样可拖拽分配高度 ----
+from PySide6.QtWidgets import QTableWidget
+
+w.main_tabs.setCurrentIndex(1)
+_app.processEvents()
+sp2 = w.sql_split
+check("K10 SQL 页用垂直分隔条承载「文件表格区」与「日志区」，且不可折叠",
+      isinstance(sp2, QSplitter) and sp2.orientation() == Qt.Vertical
+      and sp2.count() == 2 and sp2.childrenCollapsible() is False
+      and sp2.handleWidth() == 6, sp2.sizes())
+check("K11 分隔条两侧正是待处理文件表与 SQL 日志",
+      sp2.widget(0).findChild(QTableWidget) is w.sql_table and sp2.widget(1) is w.sql_log,
+      [type(sp2.widget(i)).__name__ for i in range(2)])
+sp2.setSizes([600, 100])
+_app.processEvents()
+u = [sp2.widget(i).height() for i in range(2)]
+sp2.setSizes([100, 600])
+_app.processEvents()
+d = [sp2.widget(i).height() for i in range(2)]
+check("K12 往下拖：表格区高于日志；反向拖：日志高于表格且表格确实被压缩",
+      u[0] > u[1] and d[1] > d[0] and d[0] < u[0], f"{u} -> {d}")
+check("K13 两边此消彼长，总和守恒", abs(sum(u) - sum(d)) <= 2, f"{sum(u)} vs {sum(d)}")
+check("K14 前缀行与操作条跟着表格区一起缩放，不会被分隔条单独挤掉",
+      sp2.widget(0).isAncestorOf(w.ed_sql_prefix)
+      and sp2.widget(0).isAncestorOf(w.btn_sql_run)
+      and sp2.widget(0).isAncestorOf(w.btn_sql_clear_log))
+check("K15 提示条与添加/移除按钮是固定件，不在分隔条里被挤压",
+      w.lbl_sql_db.parent() is not sp2 and w.btn_sql_add.parent() is not sp2
+      and not sp2.isAncestorOf(w.btn_sql_add))
+check("K16 表格由分隔条控制高度后仍拿得到视口",
+      w.sql_table.viewport().height() > 0, w.sql_table.viewport().height())
+w.sql_log.appendPlainText("分隔条缩放后日志仍可写入")
+check("K17 缩放到最小后日志区仍能显示内容（不会拖成 0 高）",
+      min(d) > 0 and "分隔条缩放后" in w.sql_log.toPlainText(), d)
+w.main_tabs.setCurrentIndex(0)
+_app.processEvents()
 w.close()
 
 # ---------------------------------------------------------------------------
