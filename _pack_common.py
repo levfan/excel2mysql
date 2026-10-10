@@ -85,3 +85,15 @@ def drop_unneeded_qt(binaries):
 
 
 ALL_EXCLUDES = QT_EXCLUDES + OTHER_EXCLUDES
+
+# ---------------------------------------------------------------------------
+# Win7 命令行包（excel2mysql_cli38.spec）的额外排除
+# ---------------------------------------------------------------------------
+# CLI 与 GUI 共用 core/，但 Win7 包里绝不允许出现 Qt 与 GUI 侧模块：
+# 一旦有人从 cli.py 里 import main（或直接 import PySide6），PyInstaller 会把
+# 整个 Qt 拖进旧包 —— 产物在 Win7 上照样起不来（Qt 6 只要 Win10 1809+），
+# 体积还会从十几 MB 涨到上百 MB，而这两件事都不会让打包本身报错。
+# 所以这里显式排除，build_exe38.py 再按文件名复查一遍落地的产物。
+GUI_MODULES = ["PySide6", "PySide2", "main", "ui_help", "help_doc"]
+
+CLI_EXCLUDES = ALL_EXCLUDES + GUI_MODULES

@@ -152,8 +152,9 @@ activemq-data/
 # Environments
 .env
 .envrc
-.venv
+.venv*
 env/
+venv*/
 venv/
 ENV/
 env.bak/
@@ -223,14 +224,22 @@ __marimo__/
 # ---------------------------------------------------------------------------
 # 本项目专属规则（在上面 GitHub 通用模板之后追加，模板里与本项目冲突的写法在此纠正）
 # ---------------------------------------------------------------------------
-# 模板里的 *.spec 会把打包配置一起排除掉，但这两个 .spec 是本项目必需的源文件
-# （README「打包为 Windows 免安装 exe」与 build_exe.py 的前置检查都依赖它们）
+# 模板里的 *.spec 会把打包配置一起排除掉，但这些 .spec 是本项目必需的源文件
+# （README「打包为 Windows 免安装 exe」与 build_exe.py / build_exe38.py 的前置检查都依赖它们）
 !excel2mysql.spec
 !packtest.spec
+!excel2mysql_cli38.spec
+!packtest38.spec
+
+# pyenv 的版本指针是本机的选择：GUI 线用 3.12、Win7 线用 3.8.10，两套并存。
+# 把这个文件入库会把别人的 pyenv 一起钉到 3.8，GUI 线反而起不来。
+.python-version
 
 # 打包产物：build_exe.py 现场生成，不入库（模板只写了 build/ 与 dist/）
 dist_packtest/
 build_packtest/
+dist_packtest38/
+build_packtest38/
 
 # PyCharm 工程状态（模板里 .idea/ 是注释掉的）
 .idea/
