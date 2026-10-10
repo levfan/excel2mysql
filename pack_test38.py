@@ -627,6 +627,70 @@ with clean_env():
 check("W24 全默认值时 host/port/user 有兜底",
       (merged["host"], merged["port"], merged["user"]) == ("127.0.0.1", 3306, "root"), merged)
 
+# --- W25-W31：随包带的默认连接配置（assets/conn.ini → 产物同级 conn.ini） ---
+# 这四条断的是源文件本身，冻结态包内没有 assets/conn.ini，只能 SKIP：
+# "产物里到底有没有带 conn.ini"由闸门按实际产物目录核（build_exe38.inspect_package），
+# 在测试包里再收一份副本自证是自欺欺人。
+W25_LABELS = ("W25 模板 assets/conn.ini 存在且能解析",
+              "W25b 模板给的默认值合理（本机 3306、root，口令与库留空）",
+              "W25c 模板里的键与解析器认的键完全对齐（改模板不会静默失效）",
+              "W25d 模板不含任何真实口令（公开仓库里不能带）")
+tpl_path = os.path.join(ROOT, "assets", "conn.ini")
+if not os.path.isfile(tpl_path):
+    for _lbl in W25_LABELS:
+        skip(_lbl, "冻结态包内没有 assets/conn.ini 源文件，模板内容由开发态那轮核")
+    tpl = {}
+else:
+    check(W25_LABELS[0], True, tpl_path)
+    tpl = cli_mod.read_config_file(tpl_path)
+    check(W25_LABELS[1],
+          (tpl.get("host"), str(tpl.get("port")), tpl.get("user")) == ("127.0.0.1", "3306", "root")
+          and not (tpl.get("password") or "").strip() and not (tpl.get("database") or "").strip(), tpl)
+    check(W25_LABELS[2], set(tpl) == set(cli_mod.CONFIG_KEYS), sorted(tpl))
+    check(W25_LABELS[3],
+          "Root@" not in open(tpl_path, encoding="utf-8").read()
+          and "password =" in open(tpl_path, encoding="utf-8").read())
+
+cands = cli_mod.default_config_paths()
+check("W26 自动发现顺序：先程序目录、再当前工作目录",
+      len(cands) == 2 and os.path.basename(cands[0]) == "conn.ini"
+      and os.path.isabs(cands[0]) and os.path.isabs(cands[1]), cands)
+
+code, out, _ = run_cli([v_orders, "--dry-run"])
+check("W26b 开发态（仓库根没有 conn.ini）不会误读 assets 模板，来源写的是内置默认值",
+      code == cli_mod.EXIT_OK and "内置默认值" in out, out[:200])
+
+auto_dir = os.path.join(_tmpdir, "autocfg")
+shutil.rmtree(auto_dir, ignore_errors=True)
+os.makedirs(auto_dir)
+_real_cwd = os.getcwd()
+with open(os.path.join(auto_dir, "conn.ini"), "w", encoding="utf-8") as fh:
+    fh.write("[mysql]\nhost = auto-host\nport = 3399\nuser = auto-user\n"
+             "password = auto-secret\ndatabase = autodb\n")
+try:
+    os.chdir(auto_dir)
+    code, out, _ = run_cli([v_orders, "--dry-run"])
+    check("W27 不带 -c 时自动读当前目录的 conn.ini 并在来源里标明「自动发现」",
+          code == cli_mod.EXIT_OK and "（自动发现）" in out and "auto-host" in out, out[:260])
+    check("W27b 自动发现的配置里没有回显口令值",
+          "auto-secret" not in out, out[:200])
+    code, out, _ = run_cli([v_orders, "--dry-run", "-c", cfg_path])
+    check("W27c 显式 -c 优先于自动发现（来源里不再标自动发现，用的是指定的那个文件）",
+          code == cli_mod.EXIT_OK and "（自动发现）" not in out and "10.0.0.9" in out, out[:200])
+    # 注意用 run_cli 的 env 参数：它内部会先 scrub 掉所有 E2M_*/PT_* 再写入，
+    # 从外面 set 的变量会被它自己的清场逻辑抹掉
+    code, out, _ = run_cli([v_orders, "--dry-run"], env={"E2M_HOST": "env-beats-auto"})
+    check("W27d 环境变量仍然压过自动发现的配置文件",
+          "env-beats-auto" in out and "（自动发现）" in out, out[:220])
+    os.remove(os.path.join(auto_dir, "conn.ini"))
+    with open(os.path.join(auto_dir, "conn.ini"), "w", encoding="utf-8") as fh:
+        fh.write("[wrong]\nhost = 1.2.3.4\n")
+    code, out, _ = run_cli([v_orders, "--dry-run"])
+    check("W28 自动发现的配置写坏了：报 WARN 并退回内置默认值，命令照常跑完",
+          code == cli_mod.EXIT_OK and "默认配置忽略" in out and "127.0.0.1" in out, out[:260])
+finally:
+    os.chdir(_real_cwd)
+
 
 # ---------------------------------------------------------------------------
 section("X CLI 端到端·假连接（断到真实落库调用序列，不只看退出码）")
