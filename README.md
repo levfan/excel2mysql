@@ -94,9 +94,14 @@ excel2mysql-cli.exe -c conn.ini --check
 :: 3) 真正导入：展开压缩包、给全部表名加 ods_ 前缀、日志另存一份
 excel2mysql-cli.exe -c conn.ini 数据包.zip --prefix ods_ --log 导入.log
 
-:: 4) 把手头的 .sql 脚本执行到目标库（一样能统一加前缀）
-excel2mysql-cli.exe -c conn.ini 脚本目录 --run-sql --prefix ods_ --log 脚本.log
+:: 4) 把手头的 .sql 脚本执行到目标库（改成 ads_ 前缀；本来就叫 ads_ 开头的会跳过）
+excel2mysql-cli.exe -c conn.ini 脚本目录 --run-sql --prefix ads_ --log 脚本.log
 ```
+
+> 这四条里的 `-c conn.ini` 都可以省——产物同级默认带一份 `conn.ini`，不带 `-c` 会自动读到。
+> 另外注意 `--prefix` 是**加一段**，不是改名：`--prefix ads_` 会把 `dim_region` 变成
+> `ads_dim_region`，而已经叫 `ads_t_order` 的表被视为"已带该前缀"跳过（重复跑是幂等的），
+> 所以别写一个和现有表名重复的前缀，那样等于没加。
 
 ### 输入
 
@@ -109,7 +114,11 @@ excel2mysql-cli.exe -c conn.ini 脚本目录 --run-sql --prefix ods_ --log 脚�
 
 1. 命令行：`--host --port --user --password -d/--database`
 2. 环境变量：`E2M_HOST E2M_PORT E2M_USER E2M_PASS E2M_DB`
-3. 配置文件：`-c conn.ini`
+3. 配置文件：`-c conn.ini`；**不给 `-c` 时会自动读程序同级的 `conn.ini`**——
+   产物目录里默认带一份（源文件 `assets/conn.ini`），拷走整个文件夹就能直接跑，
+   改那个文件即可，不用每次敲 `-c`。日志会写明来源是"配置文件 …（自动发现）"；
+   这份自动发现的文件要是写坏了（缺 `[mysql]` 段等），会打一条 `! [WARN] 默认配置忽略`
+   并退回内置默认值，不会让整条命令起不来
 
 ```ini
 ; conn.ini —— 段名 [mysql]（也接受 [connection]）
@@ -121,8 +130,10 @@ password = 改成你的密码
 database = testdb
 ```
 
-密码建议走 `E2M_PASS` 或配置文件而不是 `--password`：命令行参数会留在 cmd 历史和
-任务管理器的进程列表里。**日志与错误输出里永不回显密码**，只写"取自环境变量/配置文件"。
+密码建议留在这份文件之外走 `E2M_PASS`：命令行参数会留在 cmd 历史和
+任务管理器的进程列表里，填了口令的 `conn.ini` 也别外发（仓库里 `.gitignore` 已排除根级
+`/conn.ini`，只有 `assets/conn.ini` 那份空口令模板入库）。
+**日志与错误输出里永不回显密码**，只写"取自环境变量/配置文件"。
 
 ### 动作与选项
 
@@ -226,8 +237,8 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 **产物形态与分发**：`dist\excel2mysql-cli\`，实测 **79 MB / 1380 个文件**（GUI 线那个包是 154 MB）。
 这条线用的是 PyInstaller **5.x**，onedir 是**平铺布局**——`excel2mysql-cli.exe`、`python38.dll`、
-`*.pyd`、`base_library.zip` 全在同一层，**没有 GUI 线的 `_internal` 目录**（那是 6.x 才改的布局）。
-整个文件夹一起拷走或压成 zip，只拷 exe 跑不起来。
+`*.pyd`、`base_library.zip`、默认配置 `conn.ini` 全在同一层，**没有 GUI 线的 `_internal` 目录**
+（那是 6.x 才改的布局）。整个目录一起拷走或压成 zip，只拷 exe 跑不起来。
 
 > 冻结态测试包（`packtest38.spec`）会把各依赖的 `*.dist-info` 元数据一起收进包里
 > （`copy_metadata`），这样"旧栈装的到底是不是 `requirements38.txt` 钉的那几个版本"
