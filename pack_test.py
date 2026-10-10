@@ -270,10 +270,10 @@ check("B26 含时间的字符串 → DATETIME",
 check("B27 INT 溢出 → BIGINT",
       infer_columns(pd.DataFrame({"大数": [9999999999, 1111111111]}))[0]["type"] == "BIGINT",
       infer_columns(pd.DataFrame({"大数": [9999999999]}))[0]["type"])
-check("B28 表名超 64 字符只保留前 6 个音节",
-      len(sanitize_table_name("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表")) <= 64
-      and sanitize_table_name("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表")
-      == "bei_jing_shi_hai_dian_qu",
+check("B28 表名全拼超 64 字符时整名降级为首字母（仿字段规则，每个汉字都还在名字里）",
+      sanitize_table_name("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表")
+      == "bjshdqswjxsdxsksngcjcxxhzb"
+      and len(sanitize_table_name("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表")) <= 64,
       sanitize_table_name("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表"))
 dupcols = pd.DataFrame([["a", "b", "c"]], columns=["名称", "名称", "名称"])
 dfields = [c["field"] for c in infer_columns(dupcols)]
@@ -406,7 +406,9 @@ check("D10 INSERT 模板列数与占位符数一致",
 section("F GUI 构造与交互逻辑（冻结态）")
 
 w = app_main.MainWindow()
-check("F1 MainWindow 构造成功", w.windowTitle() == "Excel → MySQL 批量导入工具")
+check("F1 MainWindow 构造成功，标题带版本号",
+      w.windowTitle().startswith("Excel → MySQL 批量导入工具 v")
+      and app_main.APP_VERSION in w.windowTitle(), w.windowTitle())
 check("F2 两个页签齐全", [w.main_tabs.tabText(i) for i in range(2)]
       == ["Excel 导入", "SQL 脚本"])
 w.cb_db.blockSignals(True); w.cb_db.clear()
@@ -2182,6 +2184,144 @@ check("R32 SQL 页替换同样走模态进度框，按文件计项",
       dlg2 is not None and dlg2.accepted and dlg2.updates[-1] == (1, 1, "换前缀样本.sql"),
       dlg2.updates if dlg2 else None)
 app_main.MODAL_PROGRESS = False
+
+section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名）")
+
+from core.infer import parse_table_name_and_comment as _PT, _col_to_field as _CF
+
+_n1, _c1 = _PT("人员信息表（人事处人员）.xlsx")
+check("S1 括号内是中文：表名由全部中文一起转拼音，绝不含汉字",
+      _n1 == "ren_yuan_xin_xi_biao_ren_shi_chu_ren_yuan"
+      and all(ord(c) < 128 for c in _n1), _n1)
+check("S2 表注释保留完整文件名（人事处/财务部不会塌成同名）", _c1 == "人员信息表（人事处人员）", _c1)
+_n2, _c2 = _PT("人员信息表（7）.xlsx")
+check("S3 括号内是纯数字序号：表名转拼音并保留序号，不是只含数字的名字",
+      _n2 == "ren_yuan_xin_xi_biao_7" and not _n2.isdigit(), _n2)
+check("S4 括号内是年份数字同样回退（不产出 t_2026 这种无意义表名）",
+      _PT("人员信息表（2026）.xlsx")[0] == "ren_yuan_xin_xi_biao_2026",
+      _PT("人员信息表（2026）.xlsx")[0])
+check("S5 括号内以数字开头的英文不算可用标识符，回退拼音",
+      _PT("人员信息表（7_dim）.xlsx")[0] == "ren_yuan_xin_xi_biao_7_dim",
+      _PT("人员信息表（7_dim）.xlsx")[0])
+_n6, _c6 = _PT("北京市水务局-水库基础信息（dim_reservoir_info）.xlsx")
+check("S6 括号内是合法英文标识符：仍按老规则取括号内、注释取括号前（回归）",
+      _n6 == "dim_reservoir_info" and _c6 == "北京市水务局-水库基础信息", (_n6, _c6))
+check("S7 括号内大写英文统一转小写（Linux 下表名区分大小写）",
+      _PT("人员信息表（DIM_7）.xlsx")[0] == "dim_7", _PT("人员信息表（DIM_7）.xlsx")[0])
+check("S8 括号内是 v2 这种字母开头的名字：合法标识符，直接采用",
+      _PT("人员信息表（v2）.xlsx")[0] == "v2")
+check("S9 空括号与纯符号括号都回退，不产出畸形名",
+      _PT("水库（）.xlsx")[0] == "shui_ku" and _PT("水库（-）.xlsx")[0] == "shui_ku",
+      (_PT("水库（）.xlsx")[0], _PT("水库（-）.xlsx")[0]))
+check("S10 整个文件名只有数字（没中文可转）时补 t_ 前缀，这是唯一可行解",
+      _PT("7.xlsx")[0] == "t_7" and _PT("2026.xlsx")[0] == "t_2026",
+      (_PT("7.xlsx")[0], _PT("2026.xlsx")[0]))
+_a = _PT("人员信息表（人事处）.xlsx")[0]
+_b = _PT("人员信息表（财务部）.xlsx")[0]
+check("S11 中文括号里写不同部门，得到两个不同表名而不是同名加 _2", _a != _b, (_a, _b))
+sf1 = make_xlsx("人员信息表（人事处人员）.xlsx", {"S": pd.DataFrame({"编号": ["A1"]})})
+sf2 = make_xlsx("人员信息表（7）.xlsx", {"S": pd.DataFrame({"编号": ["B1"]})})
+td_s1 = build_table_def(sf1)
+td_s2 = build_table_def(sf2)
+check("S12 端到端：真实文件走完整条链路后表名与纯解析一致",
+      td_s1["table_name"] == _n1 and td_s2["table_name"] == _n2
+      and td_s1["base_table_name"] == td_s1["table_name"],
+      (td_s1["table_name"], td_s2["table_name"]))
+check("S13 表注释能看出是哪个文件（导入前可核对）",
+      td_s1["table_comment"] == "人员信息表（人事处人员）", td_s1["table_comment"])
+check("S14 字段规则回归：全拼、超长降级首字母、数字音节整段保留都没被改动带偏",
+      _CF("订单金额") == "ding_dan_jin_e"
+      and _CF("北京市住房和城乡建设委员会") == "bjszfhcxjswyh"
+      and _CF("1.0mm管道日平均入渗量") != _CF("100.0mm管道日平均入渗量"),
+      (_CF("订单金额"), _CF("北京市住房和城乡建设委员会")))
+
+
+section("T 版本号与「关于」框")
+
+import re as _re
+from PySide6.QtWidgets import QLabel
+from version import APP_VERSION
+import appinfo as _ai
+
+check("T1 版本号是 X.Y.Z 语义化格式，且只有一个来源",
+      _re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+", APP_VERSION) is not None, APP_VERSION)
+check("T2 appinfo 报的版本与 version.py 一致", _ai.build_info()["version"] == APP_VERSION)
+tw = app_main.MainWindow()
+check("T3 窗口标题带版本号", APP_VERSION in tw.windowTitle(), tw.windowTitle())
+check("T4 「i」按钮存在且提示写明是关于",
+      tw.btn_about.text() == "i" and "关于" in tw.btn_about.toolTip(), tw.btn_about.toolTip())
+_opened_about = []
+_real_about = app_main.AboutDialog
+
+
+class _StubAbout:
+    def __init__(self, parent=None):
+        _opened_about.append(parent)
+
+    def exec(self):
+        return 1
+
+
+app_main.AboutDialog = _StubAbout
+tw.btn_about.click()
+check("T5 点「i」打开关于框", len(_opened_about) == 1 and _opened_about[0] is tw)
+app_main.AboutDialog = _real_about
+ad = _real_about(tw)
+_labels = [x.text() for x in ad.findChildren(QLabel)]
+check("T6 关于框三行标签齐备（版本/提交/构建日期）",
+      all(t in _labels for t in ("版本", "提交", "构建日期")), _labels[:5])
+_be = None
+_i = _ai.build_info()
+check("T7 三行的值来自 appinfo，不是写死的字符串",
+      ad.rows["version"].text() == "v" + APP_VERSION
+      and ad.rows["commit"].text() == _ai.commit_display(_i)
+      and ad.rows["built"].text() == _i["built_at"],
+      {k: v.text() for k, v in ad.rows.items()})
+check("T8 提交号可鼠标选中复制（要贴给别人时不用手抄）",
+      bool(ad.rows["commit"].textInteractionFlags()))
+ad.deleteLater()
+check("T9 提交号来源被如实标注（bundle=打包烧入 / git=开发态现取 / unknown）",
+      _i["source"] in ("bundle", "git", "unknown"), _i["source"])
+check("T10 任何一项取不到都有占位文本，不会显示空白也不抛异常",
+      bool(_i["commit"]) and bool(_i["built_at"]), (_i["commit"], _i["built_at"]))
+# T11-T13 只能在开发态跑：build_exe 不在 exe 包内（产品入口不 import 它），
+# 而且它们会真的写 build_stamp.py / 读 .gitignore，冻结态两样都不存在。
+_had_stamp = os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(app_main.__file__)),
+                                         "build_stamp.py"))
+if not getattr(sys, "frozen", False):
+    import build_exe as _be
+    _be.write_build_stamp()
+    import build_stamp as _bs
+    check("T11 打包前生成的 build_stamp 字段齐备、版本与 version.py 一致、时间是完整时刻",
+          all(hasattr(_bs, k) for k in ("APP_VERSION", "COMMIT", "BRANCH", "DIRTY", "BUILT_AT"))
+          and _bs.APP_VERSION == APP_VERSION
+          and _re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}",
+                            _bs.BUILT_AT) is not None,
+          (getattr(_bs, "COMMIT", "?"), getattr(_bs, "BUILT_AT", "?")))
+    check("T12 生成后 appinfo 改口为 bundle，读的就是烧进去的提交号",
+          _ai.build_info()["source"] == "bundle" and _ai.build_info()["commit"] == _bs.COMMIT,
+          _ai.build_info())
+    _gi = io.open(os.path.join(os.path.dirname(os.path.abspath(app_main.__file__)),
+                               ".gitignore"), encoding="utf-8").read()
+    check("T13 build_stamp.py 属生成物，不入库", "build_stamp.py" in _gi)
+else:
+    skip("T11-T13 build_stamp 生成与入库排除",
+         "冻结态包里没有 build_exe 模块与 .gitignore，只在开发态验")
+# 用例自己造的生成物要自己清掉：否则开发态下次启动会误报"读到打包烧入的提交号"
+if not _had_stamp:
+    try:
+        os.remove(os.path.join(os.path.dirname(os.path.abspath(app_main.__file__)),
+                               "build_stamp.py"))
+    except OSError:
+        pass
+else:
+    _ai.build_info()
+if getattr(sys, "frozen", False):
+    check("T14 冻结态必须读到打包时烧进去的提交号",
+          _ai.build_info()["source"] == "bundle"
+          and _ai.build_info()["commit"] not in ("unknown", "无 git 信息"), _ai.build_info())
+else:
+    skip("T14 冻结态提交号取证", "开发态跑不到 exe 环境，打包闸门里会跑")
 
 section("G MySQL 真实读写（建表→导入→查询→回滚）")
 
