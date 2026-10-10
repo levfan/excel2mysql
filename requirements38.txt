@@ -1,0 +1,40 @@
+# ============================================================================
+# excel2mysql "Windows 7 line" (command-line entry, cli.py) - Python 3.8.10
+# ----------------------------------------------------------------------------
+# KEEP THIS FILE ASCII-ONLY. A fresh venv created by Python 3.8 ships pip
+# 21.1.1, which decodes requirements files with locale.getpreferredencoding()
+# (cp936 on zh-CN Windows) and dies with UnicodeDecodeError on UTF-8 Chinese
+# comments. Newer pip happens to tolerate it - do not rely on that.
+# pack_test38.py case U18/U19 fails the build if non-ASCII bytes appear here.
+#
+# These are the LAST releases that still install on Python 3.8 / run on
+# Windows 7. Do not "upgrade" them casually:
+#   numpy 1.24.4        1.25+ requires Python >= 3.9
+#   pandas 2.0.3        2.1+   requires Python >= 3.9
+#   PyMySQL 1.1.2       1.2+   requires Python >= 3.9  (GUI line uses 1.2.3)
+#   xlrd 2.0.2          pinned to the GUI line so .xls parsing is identical
+#   PyInstaller 5.13.2  6.x documents "Windows 8 and newer" only, and its
+#                       bootloader is not built for Windows 7
+#
+# The GUI line (Windows 10 1809+ / 11) is a separate environment with its own
+# dependency file:
+#   .venv     -> Python 3.12 + PySide6      : main.py,        pack_test.py
+#   .venv38   -> Python 3.8.10, no Qt       : cli.py,         pack_test38.py
+#
+# Create the environment (pyenv-win already has 3.8.10 on this machine):
+#   pyenv install 3.8.10
+#   cd excel2mysql
+#   "C:\Users\YOU\.pyenv\pyenv-win\versions\3.8.10\python.exe" -m venv .venv38
+#   .venv38\Scripts\python -m pip install --upgrade pip
+#   .venv38\Scripts\python -m pip install -r requirements38.txt
+# Package it: python  build_exe38.py   (run it through the matching .bat wrapper,
+# which is the one-click gate: env check -> tests -> build -> frozen tests -> launch)
+# ============================================================================
+numpy==1.24.4
+pandas==2.0.3
+PyMySQL==1.1.2
+openpyxl==3.1.5
+xlrd==2.0.2
+pypinyin==0.55.0
+tzdata==2026.5
+pyinstaller==5.13.2

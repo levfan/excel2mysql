@@ -1,6 +1,13 @@
-# Requires: 64-bit Windows 10 (1809+) or Windows 11; no Windows 7/8/8.1 support
-# (Qt 6 drops Win7/8.1; PySide6 needs Python >=3.10; numpy needs Python >=3.12)
-# See README section "Runtime Requirements" for details
+# KEEP THIS FILE ASCII-ONLY: old pip (21.x, bundled with Python 3.8) decodes
+# requirements with the system locale (cp936 on zh-CN Windows) and raises
+# UnicodeDecodeError on UTF-8 Chinese comments. Guarded by pack_test38.py U18/U19.
+#
+# GUI line: 64-bit Windows 10 (1809+) or Windows 11, Python >= 3.10 (.venv / 3.12.8).
+# It cannot run on Windows 7/8/8.1: Qt 6's support matrix does not even list 8.1,
+# PySide6 needs Python >= 3.10 and numpy needs >= 3.12.
+# To import data from Windows 7 use the command-line line instead (same core/, no GUI):
+#   requirements38.txt  +  .venv38  +  build_exe38.py   -  see README
+#   "Runtime Requirements" / "Windows 7" sections.
 PySide6
 pymysql
 pandas
