@@ -2251,6 +2251,17 @@ from PySide6.QtWidgets import QLabel
 from version import APP_VERSION
 import appinfo as _ai
 
+# 闸门最后一步会留下上一次构建的指纹（build_stamp.py 是那次构建的凭证，故意不删）。
+# 必须在**本组任何一次 build_info() 之前**把它刷成当前树的状态，否则下面 T7/T8b
+# 会拿旧指纹跟当前 git 实况比出假红——"刚打完包就单独跑用例集"这条正常序列必红。
+# 还要弹掉 sys.modules 里的缓存：本文件更早处可能已经 import 过 build_stamp。
+_be = None
+if not getattr(sys, "frozen", False):
+    import build_exe as _be
+    _be.write_build_stamp()
+    sys.modules.pop("build_stamp", None)
+_i = _ai.build_info()
+
 check("T1 版本号是 X.Y.Z 语义化格式，且只有一个来源",
       _re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+", APP_VERSION) is not None, APP_VERSION)
 check("T2 appinfo 报的版本与 version.py 一致", _ai.build_info()["version"] == APP_VERSION)
@@ -2299,8 +2310,10 @@ check("T7 三行的值来自 appinfo，不是写死的字符串",
 check("T8 提交号可鼠标选中复制（要贴给别人时不用手抄）",
       bool(ad.rows["commit"].textInteractionFlags()))
 ad.deleteLater()
-check("T8b 未跟踪文件不把构建标成 dirty（只看已跟踪文件的改动）",
-      _i["dirty"] is False or bool(_run_git_probe()), _i["dirty"])
+check("T8b 构建的 dirty 判定只看已跟踪文件的改动（未跟踪遗留不算）",
+      _i["dirty"] == _run_git_probe(),
+      "烧入 %s / 现取 %s（工作区里有未跟踪文件时这一对比才有意义）"
+      % (_i["dirty"], _run_git_probe()))
 check("T9 提交号来源被如实标注（bundle=打包烧入 / git=开发态现取 / unknown）",
       _i["source"] in ("bundle", "git", "unknown"), _i["source"])
 check("T10 任何一项取不到都有占位文本，不会显示空白也不抛异常",
