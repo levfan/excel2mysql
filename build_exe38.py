@@ -148,6 +148,7 @@ def check_env():
     missing = [p for p in ("excel2mysql_cli38.spec", "packtest38.spec", "pack_test38.py",
                            "cli.py", "_pack_common.py", "requirements38.txt",
                            "version.py", "assets/app_icon.ico", "assets/conn.ini",
+                           "assets/README.txt",
                            os.path.join("core", "infer.py"), os.path.join("core", "mysql_io.py"),
                            os.path.join("core", "zip_import.py"), os.path.join("core", "infer.py"),
                            os.path.join("core", "merge_check.py"), os.path.join("core", "naming.py"),
@@ -217,9 +218,11 @@ def inspect_package():
             "命令行包不该带 GUI 依赖，多半是 cli.py 里 import 了 main/PySide6")
     if not any(n == "python38.dll" for n in names):
         raise RuntimeError("产物里没有 python38.dll，说明不一定是 3.8 打出来的包")
-    if not any(n == "conn.ini" for n in names):
-        raise RuntimeError("产物同级没有 conn.ini 默认配置（spec 的 datas 漏了 assets/conn.ini）——"
-                           "对方不带 -c 时就找不到默认连接配置，只能靠内置默认值")
+    for want in ("conn.ini", "README.txt"):
+        if not any(n == want.lower() for n in names):
+            raise RuntimeError(
+                "产物同级没有 %s（spec 的 datas 漏了 assets/ 里那份）——"
+                "对方要么找不到默认配置，要么手上没有使用说明" % want)
     if any(n.endswith((".pyc", ".py")) and os.path.basename(n) == "main.py" for n in names):
         raise RuntimeError("产物里出现了 main.py")
 
@@ -371,6 +374,8 @@ def summary():
         f"解压后在 cmd 里运行 excel2mysql-cli.exe --help")
     say(f"  配置：产物同级带了一份 {os.path.join(APP_DIST, 'conn.ini')}（默认 127.0.0.1:3306/root，"
         f"口令与目标库留空），不带 -c 会自动读它；改这个文件就行")
+    say(f"  说明：产物同级的 README.txt 是写给使用方的（前置条件、四条命令、退出码、排错），"
+        f"发机器时一起拷过去即可")
     say(f"{YELLOW}注意：这条线用的是 PyInstaller 5.x，onedir 是平铺布局——"
         f"python38.dll / *.pyd / base_library.zip 全在 exe 同级目录，没有 GUI 线那个 "
         f"_internal 文件夹。整个目录一起拷，只拷 exe 跑不起来。{RESET}")
