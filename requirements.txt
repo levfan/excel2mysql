@@ -1,0 +1,9 @@
+# 运行环境：64 位 Windows 10（1809 及以上）或 Windows 11；不支持 Windows 7 / 8 / 8.1
+#（Qt 6 不支持 Win7/8.1，且 PySide6 要求 Python >=3.10、numpy 要求 >=3.12）
+# 详见 README「运行环境要求」一节
+PySide6
+pymysql
+pandas
+openpyxl
+xlrd
+pypinyin

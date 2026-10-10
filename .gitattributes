@@ -1,0 +1,12 @@
+# 默认按文本处理（仓库内存 LF）
+* text=auto
+
+# 一键打包.bat 必须是 CRLF，否则 cmd.exe 逐行解析可能出错
+*.bat text eol=crlf
+
+# 二进制资源不要做任何换行/编码改写
+*.ico binary
+*.png binary
+*.xls binary
+*.xlsx binary
+*.zip binary
