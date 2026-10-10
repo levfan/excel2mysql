@@ -1130,7 +1130,7 @@ class MainWindow(QWidget):
         self.sql_table.setColumnWidth(2, 130)
         self.sql_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sql_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        lay.addWidget(self.sql_table, 1)
+        # 表格与下面的两行操作条作为一个整体参与高度缩放，先不挂到页面布局上
 
         prefix_row = QHBoxLayout()
         prefix_row.addWidget(QLabel("表名前缀："))
@@ -1149,7 +1149,6 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.ed_sql_prefix, 1)
         prefix_row.addWidget(self.btn_sql_prefix)
         prefix_row.addWidget(self.btn_sql_replace)
-        lay.addLayout(prefix_row)
 
         act_row = QHBoxLayout()
         self.btn_sql_save = QPushButton("保存修改后脚本")
@@ -1162,12 +1161,29 @@ class MainWindow(QWidget):
         self.btn_sql_clear_log = QPushButton("清除日志")
         self.btn_sql_clear_log.clicked.connect(self.on_sql_clear_log)
         act_row.addWidget(self.btn_sql_clear_log)
-        lay.addLayout(act_row)
 
         self.sql_log = QPlainTextEdit()
         self.sql_log.setReadOnly(True)
         self.sql_log.setMaximumBlockCount(2000)
-        lay.addWidget(self.sql_log, 1)
+
+        # 上半区 = 待处理文件表格 + 它自己的前缀行与操作行；下半区 = 日志。
+        # 两者之间一条可拖拽分隔条：一边变高另一边就变窄，做法与 Excel 导入页一致。
+        sql_upper = QWidget()
+        up_lay = QVBoxLayout(sql_upper)
+        up_lay.setContentsMargins(0, 0, 0, 0)
+        up_lay.addWidget(self.sql_table, 1)
+        up_lay.addLayout(prefix_row)
+        up_lay.addLayout(act_row)
+
+        self.sql_split = QSplitter(Qt.Vertical)
+        self.sql_split.setChildrenCollapsible(False)     # 不允许把任一边拖到 0 高
+        self.sql_split.setHandleWidth(6)
+        self.sql_split.addWidget(sql_upper)
+        self.sql_split.addWidget(self.sql_log)
+        self.sql_split.setStretchFactor(0, 2)
+        self.sql_split.setStretchFactor(1, 3)
+        self.sql_split.setSizes([260, 290])
+        lay.addWidget(self.sql_split, 1)
         return page
 
     def _refresh_sql_table(self):
