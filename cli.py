@@ -8,9 +8,11 @@ GUI 版（main.py）要求 Windows 10 1809+，两者共用推断/建表/导入�
     excel2mysql-cli.exe [选项] <文件或目录> [<文件或目录> ...]
     excel2mysql-cli.exe --dry-run 数据\\目录
     excel2mysql-cli.exe -c conn.ini 数据\\目录 --prefix ods_
+    excel2mysql-cli.exe -c conn.ini 脚本\\目录 --run-sql --prefix ods_   # 执行 .sql 脚本
     excel2mysql-cli.exe -c conn.ini --check              # 只测连接并列出库
 
 输入 .xlsx / .xls / .zip（压缩包自动展开包内 Excel）；给目录则递归收集。
+`.sql` 也算一类输入，但只登记不执行——加 --run-sql 才真的执行到目标库（免得顺手把库清了）。
 连接信息优先级：命令行参数 > 环境变量（E2M_HOST/E2M_PORT/E2M_USER/E2M_PASS/E2M_DB）> 配置文件。
 
 退出码：
@@ -19,6 +21,7 @@ GUI 版（main.py）要求 Windows 10 1809+，两者共用推断/建表/导入�
     2  有输入文件解析失败（其余文件继续处理）
     3  无法连接 MySQL 或目标库不可用
     4  有表建表或导入失败（其余表继续处理）
+    5  有 SQL 脚本执行失败（该文件事务已回滚，其余文件继续处理）
     130 用户按 Ctrl+C 中止
 
 开发态：python cli.py ...      打包：双击 一键打包38.bat
@@ -37,15 +40,21 @@ from core.infer import (
 from core.merge_check import MergedCellsError
 from core.mysql_io import build_ddl, connect, create_table, insert_data, list_databases
 from core.naming import clean_prefix, is_valid_prefix
+from core.sql_script import (
+    apply_table_prefix_sql, extract_create_tables, replace_first_segment_sql,
+    split_sql_statements,
+)
 from core.zip_import import EXCEL_EXTS, ZipArchiveError, extract_excel_archive
 from version import APP_VERSION
 
 ZIP_EXT = ".zip"
+SQL_EXT = ".sql"
 EXIT_OK = 0
 EXIT_USAGE = 1
 EXIT_PARSE = 2
 EXIT_CONNECT = 3
 EXIT_IMPORT = 4
+EXIT_SCRIPT = 5
 
 # 配置文件里允许的段名，按顺序取第一个存在的
 CONFIG_SECTIONS = ("mysql", "connection")
@@ -136,9 +145,10 @@ def build_parser():
             "  excel2mysql-cli.exe -c conn.ini C:\\数据          建表并导入目录下全部 Excel\n"
             "  excel2mysql-cli.exe -c conn.ini a.zip --prefix ods_   展开压缩包并统一加前缀\n"
             "  excel2mysql-cli.exe -c conn.ini --check          只测连接并列出数据库\n"
+            "  excel2mysql-cli.exe -c conn.ini 脚本\\ --run-sql   把目录下 .sql 执行到目标库\n"
         ))
     p.add_argument("inputs", nargs="*", metavar="文件或目录",
-                   help="要导入的 .xlsx / .xls / .zip 文件，或包含它们的目录")
+                   help="要处理的 .xlsx / .xls / .zip / .sql 文件，或包含它们的目录")
     p.add_argument("-c", "--config", metavar="FILE",
                    help="连接配置文件（INI，段名 [mysql]，键 host/port/user/password/database）")
     p.add_argument("--host", help="MySQL 主机，默认 127.0.0.1")
@@ -147,9 +157,12 @@ def build_parser():
     p.add_argument("--password", help="MySQL 密码；建议改用环境变量 E2M_PASS 避免留在命令历史里")
     p.add_argument("-d", "--database", help="目标数据库")
     p.add_argument("--dry-run", action="store_true",
-                   help="只解析、推断并打印建表 DDL，不连接数据库")
+                   help="只解析、推断并打印建表 DDL，不连接数据库（脚本只报条数与改写结果，不执行）")
     p.add_argument("--check", action="store_true",
                    help="只连接数据库并列出可用库名，不做导入")
+    p.add_argument("--run-sql", action="store_true",
+                   help="把输入里的 .sql 执行到目标库：每个文件一个事务，全部语句成功才提交，"
+                        "失败则该文件回滚、继续下一个；不加这个开关时 .sql 只登记不执行")
     p.add_argument("--prefix", help="为全部表名批量添加前缀（如 ods_）；基于原名重算，重复用不叠加")
     p.add_argument("--swap-prefix", metavar="NEW",
                    help="替换表名第一个下划线之前的首段：ods_t_order → new_t_order；"
@@ -226,6 +239,10 @@ def validate(args, cfg, log):
     if args.dry_run and args.check:
         log.error("参数冲突 | --dry-run 与 --check 不能同时用")
         return EXIT_USAGE
+    if args.check and args.run_sql:
+        log.error("参数冲突 | --check 只到「列出库名」就返回了，--run-sql 不会被执行；"
+                  "要执行脚本请去掉 --check")
+        return EXIT_USAGE
     if not args.dry_run and not args.check and not args.inputs:
         log.error("没有输入 | 请给出至少一个 Excel / ZIP 文件或目录（--dry-run/--check 除外）")
         return EXIT_USAGE
@@ -259,11 +276,13 @@ def validate(args, cfg, log):
 # 输入收集与解析
 # ---------------------------------------------------------------------------
 def collect_inputs(paths, recursive, log):
-    """把文件/目录参数展开成 [(路径, 日志里显示的名字)]，保持参数顺序。
+    """把文件/目录参数展开成 (Excel 列表, 压缩包列表, SQL 脚本列表)。
 
+    三类输入分开走：Excel 走推断建表导入，压缩包先展开再并入 Excel，
+    SQL 脚本走 --run-sql 那条执行路（GUI 上分两个页签，这里同样互不掺混）。
     目录内按名字排序，同一目录两次跑出来的顺序一致，日志和结果才可复现。
     """
-    entries, zips = [], []
+    entries, zips, sqls = [], [], []
     for p in paths:
         if os.path.isdir(p):
             found = []
@@ -280,19 +299,23 @@ def collect_inputs(paths, recursive, log):
                     zips.append(f)
                 elif low.endswith(EXCEL_EXTS):
                     entries.append((f, os.path.relpath(f, p)))
+                elif low.endswith(SQL_EXT):
+                    sqls.append(f)
                 else:
-                    log.info("跳过 | %s（不是 .xlsx / .xls / .zip）" % f)
+                    log.info("跳过 | %s（不是 .xlsx / .xls / .zip / .sql）" % f)
         elif os.path.isfile(p):
             low = p.lower()
             if low.endswith(ZIP_EXT):
                 zips.append(p)
             elif low.endswith(EXCEL_EXTS):
                 entries.append((p, os.path.basename(p)))
+            elif low.endswith(SQL_EXT):
+                sqls.append(p)
             else:
-                log.error("不支持的类型 | %s（只支持 .xlsx / .xls / .zip）" % p)
+                log.error("不支持的类型 | %s（只支持 .xlsx / .xls / .zip / .sql）" % p)
         else:
             log.error("路径不存在 | %s" % p)
-    return entries, zips
+    return entries, zips, sqls
 
 
 def expand_zips(zips, tmp_dir, log):
@@ -400,6 +423,73 @@ def apply_naming(tables, args, log):
 
 
 # ---------------------------------------------------------------------------
+# SQL 脚本：读取、登记 CREATE 数量、按 GUI 同一套规则改前缀
+# ---------------------------------------------------------------------------
+def read_sql_text(path):
+    """按 utf-8-sig → utf-8 → gbk 依次尝试解码，全失败则替换非法字节而不是报错。
+
+    与 GUI 的 read_sql_text 同一口径：记事本 / Navicat / UEditor 存出来的脚本编码五花八门，
+    单个文件解码失败不该把整批脚本一起卡住。
+    """
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    for enc in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def plan_scripts(sqls, args, log):
+    """读入脚本、报 CREATE TABLE 数量、应用前缀改写，返回 ([(路径, 语句列表)], 读取失败数)。
+
+    改写走 core.sql_script 里 GUI「SQL 脚本」页那两个按钮背后的同一批函数，
+    所以同一个脚本在界面里改和在命令行里改，结果逐字符一致。
+    """
+    plans = []
+    failed = 0
+    for p in sqls:
+        fname = os.path.basename(p)
+        try:
+            text = read_sql_text(p)
+        except OSError as e:
+            failed += 1
+            log.error("脚本读取失败 | %s | %s" % (fname, e))
+            continue
+        created = extract_create_tables(text)
+        log.info("脚本载入 | %s | CREATE TABLE %d 处 / 表 %d 张：%s"
+                 % (fname, sum(c["count"] for c in created), len(created),
+                    "、".join("%s(%d)" % (c["name"], c["count"]) for c in created) or "无"))
+        if args.prefix is not None:
+            prefix = args.prefix.strip()
+            if prefix:
+                text, renamed, skipped = apply_table_prefix_sql(text, prefix)
+                log.ok("脚本前缀 | %s | 改写 %d 张表：%s"
+                       % (fname, len(renamed),
+                          "、".join("%s→%s（%d 处）" % (r["old"], r["new"], r["n"])
+                                    for r in renamed) or "无"))
+                if skipped:
+                    log.info("脚本前缀 | %s | 未改写 %d 张（已带该前缀，或脚本里没有它的引用）：%s"
+                             % (fname, len(skipped), "、".join(skipped)))
+        elif args.swap_prefix is not None:
+            head = clean_prefix(args.swap_prefix)
+            text, renamed, skipped = replace_first_segment_sql(text, head)
+            log.ok("脚本换首段 | %s | 改写 %d 张表：%s"
+                   % (fname, len(renamed),
+                      "、".join("%s→%s（%d 处）" % (r["old"], r["new"], r["n"])
+                                for r in renamed) or "无"))
+            if skipped:
+                log.warn("脚本换首段 | %s | 跳过 %d 张（名里没有下划线，或以下划线开头）：%s"
+                         % (fname, len(skipped), "、".join(skipped)))
+        stmts = split_sql_statements(text)
+        if not stmts:
+            log.warn("脚本为空 | %s | 没有可执行的语句" % fname)
+        plans.append((p, stmts))
+    return plans, failed
+
+
+# ---------------------------------------------------------------------------
 # 三种动作
 # ---------------------------------------------------------------------------
 def do_check(cfg, log):
@@ -498,6 +588,85 @@ DDL_NO_ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式�
                         "回滚仅对其后的数据操作生效。")
 
 
+def do_dry_run_sql(plans, log):
+    """不连库：报出每个脚本会执行多少条语句，供现场核对改写结果。"""
+    for path, stmts in plans:
+        log.info("脚本预览 | %s | 待执行 %d 条语句（本次没有连库）"
+                 % (os.path.basename(path), len(stmts)))
+        for st in stmts[:3]:
+            log.detail(st[:200])
+        if len(stmts) > 3:
+            log.detail("…（其余 %d 条未打印）" % (len(stmts) - 3))
+    log.ok("脚本预览完成 | 共 %d 个脚本未执行（本次没有连接 MySQL）" % len(plans))
+    return EXIT_OK
+
+
+def do_run_sql(plans, cfg, log):
+    """逐个脚本执行到目标库，每个文件一个事务（与 GUI「执行脚本到当前库」同口径）。
+
+    一个文件里某条语句报错 → 整文件回滚并接着做下一个文件；
+    连不上库则直接停，因为后面的文件必然同样失败，报一堆重复错误只会淹掉日志。
+    """
+    ok_files = bad_files = 0
+    for path, stmts in plans:
+        fname = os.path.basename(path)
+        if not stmts:
+            continue                      # plan_scripts 里已经报过"脚本为空"
+        log.info("开始执行 | %s | %d 条语句 | 目标库 %s" % (fname, len(stmts), cfg["database"]))
+        try:
+            conn = connect(cfg)
+        except Exception as e:
+            log.error("连接失败 | %s | 剩余脚本均未执行 | %s"
+                      % (target_label(cfg), describe_db_error(e)))
+            return EXIT_CONNECT
+        executed = 0
+        failed = False
+        try:
+            conn.begin()
+            cur = conn.cursor()
+            for pos, st in enumerate(stmts, 1):
+                try:
+                    cur.execute(st)
+                    if getattr(cur, "description", None) is not None:
+                        cur.fetchall()    # SELECT/SHOW 有结果集：不取出来游标会一直挂着
+                    executed += 1
+                except Exception as e:
+                    conn.rollback()
+                    failed = True
+                    log.error("脚本失败 | %s | 第 %d/%d 条语句被拒绝，本文件事务已回滚 | %s"
+                              % (fname, pos, len(stmts), describe_db_error(e)))
+                    log.detail("出错语句：\n" + st, level="error")
+                    log.detail("前面 %d 条已随本文件事务回滚。%s"
+                               % (executed, DDL_NO_ROLLBACK_NOTE), level="error")
+                    break
+            try:
+                cur.close()
+            except Exception:
+                pass
+            if not failed:
+                conn.commit()
+                ok_files += 1
+                log.ok("脚本提交 | %s | %d 条语句已提交到 `%s`" % (fname, executed, cfg["database"]))
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            failed = True
+            log.error("脚本失败 | %s | 执行异常（已执行 %d 条），本文件事务已回滚 | %s"
+                      % (fname, executed, describe_db_error(e)))
+            log.detail(DDL_NO_ROLLBACK_NOTE, level="error")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        if failed:
+            bad_files += 1
+    log.ok("脚本汇总 | 成功 %d 个文件，失败 %d 个" % (ok_files, bad_files))
+    return EXIT_SCRIPT if bad_files else EXIT_OK
+
+
 # ---------------------------------------------------------------------------
 def run(argv=None):
     try:
@@ -526,7 +695,9 @@ def run(argv=None):
     try:
         log.info("excel2mysql-cli %s | Python %s | 动作 %s"
                  % (APP_VERSION, sys.version.split()[0],
-                    "检查连接" if args.check else ("只推断" if args.dry_run else "建表导入")))
+                    "检查连接" if args.check
+                    else ("只推断" if args.dry_run
+                          else "建表导入" + ("+执行脚本" if args.run_sql else ""))))
         try:
             cfg = resolve_cfg(args, log)
         except ValueError as e:
@@ -539,40 +710,51 @@ def run(argv=None):
         if args.check:
             return do_check(cfg, log)
 
-        entries = []
-        files, zips = collect_inputs(args.inputs, not args.no_recursive, log)
-        entries.extend(files)
+        entries, zips, sqls = collect_inputs(args.inputs, not args.no_recursive, log)
         if zips:
             tmp_dir = tempfile.mkdtemp(prefix="e2m_cli_")
             expanded, zips_bad = expand_zips(zips, tmp_dir, log)
             entries.extend(expanded)
         else:
             zips_bad = 0
-        if not entries:
-            log.error("没有可解析的 Excel | 输入里没有 .xlsx / .xls 文件")
-            return EXIT_PARSE if zips_bad else EXIT_USAGE
 
-        parse_failed = zips_bad
+        plans, sql_bad = plan_scripts(sqls, args, log) if sqls else ([], 0)
+        if sqls and not args.run_sql and not args.dry_run:
+            log.warn("脚本未执行 | 已登记 %d 个 .sql 但没写入库 | 要执行请加 --run-sql" % len(sqls))
+        if args.run_sql and not sqls:
+            log.warn("没有脚本 | --run-sql 已开启，但输入里没有 .sql 文件")
+
+        parse_failed = zips_bad + sql_bad
         tables = []
-        for path, origin in entries:
-            td, err = parse_one(path, origin, log)
-            if td is None:
-                parse_failed += 1
-            else:
-                tables.append(td)
-        if not tables:
-            log.error("全部输入解析失败 | 共 %d 项" % parse_failed)
-            return EXIT_PARSE
-        if parse_failed:
-            log.warn("解析阶段有失败 | %d 项未进入待导入列表，其余 %d 张继续"
-                     % (parse_failed, len(tables)))
+        if entries:
+            for path, origin in entries:
+                td, err = parse_one(path, origin, log)
+                if td is None:
+                    parse_failed += 1
+                else:
+                    tables.append(td)
+            if not tables:
+                log.error("全部 Excel 输入解析失败 | 共 %d 项" % parse_failed)
+                return EXIT_PARSE
+            if parse_failed:
+                log.warn("解析阶段有失败 | %d 项未进入待导入列表，其余 %d 张继续"
+                         % (parse_failed, len(tables)))
+            apply_naming(tables, args, log)
+            if args.drop_if_exists:
+                log.warn("危险开关 | --drop-if-exists 已开启：目标库里的同名表会先被删除")
+        elif not plans:
+            log.error("没有可处理的输入 | 输入里没有 .xlsx / .xls / .zip / .sql 文件")
+            return EXIT_PARSE if parse_failed else EXIT_USAGE
 
-        apply_naming(tables, args, log)
-        if args.drop_if_exists:
-            log.warn("危险开关 | --drop-if-exists 已开启：目标库里的同名表会先被删除")
-
-        action_rc = do_dry_run(tables, args, log) if args.dry_run else do_import(tables, args, cfg, log)
-        code = action_rc
+        # Excel 侧与脚本侧各跑各的（GUI 上也是两个页签），退出码取最严重的一档
+        codes = []
+        if tables:
+            codes.append(do_dry_run(tables, args, log) if args.dry_run
+                         else do_import(tables, args, cfg, log))
+        if plans and (args.run_sql or args.dry_run):
+            codes.append(do_dry_run_sql(plans, log) if args.dry_run
+                         else do_run_sql(plans, cfg, log))
+        code = max(codes) if codes else EXIT_OK
         if parse_failed:
             code = max(code, EXIT_PARSE)
         return code
