@@ -34,7 +34,7 @@
 | 用例集 | `pack_test.py`（394 项，含 GUI 各组） | `pack_test38.py`（199 项，含真库读写与 `.sql` 执行；同一份在旧栈与新栈各跑一遍） |
 | 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 |
 
-两条线各自的环境与产物互不影响：GUI 包该多大还多大（154 MB）、该要 Win10 还 Win10；
+两条线各自的环境与产物互不影响：GUI 包该多大还多大（153 MB）、该要 Win10 还 Win10；
 命令行包不含任何 Qt，产物 79 MB，能在 Windows 7 SP1 上跑。
 
 ### 为什么图形版跑不了 Windows 7
@@ -235,7 +235,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 辅助开关：`--fast`（只打产品包）、`--no-parity`（跳过 3.12 那轮跨栈）、`--keep-cache`。
 
-**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **79 MB / 1382 个文件**（GUI 线那个包是 154 MB）。
+**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **79 MB / 1382 个文件**（GUI 线那个包是 153 MB）。
 这条线用的是 PyInstaller **5.x**，onedir 是**平铺布局**——`excel2mysql-cli.exe`、`python38.dll`、
 `*.pyd`、`base_library.zip`、默认配置 `conn.ini`、使用说明 `README.txt` 全在同一层，
 **没有 GUI 线的 `_internal` 目录**（那是 6.x 才改的布局）。整个目录一起拷走或压成 zip，只拷 exe 跑不起来。
@@ -265,7 +265,10 @@ W31 保证说明里不会带出口令或内网地址。
 ```bash
 # 图形版：Windows 10 1809+ / 11，Python 3.10+（本机 .venv = 3.12.8）
 pip install -r requirements.txt
-# 即 PySide6 pymysql pandas openpyxl xlrd pypinyin
+# 即 PySide6 pymysql pandas openpyxl xlrd pypinyin pyinstaller
+# 前五个是运行期依赖，最后那个 pyinstaller 是打包闸门要用的构建工具——
+# 有意一起列在这份清单里：重建 .venv 时一条命令就能得到"能跑也能打包"的环境，
+# 不会装完还得到闸门第 1 步才发现缺 PyInstaller（真踩过：.venv 重建后一键打包.bat 就起不来）
 # 只想要更小体积可把 PySide6 换成 PySide6-Essentials：代码只用到 QtCore/QtGui/QtWidgets，
 # 装成完整 PySide6 也不会被打进产物（打包时 WebEngine/Pdf 等已显式排除）
 
@@ -288,7 +291,7 @@ python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.
 
 | 产物 | 双击入口 | 实际执行 | 用什么环境 |
 | --- | --- | --- | --- |
-| 图形版 `dist\excel2mysql\`（154 MB，带 `_internal`） | `一键打包.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
+| 图形版 `dist\excel2mysql\`（153 MB，带 `_internal`） | `一键打包.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
 | 命令行版 `dist\excel2mysql-cli\`（79 MB，平铺无 `_internal`） | `一键打包38.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
 
 下面「一键打包」到「已知限制」讲的是**图形版**那条闸门；
@@ -335,9 +338,8 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 
 ### 打包机上的一次性准备
 
-```bash
-pip install pyinstaller
-```
+不需要单独准备：`requirements.txt` 里已含 `pyinstaller`，`pip install -r requirements.txt`
+就把运行依赖和打包工具一起装好。（单独补装也可以：`pip install pyinstaller`。）
 
 打包配置在 `excel2mysql.spec`，应用图标在 `assets/app_icon.ico`（多尺寸：16/20/24/32/40/48/64/128/256）。
 
@@ -357,7 +359,7 @@ dist\excel2mysql\
 └── _internal\          145 MB  Qt / pandas / numpy / pypinyin 词典等运行时
 ```
 
-合计 **154 MB / 910 个文件**。`excel2mysql.exe` 与 `_internal` 必须同级放在一起，不能只拷 exe。
+合计 **153 MB / 908 个文件**。`excel2mysql.exe` 与 `_internal` 必须同级放在一起，不能只拷 exe。
 
 ### 分发方式
 
