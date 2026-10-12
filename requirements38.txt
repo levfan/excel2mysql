@@ -15,6 +15,13 @@
 #   xlrd 2.0.2          pinned to the GUI line so .xls parsing is identical
 #   PyInstaller 5.13.2  6.x documents "Windows 8 and newer" only, and its
 #                       bootloader is not built for Windows 7
+#   cryptography 47.0.0 last release that still supports Python 3.8 (48+ drops
+#                       it, and importing it prints a deprecation warning).
+#                       Not optional: PyMySQL needs it for MySQL 8
+#                       caching_sha2_password FULL authentication, which is the
+#                       path taken by the very first connection after every
+#                       server restart. Without it the CLI cannot connect at all
+#                       (RuntimeError: 'cryptography' package is required ...)
 #
 # The GUI line (Windows 10 1809+ / 11) is a separate environment with its own
 # dependency file:
@@ -38,3 +45,4 @@ xlrd==2.0.2
 pypinyin==0.55.0
 tzdata==2026.5
 pyinstaller==5.13.2
+cryptography==47.0.0

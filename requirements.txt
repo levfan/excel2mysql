@@ -14,6 +14,10 @@ pandas
 openpyxl
 xlrd
 pypinyin
+# Required by pymysql for MySQL 8 caching_sha2_password FULL authentication:
+# the first connection after every server restart takes that path, and without
+# this package pymysql raises "RuntimeError: 'cryptography' package is required".
+cryptography
 
 # Build tool as well, on purpose: the packaging gate (build_exe.py, run by
 # the GUI .bat entry) needs PyInstaller. Listing it here means "recreate the
