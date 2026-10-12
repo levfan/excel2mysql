@@ -2,6 +2,7 @@ package com.excel2mysql.pinyin;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -66,20 +67,61 @@ public final class PinyinConverter {
     }
 
     public static PinyinConverter load(Path dir) throws IOException {
+        return load(dir.resolve("single.txt"), dir.resolve("phrase.txt"));
+    }
+
+    /**
+     * 打进 jar 后没有目录可读，必须走 classpath 资源。
+     * 这条路径是交付态唯一可用的，所以差分与产品代码都用它，不让两条加载路径各自演化成不同行为。
+     */
+    public static PinyinConverter loadFromResources() throws IOException {
+        ClassLoader cl = PinyinConverter.class.getClassLoader();
+        java.io.InputStream single = cl.getResourceAsStream("pinyin/single.txt");
+        if (single == null) {
+            throw new IOException("classpath 资源缺失：pinyin/single.txt");
+        }
+        java.io.InputStream phrase = cl.getResourceAsStream("pinyin/phrase.txt");
+        if (phrase == null) {
+            single.close();
+            throw new IOException("classpath 资源缺失：pinyin/phrase.txt");
+        }
+        try {
+            return load(single, phrase);
+        } finally {
+            single.close();
+            phrase.close();
+        }
+    }
+
+    /**
+     * 从词典目录取两个文件。目录形式只服务于差分复跑，交付态走 {@link #loadFromResources()}。
+     */
+    public static PinyinConverter load(Path singleFile, Path phraseFile) throws IOException {
+        return load(Files.newInputStream(singleFile), Files.newInputStream(phraseFile));
+    }
+
+    private static PinyinConverter load(java.io.InputStream singleIn,
+                                        java.io.InputStream phraseIn) throws IOException {
         PinyinConverter c = new PinyinConverter();
         Charset utf8 = Charset.forName("UTF-8");
-        for (String line : Files.readAllLines(dir.resolve("single.txt"), utf8)) {
-            if (line.isEmpty()) {
-                continue;
-            }
-            int tab = line.indexOf('\t');
-            int code = Integer.parseInt(line.substring(0, tab), 16);
-            c.single.put(Integer.valueOf(code), line.substring(tab + 1));
-        }
-        BufferedReader r = Files.newBufferedReader(dir.resolve("phrase.txt"), utf8);
+        BufferedReader r = new BufferedReader(new InputStreamReader(singleIn, utf8));
         try {
             String line;
             while ((line = r.readLine()) != null) {
+                if (line.isEmpty()) {
+                    continue;
+                }
+                int tab = line.indexOf('\t');
+                int code = Integer.parseInt(line.substring(0, tab), 16);
+                c.single.put(Integer.valueOf(code), line.substring(tab + 1));
+            }
+        } finally {
+            r.close();
+        }
+        BufferedReader p = new BufferedReader(new InputStreamReader(phraseIn, utf8));
+        try {
+            String line;
+            while ((line = p.readLine()) != null) {
                 if (line.isEmpty()) {
                     continue;
                 }
@@ -95,7 +137,7 @@ public final class PinyinConverter {
                 }
             }
         } finally {
-            r.close();
+            p.close();
         }
         return c;
     }
