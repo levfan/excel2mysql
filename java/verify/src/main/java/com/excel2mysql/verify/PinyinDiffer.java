@@ -72,7 +72,7 @@ public final class PinyinDiffer {
         System.out.println("+ [OK] 拼音差分 | " + total + " 条全部一致，表名与字段名的转写等价成立");
     }
 
-    private static String ascii(Object value) {
+    static String ascii(Object value) {
         StringBuilder sb = new StringBuilder();
         for (char ch : String.valueOf(value).toCharArray()) {
             if (ch >= 0x20 && ch < 0x7F) {
