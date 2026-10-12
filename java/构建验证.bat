@@ -1,5 +1,5 @@
 @echo off
-rem Java 线构建 + 三道闸门：class 主版本 <= 52、拼音转写、表名与字段名。
+rem Java 线构建 + 四道闸门：class 主版本 <= 52、拼音转写、表名与字段名、类型推断。
 rem 用随包同款 JDK 8 编译，避免"开发机能编、现场 JRE 跑不了"。
 setlocal
 chcp 65001 >nul
@@ -17,31 +17,37 @@ for %%i in (java.exe) do set "RUNTIME=%%~$PATH:i"
 echo - [INFO] BUILD ^| 构建所用 JDK %RUNTIME%
 
 echo.
-echo === 1/5 Maven 编译打包 ===
+echo === 1/6 Maven 编译打包 ===
 call mvn -B clean install || exit /b 1
 
 echo.
-echo === 2/5 收集依赖 jar ===
+echo === 2/6 收集依赖 jar ===
 call mvn -B -q -pl verify dependency:copy-dependencies -DoutputDirectory=target/lib -DincludeScope=runtime || exit /b 1
 
 echo.
-echo === 3/5 class 主版本闸门 ===
+echo === 3/6 class 主版本闸门 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "verify\target\classes" ^
   com.excel2mysql.verify.ClassVersionAudit ^
   app\target\classes verify\target\classes verify\target\lib app\target\excel2mysql-1.0.1.jar || exit /b 1
 
 echo.
-echo === 4/5 拼音金标准差分 ===
+echo === 4/6 拼音金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
   com.excel2mysql.verify.PinyinDiffer ^
   app\src\main\resources\pinyin verify\golden\cases.jsonl.gz || exit /b 1
 
 echo.
-echo === 5/5 表名与字段名金标准差分 ===
+echo === 5/6 表名与字段名金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
   com.excel2mysql.verify.NameDiffer ^
   verify\golden\excel.jsonl.gz || exit /b 1
 
 echo.
-echo + [OK] BUILD ^| Java 线五步全过
+echo === 6/6 类型推断金标准差分 ===
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
+  com.excel2mysql.verify.TypeDiffer ^
+  verify\golden\excel.jsonl.gz || exit /b 1
+
+echo.
+echo + [OK] BUILD ^| Java 线六步全过
 exit /b 0
