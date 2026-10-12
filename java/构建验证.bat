@@ -49,5 +49,11 @@ call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\targ
   verify\golden\excel.jsonl.gz || exit /b 1
 
 echo.
-echo + [OK] BUILD ^| Java 线六步全过
+echo === 7/7 读取层逐格金标准差分 ===
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
+  com.excel2mysql.verify.ReaderDiffer ^
+  verify\golden\excel.jsonl.gz verify\fixtures || exit /b 1
+
+echo.
+echo + [OK] BUILD ^| Java 线七步全过
 exit /b 0

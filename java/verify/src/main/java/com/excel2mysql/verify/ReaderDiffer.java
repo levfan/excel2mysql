@@ -87,7 +87,7 @@ public final class ReaderDiffer {
         }
         reader.close();
         System.out.println("- [INFO] READER-DIFF | 表 " + files + " 张 | 比对 " + cells
-                + " 格 | 不一致 " + bad + " 处");
+                + " 格 | 不一致 " + bad + " 处 | 空白折叠 " + blankFolded + " 格");
         for (String s : shown) {
             System.out.println(s);
         }
@@ -144,6 +144,11 @@ public final class ReaderDiffer {
             // Python 侧存的是 float.hex()，归一到和 encode() 同一个十进制最短形
             return "float\u0000" + canonical(Double.valueOf(text).doubleValue());
         }
+        if ("str".equals(kind) && !text.isEmpty() && text.trim().isEmpty()) {
+            // 只在 Python 侧计数：Java 侧本来就是 null，不折也一致
+            blankFolded++;
+            return "none\u0000";
+        }
         return kind + "\u0000" + text;
     }
 
@@ -186,8 +191,21 @@ public final class ReaderDiffer {
         if (v instanceof LocalDate) {
             return "date\u0000" + v.toString();
         }
+        if (v instanceof String) {
+            String s = (String) v;
+            // 纯空白文本按空值等价处理：infer_columns 在统计字节宽度之前就 continue 掉它，
+            // _convert 也把它写成 NULL，所以"null vs \"   \""产品层面观察不到。
+            // 这类折叠要计数报出来，不能静默——它确实是两条链取值的差别，只是不可观测。
+            if (!s.isEmpty() && s.trim().isEmpty()) {
+                blankFolded++;
+                return "none\u0000";
+            }
+            return "str\u0000" + s;
+        }
         return "str\u0000" + String.valueOf(v);
     }
+
+    private static int blankFolded;
 
     /**
      * 两边归一到同一个可比形式：Python 的 float.hex() 是 0x1.9000000000000p+3，
