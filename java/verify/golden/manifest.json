@@ -6,6 +6,12 @@
   "phrase_entries": 47111,
   "single_sha256": "52fb891d22f1d40ff3c86e84ddfe471e70d8f88411f5c59ba3236bef03bf1438",
   "phrase_sha256": "4b93af0ee97489fa478a9b48573562e22bad214e2d46607c87ca214fcd8ad4d4",
+  "jpinyin_single_entries": 41923,
+  "jpinyin_phrase_entries": 47111,
+  "jpinyin_phrase_len_mismatch": 0,
+  "jpinyin_empty_reading": 0,
+  "jpinyin_single_sha256": "5f1636958d5b6759652c3f4358540c58ecf46aa3b8e8308fcee417055ee060ac",
+  "jpinyin_phrase_sha256": "58226216d920622628c6d68de6feb0dd77e04821c91fe4459b38d5dae92e0371",
   "golden_cases": 57228,
-  "golden_sha256": "1b713b17c6898b5fd8d1b899f192c45f35482b7628442dac8484da94ec6ae79d"
+  "golden_sha256": "4199d58befd01303c27e03ffc545ca63d95324528a87401e54c7ff0859898a28"
 }

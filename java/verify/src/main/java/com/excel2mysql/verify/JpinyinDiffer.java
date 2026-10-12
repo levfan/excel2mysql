@@ -24,8 +24,40 @@ public final class JpinyinDiffer {
 
     private static final String SEP = "\u0001";
 
-    public static void main(String[] args) throws IOException {
-        int perTag = args.length > 1 ? Integer.parseInt(args[1]) : 4;
+    /** 由第二个参数触发：只比 core 的 _syllables 真正会喂进拼音的汉字段。 */
+    private static boolean inDomainOnly = true;
+    private static int skipped;
+
+    /**
+     * core/infer.py 的 _syllables 只把 [\\u4e00-\\u9fff] 连续段交给拼音引擎，
+     * 其余字符走"英文数字整段保留"或直接被清洗掉。
+     * 金标准语料为了压词典把范围铺到 RE_HANS 全量（含扩展 A 区），
+     * 那部分差异改不动表名，混在报表里只会把真实风险冲淡。
+     */
+    private static boolean insidePipelineDomain(String input) {
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (c < 0x4E00 || c > 0x9FFF) {
+                return false;
+            }
+        }
+        return input.length() > 0;
+    }
+
+    public static void main(String[] args) throws Exception {
+        int perTag = args.length > 2 ? Integer.parseInt(args[2]) : 4;
+        if (args.length > 1) {
+            // 用 jpinyin 自己的加载口注入 pypinyin 词典：引擎是它的，数据是我们的。
+            // addPinyinDict / addMutilPinyinDict 都是 putAll 合并语义，不是替换，
+            // 所以 jpinyin 自带词典里我们没覆盖到的字/词组会留下来，由差分去暴露。
+            String dir = args[1];
+            PinyinHelper.addPinyinDict(dir + "/jpinyin_single.dict");
+            PinyinHelper.addMutilPinyinDict(dir + "/jpinyin_phrase.dict");
+            System.out.println("- [INFO] JPINYIN-DIFF | 已注入 pypinyin 词典 " + dir);
+        }
+        if (args.length > 3 && "all".equals(args[3])) {
+            inDomainOnly = false;
+        }
         Map<String, Integer> tagShown = new LinkedHashMap<String, Integer>();
         Map<String, Integer> byKind = new LinkedHashMap<String, Integer>();
         Map<String, Integer> byTag = new LinkedHashMap<String, Integer>();
@@ -46,6 +78,10 @@ public final class JpinyinDiffer {
                 String tag = (String) record.get("tag");
                 @SuppressWarnings("unchecked")
                 List<String> expected = (List<String>) record.get("exp");
+                if (inDomainOnly && !insidePipelineDomain(input)) {
+                    skipped++;
+                    continue;
+                }
                 total++;
                 List<String> actual;
                 try {
@@ -79,7 +115,8 @@ public final class JpinyinDiffer {
             reader.close();
         }
 
-        System.out.println("- [INFO] JPINYIN-DIFF | 语料 " + total + " 条 | 不一致 " + bad
+        System.out.println("- [INFO] JPINYIN-DIFF | " + (inDomainOnly ? "只算 core 真实输入域(\\u4e00-\\u9fff)" : "全量语料")
+                + " | 计入 " + total + " 条（跳过域外 " + skipped + "）| 不一致 " + bad
                 + " 条（" + percent(bad, total) + "%）");
         for (Map.Entry<String, Integer> e : byKind.entrySet()) {
             System.out.println("    " + e.getKey() + " = " + e.getValue());

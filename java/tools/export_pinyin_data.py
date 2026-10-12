@@ -187,6 +187,47 @@ def _sz(p):
     return "%.2f MB" % (os.path.getsize(p) / 1048576.0)
 
 
+def write_jpinyin_dicts(out_dir):
+    """把同一份 pypinyin 词典改写成 jpinyin 的格式，供 addPinyinDict/addMutilPinyinDict 注入。
+
+    输出目录是 verify/golden，**刻意不放 app/src/main/resources**：
+    jpinyin 路线已被 JpinyinDiffer 实测否掉（见 java/README.md），这两个文件只是
+    留给"以后再有人提换库"时一键复测的证据；放进资源目录会被打进 jar，白胖 1.6 MB。
+
+    jpinyin 的格式（实测自 1.1.8 自带 data/*.dict 与 PinyinResource.getResource）：
+      单字  字=带调读音,带调读音...
+      词组  词组=每字一个带调读音，逗号分隔
+    它内部一律先按逗号切成数组，再按 PinyinFormat 去声调，取 [0] 就是首选读音，
+    和 lazy_pinyin(heteronym=False) 的 item[0] 对得上。
+
+    这里刻意不做任何"顺手修正"：读音数量与字数不等、空读音、重复读音都原样写出来，
+    由差分去暴露 jpinyin 的行为，而不是在导出时就掩盖掉。
+    """
+    stats = {"single": 0, "phrase": 0, "phrase_len_mismatch": 0, "empty_reading": 0}
+    single_path = os.path.join(out_dir, "jpinyin_single.dict")
+    with io.open(single_path, "w", encoding="utf-8", newline="\n") as f:
+        for code in sorted(PINYIN_DICT.keys()):
+            raw = PINYIN_DICT[code]
+            f.write(u"%s=%s\n" % (chr(code), raw))
+            stats["single"] += 1
+
+    phrase_path = os.path.join(out_dir, "jpinyin_phrase.dict")
+    with io.open(phrase_path, "w", encoding="utf-8", newline="\n") as f:
+        for phrase in sorted(PHRASES_DICT.keys()):
+            readings = []
+            for cands in PHRASES_DICT[phrase]:
+                if not cands or not cands[0]:
+                    stats["empty_reading"] += 1
+                    readings.append(u"")
+                else:
+                    readings.append(cands[0])
+            if len(readings) != len(phrase):
+                stats["phrase_len_mismatch"] += 1
+            f.write(u"%s=%s\n" % (phrase, u",".join(readings)))
+            stats["phrase"] += 1
+    return single_path, phrase_path, stats
+
+
 def main():
     if sys.version_info[:2] != (3, 8):
         print("! [WARN] 建议用 .venv38 跑，基准要和打包用的 pypinyin 一致 -> %s"
@@ -208,6 +249,8 @@ def main():
         for phrase in sorted(PHRASES_DICT.keys()):
             positions = " ".join("+".join(p) for p in PHRASES_DICT[phrase])
             f.write("%s\t%s\n" % (phrase, positions))
+
+    jp_single_path, jp_phrase_path, jp_stats = write_jpinyin_dicts(OUT_VERIFY)
 
     golden_path = os.path.join(OUT_VERIFY, "cases.jsonl.gz")
     branches = {}
@@ -240,6 +283,12 @@ def main():
         "phrase_entries": len(PHRASES_DICT),
         "single_sha256": sha256(single_path),
         "phrase_sha256": sha256(phrase_path),
+        "jpinyin_single_entries": jp_stats["single"],
+        "jpinyin_phrase_entries": jp_stats["phrase"],
+        "jpinyin_phrase_len_mismatch": jp_stats["phrase_len_mismatch"],
+        "jpinyin_empty_reading": jp_stats["empty_reading"],
+        "jpinyin_single_sha256": sha256(jp_single_path),
+        "jpinyin_phrase_sha256": sha256(jp_phrase_path),
         "golden_cases": len(cases),
         "golden_sha256": sha256(golden_path),
     }
@@ -249,6 +298,11 @@ def main():
 
     print("+ [OK] 词典导出 | single %d 条 %s | phrase %d 条 %s" % (
         len(PINYIN_DICT), _sz(single_path), len(PHRASES_DICT), _sz(phrase_path)))
+    print("+ [OK] jpinyin 格式词典 | 单字 %d 条 %s | 词组 %d 条 %s"
+          "（音节数与字数不等 %d，空读音 %d）" % (
+              jp_stats["single"], _sz(jp_single_path),
+              jp_stats["phrase"], _sz(jp_phrase_path),
+              jp_stats["phrase_len_mismatch"], jp_stats["empty_reading"]))
     print("+ [OK] 金标准语料 | %d 条 %s" % (len(cases), _sz(golden_path)))
     print("- [INFO] 分支命中统计:")
     for k in sorted(branches):
