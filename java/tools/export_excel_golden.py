@@ -42,12 +42,12 @@ def sha256(path):
 
 def encode(v):
     """单元格值 -> (类型标签, 可比对的规范文本)。"""
-    if v is None:
+    if v is None or v is pd.NA or v is pd.NaT:
+        # pandas 3.0 的空缺标量是 pd.NA，它不是 float 且 `pd.NA != pd.NA` 会抛
+        # "boolean value of NA is ambiguous"，必须先按身份判掉
         return ("none", "")
     if isinstance(v, float) and v != v:
         return ("none", "")
-    if v is pd.NaT:
-        return ("nat", "")
     if isinstance(v, bool):
         return ("bool", "1" if v else "0")
     if isinstance(v, int):
