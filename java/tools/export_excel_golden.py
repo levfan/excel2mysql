@@ -7,8 +7,20 @@
 
 记录里的 sha256 是夹具文件本身的哈希，**不属于比对契约**：两个 venv 的 openpyxl 版本
 不同，写出的 xlsx 字节就不同（实测 venv3.12 与 venv3.8 七个文件全不一致），
-但去掉 sha256 后 grid 与 def 逐字段 7/7 完全一致 ⇒ Java 侧对撞时要排除该字段，
-否则会误以为两条 Python 线的推断口径不一致。
+实测出来的读取层契约（Java 侧必须照做，别再靠猜）：
+
+1. **整值浮点会被 pandas 转成 Python int**。`pandas/io/excel/_openpyxl.py::_convert_cell`
+   对数字单元格做 `val = int(cell.value); if val == cell.value: return val`。
+   所以写进去的 100.0 读出来是 int 100，1e20 读出来是 int
+   10000000000000000905969664（浮点精确值，不是"1e20"）。
+   ⇒ Java 侧数值单元格要按"能不能精确表示成整数"分 int/float 两支，
+     且整数支必须用 BigInteger，long 装不下 1e20。
+2. **重复表头会被 pandas 改名成 `X.1`、`X.2`**，而 infer_columns 用 `str(列名)` 当注释，
+   于是第二个"重复名"转出来的字段是 `chong_fu_ming_1`（点被当非 \w 换成下划线）。
+   金标准里 18 个表头对应 17 个字段，少的正是全空列被 dropna(axis=1) 丢掉。
+3. **布尔单元格读成 True/False，最终推断成 INT**（`_looks_int` 对 bool 直接返回 True）。
+4. 空白列（`   `、``、`  \t `）算空值不参与长度统计，但整列都空时仍出 VARCHAR(64) 而不是被丢——
+   只要该列有过非空值。
 """
 from __future__ import print_function
 
