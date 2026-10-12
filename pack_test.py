@@ -107,6 +107,13 @@ check("A2 pypinyin 词典可用（懒加载 JSON 可读）",
       lazy_pinyin("水库") == ["shui", "ku"], lazy_pinyin("水库"))
 check("A3 pandas 时区数据可用（tzdata 落包）",
       str(pd.Timestamp("2026-01-01").tz_localize("Asia/Shanghai").tz) == "Asia/Shanghai")
+# MySQL 8 的 caching_sha2_password 在服务端缓存失效后的第一个连接要走 full auth，
+# 那一步要 RSA。pymysql 在 import 时就算好了有没有 cryptography，缺包不会让导入报错，
+# 只会在现场连不上库，所以在这里钉住。
+import pymysql._auth as _pymysql_auth
+check("A3b cryptography 在场（否则 MySQL 8 重启后首个连接连不上）",
+      _pymysql_auth._have_cryptography,
+      f"_have_cryptography={_pymysql_auth._have_cryptography}")
 
 import main as app_main
 

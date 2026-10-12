@@ -208,7 +208,8 @@ def installed_version(dist):
 
 
 _V = {n: installed_version(n) for n in ("numpy", "pandas", "PyMySQL", "openpyxl",
-                                        "xlrd", "pypinyin", "tzdata", "pyinstaller")}
+                                        "xlrd", "pypinyin", "tzdata", "pyinstaller",
+                                        "cryptography")}
 
 if IS_OLD:
     check("U9 旧栈依赖的发行版元数据全部可读",
@@ -220,6 +221,13 @@ if IS_OLD:
     check("U11b PyMySQL 版本以 dist-info 为准（模块自报的 __version__ 是上游 bug）",
           _V["PyMySQL"] == "1.1.2" and __import__("pymysql").__version__ != "1.1.2",
           "dist-info=1.1.2, pymysql.__version__=%s" % __import__("pymysql").__version__)
+    # MySQL 8 的 caching_sha2_password 在服务端缓存失效后的第一个连接要走 full auth，
+    # 那一步要 RSA；pymysql 在 import 时就把有没有 cryptography 算成了这个开关，
+    # 所以缺包不会让导入报错，只会在现场连不上库——必须在这里钉住。
+    import pymysql._auth as _auth
+    check("U11c MySQL 8 冷缓存首连要 RSA，cryptography 必须在场",
+          _auth._have_cryptography,
+          "pymysql._auth._have_cryptography=%s" % _auth._have_cryptography)
 else:
     skip("U9-U11b requirements38 版本契约", "本轮跑在 %s，版本契约由 .venv38 那一轮核" % STACK)
 
@@ -229,7 +237,7 @@ if req is None:
 else:
     for pin in ("numpy==1.24.4", "pandas==2.0.3", "PyMySQL==1.1.2",
                 "openpyxl==3.1.5", "xlrd==2.0.2", "pypinyin==0.55.0",
-                "tzdata==2026.5", "pyinstaller==5.13.2"):
+                "tzdata==2026.5", "pyinstaller==5.13.2", "cryptography==47.0.0"):
         check("U13 requirements38 钉住 %s" % pin, pin in req)
     check("U14 requirements38 写明了「这是最后能装进 3.8 的版本」这件事",
           "Windows 7" in req and "6.x" in req and "requires Python >= 3.9" in req)
