@@ -1,0 +1,11 @@
+{
+  "pypinyin_version": "0.55.0",
+  "re_hans_pattern": "^(?:[\\u3007\\ue815-\\ue864\\ufa18\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\U00020000-\\U0002A6DF\\U0002A703-\\U0002B73F\\U0002B740-\\U0002B81D\\U0002B825-\\U0002BF6E\\U0002C029-\\U0002CE93\\U0002D016\\U0002D11B-\\U0002EBD9\\U0002F80A-\\U0002FA1F\\U00030000-\\U0003134A\\U000300F7-\\U00031288\\U00030EDD\\U00030EDE\\U00031350-\\U00032389])+$",
+  "seg_no_non_phrases": true,
+  "single_entries": 41923,
+  "phrase_entries": 47111,
+  "single_sha256": "52fb891d22f1d40ff3c86e84ddfe471e70d8f88411f5c59ba3236bef03bf1438",
+  "phrase_sha256": "4b93af0ee97489fa478a9b48573562e22bad214e2d46607c87ca214fcd8ad4d4",
+  "golden_cases": 57228,
+  "golden_sha256": "1b713b17c6898b5fd8d1b899f192c45f35482b7628442dac8484da94ec6ae79d"
+}
