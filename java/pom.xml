@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Java 线（JDK 1.8）构建。
+
+  为什么用 JDK 8 编译而不是高版本 JDK 加 release 8：随包 JRE 就是 8u202，
+  用同一支 javac 构建，"能在开发机编译"与"能在目标机运行"之间不留空档。
+  class 主版本闸门见 verify 模块的 ClassVersionAudit。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.excel2mysql</groupId>
+  <artifactId>excel2mysql-java</artifactId>
+  <version>1.0.1</version>
+  <packaging>pom</packaging>
+
+  <modules>
+    <module>app</module>
+    <module>verify</module>
+  </modules>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <maven.compiler.source>1.8</maven.compiler.source>
+    <maven.compiler.target>1.8</maven.compiler.target>
+    <!-- 与 version.py 的 APP_VERSION 保持同值，改版本两边一起改 -->
+    <app.version>1.0.1</app.version>
+    <fastexcel.version>1.3.0</fastexcel.version>
+    <mysql.version>8.0.33</mysql.version>
+    <jpinyin.version>1.1.8</jpinyin.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>cn.idev.excel</groupId>
+        <artifactId>fastexcel</artifactId>
+        <version>${fastexcel.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.stuxuhai</groupId>
+        <artifactId>jpinyin</artifactId>
+        <version>${jpinyin.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.mysql</groupId>
+        <artifactId>mysql-connector-j</artifactId>
+        <version>${mysql.version}</version>
+        <exclusions>
+          <!--
+            protobuf-java 只被 com.mysql.cj.xdevapi（mysqlx 协议 / X DevAPI）用到，
+            本工具只走经典 JDBC 的 3306 端口。实测它在依赖树里占 1.6 MB，
+            是整个连库侧最大的一块无用重量，排掉。
+            P3 真连库回归要覆盖这条：一旦排错，症状是 NoClassDefFoundError。
+          -->
+          <exclusion>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>3.4.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-dependency-plugin</artifactId>
+          <version>3.7.0</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>3.5.3</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

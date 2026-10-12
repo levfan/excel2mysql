@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  差分验收模块：拿 Python 侧导出的金标准对撞 Java 复刻。
+  不进交付包，只在构建/回归时跑，所以不打进 app 的 jar。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.excel2mysql</groupId>
+    <artifactId>excel2mysql-java</artifactId>
+    <version>1.0.1</version>
+  </parent>
+
+  <artifactId>excel2mysql-verify</artifactId>
+  <packaging>jar</packaging>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.excel2mysql</groupId>
+      <artifactId>excel2mysql-app</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>cn.idev.excel</groupId>
+      <artifactId>fastexcel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.github.stuxuhai</groupId>
+      <artifactId>jpinyin</artifactId>
+    </dependency>
+  </dependencies>
+</project>
