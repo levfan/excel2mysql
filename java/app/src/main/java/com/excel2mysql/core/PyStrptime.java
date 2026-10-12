@@ -57,6 +57,26 @@ public final class PyStrptime {
         return false;
     }
 
+    /** 按 DATETIME_FORMATS 顺序试，先命中先赢。 */
+    public static LocalDateTime parseDatetime(String s) {
+        return firstMatch(s, DATETIME_FORMATS);
+    }
+
+    /** 按 DATE_FORMATS 顺序试。 */
+    public static LocalDateTime parseDate(String s) {
+        return firstMatch(s, DATE_FORMATS);
+    }
+
+    private static LocalDateTime firstMatch(String s, String[] formats) {
+        for (String fmt : formats) {
+            LocalDateTime v = parse(s, fmt);
+            if (v != null) {
+                return v;
+            }
+        }
+        return null;
+    }
+
     /** Python 的命名分组不存在时返回 None；Java 的 Matcher.group(name) 会直接抛异常。 */
     private static String group(Matcher m, String name) {
         try {
