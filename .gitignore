@@ -252,3 +252,6 @@ build_stamp.py
 
 # 填了真实口令的本地连接配置永不入库（模板是 assets/conn.ini，那份要提交）
 /conn.ini
+
+# Java 线（P1 阶段用 javac 直编的产物目录；接进 Maven 后改由 target/ 覆盖）
+java/out/
