@@ -16,11 +16,23 @@ JDK 8u202 的核心二进制实测零 `api-ms-win-crt-*` 导入，它依赖的 `
 
 ## 硬约束
 
-- 界面只能用 **Swing/AWT**，禁止 JavaFX：JRE 里那批 `javafx_*`/`glass`/`glib-lite`
-  等 16 个 dll 导入 UCRT，其中部分 PE 下限是 Windows 10。
+- 界面只用 **Swing/AWT**，不用 JavaFX。
+  理由要更正一次：原先写的"JavaFX 那批 dll 导入 UCRT"**实测不成立**——扫遍本机
+  JRE 8u202 的 130 个 dll/exe，`api-ms-win-crt-*` 导入数为 **0**。
+  真实理由有两条：JavaFX 会额外拖进 `glass`/`glib-lite`/`fxplugins`/`decora_sse` 等
+  16 个原生 dll（PE 头声明的最低系统是 Vista 6.0，比 Swing 那批的 5.2 高一档），
+  而本工具的界面是表单加表格，Swing 完全够用，多那 16 个 dll 只增加老机器上的变量。
 - 字节码 major version 必须是 **52**；依赖 jar 也要逐个校验，否则在 JRE 8 上是
   `UnsupportedClassVersionError`，而在本机构建时完全不暴露。
+  由 `com.excel2mysql.verify.ClassVersionAudit` 把关，多版本 jar 的
+  `META-INF/versions/**` 不计入（JDK 8 不读它，计入会让守卫永久假红）。
 - 随包 JRE 与产物一起发布，`启动.bat` 点名用包内 `jre\bin\java.exe`，不依赖目标机装没装 Java。
+- **随包 JRE 不能整目录照抄**：实测本机两个 8u202（`jdk1.8.0_202\jre` 与 `jre1.8.0_202`）
+  的 `bin` 里都有 40 个 `api-ms-win-core-*.dll` 加 `ucrtbase.dll`/`concrt140.dll`/`vcruntime140.dll`，
+  这批桩 PE 头声明的最低系统是 **10.0**，而 JVM 自己的二进制零 crt 导入、只链 `msvcr100.dll`。
+  打包时要把它们剔掉，闸门要断言"包内没有任何 `api-ms-win-*.dll`"，
+  否则等于把一个 Win10 下限的东西搬到 Win7 上赌它不被加载。
+
 
 ## P1：拼音转写等价性（已完成）
 
@@ -53,6 +65,23 @@ JDK 8u202 的核心二进制实测零 `api-ms-win-crt-*` 导入，它依赖的 `
 「严格模式正向最大匹配 + 整词优先取首读音 + NORMAL 去声调」的 Python 复刻，
 它先与库对撞归零，Java 侧才算拿到读准了的规格。词典与语料一起入库（约 2.4 MB），
 目的是让 jar 构建只依赖 JDK，不要求构建机装 Python。
+
+## P1.5：换 jpinyin 做拼音引擎——已实测否决（2026-10-13）
+
+`com.excel2mysql.verify.JpinyinDiffer` 拿 P1 那 57228 条金标准撞 `com.github.stuxuhai:jpinyin:1.1.8`。
+只算 core 的 `_syllables` 真正会喂进拼音的输入域（`\u4e00-\u9fff`，计入 52169 条、跳过域外 5059 条）：
+
+| 词典 | 不一致 | 说明 |
+| --- | --- | --- |
+| jpinyin 自带 | **5110 / 52169（9.8%）** | 单字表只有 20902 条，pypinyin 是 41923 |
+| jpinyin 引擎 + 注入 pypinyin 词典 | **154 / 52169（0.3%）** | 已把 41923 单字 + 47111 词组按它的格式导出注入 |
+
+注入后仍不平的那 0.3% 不是数据问题，是结构问题：`PinyinHelper.convertToPinyinString`
+**第一行无条件做繁转简**，而 `chinese.dict` 的 2533 个键全部落在输入域内且都映射成别的字
+（`著 U+8457 → 着 U+7740`）。键先被换掉，注入的词组必然查不中，单字也取成了着的首读音 `zhe`。
+外部没有开关能关掉它；要绕开就得自己调 `convertToPinyinArray` 重新做分词——
+那正是"换库是为了不自己写"想省掉的部分。所以 **jpinyin 只作为 verify 依赖保留**（可一键复测），
+不进 app 的依赖树，产物 jar 里没有它。
 
 ## 当前状态
 
