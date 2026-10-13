@@ -121,6 +121,21 @@ public final class GuiMain {
                 } else if (frame.isConnected() || importBtn.isEnabled()) {
                     problems.add("未连接时「开始导入」就可点，点了只会静默失败");
                 }
+                // 日志的红色与行数上限：错误没标红、或日志无限涨，都只会在现场翻车时才发现
+                frame.logError("自检错误行");
+                frame.log("自检普通行");
+                if (!frame.logPanel().isErrorLine("自检错误行")) {
+                    problems.add("logError 写出来的行没被标成错误级");
+                }
+                if (frame.logPanel().isErrorLine("自检普通行")) {
+                    problems.add("普通日志被误标成错误级");
+                }
+                for (int i = 0; i < frame.logPanel().maxLines() + 50; i++) {
+                    frame.log("灌行 " + i);
+                }
+                if (frame.logPanel().lineCount() > frame.logPanel().maxLines()) {
+                    problems.add("日志没裁到上限：" + frame.logPanel().lineCount());
+                }
                 // 进度框按阶段计项：走三步必须三步都记，且总项数一次算准
                 com.excel2mysql.gui.ProgressDialog pd =
                         new com.excel2mysql.gui.ProgressDialog(null, "自检");

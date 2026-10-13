@@ -42,7 +42,7 @@ public final class MainFrame extends JFrame {
     private final TableDefModel model = new TableDefModel();
     private final javax.swing.JTable table = new javax.swing.JTable(model);
     private final JTextArea ddl = new JTextArea();
-    private final JTextArea log = new JTextArea();
+    private final LogPanel logPanel = new LogPanel();
     private JLabel status;
     private JButton preview;
     private JButton connect;
@@ -136,9 +136,7 @@ public final class MainFrame extends JFrame {
         ddlScroll.setBorder(BorderFactory.createTitledBorder("建表语句预览"));
         ddlScroll.setMinimumSize(new Dimension(300, 120));
 
-        log.setEditable(false);
-        log.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
-        JScrollPane logScroll = new JScrollPane(log);
+        JScrollPane logScroll = new JScrollPane(logPanel);
         logScroll.setBorder(BorderFactory.createTitledBorder("日志"));
 
         JSplitPane right = new JSplitPane(JSplitPane.VERTICAL_SPLIT, ddlScroll, logScroll);
@@ -178,7 +176,7 @@ public final class MainFrame extends JFrame {
             return true;
         } catch (Exception e) {
             connected = false;
-            log("连接失败：" + e.getMessage());
+            logError("连接失败：" + e.getMessage());
             status.setText("连接失败");
             return false;
         }
@@ -206,7 +204,7 @@ public final class MainFrame extends JFrame {
                 db = new DbClient(config);
             } catch (Exception e) {
                 final String message = e.getMessage();
-                SwingUtilities.invokeLater(() -> log("连接失败：" + message));
+                SwingUtilities.invokeLater(() -> logError("连接失败：" + message));
                 setEnabledForRun(true);
                 progress.close();
                 return;
@@ -223,7 +221,7 @@ public final class MainFrame extends JFrame {
                 } catch (Exception e) {
                     failed++;
                     final String message = e.getMessage();
-                    SwingUtilities.invokeLater(() -> log("建表失败 " + t.tableName + " — " + message));
+                    SwingUtilities.invokeLater(() -> logError("建表失败 " + t.tableName + " — " + message));
                     continue;
                 }
                 progress.step("写入 " + t.tableName);
@@ -243,7 +241,7 @@ public final class MainFrame extends JFrame {
                 } catch (Exception e) {
                     failed++;
                     final String message = e.getMessage();
-                    SwingUtilities.invokeLater(() -> log("写入失败 " + t.tableName + " — " + message));
+                    SwingUtilities.invokeLater(() -> logError("写入失败 " + t.tableName + " — " + message));
                 }
             }
             client.close();
@@ -420,9 +418,16 @@ public final class MainFrame extends JFrame {
     }
 
     public void log(String text) {
-        log.append(text);
-        log.append("\n");
-        log.setCaretPosition(log.getDocument().getLength());
+        logPanel.log(text);
+    }
+
+    /** 错误要整条标红：一屏日志里靠眼睛扫"失败"两个字太容易漏。 */
+    public void logError(String text) {
+        logPanel.error(text);
+    }
+
+    public LogPanel logPanel() {
+        return logPanel;
     }
 
     private static String baseName(String path) {
