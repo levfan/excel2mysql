@@ -187,6 +187,47 @@ Python 线是否修，另议。
 - Python 侧**没有状态栏、没有菜单、没有右键菜单**，快捷键只有 F1 与 Esc；
   Java 原来那条 `status` JLabel 是自造的，第 20 轮已删干净，连接状态只由提示条说。
 
+## 12. 第五轮：把两条线的界面真画出来逐屏对（本轮找到并修掉 8 处）
+
+前四轮都是"读代码列条目"，问题就在这儿：连接框里挤了 12 个控件、日志段被压成一行、
+进度条印着字面的 `%p%`——这些在源码里都"存在且正确"，只有画出来才看得见。
+这轮改成渲染比对，两边各出同名十屏：
+
+```
+.venv/Scripts/python.exe java/tools/py_ui_shot.py              # Python 侧十屏
+cd java && mvn -o install -DskipTests                          # 先构建
+  java -cp "verify/target/classes;app/target/classes;verify/target/lib/*" \
+       com.excel2mysql.verify.UiShot <输出目录> verify/fixtures # Java 侧十屏
+```
+
+两边都走离屏渲染（锁屏时截屏只能拿到锁屏图），Python 用 `QWidget.grab()`，
+Java 用 `component.paint()` 画客户区。屏序：01 空界面 / 02 Excel 载入 / 03 SQL 空 /
+04 SQL 读入 / 05 SQL 改前缀 / 06 结构弹窗 / 07 DDL 弹窗 / 08 使用说明 / 09 关于 / 10 进度框。
+
+找到的 8 处，全部已修：
+
+| # | 差距 | 症状 | 修在哪 |
+| --- | --- | --- | --- |
+| 1 | Excel 页 12 个控件全塞在顶部连接框里 | 前缀框、四个操作按钮、清除日志、覆盖已存在表、停止、开始导入挤成两排，而组框里只有表格 | `MainFrame.buildCenter`：前缀行与四按钮进「待导入文件」组框、清除日志进日志区上方、勾选框+停止+开始导入进底部动作条 |
+| 2 | 连接框是一行 FlowLayout | Python 是 QFormLayout 五行，标签各占一行 | 改 GridBagLayout 两列五行，「连接并加载库」与目标库下拉同行 |
+| 3 | 三段分栏只给绝对值 130/250 | 窗口比 670 矮时日志段被挤成一行（Qt 的 setSizes 会等比缩放） | `applySplitProportions()`：首次拿到尺寸后按 130:250:290 等比重摆一次，之后不再动用户拖的把手 |
+| 4 | 进度框没有框内标题行 | Python 在框里另写一行加粗任务名，Java 只有窗口标题 | `ProgressDialog` 补 `head` 加粗标签 |
+| 5 | 取消按钮被拉成整行宽 | `add(cancel, SOUTH)` 让 BorderLayout 把它撑满 | 按钮进一条右对齐的 FlowLayout |
+| 6 | 进度条印的是字面 `%p%` | Qt 的 `setFormat("%p%")` 是格式符，Swing 的 `setString` 是字面文本 | `showPercent()` 每次改值自己写 `n%`；自检断 `percentText()` |
+| 7 | 端口显示成 `3,306` | JSpinner 默认按本地 NumberFormat 加千分位，QSpinBox 不加 | `NumberEditor(portField, "#0")` |
+| 8 | 多表弹窗的标签换行堆两排 | Swing 的 JTabbedPane 默认 WRAP，QTabWidget 是单行加箭头 | 结构弹窗与 DDL 弹窗改 `SCROLL_TAB_LAYOUT` |
+
+顺带两条关于"怎么验"的事实，别再靠读代码下结论：
+
+- **进度框的客户区尺寸**：Python 的 `resize(480,140)` 说的是内容区，Java 原先把 480×140
+  钉在窗体上，`pack()` 之后内容区实际只有 458×84。改成钉在内容面板上，自检也改成量内容面板。
+- **探针必须泵事件**：控件更新是排进事件分发线程队列的，站在 EDT 上直接 paint 会拍到
+  "数据改了、控件还空着"那一刻——日志区一片空白就是这么来的，不是功能缺失。
+  `UiShot` 因此把驱动放在主线程，每步一次 `invokeAndWait`，回来时队列已排空。
+
+这轮之后十屏逐张对过：01/02/03/04/05/06/07/08/09/10 的结构、控件归属、比例、文案位置都已一致。
+剩下的可见差异只有字体渲染本身（Windows 下 Swing 与 Qt 的默认字族与行高不同），不在功能范围内追。
+
 ## 11. 第四轮：全量文案与信号扫描的结果（本轮没有新增待办）
 
 换了两个此前没用过的扫描面，都是把 Python 侧的东西全量列出来再逐条去 Java 里找：
