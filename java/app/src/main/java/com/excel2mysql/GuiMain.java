@@ -155,6 +155,8 @@ public final class GuiMain {
                 drop_and_progress(frame, files, problems);
                 // 导入收尾：成功文件移出、失败保留，日志与弹窗用的是同一句话
                 import_finish(frame, files, problems);
+                // 「开始导入」的两道闸：没表不管、没选库弹窗，且都不许把任务位占死
+                import_guard(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
                 // 页面级「停止」与并发护栏
@@ -586,8 +588,38 @@ public final class GuiMain {
         frame.clearAll();
     }
 
-    private static void writeText(String path, String text) {
-        try {
+    /**
+     * 「开始导入」的两道闸：列表空着不管（按钮本来就是灰的），没选库要弹 NO_DB_HINT。
+     * 两条都断"任务位还得回来"：早先在抢到位之后 return 却没 endTask，
+     * 一次拦下就把之后每个按钮都变成"已有任务在跑"。
+     */
+    private static void import_guard(MainFrame frame, List<String> files, List<String> problems) {
+        frame.clearAll();
+        frame.setSelectedDatabase("");
+        frame.startImport();
+        if (frame.taskBusy()) {
+            problems.add("列表空着点导入却抢了任务位");
+        }
+        frame.addFiles(files);
+        frame.startImport();
+        if (!"提示".equals(frame.lastDialogTitle())
+                || !frame.lastDialogText().contains("未选择目标数据库")) {
+            problems.add("没选库点导入要弹 NO_DB_HINT，实际标题=" + frame.lastDialogTitle()
+                    + " 正文=" + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        if (!frame.logPanel().contains("已拦下：未选择目标数据库")) {
+            problems.add("拦下导入只弹窗没写日志，回头查不到");
+        }
+        if (frame.taskBusy()) {
+            problems.add("拦下之后任务位没还回来，之后每个按钮都会被吃掉");
+            // 抢着不放正是要抓的缺陷，但别让它把后面所有用例一起带崩：
+            // 失败报告要只说这一条，而不是后面一屏连锁异常
+            frame.endTask();
+        }
+        frame.clearAll();
+    }
+
+    private static void writeText(String path, String text) {        try {
             java.nio.file.Files.write(java.nio.file.Paths.get(path),
                     text.getBytes(java.nio.charset.Charset.forName("UTF-8")));
         } catch (java.io.IOException e) {
