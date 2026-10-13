@@ -570,24 +570,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 导入在子线程跑，界面靠模态进度框报进度并可取消。 */
     public void startImport() {
+        // 与 Python 同序同话术：没表直接不管（这时「开始导入」本来就是灰的），
+        // 没选库要弹 NO_DB_HINT。两处都不占任务位——原来在抢到位之后 return 却没 endTask，
+        // 任务位会被永久占住，之后每个按钮都只剩"已有任务在跑"。
+        if (tables.isEmpty()) {
+            return;
+        }
+        final Config cfg = currentConfig();
+        if (!cfg.hasDatabase()) {
+            warn(LogText.NO_DB_HINT);
+            return;
+        }
         if (!startTask()) {
             return;
         }
-        if (!connected || config == null) {
-            log("还没连接，不能导入");
-            return;
-        }
-        if (!currentConfig().hasDatabase()) {
-            warn(LogText.NO_DB_HINT);
-            endTask();
-            return;
-        }
-        config = currentConfig();
-        if (tables.isEmpty()) {
-            log("没有可导入的表");
-            endTask();
-            return;
-        }
+        config = cfg;
         final List<TableBuilder.Result> work = new ArrayList<TableBuilder.Result>();
         for (TableOps.Table t : tables) {
             TableBuilder.Result r = byTable.get(t);
@@ -597,7 +594,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         // 勾选状态在 EDT 上读一次：子线程里再点组件属于跨线程摸 Swing
         final boolean drop = dropExisting.isSelected();
-        final Config cfg = config;
         final ProgressDialog progress = new ProgressDialog(this, "正在导入到目标库…");
         // 导入是唯一能中止的长任务，按钮名要说清楚"做完当前表才停"
         progress.setCancelText("停止（当前表完成后中止）");
@@ -1397,26 +1393,24 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 任务异常），一律写"提示"等于把"这是哪类结果"的分类信息丢掉。
      */
     public void inform2(String title, String text) {
-        dialog(title, text, false);
+        dialog(title, text, javax.swing.JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** 出错类弹窗：Python 用 QMessageBox.critical，图标也是"这次没做成"的一部分。 */
     @Override
     public void informError(String title, String text) {
-        dialog(title, text, true);
+        dialog(title, text, javax.swing.JOptionPane.ERROR_MESSAGE);
     }
 
-    private void dialog(String title, String text, boolean error) {
+    private void dialog(String title, String text, int icon) {
         lastDialogTitle = title;
         lastDialogText = text == null ? "" : text;
-        lastDialogIsError = error;
+        lastDialogIsError = icon == javax.swing.JOptionPane.ERROR_MESSAGE;
         if (!modalProgress || lastDialogText.isEmpty()) {
             // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
             return;
         }
-        javax.swing.JOptionPane.showMessageDialog(this, lastDialogText, title,
-                error ? javax.swing.JOptionPane.ERROR_MESSAGE
-                        : javax.swing.JOptionPane.INFORMATION_MESSAGE);
+        javax.swing.JOptionPane.showMessageDialog(this, lastDialogText, title, icon);
     }
 
     /** 最后一次弹窗的标题与正文：两条路都写满，自检读这一份，模态那条才真弹。 */
@@ -1433,11 +1427,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return lastDialogIsError;
     }
 
-    /** 拦下的操作除了弹窗还要落一行日志：弹窗关掉就没了，日志才是可回溯的那份。 */
+    /**
+     * 拦下的操作除了弹窗还要落一行日志：弹窗关掉就没了，日志才是可回溯的那份。
+     * 图标用警告那一档（Python 这些位置全是 QMessageBox.warning），弹窗走同一个漏斗，
+     * 原地模式才不会把站在事件分发线程上的自检卡死。
+     */
     public void warn(String text) {
         log("已拦下：" + text);
-        javax.swing.JOptionPane.showMessageDialog(this, text, "提示",
-                javax.swing.JOptionPane.WARNING_MESSAGE);
+        dialog("提示", text, javax.swing.JOptionPane.WARNING_MESSAGE);
     }
 
     private static String baseName(String path) {
