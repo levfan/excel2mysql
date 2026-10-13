@@ -72,6 +72,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JButton preview;
     private JButton connect;
     private JButton importBtn;
+    private JButton stopBtn;
+    private boolean taskRunning;
     private javax.swing.JTextField hostField;
     private javax.swing.JSpinner portField;
     private javax.swing.JTextField userField;
@@ -209,6 +211,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         importBtn = new JButton("开始导入");
         importBtn.setEnabled(false);
         importBtn.addActionListener(e -> startImport());
+        // 页面级「停止」：Python 的进度框根本没有 X，中止就靠这个按钮
+        stopBtn = new JButton("停止");
+        stopBtn.setEnabled(false);
+        stopBtn.addActionListener(e -> stopTask());
         prefixField = new javax.swing.JTextField(18);
         prefixField.setToolTipText(PREFIX_HINT);
         JButton applyPrefix = new JButton("批量应用前缀");
@@ -230,6 +236,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tools.add(replacePrefix);
         tools.add(dropExisting);
         tools.add(clearLog);
+        tools.add(stopBtn);
         tools.add(importBtn);
 
         JPanel fields = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
@@ -552,17 +559,22 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 导入在子线程跑，界面靠模态进度框报进度并可取消。 */
     public void startImport() {
+        if (!startTask()) {
+            return;
+        }
         if (!connected || config == null) {
             log("还没连接，不能导入");
             return;
         }
         if (!currentConfig().hasDatabase()) {
             warn(LogText.NO_DB_HINT);
+            endTask();
             return;
         }
         config = currentConfig();
         if (tables.isEmpty()) {
             log("没有可导入的表");
+            endTask();
             return;
         }
         final List<TableBuilder.Result> work = new ArrayList<TableBuilder.Result>();
@@ -612,9 +624,54 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         progress.open();
     }
 
+    /**
+     * 任务在跑与没在跑是同一处开关：导入/解析开始置灰、结束复原。
+     * 顺手把并发护栏也管起来——两个任务同时跑会共用同一份表列表互相踩，
+     * 进度框也会叠到看不见底下那个（Python 侧靠 task_dialog 非空直接不吃第二次点击）。
+     */
     private void setEnabledForRun(boolean on) {
+        taskRunning = !on;
         connect.setEnabled(on);
         importBtn.setEnabled(on && connected && !tables.isEmpty());
+        stopBtn.setEnabled(!on);
+    }
+
+    /**
+     * 占住任务位：占不到就说明已有任务在跑，这次点击直接不吃掉。
+     * 两个任务同时跑会共用同一份表列表互相踩，进度框也会叠到看不见底下那个，
+     * 所以护栏得是真入口，而不是散在各方法开头的 if。
+     */
+    public boolean startTask() {
+        if (taskRunning) {
+            log("已有任务在跑，请等当前这个结束");
+            return false;
+        }
+        setEnabledForRun(false);
+        return true;
+    }
+
+    /** 释放任务位并复原按钮。 */
+    public void endTask() {
+        setEnabledForRun(true);
+    }
+
+    /** 有长任务在跑吗：护栏与自检都读这一个判定，不留两套状态。 */
+    public boolean taskBusy() {
+        return taskRunning;
+    }
+
+    public javax.swing.JButton stopButton() {
+        return stopBtn;
+    }
+
+    /** 请求中止当前任务：已经做完的那一项会跑完，剩下的不再开工。 */
+    public void stopTask() {
+        if (!taskRunning || lastTask == null) {
+            log("没有正在执行的任务");
+            return;
+        }
+        lastTask.requestCancel();
+        log("[正在中止...]");
     }
 
     public boolean isConnected() {
@@ -677,9 +734,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 界面只挂一个可取消的模态进度框。几十万行的表读起来不该让窗口变成白屏。
      */
     public void addFilesAsync(final List<String> paths) {
+        if (!startTask()) {
+            return;
+        }
         final ProgressDialog progress = new ProgressDialog(this, "正在解析文件…");
-        lastTask = progress;
         final ImportParse.Sink sink = sinkFor(progress);
+        lastTask = progress;
         setEnabledForRun(false);
         Thread worker = new Thread(() -> {
             try {
