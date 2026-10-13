@@ -50,6 +50,8 @@ public final class SqlPage extends JPanel {
 
         void inform(String text);
 
+        void inform2(String title, String text);
+
         void warn(String text);
     }
 
@@ -570,7 +572,7 @@ public final class SqlPage extends JPanel {
             SwingUtilities.invokeLater(() -> {
                 runButton.setEnabled(true);
                 progress.close();
-                host.inform(finishRun(okFinal, failFinal, skipFinal, cancelled, target));
+                host.inform2("执行完成", finishRun(okFinal, failFinal, skipFinal, cancelled, target));
             });
             } catch (Throwable t) {
                 String msg = LogText.describe(t);
@@ -578,7 +580,7 @@ public final class SqlPage extends JPanel {
                     error(LogText.crashLog(msg));
                     runButton.setEnabled(true);
                     progress.close();
-                    host.inform(LogText.crashDialog(msg));
+                    host.inform2("任务异常", LogText.crashDialog(msg));
                 });
             }
         }, "excel2mysql-sqlrun");

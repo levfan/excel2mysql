@@ -87,6 +87,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private HintLabel impHint;
     private SqlPage sqlPage;
     private ProgressDialog lastTask;
+    private String lastDialogTitle = "";
+    private String lastDialogText = "";
     private javax.swing.JTabbedPane tabs;
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
@@ -617,7 +619,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     setEnabledForRun(true);
                     progress.close();
                     // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
-                    inform(finishImport(outcomes, cancelled));
+                    inform2("导入完成", finishImport(outcomes, cancelled));
                 });
             } catch (Throwable t) {
                 crash(t, progress, () -> setEnabledForRun(true));
@@ -747,7 +749,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private void taskCrash(Throwable t, boolean showDialog) {
         String text = crashMessage(t);
         if (showDialog) {
-            inform(text);
+            inform2("任务异常", text);
         }
     }
 
@@ -843,15 +845,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     ImportParse.parse(paths, currentPaths(), zipDirFor(paths), zipDestSeq,
                             builder, sink);
             SwingUtilities.invokeLater(() -> {
-                if (outcome.cancelled) {
-                    log("已取消，只完成了部分解析");
-                }
-                String summary = finishAdd(outcome);
+                finishAdd(outcome);
                 progress.close();
                 setEnabledForRun(true);
-                if (!summary.isEmpty()) {
-                    inform(summary);
-                }
             });
             } catch (Throwable t) {
                 // 线程里的意外只会把模态框留在界面上，必须收掉并说出来
@@ -964,9 +960,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         status.setText("已加载 " + tables.size() + " 张表 / " + fileModel.rowTotal() + " 个字段");
         refreshPreview();
         String summary = ImportParse.summaryText(outcome);
+        if (outcome.cancelled) {
+            // 取消这件事要进正文，只看弹窗的人会以为整批都跑完了
+            summary = summary.isEmpty() ? "已取消，只完成了部分解析"
+                    : "已取消，只完成了部分解析" + NEWLINE + summary;
+        }
         if (!summary.isEmpty()) {
             // 同一句话既进日志也进弹窗：日志可回溯，弹窗防走神漏看
             log("[添加结果] " + summary);
+            inform2("添加结果", summary);
         }
         return summary;
     }
@@ -1200,7 +1202,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             if (restore != null) {
                 restore.run();
             }
-            inform(LogText.crashDialog(msg));
+            inform2("任务异常", LogText.crashDialog(msg));
         });
     }
 
@@ -1341,8 +1343,31 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     public void inform(String text) {
-        javax.swing.JOptionPane.showMessageDialog(this, text, "提示",
+        inform2("提示", text);
+    }
+
+    /**
+     * 带标题的结果弹窗。Python 的四类对话框各有各的标题（添加结果 / 导入完成 / 执行完成 /
+     * 任务异常），一律写"提示"等于把"这是哪类结果"的分类信息丢掉。
+     */
+    public void inform2(String title, String text) {
+        lastDialogTitle = title;
+        lastDialogText = text == null ? "" : text;
+        if (!modalProgress || lastDialogText.isEmpty()) {
+            // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
+            return;
+        }
+        javax.swing.JOptionPane.showMessageDialog(this, lastDialogText, title,
                 javax.swing.JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** 最后一次弹窗的标题与正文：两条路都写满，自检读这一份，模态那条才真弹。 */
+    public String lastDialogTitle() {
+        return lastDialogTitle;
+    }
+
+    public String lastDialogText() {
+        return lastDialogText;
     }
 
     /** 拦下的操作除了弹窗还要落一行日志：弹窗关掉就没了，日志才是可回溯的那份。 */
