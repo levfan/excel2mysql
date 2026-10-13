@@ -81,7 +81,6 @@ public final class GuiMain {
                 int fileRows = frame.fileModel().getRowCount();
                 int rows = frame.fileModel().rowTotal();
                 String ddl = frame.ddlText();
-                String status = frame.statusText();
                 List<String> problems = new ArrayList<String>();
                 if (!addSummary.contains("添加 7 项文件")) {
                     problems.add("添加结果汇总没数清文件：" + addSummary.replace((char) 10, ' '));
@@ -137,9 +136,8 @@ public final class GuiMain {
                 if (!ddl.contains("PRIMARY KEY")) {
                     problems.add("DDL 预览里没有主键，自动选主键没生效");
                 }
-                if (!status.contains(String.valueOf(tables))) {
-                    problems.add("状态栏没反映表数：" + status);
-                }
+                // 表数的可见痕迹是文件表行数与日志里那句汇总（Python 没有状态栏），
+                // 两者已分别在上面断过，这里不再断自造的状态文字
                 // 文件表刻意不可就地编辑：字段级改动在双击打开的结构弹窗里做，
                 // 和 Python 侧一致（就地编辑会让"改的是哪张表"变含糊）
                 if (frame.fileModel().isCellEditable(0, 3)) {
@@ -179,6 +177,17 @@ public final class GuiMain {
                 for (javax.swing.AbstractButton b : frame.buttons()) {
                     if (b.getActionListeners().length == 0) {
                         problems.add("按钮没有绑定动作：" + b.getText());
+                    }
+                }
+                // 自造文案清掉之后不许长回来：状态栏那几行 Python 根本没有，
+                // 连接状态只由绿/红提示条说（main.py:861-878 那条框里只有输入框和按钮）
+                List<String> labelTexts = new ArrayList<String>();
+                collectLabels(frame.getContentPane(), labelTexts);
+                for (String bad : new String[]{"尚未连接", "待导入 ", "尚未添加文件"}) {
+                    for (String l : labelTexts) {
+                        if (l.contains(bad)) {
+                            problems.add("界面上又长出 Python 没有的状态文字：" + l);
+                        }
                     }
                 }
                 // 没连接之前"开始导入"必须是禁用的，不然点了只会静默失败
@@ -657,6 +666,21 @@ public final class GuiMain {
             frame.endTask();
         }
         frame.clearAll();
+    }
+
+    /** 把界面上所有静态文字收出来：状态栏这类自造文案一长回来就要被抓到。 */
+    private static void collectLabels(java.awt.Container c, List<String> out) {
+        for (java.awt.Component child : c.getComponents()) {
+            if (child instanceof javax.swing.JLabel) {
+                String t = ((javax.swing.JLabel) child).getText();
+                if (t != null && !t.isEmpty()) {
+                    out.add(t);
+                }
+            }
+            if (child instanceof java.awt.Container) {
+                collectLabels((java.awt.Container) child, out);
+            }
+        }
     }
 
     private static void writeText(String path, String text) {        try {
