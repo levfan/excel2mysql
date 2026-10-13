@@ -124,6 +124,8 @@ public final class GuiMain {
                 import_finish(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
+                // 页面级「停止」与并发护栏
+                stop_button(frame, problems);
                 // 进度框文案与收尾
                 progress_copy(problems);
                 // DDL 逐表分页、文件表列宽、端口范围
@@ -1018,6 +1020,49 @@ public final class GuiMain {
             }
         } finally {
             pd.dispose();
+        }
+    }
+
+    private static void stop_button(MainFrame frame, List<String> problems) {
+        javax.swing.JButton stop = frame.stopButton();
+        if (stop == null) {
+            problems.add("界面上没有「停止」按钮");
+            return;
+        }
+        if (!"停止".equals(stop.getText())) {
+            problems.add("中止按钮文案不对：" + stop.getText());
+        }
+        if (frame.taskBusy()) {
+            problems.add("刚建好窗口就处于有任务在跑的状态");
+        }
+        if (stop.isEnabled()) {
+            problems.add("没任务时可点的「停止」是假按钮");
+        }
+        // 并发护栏与忙碌态联动：这两条必须走真入口，不能只看构造时的初始值
+        if (!frame.startTask() || !frame.taskBusy()) {
+            problems.add("startTask 没能占住任务位");
+        }
+        if (frame.startTask()) {
+            problems.add("第二个任务挤得进来，两个任务会踩同一份表列表");
+        }
+        if (!stop.isEnabled()) {
+            problems.add("任务在跑时「停止」是灰的，中止只能等它自己跑完");
+        }
+        frame.endTask();
+        if (frame.taskBusy() || stop.isEnabled()) {
+            problems.add("任务结束后没复原忙碌态与停止按钮");
+        }
+        if (!frame.startTask()) {
+            problems.add("endTask 之后任务位没释放，第三次点不动了");
+        }
+        frame.endTask();
+        int lines = frame.logPanel().lineCount();
+        frame.stopTask();
+        if (frame.logPanel().lineCount() == lines) {
+            problems.add("空点「停止」什么都不说，用户会以为自己按错了");
+        }
+        if (!frame.logPanel().contains("没有正在执行的任务")) {
+            problems.add("空点「停止」的提示语不对");
         }
     }
 }
