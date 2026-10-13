@@ -108,6 +108,8 @@ public final class GuiMain {
                 structure_dialog(frame, problems);
                 // 前缀两个按钮与「覆盖已存在表」勾选：文案、幂等、跳过口径都要和 Python 一致
                 prefix_and_labels(frame, problems);
+                // 拖拽区与页内进度条：真拖进来走的必须是和选择器同一个入口
+                drop_and_progress(frame, files, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
                 // 比少一个按钮更糟——用户会以为是自己操作错了
                 for (javax.swing.AbstractButton b : frame.buttons()) {
@@ -332,6 +334,45 @@ public final class GuiMain {
         frame.refreshPreview();
         if (frame.ddlText().contains("DROP TABLE IF EXISTS")) {
             problems.add("没勾「覆盖已存在表」DDL 预览里却出现了 DROP");
+        }
+    }
+
+    private static void drop_and_progress(MainFrame frame, List<String> files,
+                                          List<String> problems) {
+        com.excel2mysql.gui.DropArea drop = frame.dropArea();
+        if (drop == null) {
+            problems.add("界面上没有拖拽接收区");
+            return;
+        }
+        if (!drop.acceptsDrops()) {
+            problems.add("拖拽区没挂上接收器，拖文件进来不会有任何反应");
+        }
+        if (!drop.hintText().contains("拖到此处") || !drop.hintText().contains(".zip")) {
+            problems.add("拖拽区提示没交代清楚能拖什么：" + drop.hintText());
+        }
+        if (files.isEmpty()) {
+            problems.add("自检没有夹具可拖");
+            return;
+        }
+        int before = frame.tables().size();
+        List<String> one = new ArrayList<String>();
+        one.add(files.get(0));
+        drop.fireDrop(one);
+        if (frame.tables().size() <= before) {
+            problems.add("拖进来一个文件后表数没增加：" + before + " → " + frame.tables().size());
+        }
+        drop.fireDrop(new ArrayList<String>());
+        if (!frame.logPanel().contains("拖拽里没有可读取的文件")) {
+            problems.add("空拖拽没有任何提示");
+        }
+
+        frame.setPageProgress(37);
+        if (frame.pageProgressValue() != 37) {
+            problems.add("页内进度条没跟上：" + frame.pageProgressValue());
+        }
+        frame.clearAll();
+        if (frame.pageProgressValue() != 0 || !frame.tables().isEmpty()) {
+            problems.add("「清空列表」没把进度条归零或没清空表");
         }
     }
 }

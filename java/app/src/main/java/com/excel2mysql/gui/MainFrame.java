@@ -62,6 +62,8 @@ public final class MainFrame extends JFrame {
     private javax.swing.JTextField userField;
     private javax.swing.JPasswordField passField;
     private javax.swing.JTextField dbField;
+    private DropArea drop;
+    private javax.swing.JProgressBar pageProgress;
     private javax.swing.JTextField prefixField;
     private javax.swing.JCheckBox dropExisting;
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
@@ -156,6 +158,13 @@ public final class MainFrame extends JFrame {
     }
 
     private java.awt.Component buildCenter() {
+        drop = new DropArea(paths -> {
+            if (paths.isEmpty()) {
+                log("拖拽里没有可读取的文件");
+            } else {
+                addFiles(paths);
+            }
+        });
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
         table.setRowHeight(22);
@@ -184,7 +193,18 @@ public final class MainFrame extends JFrame {
         right.setResizeWeight(0.62);
         JSplitPane center = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, tableScroll, right);
         center.setResizeWeight(0.52);
-        return center;
+
+        // 三段都能拖着调高度：拖拽区被压到 0 就等于没有，所以给它设了最小高度
+        JSplitPane stacked = new JSplitPane(JSplitPane.VERTICAL_SPLIT, drop, center);
+        stacked.setResizeWeight(0.14);
+        stacked.setDividerLocation(96);
+
+        pageProgress = new javax.swing.JProgressBar();
+        pageProgress.setPreferredSize(new Dimension(200, 18));
+        JPanel page = new JPanel(new BorderLayout());
+        page.add(stacked, BorderLayout.CENTER);
+        page.add(pageProgress, BorderLayout.SOUTH);
+        return page;
     }
 
     /** 连接并加载库：口令只从这里读，连上之前"开始导入"保持禁用。 */
@@ -239,9 +259,11 @@ public final class MainFrame extends JFrame {
         final ProgressDialog progress = new ProgressDialog(this, "开始导入");
         progress.setTotal(todo.size() * 2);
         setEnabledForRun(false);
+        setPageProgress(0);
         Thread worker = new Thread(() -> {
             int ok = 0;
             int failed = 0;
+            int done = 0;
             DbClient db = null;
             try {
                 db = new DbClient(config);
@@ -258,6 +280,10 @@ public final class MainFrame extends JFrame {
                     break;
                 }
                 TableBuilder.Result r = byTable.get(t);
+                done++;
+                // 建表失败也会 continue 走出这一轮，所以计数放在开头：
+                // 半途失败的表照样占一格，进度条不会停在"看起来还剩几张"
+                reportTableProgress(done, todo.size());
                 progress.step("建表 " + t.tableName);
                 try {
                     client.createTable(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, drop));
@@ -291,6 +317,7 @@ public final class MainFrame extends JFrame {
             final int okFinal = ok;
             final int badFinal = failed;
             SwingUtilities.invokeLater(() -> {
+                setPageProgress(0);
                 status.setText("导入完成 " + okFinal + " 张，失败 " + badFinal + " 张");
                 log(status.getText() + (progress.isCancelled() ? "（已取消，未继续）" : ""));
                 setEnabledForRun(true);
@@ -300,6 +327,12 @@ public final class MainFrame extends JFrame {
         worker.setDaemon(true);
         worker.start();
         progress.open();
+    }
+
+    /** 进度只按表计：行数在子线程里跳太快，页内那条只会被刷成一团糊的。 */
+    private void reportTableProgress(int done, int total) {
+        final int percent = total <= 0 ? 0 : (int) (done * 100L / total);
+        SwingUtilities.invokeLater(() -> setPageProgress(percent));
     }
 
     private void setEnabledForRun(boolean on) {
@@ -489,12 +522,13 @@ public final class MainFrame extends JFrame {
         return status.getText();
     }
 
-    private void clearAll() {
+    public void clearAll() {
         tables.clear();
         byTable.clear();
         fileModel.clear();
         ddl.setText("");
         status.setText("尚未添加文件");
+        setPageProgress(0);
         log("已清空");
     }
 
@@ -514,6 +548,21 @@ public final class MainFrame extends JFrame {
 
     public javax.swing.JCheckBox dropExistingBox() {
         return dropExisting;
+    }
+
+    /** 页内进度条：导入按"当前表完成数 / 总表数"报百分比，跑完归零。 */
+    public void setPageProgress(int percent) {
+        if (pageProgress != null) {
+            pageProgress.setValue(Math.max(0, Math.min(100, percent)));
+        }
+    }
+
+    public int pageProgressValue() {
+        return pageProgress == null ? -1 : pageProgress.getValue();
+    }
+
+    public DropArea dropArea() {
+        return drop;
     }
 
     public LogPanel logPanel() {
