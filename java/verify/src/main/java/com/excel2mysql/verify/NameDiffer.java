@@ -22,10 +22,13 @@ public final class NameDiffer {
     public static void main(String[] args) throws IOException {
         String golden = args.length > 0 ? args[0]
                 : "java/verify/golden/excel.jsonl.gz";
+        // 合并区那条记录要真打开文件验"Java 也拒绝"，所以这里也得拿夹具目录
+        String fixtureDir = args.length > 1 ? args[1] : "java/verify/fixtures";
         Names names = new Names(PinyinConverter.loadFromResources());
         BufferedReader reader = new BufferedReader(new InputStreamReader(
                 new GZIPInputStream(new FileInputStream(golden)), Charset.forName("UTF-8")));
         int files = 0;
+        int rejected = 0;
         int fields = 0;
         int structured = 0;
         int nanFields = 0;
@@ -45,6 +48,23 @@ public final class NameDiffer {
                 String baseTable = (String) def.get("base_table_name");
                 String table = (String) def.get("table_name");
                 String comment = (String) def.get("table_comment");
+                String source = (String) def.get("source");
+                if ("merged".equals(source)) {
+                    // 含合并区的文件在 Python 侧连表定义都没有（build_table_def 直接拒），
+                    // 拿 null 去比推导出的表名必然假红；这条记录要撞的是"Java 也拒绝"
+                    rejected++;
+                    try {
+                        com.excel2mysql.core.MergeCheck.ensureNoMergedCells(
+                                fixtureDir + "/" + file);
+                        bad++;
+                        if (shown.size() < 12) {
+                            shown.add("     漏检[" + file + "] 含合并区却没拒绝");
+                        }
+                    } catch (com.excel2mysql.core.MergeCheck.MergedCellsException expected) {
+                        // 正是期望行为
+                    }
+                    continue;
+                }
                 String[] got = names.parseTableNameAndComment(file);
                 if (!got[0].equals(baseTable) || !got[1].equals(comment)) {
                     bad++;
@@ -55,7 +75,6 @@ public final class NameDiffer {
                                 + " / " + ascii(got[1]));
                     }
                 }
-                String source = (String) def.get("source");
                 @SuppressWarnings("unchecked")
                 List<Object> cols = (List<Object>) def.get("columns");
                 if ("normal".equals(source)) {
@@ -97,7 +116,7 @@ public final class NameDiffer {
         }
         System.out.println("- [INFO] NAME-DIFF | 文件 " + files + " 个（结构定义 " + structured
                 + "，其中 nan 字段 " + nanFields + " 个）| 拼音字段 " + fields
-                + " 个 | 不一致 " + bad + " 处");
+                + " 个 | 合并拒绝 " + rejected + " 个 | 不一致 " + bad + " 处");
         for (String s : shown) {
             System.out.println(s);
         }

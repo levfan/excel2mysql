@@ -1,6 +1,12 @@
 package com.excel2mysql.verify;
 
 import com.excel2mysql.core.Frame;
+import com.excel2mysql.core.Infer;
+import com.excel2mysql.core.Names;
+import com.excel2mysql.core.TableBuilder;
+import com.excel2mysql.core.TableOps;
+import com.excel2mysql.pinyin.PinyinConverter;
+import com.excel2mysql.core.MergeCheck;
 import com.excel2mysql.excel.WorkbookReader;
 
 import java.io.BufferedReader;
@@ -29,9 +35,10 @@ public final class ReaderDiffer {
         BufferedReader reader = new BufferedReader(new InputStreamReader(
                 new GZIPInputStream(new FileInputStream(golden)), Charset.forName("UTF-8")));
         int files = 0;
+        int structuredFiles = 0;
+        int mergedFiles = 0;
+        int rejected = 0;
         int cells = 0;
-        int bad = 0;
-        List<String> shown = new ArrayList<String>();
         String line;
         while ((line = reader.readLine()) != null) {
             if (line.isEmpty()) {
@@ -39,17 +46,56 @@ public final class ReaderDiffer {
             }
             Map<String, Object> rec = MiniJson.parseObject(line);
             Map<String, Object> def = (Map<String, Object>) rec.get("def");
+            String file = (String) rec.get("file");
+            String path = fixtureDir + "/" + file;
+            // 合并单元格检测要在读数据之前判，且它本身就是契约：
+            // 老格式只有把格式化信息读出来才看得到合并区，是最容易"静默漏检"的一段
+            Object wantMerged = rec.get("merged");
+            if (wantMerged != null) {
+                mergedFiles++;
+                Map<String, List<String>> got = MergeCheck.detect(path);
+                String want = sortRanges((Map<String, Object>) wantMerged);
+                String have = sortRangesFromLists(got);
+                if (!want.equals(have)) {
+                    bad++;
+                    if (shown.size() < 15) {
+                        shown.add("     合并区 [" + file + "] 期望 " + ascii(want)
+                                + " 实际 " + ascii(have));
+                    }
+                }
+                if ("merged".equals(def.get("source"))) {
+                    // 这条夹具本来就该被拒：漏检就会静默建出一张错表
+                    try {
+                        MergeCheck.ensureNoMergedCells(path);
+                        bad++;
+                        if (shown.size() < 15) {
+                            shown.add("     漏检 [" + file + "] 含合并区却没拒绝");
+                        }
+                    } catch (MergeCheck.MergedCellsException expected) {
+                        rejected++;
+                    }
+                }
+            }
+            if ("structured".equals(def.get("source"))) {
+                // 元数据 Sheet 驱动那条路从没被端到端比过：NameDiffer 比的是拼音规则
+                // （这里字段名是用户手写的），TypeDiffer 比的是推断器（这里类型来自元数据），
+                // 两边都名正言顺地跳过了它。这里拿 Java 整条 build 的结果逐字段比。
+                structuredFiles++;
+                TableBuilder.Result built =
+                        new TableBuilder(new Infer(names()), names()).build(path);
+                compareDef(file, def, built);
+                continue;
+            }
             if (!"normal".equals(def.get("source"))) {
                 continue;
             }
-            String file = (String) rec.get("file");
             files++;
             Map<String, Object> sheet = (Map<String, Object>) ((List<Object>) rec.get("grid")).get(0);
             List<Object> wantHeaders = (List<Object>) sheet.get("headers");
             List<Object> wantRows = (List<Object>) sheet.get("rows");
 
             List<WorkbookReader.Sheet> read =
-                    WorkbookReader.read(fixtureDir + "/" + file);
+                    WorkbookReader.read(path);
             List<List<Object>> rows = rawRows(read.isEmpty() ? null : read.get(0));
 
             // pandas 的规则：行尾空串裁掉、尾部整行空裁掉、短行补到最大宽度
@@ -87,7 +133,9 @@ public final class ReaderDiffer {
         }
         reader.close();
         System.out.println("- [INFO] READER-DIFF | 表 " + files + " 张 | 比对 " + cells
-                + " 格 | 不一致 " + bad + " 处 | 空白折叠 " + blankFolded + " 格");
+                + " 格 | 不一致 " + bad + " 处 | 空白折叠 " + blankFolded + " 格"
+                + " | 结构定义表端到端比对 " + structuredFiles + " 张"
+                + " | 合并区检测 " + mergedFiles + " 个文件（其中按拒绝记账 " + rejected + "）");
         for (String s : shown) {
             System.out.println(s);
         }
@@ -205,7 +253,106 @@ public final class ReaderDiffer {
         return "str\u0000" + String.valueOf(v);
     }
 
+    /** 金标准里的合并区：{sheet: [range, ...]}，排序后拼成可比对的规范文本。 */
+    @SuppressWarnings("unchecked")
+    private static String sortRanges(Map<String, Object> merged) {
+        List<String> parts = new ArrayList<String>();
+        List<String> names = new ArrayList<String>(merged.keySet());
+        java.util.Collections.sort(names);
+        for (String n : names) {
+            List<Object> raw = (List<Object>) merged.get(n);
+            List<String> rs = new ArrayList<String>();
+            for (Object o : raw) {
+                rs.add(String.valueOf(o));
+            }
+            java.util.Collections.sort(rs);
+            parts.add(n + "=" + rs);
+        }
+        return parts.toString();
+    }
+
+    private static String sortRangesFromLists(Map<String, List<String>> merged) {
+        Map<String, Object> asMap = new java.util.TreeMap<String, Object>(merged);
+        return sortRanges(asMap);
+    }
+
+    private static Names names;
+
+    /** 词典只在建结构定义表时才需要；加载失败要立刻停，不能拿半套拼音表去比。 */
+    private static Names names() {
+        if (names == null) {
+            try {
+                names = new Names(PinyinConverter.loadFromResources());
+            } catch (IOException e) {
+                throw new IllegalStateException("拼音词典加载失败", e);
+            }
+        }
+        return names;
+    }
+
+    /** 整张表定义逐字段比：表名、注释、来源、主键与每一列的字段名/类型/可空/主键标记。 */
+    @SuppressWarnings("unchecked")
+    private static void compareDef(String file, Map<String, Object> want, TableBuilder.Result got) {
+        TableOps.Table t = got.table;
+        wantStr(file, "表名", want.get("table_name"), t.tableName);
+        wantStr(file, "基础表名", want.get("base_table_name"), t.baseTableName);
+        wantStr(file, "表注释", want.get("table_comment"), t.tableComment);
+        wantStr(file, "来源", want.get("source"), t.source);
+        wantStr(file, "主键", want.get("primary_key"), pkOf(t));
+        wantStr(file, "主键理由", want.get("pk_reason"), got.pkReason);
+        List<Object> ws = (List<Object>) want.get("columns");
+        if (ws.size() != t.columns.size()) {
+            report(file, "列数", String.valueOf(ws.size()), String.valueOf(t.columns.size()));
+            return;
+        }
+        for (int i = 0; i < ws.size(); i++) {
+            Map<String, Object> w = (Map<String, Object>) ws.get(i);
+            Infer.Column g = t.columns.get(i);
+            wantStr(file, "列#" + i + " 字段名", w.get("field"), g.field);
+            wantStr(file, "列#" + i + " 注释", w.get("comment"), g.comment);
+            wantStr(file, "列#" + i + " 类型", w.get("type"), g.type);
+            wantBool(file, "列#" + i + " 可空", (Boolean) w.get("nullable"), g.nullable);
+            wantBool(file, "列#" + i + " 主键", (Boolean) w.get("primary_key"),
+                    Boolean.valueOf(g.primaryKey));
+        }
+    }
+
+    private static String pkOf(TableOps.Table t) {
+        StringBuilder sb = new StringBuilder();
+        for (Infer.Column c : t.columns) {
+            if (c.primaryKey) {
+                if (sb.length() > 0) {
+                    sb.append('+');
+                }
+                sb.append(c.field);
+            }
+        }
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    private static void wantStr(String file, String what, Object want, String have) {
+        String w = want == null ? null : String.valueOf(want);
+        if (w == null ? have != null : !w.equals(have)) {
+            report(file, what, ascii(String.valueOf(want)), ascii(String.valueOf(have)));
+        }
+    }
+
+    private static void wantBool(String file, String what, Boolean want, Boolean have) {
+        if (want == null ? have != null : !want.equals(have)) {
+            report(file, what, String.valueOf(want), String.valueOf(have));
+        }
+    }
+
+    private static void report(String file, String what, String want, String have) {
+        bad++;
+        if (shown.size() < 15) {
+            shown.add("     结构定义[" + file + "] " + what + " 期望 " + want + " 实际 " + have);
+        }
+    }
+
     private static int blankFolded;
+    private static int bad;
+    private static final List<String> shown = new ArrayList<String>();
 
     /**
      * 两边归一到同一个可比形式：Python 的 float.hex() 是 0x1.9000000000000p+3，
