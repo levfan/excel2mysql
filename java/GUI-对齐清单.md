@@ -169,7 +169,7 @@ Python 线是否修，另议。
 | 16 | 点「开始导入」时按未选库弹 `NO_DB_HINT`，而不是写一行日志 | `main.py:1541` | 已做（改成与 Python 同序同话术：没表直接不管（按钮本来就是灰的），没选库弹警告框并同样写一行日志。顺带修掉一处真缺陷：老写法在抢到任务位之后 return 却不 endTask，一次拦下就把之后每个按钮都变成"已有任务在跑"；自检两条都断） |
 | 17 | 提示条要能真的拖选复制 | `main.py:887`、`1121`、`ui_help.py:135` | 部分（改成双击整行复制，且我给自己加了句 Python 没有的 tooltip） |
 | 18 | 分隔条 `setChildrenCollapsible(False)` + `setHandleWidth(6)` + 三段初始高度 | `main.py:965-973`、`1191-1197` | 部分（把手与最小尺寸已补，SQL 页初始比例未补） |
-| 19 | 弹窗被点 X / Esc 的语义要和 reject 一致（StructureDialog 点 X 等同取消） | `main.py:1654` | 未做（Java 点 X 不等同 reject） |
+| 19 | 弹窗被点 X / Esc 的语义要和 reject 一致（StructureDialog 点 X 等同取消） | `main.py:1654` | 已做（结构弹窗补上 DISPOSE_ON_CLOSE 与 Esc 绑定，另外三个弹窗本来就有 Esc；自检断"没按确定就绝不写回表定义"，以及 Esc 绑定与默认关闭动作两项都在不开框的前提下查） |
 | 20 | Java 侧自造、Python 不存在的文案要清掉：状态栏"尚未连接/已连接…/待导入 N 张表"、"已加载 N 张表 / M 个字段"、"未选择文件"、"没有可导入的表"、日志组框标题等 | 无对应 | 部分（"还没连接，不能导入"与"没有可导入的表"已随第 16 条删掉；剩下的状态栏、"已加载 N 张表 / M 个字段"、"未选择文件"、日志组框标题仍是自造的，界面上与 Python 对不上） |
 
 执行任务体另有一条真库验证：`verify/src/main/java/com/excel2mysql/verify/SqlRunCli.java`
