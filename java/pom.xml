@@ -31,6 +31,14 @@
     <fastexcel.version>1.3.0</fastexcel.version>
     <mysql.version>8.0.33</mysql.version>
     <jpinyin.version>1.1.8</jpinyin.version>
+    <!-- 随包信息：提交号与构建日期只有打包那一刻知道，默认留空由构建命令 -D 覆盖 -->
+    <git.commit></git.commit>
+    <git.branch></git.branch>
+    <git.dirty>false</git.dirty>
+    <maven.build.timestamp.format>yyyy-MM-dd HH:mm:ss</maven.build.timestamp.format>
+    <!-- 资源过滤读的是 project properties，maven.build.timestamp 不在里面：
+         不转一道的话 appinfo.properties 里拿到的是默认 ISO 串而不是这里配的格式 -->
+    <timestamp>${maven.build.timestamp}</timestamp>
   </properties>
 
   <dependencyManagement>

@@ -27,6 +27,26 @@
 
   <build>
     <finalName>excel2mysql-${app.version}</finalName>
+    <!--
+      只有 appinfo.properties 参与构建期替换；拼音词典必须原样复制——
+      对词典开过滤会吞掉其中的 ${} 字面量，改出一个静默错词典。
+    -->
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+        <includes>
+          <include>appinfo.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+        <excludes>
+          <exclude>appinfo.properties</exclude>
+        </excludes>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

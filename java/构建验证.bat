@@ -17,13 +17,23 @@ for %%i in (java.exe) do set "RUNTIME=%%~$PATH:i"
 echo - [INFO] BUILD ^| 构建所用 JDK %RUNTIME%
 
 echo.
+rem 随包信息：提交号/分支/工作区是否脏，只有构建这一刻知道，烧进 jar 里的 appinfo.properties
+set "GIT_COMMIT="
+set "GIT_BRANCH="
+set "GIT_DIRTY=false"
+for /f "delims=" %%c in ('git rev-parse --short HEAD 2^>nul') do set "GIT_COMMIT=%%c"
+for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "GIT_BRANCH=%%b"
+for /f "delims=" %%d in ('git status --porcelain -uno 2^>nul') do set "GIT_DIRTY=true"
+set "GIT_ARGS=-Dgit.commit=%GIT_COMMIT% -Dgit.branch=%GIT_BRANCH% -Dgit.dirty=%GIT_DIRTY%"
+echo - [INFO] BUILD ^| 随包提交号 %GIT_COMMIT%（%GIT_BRANCH%，未提交改动 %GIT_DIRTY%）
+
 echo === 1/9 Maven 编译打包 ===
 rem IDEA 开着工程时 target 会被占用，clean 删不掉。这时降级成增量构建，
 rem 但要把"这一轮没验干净构建"显式说出来——静默当成干净构建才是真隐患。
-call mvn -B clean install 2>nul
+call mvn -B clean install %GIT_ARGS% 2>nul
 if not errorlevel 1 goto :built
 echo ! [WARN] BUILD ^| clean 失败（多半是 IDEA 占着 target），降级为增量构建
-call mvn -B install || exit /b 1
+call mvn -B install %GIT_ARGS% || exit /b 1
 echo ! [WARN] BUILD ^| 本轮未验证干净构建，交付前请关掉 IDE 重跑一次
 :built
 

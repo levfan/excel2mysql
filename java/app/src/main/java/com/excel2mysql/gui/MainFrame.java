@@ -1,5 +1,6 @@
 package com.excel2mysql.gui;
 
+import com.excel2mysql.core.AppInfo;
 import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.Names;
@@ -79,13 +80,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private final TableBuilder builder = new TableBuilder(new Infer(names), names);
 
     public MainFrame() {
-        super("excel2mysql");
+        // 标题带版本号：不点开「关于」也能看见现场跑的是哪一版
+        super(AppInfo.load().titleText());
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setSize(1080, 700);
         setLocationByPlatform(true);
         setLayout(new BorderLayout());
 
-        add(buildConnectionBar(), BorderLayout.NORTH);
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(buildHeaderRow(), BorderLayout.NORTH);
+        north.add(buildConnectionBar(), BorderLayout.CENTER);
+        add(north, BorderLayout.NORTH);
         // 两个页签共用上方那条连接栏：口令只有一份，写在页签里会出现"这页连的是哪个库"的歧义
         tabs = new javax.swing.JTabbedPane();
         sqlPage = new SqlPage(this);
@@ -95,7 +100,53 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         add(tabs, BorderLayout.CENTER);
         // 切页也要刷新：两页提示条同源，不刷就会停在"上一个页签当时看到的库"
         tabs.addChangeListener(e -> refreshDbLabels());
+        bindHelpKey();
         refreshDbLabels();
+    }
+
+    /**
+     * 标题栏正下方一条极窄的工具行：Windows 的原生标题栏塞不进按钮，
+     * 「?」放在最贴近标题栏的右上角，对应 main.py:838-858。
+     */
+    private JPanel buildHeaderRow() {
+        JPanel row = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 0));
+        java.awt.Font bold = row.getFont().deriveFont(java.awt.Font.BOLD);
+        JButton about = new JButton("i");
+        about.setFont(bold);
+        about.setPreferredSize(new Dimension(26, 22));
+        about.setToolTipText("关于：版本、提交号与构建日期");
+        about.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        about.addActionListener(e -> showAbout());
+        JButton help = new JButton("?");
+        help.setFont(bold);
+        help.setPreferredSize(new Dimension(26, 22));
+        help.setToolTipText("使用说明（按 F1 也可打开）");
+        help.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        help.addActionListener(e -> showHelp());
+        row.add(about);
+        row.add(help);
+        return row;
+    }
+
+    /** 说明与关于都是模态框；自检直接构造它们查内容，不走这两个可见入口。 */
+    public void showHelp() {
+        new HelpDialog(this).setVisible(true);
+    }
+
+    public void showAbout() {
+        new AboutDialog(this).setVisible(true);
+    }
+
+    /** F1 与「?」是同一个入口：现场没人会先读手册，但一定会按 F1。 */
+    private void bindHelpKey() {
+        getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(javax.swing.KeyStroke.getKeyStroke("F1"), "openHelp");
+        getRootPane().getActionMap().put("openHelp", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                showHelp();
+            }
+        });
     }
 
     /** 连接栏：口令只进 JPasswordField，全程不落文件、不进日志。 */
