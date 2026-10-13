@@ -69,8 +69,9 @@ public final class GuiMain {
         final CountDownLatch done = new CountDownLatch(1);
         final int[] result = {0};
         SwingUtilities.invokeLater(() -> {
-            MainFrame frame = new MainFrame();
+            MainFrame frame = null;
             try {
+                frame = new MainFrame();   // 建窗也在 try 里：构造期抛异常要让自检拿到退出码，而不是把闸门挂死
                 frame.addFiles(files);
                 int tables = frame.tables().size();
                 int fileRows = frame.fileModel().getRowCount();
@@ -173,6 +174,11 @@ public final class GuiMain {
                     }
                     result[0] = 1;
                 }
+            } catch (Throwable e) {
+                // 中途抛异常必须换成非 0 退出码：只把栈打在控制台上、闸门照样绿，比没闸门更糟
+                System.out.println("x [ERROR] GUI-SELFTEST | 自检中途抛异常："
+                        + e.getClass().getName() + " " + e.getMessage());
+                result[0] = 1;
             } finally {
                 done.countDown();
             }
@@ -366,8 +372,11 @@ public final class GuiMain {
             problems.add("拖进来一个文件后表数没增加：" + before + " → " + frame.tables().size());
         }
         drop.fireDrop(new ArrayList<String>());
-        if (!frame.logPanel().contains("拖拽里没有可读取的文件")) {
-            problems.add("空拖拽没有任何提示");
+        List<String> junk = new ArrayList<String>();
+        junk.add(new java.io.File("readme.txt").getPath());
+        drop.fireDrop(junk);
+        if (!frame.logPanel().contains("拖入的不是 Excel 或 ZIP 文件，已忽略")) {
+            problems.add("拖进非 Excel 文件时没有任何说明");
         }
 
         frame.setPageProgress(37);
@@ -378,6 +387,31 @@ public final class GuiMain {
         if (frame.pageProgressValue() != 0 || !frame.tables().isEmpty()) {
             problems.add("「清空列表」没把进度条归零或没清空表");
         }
+
+        if (frame.databaseChooserEnabled()) {
+            problems.add("还没连接就能选库，库名只能靠猜");
+        }
+        if (!frame.excelHintText().contains("未选择目标数据库") || frame.excelHintIsOk()) {
+            problems.add("未选库时 Excel 页提示条没按红级说明：" + frame.excelHintText());
+        }
+        if (!frame.sqlPage().hintText().equals(frame.excelHintText())) {
+            problems.add("两页的提示条说的话不一样，用户会以为连的不是同一个库");
+        }
+        frame.setSelectedDatabase("testdb");
+        if (!frame.excelHintText().contains("当前目标库：testdb（127.0.0.1:3306）")
+                || !frame.excelHintText().contains("Excel 数据将导入到这个库")
+                || !frame.excelHintIsOk()) {
+            problems.add("选定库之后 Excel 页提示条不对：" + frame.excelHintText());
+        }
+        if (!frame.sqlPage().hintText().contains("SQL 脚本将执行到这个库")
+                || !frame.sqlPage().hintIsOk()) {
+            problems.add("SQL 页提示条没跟着联动：" + frame.sqlPage().hintText());
+        }
+        frame.hostField().setText("10.0.0.9");
+        if (!frame.excelHintText().contains("10.0.0.9:3306")) {
+            problems.add("改了主机但提示条还是旧地址：" + frame.excelHintText());
+        }
+        frame.hostField().setText("127.0.0.1");
     }
 
     private static void import_finish(MainFrame frame, List<String> files, List<String> problems) {
