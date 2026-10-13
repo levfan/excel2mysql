@@ -112,6 +112,8 @@ public final class GuiMain {
                 drop_and_progress(frame, files, problems);
                 // 导入收尾：成功文件移出、失败保留，日志与弹窗用的是同一句话
                 import_finish(frame, files, problems);
+                // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
+                sql_page(frame, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
                 // 比少一个按钮更糟——用户会以为是自己操作错了
                 for (javax.swing.AbstractButton b : frame.buttons()) {
@@ -441,5 +443,162 @@ public final class GuiMain {
             problems.add("零失败的汇总行被标成了错误级");
         }
         frame.clearAll();
+    }
+
+    private static void writeText(String path, String text) {
+        try {
+            java.nio.file.Files.write(java.nio.file.Paths.get(path),
+                    text.getBytes(java.nio.charset.Charset.forName("UTF-8")));
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("自检写夹具失败：" + path, e);
+        }
+    }
+
+    private static void sql_page(MainFrame frame, List<String> problems) {
+        List<String> titles = frame.tabTitles();
+        if (!titles.contains("Excel 导入") || !titles.contains("SQL 脚本")) {
+            problems.add("页签不齐全：" + titles);
+        }
+        com.excel2mysql.gui.SqlPage page = frame.sqlPage();
+        if (page == null) {
+            problems.add("界面上没有 SQL 脚本页");
+            return;
+        }
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-sql-selftest").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建临时脚本目录失败：" + e);
+            return;
+        }
+        String nl = String.valueOf((char) 10);
+        String a = new java.io.File(dir, "a.sql").getPath();
+        String b = new java.io.File(dir, "b.sql").getPath();
+        writeText(a, "CREATE TABLE t_order (id INT);" + nl
+                + "INSERT INTO `t_order` VALUES (1);" + nl
+                + "CREATE TABLE plain (id INT);" + nl);
+        writeText(b, "CREATE TABLE dim_x (id INT);" + nl);
+        List<String> paths = new ArrayList<String>();
+        paths.add(a);
+        paths.add(b);
+
+        if (page.addFiles(paths) != 2) {
+            problems.add("两个脚本应全部加载成功");
+        }
+        if (page.rowCount() != 3) {
+            problems.add("表格按表名出行，应有 3 行，实际 " + page.rowCount());
+        }
+        if (!page.logPanel().contains("[已加载] a.sql：2 个表")) {
+            problems.add("加载日志没报每个文件的表数");
+        }
+        page.addFiles(paths);
+        if (!page.logPanel().contains("[跳过] 已在列表：a.sql")) {
+            problems.add("重复添加同一文件没有跳过");
+        }
+        if (page.entryCount() != 2) {
+            problems.add("重复添加把文件加了两遍");
+        }
+        if (page.applyPrefix() == null) {
+            problems.add("空前缀没被拦下");
+        }
+
+        page.setPrefixText("ods_");
+        if (page.applyPrefix() != null) {
+            problems.add("合法前缀被拦住了");
+        }
+        String text = page.textOf(a);
+        if (!text.contains("ods_t_order") || !text.contains("ods_plain")) {
+            problems.add("加前缀没改到表名：" + text);
+        }
+        if (!page.isModified(a)) {
+            problems.add("改过却没标记成已修改，「保存修改后脚本」会漏掉它");
+        }
+        int rowsBefore = page.rowCount();
+        page.setPrefixText("ods_");
+        page.applyPrefix();
+        if (page.rowCount() != rowsBefore || page.textOf(a).contains("ods_ods_")) {
+            problems.add("重复加同一个前缀叠了一层");
+        }
+        if (!page.logPanel().contains("[前缀完成] 共改写 3 个表名")) {
+            problems.add("前缀完成没有汇总改写了几个表名");
+        }
+        if (!page.cellText(0, 3).equals("ods_t_order")) {
+            problems.add("「当前表名」列没跟着改写走：" + page.cellText(0, 3));
+        }
+        if (!page.cellText(0, 1).equals("t_order")) {
+            problems.add("「原表名」列显示的不是最初的表名：" + page.cellText(0, 1));
+        }
+
+        page.setPrefixText("change");
+        if (page.replaceFirstPrefix() != null) {
+            problems.add("替换首个前缀被拦住");
+        }
+        String after = page.textOf(a);
+        if (!after.contains("change_t_order") || !after.contains("change_plain")) {
+            problems.add("替换首段没改到表名：" + after);
+        }
+        if (!after.contains("INSERT INTO `change_t_order`")) {
+            problems.add("INSERT 里的引用没跟着改写：" + after);
+        }
+        if (!page.textOf(b).contains("change_dim_x")) {
+            problems.add("ods_dim_x 的首段没被换掉：" + page.textOf(b));
+        }
+
+        if (page.saveModified() != 2) {
+            problems.add("两个改过的脚本都该落盘");
+        }
+        if (!page.logPanel().contains("[已保存] ")) {
+            problems.add("落盘成功没有报出写了哪个文件");
+        }
+        String outA = com.excel2mysql.gui.SqlPage.modifiedPath(a);
+        if (!new java.io.File(outA).isFile()) {
+            problems.add("保存后没有生成副本：" + outA);
+        }
+        if (page.isModified(a)) {
+            problems.add("落盘后还标记着已修改，下次会重复保存");
+        }
+        if (page.saveModified() != 0 || !page.logPanel().contains("[保存] 没有修改过的脚本文件")) {
+            problems.add("没有改动时保存要如实说明，不能静默");
+        }
+        if (!"x/y_prefix.sql".equals(com.excel2mysql.gui.SqlPage.modifiedPath("x/y.sql"))) {
+            problems.add("副本文件名规则不对：" + com.excel2mysql.gui.SqlPage.modifiedPath("x/y.sql"));
+        }
+        if (!"x/y_prefix.sql".equals(com.excel2mysql.gui.SqlPage.modifiedPath("x/y"))) {
+            problems.add("无扩展名时副本名没补 .sql");
+        }
+
+        String hint = page.execute();
+        if (hint == null || !hint.contains("未选择目标数据库")) {
+            problems.add("没选库时执行应当拦下并说明：" + hint);
+        }
+        String summary = page.finishRun(1, 1, 0, false, "testdb@127.0.0.1:3306");
+        if (!summary.contains("成功 1 个文件，失败 1 个文件")) {
+            problems.add("执行收尾文案不对：" + summary.replace((char) 10, ' '));
+        }
+        if (!page.logPanel().isErrorLine("===== 执行完成：成功 1 个文件，失败 1 个文件")) {
+            problems.add("有失败时执行收尾行没标成错误级");
+        }
+
+        page.selectRow(0);
+        if (page.removeSelected() != 1) {
+            problems.add("选中一行应移除它所属的整个文件");
+        }
+        if (page.entryCount() != 1 || page.rowCount() != 1) {
+            problems.add("移除后文件与行数都不对：" + page.entryCount() + "/" + page.rowCount());
+        }
+        if (!page.logPanel().contains("[移除] 1 个脚本文件")) {
+            problems.add("移除文件没有留痕");
+        }
+        deleteTree(dir);
+    }
+
+    private static void deleteTree(java.io.File f) {
+        java.io.File[] kids = f.listFiles();
+        if (kids != null) {
+            for (java.io.File k : kids) {
+                deleteTree(k);
+            }
+        }
+        f.delete();
     }
 }

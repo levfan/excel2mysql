@@ -38,7 +38,7 @@ import java.util.Map;
  * 连库导入的按钮不在这一片里。界面上出现一个点了不会真写库的"开始导入"，
  * 比不给这个按钮更糟。
  */
-public final class MainFrame extends JFrame {
+public final class MainFrame extends JFrame implements SqlPage.Host {
 
     private static final String NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。";
     private static final String PREFIX_HINT =
@@ -62,6 +62,8 @@ public final class MainFrame extends JFrame {
     private javax.swing.JTextField userField;
     private javax.swing.JPasswordField passField;
     private javax.swing.JTextField dbField;
+    private SqlPage sqlPage;
+    private javax.swing.JTabbedPane tabs;
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
     private javax.swing.JTextField prefixField;
@@ -82,7 +84,12 @@ public final class MainFrame extends JFrame {
         setLayout(new BorderLayout());
 
         add(buildConnectionBar(), BorderLayout.NORTH);
-        add(buildCenter(), BorderLayout.CENTER);
+        // 两个页签共用上方那条连接栏：口令只有一份，写在页签里会出现"这页连的是哪个库"的歧义
+        tabs = new javax.swing.JTabbedPane();
+        sqlPage = new SqlPage(this);
+        tabs.addTab("Excel 导入", buildCenter());
+        tabs.addTab("SQL 脚本", sqlPage);
+        add(tabs, BorderLayout.CENTER);
     }
 
     /** 连接栏：口令只进 JPasswordField，全程不落文件、不进日志。 */
@@ -629,6 +636,34 @@ public final class MainFrame extends JFrame {
         return dropExisting;
     }
 
+    @Override
+    public boolean connected() {
+        return isConnected();
+    }
+
+    @Override
+    public Config config() {
+        return config;
+    }
+
+    @Override
+    public java.awt.Frame owner() {
+        return this;
+    }
+
+    /** 页签名要与 Python 完全一致，切页时两条线各自的日志也还在。 */
+    public List<String> tabTitles() {
+        List<String> out = new ArrayList<String>();
+        for (int i = 0; i < tabs.getTabCount(); i++) {
+            out.add(tabs.getTitleAt(i));
+        }
+        return out;
+    }
+
+    public SqlPage sqlPage() {
+        return sqlPage;
+    }
+
     /** 页内进度条：导入按"当前表完成数 / 总表数"报百分比，跑完归零。 */
     public void setPageProgress(int percent) {
         if (pageProgress != null) {
@@ -710,13 +745,13 @@ public final class MainFrame extends JFrame {
         log("[结构] 已按弹窗确认 " + tables.size() + " 张表的字段定义");
     }
 
-    private void inform(String text) {
+    public void inform(String text) {
         javax.swing.JOptionPane.showMessageDialog(this, text, "提示",
                 javax.swing.JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** 拦下的操作除了弹窗还要落一行日志：弹窗关掉就没了，日志才是可回溯的那份。 */
-    private void warn(String text) {
+    public void warn(String text) {
         log("已拦下：" + text);
         javax.swing.JOptionPane.showMessageDialog(this, text, "提示",
                 javax.swing.JOptionPane.WARNING_MESSAGE);

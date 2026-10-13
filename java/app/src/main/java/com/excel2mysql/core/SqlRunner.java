@@ -25,6 +25,10 @@ public final class SqlRunner {
         public int creates;
         public boolean ok;
         public String error;
+        /** 失败发生在第几条（1 起），以及执行到此刻已成功几条：日志要说清回滚了多少。 */
+        public int failedAt;
+        public int executed;
+        public String failedSql;
     }
 
     private SqlRunner() {
@@ -49,24 +53,43 @@ public final class SqlRunner {
     }
 
     public static FileResult runOne(DbClient db, File file) {
-        FileResult r = new FileResult();
-        r.file = file.getName();
         String text;
         try {
             text = readScript(file);
         } catch (IOException e) {
+            FileResult r = new FileResult();
+            r.file = file.getName();
             r.ok = false;
             r.error = e.getMessage();
             return r;
         }
+        return runText(db, file.getName(), text);
+    }
+
+    /**
+     * 执行内存里的脚本文本：SQL 页改过表名后不落盘也要能直接跑，
+     * 用磁盘上的原文执行会建出一批没改名的表。
+     */
+    public static FileResult runText(DbClient db, String file, String text) {
+        FileResult r = new FileResult();
+        r.file = file;
         List<String> statements = SqlScript.splitStatements(text);
         r.statements = statements;
         r.creates = SqlScript.extractCreateTables(text).size();
         Statement st = null;
         try {
             st = db.connection().createStatement();
-            for (String sql : statements) {
-                st.execute(sql);
+            for (int pos = 0; pos < statements.size(); pos++) {
+                String sql = statements.get(pos);
+                try {
+                    st.execute(sql);
+                } catch (SQLException e) {
+                    r.failedAt = pos + 1;
+                    r.executed = pos;
+                    r.failedSql = sql;
+                    throw e;
+                }
+                r.executed = pos + 1;
             }
             db.connection().commit();
             r.ok = true;
@@ -78,7 +101,10 @@ public final class SqlRunner {
                 // 回滚再失败时保留原始报错，那才是使用者要看的原因
             }
             r.ok = false;
-            r.error = e.getMessage();
+            r.error = LogText.describe(e);
+            if (r.failedAt == 0) {
+                r.executed = 0;
+            }
             return r;
         } finally {
             if (st != null) {
