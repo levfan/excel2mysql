@@ -47,11 +47,23 @@ public final class ProgressDialog extends JDialog {
         JPanel body = new JPanel(new BorderLayout(8, 8));
         body.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
         bar.setStringPainted(true);
-        bar.setString("%p%");
+        // Qt 的 setFormat("%p%") 是"显示百分比"，Swing 的 setString 是字面文本：
+        // 照抄会让进度条真的印出 "%p%" 四个字符，所以每次改值都自己写百分比
+        bar.setString("0%");
         label.setForeground(new Color(0x55, 0x55, 0x55));
-        body.add(label, BorderLayout.NORTH);
+        // Python 在框里另写了一行加粗标题（main.py:211-214）：那个框的标题栏没有关闭按钮，
+        // 任务名只靠窗口标题太弱，框体里也得有一句
+        JLabel head = new JLabel(title);
+        head.setFont(head.getFont().deriveFont(java.awt.Font.BOLD));
+        JPanel top = new JPanel(new BorderLayout(0, 4));
+        top.add(head, BorderLayout.NORTH);
+        top.add(label, BorderLayout.SOUTH);
+        // 取消按钮靠右、按自身宽度：直接 add 到 SOUTH 会被 BorderLayout 拉成整行宽
+        JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 0));
+        btnRow.add(cancel);
+        body.add(top, BorderLayout.NORTH);
         body.add(bar, BorderLayout.CENTER);
-        body.add(cancel, BorderLayout.SOUTH);
+        body.add(btnRow, BorderLayout.SOUTH);
         setContentPane(body);
         renderLabel();
         cancel.addActionListener(e -> requestCancel());
@@ -63,7 +75,9 @@ public final class ProgressDialog extends JDialog {
                 requestCancel();
             }
         });
-        setPreferredSize(new Dimension(480, 140));
+        // Python 的 resize(480,140) 说的是客户区；setPreferredSize 打在窗体上会被 pack 覆盖，
+        // 所以把尺寸钉在内容面板上，让客户区真就是 480×140
+        body.setPreferredSize(new Dimension(480, 140));
         pack();
         setLocationRelativeTo(owner);
         anim = new javax.swing.Timer(16, e -> tick());
@@ -76,10 +90,28 @@ public final class ProgressDialog extends JDialog {
         this.target = 0;
         this.shown = 0;
         this.plainText = "准备中…";
-        SwingUtilities.invokeLater(() -> {
+        onEdt(() -> {
             anim.stop();
-            bar.setValue(0);
+            showPercent(0);
         });
+    }
+
+    /**
+     * 已经在事件分发线程上就直接改控件，别的线程才排队。
+     * 一律 invokeLater 的话，站在 EDT 上的调用方（自检、原地任务模式）读回来的是旧值。
+     */
+    private static void onEdt(Runnable update) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            update.run();
+        } else {
+            SwingUtilities.invokeLater(update);
+        }
+    }
+
+    /** 进度条上的文字要跟着数值走：Swing 没有 Qt 那种格式占位符，只能自己写。 */
+    private void showPercent(int value) {
+        bar.setValue(value);
+        bar.setString(value + "%");
     }
 
     /** 由工作线程调用。 */
@@ -103,11 +135,11 @@ public final class ProgressDialog extends JDialog {
             // 收尾一定要拉满：停在 98% 会让人以为卡住了，而不是以为跑完了
             shown = 100;
         }
-        SwingUtilities.invokeLater(() -> {
+        onEdt(() -> {
             renderLabel();
             if (over) {
                 anim.stop();
-                bar.setValue(100);
+                showPercent(100);
             } else if (shown < target && !anim.isRunning()) {
                 anim.start();
             }
@@ -121,13 +153,13 @@ public final class ProgressDialog extends JDialog {
         }
         int step = Math.max(1, (target - shown) / 10);
         shown = Math.min(target, shown + step);
-        bar.setValue(shown);
+        showPercent(shown);
     }
 
     public void requestCancel() {
         cancelled = true;
         plainText = "正在取消…（当前项做完就停）";
-        SwingUtilities.invokeLater(() -> {
+        onEdt(() -> {
             cancel.setEnabled(false);
             renderLabel();
         });
@@ -136,7 +168,7 @@ public final class ProgressDialog extends JDialog {
     /** 导入这类长任务把"取消"改成读得懂的动作名（main.py:1557）。 */
     public void setCancelText(String text) {
         cancelLabel = text;
-        SwingUtilities.invokeLater(() -> cancel.setText(text));
+        onEdt(() -> cancel.setText(text));
     }
 
     public String cancelText() {
@@ -146,6 +178,11 @@ public final class ProgressDialog extends JDialog {
     /** 原始文案，不含 html 包装：自检与日志都要读这一份。 */
     public String statusText() {
         return plainText;
+    }
+
+    /** 进度条上印着的那串字：Qt 的 %p% 是格式符，Swing 得自己填，这里断的就是自己填对了。 */
+    public String percentText() {
+        return bar.getString();
     }
 
     public int percentShown() {
