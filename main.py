@@ -66,6 +66,18 @@ def resource_path(rel: str) -> str:
     return os.path.join(base, rel)
 
 
+def program_dir() -> str:
+    """可执行程序所在目录——生成物的日期目录要落在这里。
+
+    不能用 resource_path 那个 `_MEIPASS`：那是 onefile 的一次性解包临时目录，
+    程序退出就被删掉，用户在里面找不到自己刚生成的文件。
+    onedir 与开发态取的是 exe（或 main.py）真正待着的那一层。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 # ---------------------------------------------------------------------------
 # 日志输出：错误整条标红，并把数据库异常展开成可读的详细信息
 # ---------------------------------------------------------------------------
@@ -781,6 +793,19 @@ class ImportWorker(QThread):
 # ---------------------------------------------------------------------------
 # 拖拽接收区
 # ---------------------------------------------------------------------------
+def meta_export_task(tables, out_root, with_meta, sink):
+    """生成「标准/简易 Excel 文件」：写盘与逐行取值都在这里，主线程只弹进度框。
+
+    一张表一个文件，按文件计项；写失败只记错误不中断其余，
+    与导入那条路同一口径（半途炸掉却把已经写好的目录报成失败，用户就白等一趟）。
+    """
+    from core.meta_export import export_tables
+
+    target, written = export_tables(tables, out_root, with_meta, sink)
+    return {"dir": target, "written": written, "total": len(tables),
+            "cancelled": sink.cancelled}
+
+
 class DropArea(QWidget):
     files_dropped = Signal(list)
 
@@ -986,6 +1011,22 @@ class MainWindow(QWidget):
         op.addStretch(1)
         op.addWidget(self.btn_stop)
         op.addWidget(self.btn_import)
+        # 两个生成按钮排在「开始导入」右侧：它们和导入用的是同一份已解析表定义，
+        # 放在同一排才看得出"这是同一件事的另一种出口"，而不是另一功能
+        self.btn_gen_std = QPushButton("生成标准excel文件")
+        self.btn_gen_std.setToolTip(
+            "在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+            "Sheet1「元数据」是建表用的字段定义，Sheet2「数据」是数据行")
+        self.btn_gen_std.setEnabled(False)
+        self.btn_gen_std.clicked.connect(self.on_gen_standard)
+        self.btn_gen_simple = QPushButton("生成简易excel文件")
+        self.btn_gen_simple.setToolTip(
+            "在程序同级建 simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+            "只留「数据」一个 Sheet")
+        self.btn_gen_simple.setEnabled(False)
+        self.btn_gen_simple.clicked.connect(self.on_gen_simple)
+        op.addWidget(self.btn_gen_std)
+        op.addWidget(self.btn_gen_simple)
         excel_lay.addLayout(op)
 
         self.progress = QProgressBar()
@@ -1052,6 +1093,7 @@ class MainWindow(QWidget):
         self._task_log_view = log_view if log_view is not None else self.log
         self._task_on_done = on_done
         self._task_result = None
+        self._sync_gen_buttons()
         if not MODAL_PROGRESS:
             sink = ProgressSink(on_log=self._on_task_log, on_log_error=self._on_task_log_error)
             try:
@@ -1098,6 +1140,16 @@ class MainWindow(QWidget):
                    f"[任务异常] {msg}\n    本次操作未完成，请查看日志后重试。", error=True)
         QMessageBox.critical(self, "任务异常", f"{msg}\n本次操作未完成，详见日志。")
 
+    def _sync_gen_buttons(self):
+        """两个生成按钮只在"有表可导、且没有别的任务在跑"时可点。
+
+        判据取自同一处而不是各写各的：任务跑着的时候表列表正被工作线程读，
+        这时候再生成一份就是两个任务共用同一份数据互相踩。
+        """
+        on = bool(self.tables) and self.task_dialog is None
+        self.btn_gen_std.setEnabled(on)
+        self.btn_gen_simple.setEnabled(on)
+
     def _finish_task(self):
         """exec() 退出后收尾：把结果交给回调（工作函数返回 None 视为没做成，不回调）。"""
         self.task_dialog = None
@@ -1106,6 +1158,7 @@ class MainWindow(QWidget):
         self._task_result = None
         if result is not None and cb:
             cb(result)
+        self._sync_gen_buttons()
 
     # -------------------- 槽函数 --------------------
     def on_clear_log(self):
@@ -1456,6 +1509,7 @@ class MainWindow(QWidget):
         self.tables.clear()
         self.file_table.setRowCount(0)
         self.btn_import.setEnabled(False)
+        self._sync_gen_buttons()
         self.progress.setValue(0)      # 清空列表后不留上一次的进度残留
 
     def closeEvent(self, e):
@@ -1531,6 +1585,38 @@ class MainWindow(QWidget):
             return
         dlg = DDLDialog(self.tables, self.chk_drop.isChecked(), self)
         dlg.exec()
+
+    # ---- 生成标准 / 简易 excel 文件 ----
+    def on_gen_standard(self):
+        self._gen_excel("标准", True)
+
+    def on_gen_simple(self):
+        self._gen_excel("简易", False)
+
+    def _gen_excel(self, label, with_meta):
+        """写盘在子线程、进度框照弹，与导入同一个任务框架；输出落在程序同级。"""
+        if not self.tables:
+            QMessageBox.warning(self, "提示", NO_FILE_HINT)
+            return
+        out_root = program_dir()
+        title = ("正在生成标准excel文件…" if with_meta else "正在生成简易excel文件…")
+        append_log(self.log, f"===== 开始生成{label}excel文件（输出根目录 {out_root}）=====")
+        self._run_modal(title, meta_export_task, (list(self.tables), out_root, with_meta),
+                        on_done=self._finish_meta_export, log_view=self.log)
+
+    def _finish_meta_export(self, res):
+        if not res:
+            return
+        n = len(res["written"])
+        note = "（已取消，剩余文件未生成）" if res["cancelled"] else ""
+        # 目录名要原样给出来：文件是落在程序同级、按日期新建的目录里，
+        # 只说"生成完成"用户不知道该去哪儿找
+        text = (f"已生成 {n} 个文件（共 {res['total']} 张表）。\n目录：\n{res['dir']}{note}"
+                if n else f"没有生成任何文件，详见日志。{note}")
+        append_log(self.log,
+                   f"===== 生成完成：{n}/{res['total']} 个文件，目录 {res['dir']} ====={note}",
+                   error=(n == 0))
+        QMessageBox.information(self, "生成结果", text)
 
     # ---- 开始导入 ----
     def on_start_import(self):
