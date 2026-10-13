@@ -115,6 +115,8 @@ public final class GuiMain {
                 import_finish(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
+                // 标题版本号、说明窗口与关于框
+                help_and_about(frame, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
                 // 比少一个按钮更糟——用户会以为是自己操作错了
                 for (javax.swing.AbstractButton b : frame.buttons()) {
@@ -634,5 +636,52 @@ public final class GuiMain {
             }
         }
         f.delete();
+    }
+
+    private static void help_and_about(MainFrame frame, List<String> problems) {
+        String title = frame.getTitle();
+        if (!title.contains("v") || !title.contains(
+                com.excel2mysql.core.AppInfo.load().versionText())) {
+            problems.add("窗口标题没带版本号：" + title);
+        }
+        com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
+        try {
+            if (hd.tocCount() != 12) {
+                problems.add("说明目录应有 12 章，实际 " + hd.tocCount());
+            }
+            if (hd.bodyLength() < 2000) {
+                problems.add("说明正文没渲染出来，长度只有 " + hd.bodyLength());
+            }
+            hd.selectToc(3);
+            if (!"excel".equals(hd.currentAnchor())) {
+                problems.add("点目录第 4 章没跳到「两类 Excel 格式」，锚点=" + hd.currentAnchor());
+            }
+            hd.selectToc(0);
+            if (!"start".equals(hd.currentAnchor())) {
+                problems.add("跳回第一章失败，锚点=" + hd.currentAnchor());
+            }
+            if (!"anchor".equals(hd.jumpVia())) {
+                problems.add("目录跳转不是靠锚点实现的（走的是 " + hd.jumpVia()
+                        + "），说明 HTML 里的 a name 没被渲染器收下来");
+            }
+        } finally {
+            hd.dispose();
+        }
+        com.excel2mysql.gui.AboutDialog ad = new com.excel2mysql.gui.AboutDialog(null);
+        try {
+            if (!ad.valueOf("version").startsWith("v")) {
+                problems.add("关于框的版本行不对：" + ad.valueOf("version"));
+            }
+            String commit = ad.valueOf("commit");
+            if (commit == null || commit.isEmpty()) {
+                problems.add("关于框的提交行是空的");
+            }
+            if ("未知".equals(ad.valueOf("built")) && "unknown".equals(
+                    com.excel2mysql.core.AppInfo.load().source)) {
+                problems.add("关于框既没有构建日期也没有声明来源，用户无从判断可信度");
+            }
+        } finally {
+            ad.dispose();
+        }
     }
 }
