@@ -91,6 +91,9 @@ public final class GuiMain {
                 if (rows == 0) {
                     problems.add("字段总数为 0，模型是空的");
                 }
+                if (!frame.fileModel().tooltipAt(0).endsWith(".xlsx")) {
+                    problems.add("文件列没给完整路径：" + frame.fileModel().tooltipAt(0));
+                }
                 // 文件表是"一行一个文件"，不是"一行一个字段"，两者搞混说明改造没做完
                 if (fileRows != tables) {
                     problems.add("文件表应一行一个文件：" + fileRows + " 行 / " + tables + " 张表");
@@ -121,6 +124,8 @@ public final class GuiMain {
                 import_finish(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
+                // 导入那条路的文案与计项口径
+                import_run(problems);
                 // 子线程出意外时的兜底文案
                 task_crash(frame, problems);
                 // ZIP 展开、汇总计数与临时目录清理
@@ -371,6 +376,16 @@ public final class GuiMain {
         }
         if (!drop.hintText().contains("拖到此处") || !drop.hintText().contains(".zip")) {
             problems.add("拖拽区提示没交代清楚能拖什么：" + drop.hintText());
+        }
+        java.awt.Image icon = frame.getIconImage();
+        if (icon == null) {
+            problems.add("窗口图标没设上，任务栏里只会是默认图");
+        } else if (icon.getWidth(null) < 64) {
+            problems.add("窗口图标取小了，任务栏会糊：" + icon.getWidth(null) + "x"
+                    + icon.getHeight(null));
+        }
+        if (frame.getWidth() != 1100 || frame.getHeight() != 780) {
+            problems.add("窗口尺寸与 Python 侧不一致：" + frame.getWidth() + "x" + frame.getHeight());
         }
         if (files.isEmpty()) {
             problems.add("自检没有夹具可拖");
@@ -751,6 +766,15 @@ public final class GuiMain {
         if (!summary.contains("添加 1 项 zip 文件")) {
             problems.add("弹窗汇总没把 zip 单列一行：" + summary.replace((char) 10, ' '));
         }
+        int last = frame.fileModel().getRowCount() - 1;
+        String tip = frame.fileModel().tooltipAt(last);
+        if (!tip.contains("pack1.zip!") || !tip.contains("inner.xlsx")) {
+            problems.add("包内文件的来源 tooltip 不对：" + tip);
+        }
+        String looseTip = frame.fileModel().tooltipAt(0);
+        if (looseTip.isEmpty() || !looseTip.contains(".xlsx")) {
+            problems.add("散装文件的全路径 tooltip 缺失：" + looseTip);
+        }
         String tempDir = frame.zipTempDir();
         if (tempDir == null || !new java.io.File(tempDir).isDirectory()) {
             problems.add("展开压缩包却没建会话临时目录");
@@ -782,6 +806,108 @@ public final class GuiMain {
         }
         if (!frame.logPanel().contains("本次操作未完成，请查看日志后重试")) {
             problems.add("任务异常的日志没给下一步动作");
+        }
+    }
+
+    /** 只记账不渲染的回报口，用来验 core 里那条链的对外行为。 */
+    private static final class Recorder implements com.excel2mysql.core.ImportParse.Sink {
+        final List<String> lines = new ArrayList<String>();
+        final List<String> errors = new ArrayList<String>();
+        int total = -1;
+        int advanced;
+
+        @Override
+        public void setTotal(int n) {
+            total = n;
+        }
+
+        @Override
+        public void step(String label) {
+            advanced++;
+        }
+
+        @Override
+        public void advance(int units, String label) {
+            advanced += units;
+        }
+
+        @Override
+        public void log(String text) {
+            lines.add(text);
+        }
+
+        @Override
+        public void logError(String text) {
+            errors.add(text);
+        }
+
+        @Override
+        public boolean cancelled() {
+            return false;
+        }
+
+        boolean saw(String needle, boolean errorLevel) {
+            for (String s : (errorLevel ? errors : lines)) {
+                if (s.contains(needle)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private static void import_run(List<String> problems) {
+        com.excel2mysql.core.Config cfg = new com.excel2mysql.core.Config();
+        cfg.host = "127.0.0.1";
+        cfg.port = 1;
+        cfg.user = "probe";
+        cfg.database = "testdb";
+        if (!"testdb@127.0.0.1:1".equals(com.excel2mysql.core.ImportRun.targetOf(cfg))) {
+            problems.add("目标库串拼错：" + com.excel2mysql.core.ImportRun.targetOf(cfg));
+        }
+        cfg.database = "";
+        if (!"127.0.0.1:1".equals(com.excel2mysql.core.ImportRun.targetOf(cfg))) {
+            problems.add("没选库时目标库串该只写主机端口");
+        }
+        cfg.database = "testdb";
+
+        if (!com.excel2mysql.core.ImportRun.headerLine(2, 7, "t_x", 3)
+                .equals("===== [2/7] 处理表 `t_x`（3 行）=====")) {
+            problems.add("逐表头一行不对：" + com.excel2mysql.core.ImportRun.headerLine(2, 7, "t_x", 3));
+        }
+        if (!com.excel2mysql.core.ImportRun.ddlLog("CREATE TABLE x (a INT);")
+                .startsWith("-- 建表 DDL --")) {
+            problems.add("建表语句没写进日志");
+        }
+        String cf = com.excel2mysql.core.ImportRun.createFailLog("t_x", "testdb@127.0.0.1:1",
+                "SQLException（MySQL 错误码 1064）：语法错", "CREATE TABLE t_x (a INT);");
+        if (!cf.contains("建表语句被 MySQL 拒绝") || !cf.contains("失败的建表语句")
+                || !cf.contains(com.excel2mysql.core.LogText.ROLLBACK_NOTE)) {
+            problems.add("建表失败的日志缺了目标库、语句原文或回滚说明");
+        }
+        String ifl = com.excel2mysql.core.ImportRun.importFailLog("t_x", "testdb@127.0.0.1:1",
+                12, "SQLException：值太长");
+        if (!ifl.contains("共 12 行数据未能写入，本表事务已回滚")
+                || !ifl.contains(com.excel2mysql.core.LogText.ROLLBACK_NOTE)) {
+            problems.add("导入失败没说清楚回滚范围");
+        }
+        if (!com.excel2mysql.core.ImportRun.importedLog("t_x", 5)
+                .equals("[导入完成] `t_x` 共 5 行")) {
+            problems.add("导入完成的文案不对");
+        }
+
+        Recorder rec = new Recorder();
+        List<com.excel2mysql.core.TableBuilder.Result> empty =
+                new ArrayList<com.excel2mysql.core.TableBuilder.Result>();
+        int units = com.excel2mysql.core.ImportRun.run(cfg, empty, false, rec, null).size();
+        if (units != 0) {
+            problems.add("空列表不该有结果");
+        }
+        if (rec.total != 0) {
+            problems.add("空列表的总项数应为 0，实际 " + rec.total);
+        }
+        if (!rec.saw("[连接失败] 无法连接到 testdb@127.0.0.1:1（用户 probe）", true)) {
+            problems.add("连不上库时没写连接失败日志：" + rec.errors);
         }
     }
 }
