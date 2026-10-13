@@ -7,6 +7,7 @@ import cn.idev.excel.enums.ReadDefaultReturnEnum;
 import cn.idev.excel.metadata.data.DataFormatData;
 import cn.idev.excel.metadata.data.ReadCellData;
 import cn.idev.excel.read.listener.ReadListener;
+import cn.idev.excel.read.metadata.ReadSheet;
 import cn.idev.excel.util.DateUtils;
 
 import java.io.File;
@@ -57,31 +58,88 @@ public final class WorkbookReader {
         if (!file.exists()) {
             throw new IllegalArgumentException("文件不存在：" + path);
         }
-        Collector collector = new Collector();
-        InputStream in = null;
-        try {
-            in = new FileInputStream(file);
-        } catch (FileNotFoundException e) {
-            throw new IllegalArgumentException("打不开文件：" + path, e);
-        }
-        try {
-            // headRowNumber(0)：表头也当数据吐出来。表头的改名与补空是 pandas 的规则，
-            // 交给 FastExcel 解析就变成它的语义，而不是我们要对撞的那个语义。
-            FastExcel.read(in, collector)
-                    .readDefaultReturn(ReadDefaultReturnEnum.READ_CELL_DATA)
-                    .ignoreEmptyRow(Boolean.FALSE)
-                    .headRowNumber(0)
-                    .autoCloseStream(Boolean.FALSE)
-                    .sheet()
-                    .doRead();
-        } finally {
+        int sheetCount = countSheets(file);
+        List<Sheet> sheets = new ArrayList<Sheet>();
+        for (int i = 0; i < sheetCount; i++) {
+            Collector collector = new Collector();
+            InputStream in = null;
             try {
-                in.close();
-            } catch (IOException ignored) {
-                // 读取已失败时别用关闭异常盖住真正的原因
+                in = new FileInputStream(file);
+            } catch (FileNotFoundException e) {
+                throw new IllegalArgumentException("打不开文件：" + path, e);
+            }
+            try {
+                // headRowNumber(0)：表头也当数据吐出来。表头的改名与补空是 pandas 的规则，
+                // 交给 FastExcel 解析就变成它的语义，而不是我们要对撞的那个语义。
+                //
+                // 一张 Sheet 一次读取：.sheet() 不带参数只读第一张，
+                // 而 pandas 的 read_excel(sheet_name=None) 是全量。结构定义模式的
+                // 数据 Sheet 往往是第二张，漏读会让整批数据静默变成 0 行——
+                // DDL 看着完全正确，写库却一张不写。
+                FastExcel.read(in, collector)
+                        .readDefaultReturn(ReadDefaultReturnEnum.READ_CELL_DATA)
+                        .ignoreEmptyRow(Boolean.FALSE)
+                        .headRowNumber(0)
+                        .autoCloseStream(Boolean.FALSE)
+                        .sheet(Integer.valueOf(i))
+                        .doRead();
+            } finally {
+                close(in);
+            }
+            List<Sheet> got = collector.finish();
+            if (!got.isEmpty()) {
+                sheets.add(got.get(0));
+            } else {
+                sheets.add(new Sheet(nameOf(file, i), new ArrayList<List<Object>>()));
             }
         }
-        return collector.finish();
+        return sheets;
+    }
+
+    /** 空 Sheet 也要占位：Sheet 的下标和数量参与"取第一张还是取某一张"的判断。 */
+    private static String nameOf(File file, int index) {
+        List<String> names = sheetNames(file);
+        return index < names.size() ? names.get(index) : ("sheet" + (index + 1));
+    }
+
+    private static int countSheets(File file) {
+        return sheetNames(file).size();
+    }
+
+    private static List<String> sheetNames(File file) {
+        List<String> names = new ArrayList<String>();
+        InputStream in = null;
+        cn.idev.excel.ExcelReader reader = null;
+        try {
+            in = new FileInputStream(file);
+            reader = FastExcel.read(in).autoCloseStream(Boolean.FALSE).build();
+            for (cn.idev.excel.read.metadata.ReadSheet meta : reader.excelExecutor().sheetList()) {
+                names.add(meta.getSheetName());
+            }
+        } catch (Exception e) {
+            throw new IllegalArgumentException("读取工作簿失败：" + file.getName() + " — " + e, e);
+        } finally {
+            if (reader != null) {
+                try {
+                    reader.finish();
+                } catch (Exception ignored) {
+                    // 收尾关闭失败不影响已经拿到的 Sheet 清单
+                }
+            }
+            close(in);
+        }
+        return names;
+    }
+
+    private static void close(InputStream in) {
+        if (in == null) {
+            return;
+        }
+        try {
+            in.close();
+        } catch (IOException ignored) {
+            // 读取已失败时别用关闭异常盖住真正的原因
+        }
     }
 
     /** 按 Sheet 名分桶；FastExcel 会按 workbook 顺序回调，所以顺序天然保留。 */
