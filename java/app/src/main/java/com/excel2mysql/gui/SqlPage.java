@@ -17,7 +17,6 @@ import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
-import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -82,18 +81,36 @@ public final class SqlPage extends JPanel {
 
     /**
      * 交给子线程的输入快照：改写期间主线程可能继续动列表，子线程只读这份拷贝。
-     * 保存这条路径只用 path/text，renameMap 留空。
+     * 保存/执行这两条路径只用 path/text，renameMap 留空。
      */
-    private static final class Src {
-        final String path;
-        final String text;
+    public static final class Src {
+        public final String path;
+        public final String text;
         final Map<String, String> renameMap;
 
-        Src(String path, String text, Map<String, String> renameMap) {
+        public Src(String path, String text, Map<String, String> renameMap) {
             this.path = path;
             this.text = text;
             this.renameMap = renameMap == null
                     ? new LinkedHashMap<String, String>() : renameMap;
+        }
+    }
+
+    /** 执行任务的结局：三个计数加两个状态，回事件分发线程只用来写汇总与弹窗。 */
+    public static final class RunResult {
+        public final int ok;
+        public final int fail;
+        public final int skipped;
+        public final boolean cancelled;
+        /** 连不上库：详细原因已经在日志里报过了，收尾不该再重复一遍汇总。 */
+        public final boolean connFailed;
+
+        public RunResult(int ok, int fail, int skipped, boolean cancelled, boolean connFailed) {
+            this.ok = ok;
+            this.fail = fail;
+            this.skipped = skipped;
+            this.cancelled = cancelled;
+            this.connFailed = connFailed;
         }
     }
 
@@ -591,7 +608,7 @@ public final class SqlPage extends JPanel {
 
     /**
      * 每个文件一个事务地执行到当前库。返回非 null 表示只该弹提示、没有连库。
-     * 执行跑在子线程，界面靠模态进度框报进度并可取消。
+     * 执行并入统一任务位：抢不到任务位就不会开出第二个线程，进度、取消与日志走同一套。
      */
     public String execute() {
         Config cfg = host.config();
@@ -603,116 +620,107 @@ public final class SqlPage extends JPanel {
         }
         final String target = cfg.database + "@" + cfg.host + ":" + cfg.port;
         log("===== 开始执行脚本（目标库 " + cfg.database + "，每个文件一个事务）=====");
-        log("正在切分 " + entries.size() + " 个脚本的语句…");
-        final List<Entry> todo = new ArrayList<Entry>(entries);
-        final List<List<String>> plans = new ArrayList<List<String>>();
-        for (Entry e : todo) {
-            plans.add(SqlScript.splitStatements(e.text));
+        List<Src> items = new ArrayList<Src>();
+        for (Entry e : entries) {
+            items.add(new Src(e.path, e.text, null));
         }
+        final List<Src> todo = items;
         final Config conf = cfg;
-        final ProgressDialog progress = new ProgressDialog(host.owner(), "正在执行脚本到目标库…");
-        // 计项按语句：一个脚本几万条时也照样推进，但每个文件最多刷约 100 次，
-        // 不然进度框会被刷屏到看不出动静
+        host.runSqlTask("正在执行脚本到目标库…", sink -> runScripts(todo, conf, sink), out -> {
+            RunResult r = (RunResult) out;
+            if (r.connFailed) {
+                return;                       // 连不上库时已经报过详细原因，不再重复汇总
+            }
+            host.inform2("执行完成", finishRun(r.ok, r.fail, r.skipped, r.cancelled, target));
+        });
+        return null;
+    }
+
+    /**
+     * 执行任务体：切分语句、逐文件一个事务地跑，进度与日志只经 sink 往外报。
+     * 单独成方法是因为真库验证走不了 GUI——命令行入口拿同一个任务体连库跑，
+     * 界面那层只管起线程与落界面。
+     */
+    public static RunResult runScripts(List<Src> items, Config cfg,
+                                       com.excel2mysql.core.ImportParse.Sink sink) {
+        sink.log("正在切分 " + items.size() + " 个脚本的语句…");
+        final List<List<String>> plans = new ArrayList<List<String>>();
+        for (Src s : items) {
+            plans.add(SqlScript.splitStatements(s.text));
+        }
         int totalStatements = 0;
         for (List<String> stmts : plans) {
             totalStatements += stmts.size();
         }
-        progress.setTotal(Math.max(1, totalStatements));
-        runButton.setEnabled(false);
-        Thread worker = new Thread(() -> {
-            try {
-            int ok = 0;
-            int fail = 0;
-            int skipped = 0;
-            DbClient client;
-            try {
-                client = new DbClient(conf);
-            } catch (Exception ex) {
-                final String detail = LogText.describe(ex);
-                SwingUtilities.invokeLater(() -> error("[连接失败] 无法连接到 " + target
-                        + "（用户 " + conf.user + "），剩余脚本均未执行" + LogText.NL
-                        + LogText.indentDetail(detail)));
-                SwingUtilities.invokeLater(() -> {
-                    runButton.setEnabled(true);
-                    progress.close();
-                });
-                return;
+        // 计项按语句：一个脚本几万条时也照样推进，但每个文件最多刷约 100 次，
+        // 不然进度框会被刷屏到看不出动静
+        sink.setTotal(Math.max(1, totalStatements));
+        final String target = cfg.database + "@" + cfg.host + ":" + cfg.port;
+        int ok = 0;
+        int fail = 0;
+        int skipped = 0;
+        DbClient client;
+        try {
+            client = new DbClient(cfg);
+        } catch (Exception ex) {
+            sink.logError("[连接失败] 无法连接到 " + target + "（用户 " + cfg.user
+                    + "），剩余脚本均未执行" + LogText.NL
+                    + LogText.indentDetail(LogText.describe(ex)));
+            return new RunResult(0, 0, 0, true, true);
+        }
+        for (int i = 0; i < items.size(); i++) {
+            Src s = items.get(i);
+            List<String> stmts = plans.get(i);
+            String fname = baseName(s.path);
+            if (sink.cancelled()) {
+                break;
             }
-            for (int i = 0; i < todo.size(); i++) {
-                Entry e = todo.get(i);
-                List<String> stmts = plans.get(i);
-                String fname = baseName(e.path);
-                if (progress.isCancelled()) {
-                    break;
-                }
-                if (stmts.isEmpty()) {
-                    skipped++;
-                    log("[跳过] " + fname + "：没有可执行的语句");
-                    progress.step(fname);
-                    continue;
-                }
-                final int size = stmts.size();
-                final int chunk = Math.max(1, size / 100);
-                final int[] reported = {0};
-                SqlRunner.FileResult r = SqlRunner.runText(client, fname, e.text,
-                        new SqlRunner.StatementHook() {
-                            @Override
-                            public boolean cancelled() {
-                                return progress.isCancelled();
-                            }
+            if (stmts.isEmpty()) {
+                skipped++;
+                sink.log("[跳过] " + fname + "：没有可执行的语句");
+                sink.step(fname);
+                continue;
+            }
+            final int size = stmts.size();
+            final int chunk = Math.max(1, size / 100);
+            final int[] reported = {0};
+            SqlRunner.FileResult r = SqlRunner.runText(client, fname, s.text,
+                    new SqlRunner.StatementHook() {
+                        @Override
+                        public boolean cancelled() {
+                            return sink.cancelled();
+                        }
 
-                            @Override
-                            public void onStatement(int done, int total) {
-                                if (done - reported[0] >= chunk) {
-                                    progress.advance(chunk, fname + " 第 " + done + "/" + total + " 条");
-                                    reported[0] = done;
-                                }
+                        @Override
+                        public void onStatement(int done, int total) {
+                            if (done - reported[0] >= chunk) {
+                                sink.advance(chunk, fname + " 第 " + done + "/" + total + " 条");
+                                reported[0] = done;
                             }
-                        });
-                // 把余数补齐，进度条总数才落得准
-                progress.advance(Math.max(0, size - reported[0]), fname + " 收尾");
-                if (r.cancelled) {
-                    // 取消的文件既不算成功也不算失败，但它确实被处理过了
-                    ok++;
-                    log("[已取消] " + fname + "：已执行 " + r.executed + "/" + size + " 条，"
-                            + "本文件事务已回滚" + LogText.NL + "    " + LogText.ROLLBACK_NOTE);
-                } else if (r.ok) {
-                    ok++;
-                    log("[提交] " + fname + "：" + r.executed + " 条语句已提交");
-                } else {
-                    fail++;
-                    error("[执行失败] " + fname + " 第 " + r.failedAt + "/" + r.statements.size()
-                            + " 条语句报错，目标库 " + target + "，本文件事务已回滚" + LogText.NL
-                            + LogText.indentDetail(r.error) + LogText.NL + "    出错语句："
-                            + LogText.NL + LogText.formatStatement(r.failedSql) + LogText.NL
-                            + "    前面 " + r.executed + " 条语句已随事务回滚。"
-                            + LogText.ROLLBACK_NOTE);
-                }
+                        }
+                    });
+            // 把余数补齐，进度条总数才落得准
+            sink.advance(Math.max(0, size - reported[0]), fname + " 收尾");
+            if (r.cancelled) {
+                // 取消的文件既不算成功也不算失败，但它确实被处理过了
+                ok++;
+                sink.log("[已取消] " + fname + "：已执行 " + r.executed + "/" + size + " 条，"
+                        + "本文件事务已回滚" + LogText.NL + "    " + LogText.ROLLBACK_NOTE);
+            } else if (r.ok) {
+                ok++;
+                sink.log("[提交] " + fname + "：" + r.executed + " 条语句已提交");
+            } else {
+                fail++;
+                sink.logError("[执行失败] " + fname + " 第 " + r.failedAt + "/" + r.statements.size()
+                        + " 条语句报错，目标库 " + target + "，本文件事务已回滚" + LogText.NL
+                        + LogText.indentDetail(r.error) + LogText.NL + "    出错语句："
+                        + LogText.NL + LogText.formatStatement(r.failedSql) + LogText.NL
+                        + "    前面 " + r.executed + " 条语句已随事务回滚。"
+                        + LogText.ROLLBACK_NOTE);
             }
-            client.close();
-            final boolean cancelled = progress.isCancelled();
-            final int okFinal = ok;
-            final int failFinal = fail;
-            final int skipFinal = skipped;
-            SwingUtilities.invokeLater(() -> {
-                runButton.setEnabled(true);
-                progress.close();
-                host.inform2("执行完成", finishRun(okFinal, failFinal, skipFinal, cancelled, target));
-            });
-            } catch (Throwable t) {
-                String msg = LogText.describe(t);
-                SwingUtilities.invokeLater(() -> {
-                    error(LogText.crashLog(msg));
-                    runButton.setEnabled(true);
-                    progress.close();
-                    host.informError("任务异常", LogText.crashDialog(msg));
-                });
-            }
-        }, "excel2mysql-sqlrun");
-        worker.setDaemon(true);
-        worker.start();
-        progress.open();
-        return null;
+        }
+        client.close();
+        return new RunResult(ok, fail, skipped, sink.cancelled(), false);
     }
 
     /** 收尾：先写日志，把要在弹窗里重复的那句话返回给调用方。 */
