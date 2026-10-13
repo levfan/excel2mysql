@@ -39,8 +39,8 @@ import java.util.Map;
  */
 public final class MainFrame extends JFrame {
 
-    private final TableDefModel model = new TableDefModel();
-    private final javax.swing.JTable table = new javax.swing.JTable(model);
+    private final FileRowModel fileModel = new FileRowModel();
+    private final javax.swing.JTable table = new javax.swing.JTable(fileModel);
     private final JTextArea ddl = new JTextArea();
     private final LogPanel logPanel = new LogPanel();
     private JLabel status;
@@ -127,6 +127,15 @@ public final class MainFrame extends JFrame {
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
         table.setRowHeight(22);
+        // 双击进结构弹窗改字段与主键：就地编辑会让"改的是哪张表"变含糊
+        table.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    editStructure();
+                }
+            }
+        });
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.setMinimumSize(new Dimension(300, 120));
 
@@ -325,7 +334,7 @@ public final class MainFrame extends JFrame {
                 log("跳过（不是 Excel 或 zip）：" + f.getName());
             }
         }
-        status.setText("已加载 " + tables.size() + " 张表 / " + model.getRowCount() + " 个字段");
+        status.setText("已加载 " + tables.size() + " 张表 / " + fileModel.rowTotal() + " 个字段");
         refreshPreview();
         return added;
     }
@@ -359,7 +368,7 @@ public final class MainFrame extends JFrame {
             TableBuilder.Result r = builder.build(path);
             tables.add(r.table);
             byTable.put(r.table, r);
-            model.addTable(r.table);
+            fileModel.add(new FileRowModel.Item(r.table, r));
             if (importBtn != null) {
                 importBtn.setEnabled(connected);
             }
@@ -396,8 +405,26 @@ public final class MainFrame extends JFrame {
         return tables;
     }
 
-    public TableDefModel model() {
-        return model;
+    public FileRowModel fileModel() {
+        return fileModel;
+    }
+
+    /** 双击选中行打开结构弹窗，确认后重算 DDL 预览。 */
+    public boolean editStructure() {
+        int row = table.getSelectedRow();
+        if (row < 0) {
+            return false;
+        }
+        FileRowModel.Item item = fileModel.itemAt(row);
+        StructureDialog dialog = new StructureDialog(this, item.table, item.result, null);
+        dialog.setVisible(true);
+        if (!dialog.isConfirmed()) {
+            return false;
+        }
+        log("[结构] " + item.table.tableName + " 已按弹窗修改");
+        fileModel.refresh();
+        refreshPreview();
+        return true;
     }
 
     public String ddlText() {
@@ -411,7 +438,7 @@ public final class MainFrame extends JFrame {
     private void clearAll() {
         tables.clear();
         byTable.clear();
-        model.clear();
+        fileModel.clear();
         ddl.setText("");
         status.setText("尚未添加文件");
         log("已清空");

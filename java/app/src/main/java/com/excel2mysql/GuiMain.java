@@ -73,7 +73,8 @@ public final class GuiMain {
             try {
                 frame.addFiles(files);
                 int tables = frame.tables().size();
-                int rows = frame.model().getRowCount();
+                int fileRows = frame.fileModel().getRowCount();
+                int rows = frame.fileModel().rowTotal();
                 String ddl = frame.ddlText();
                 String status = frame.statusText();
                 List<String> problems = new ArrayList<String>();
@@ -81,7 +82,11 @@ public final class GuiMain {
                     problems.add("表数期望 7，实际 " + tables + "（有文件解析失败，看日志）");
                 }
                 if (rows == 0) {
-                    problems.add("表格行数为 0，字段没进模型");
+                    problems.add("字段总数为 0，模型是空的");
+                }
+                // 文件表是"一行一个文件"，不是"一行一个字段"，两者搞混说明改造没做完
+                if (fileRows != tables) {
+                    problems.add("文件表应一行一个文件：" + fileRows + " 行 / " + tables + " 张表");
                 }
                 if (!ddl.contains("CREATE TABLE")) {
                     problems.add("DDL 预览里没有 CREATE TABLE");
@@ -92,16 +97,13 @@ public final class GuiMain {
                 if (!status.contains(String.valueOf(tables))) {
                     problems.add("状态栏没反映表数：" + status);
                 }
-                if (!frame.model().isCellEditable(0, 3)) {
-                    problems.add("类型列不可编辑");
-                } else {
-                    Object before = frame.model().getValueAt(0, 3);
-                    frame.model().setValueAt("VARCHAR(64)", 0, 3);
-                    if (!"VARCHAR(64)".equals(String.valueOf(frame.model().getValueAt(0, 3)))) {
-                        problems.add("类型列改了不生效");
-                    }
-                    frame.model().setValueAt(before, 0, 3);
+                // 文件表刻意不可就地编辑：字段级改动在双击打开的结构弹窗里做，
+                // 和 Python 侧一致（就地编辑会让"改的是哪张表"变含糊）
+                if (frame.fileModel().isCellEditable(0, 3)) {
+                    problems.add("文件表不该可就地编辑，改动要走结构弹窗");
                 }
+                // 结构弹窗要能真的改到表定义：改字段类型后 DDL 必须跟着变
+                table_select_for_dialog(frame, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
                 // 比少一个按钮更糟——用户会以为是自己操作错了
                 for (javax.swing.AbstractButton b : frame.buttons()) {
@@ -152,8 +154,9 @@ public final class GuiMain {
                 }
                 pd.dispose();
                 if (problems.isEmpty()) {
-                    System.out.println("+ [OK] GUI-SELFTEST | 窗口构造成功，7 张表 / "
-                            + rows + " 个字段进表格，DDL 预览含建表语句与主键");
+                    System.out.println("+ [OK] GUI-SELFTEST | 窗口构造成功，文件表 "
+                            + fileRows + " 行 / 字段合计 " + rows
+                            + " 个，DDL 预览含建表语句与主键，改类型能反映到预览");
                 } else {
                     for (String p : problems) {
                         System.out.println("x [ERROR] GUI-SELFTEST | " + p);
@@ -172,5 +175,26 @@ public final class GuiMain {
             return 1;
         }
         return result[0];
+    }
+
+    /**
+     * 不弹窗（模态框会卡住自检），直接验 StructureDialog 依赖的那条链路：
+     * 改 columns 里的类型 -> 重算 DDL 应该带上新的类型。
+     */
+    private static void table_select_for_dialog(MainFrame frame, List<String> problems) {
+        com.excel2mysql.core.Infer.Column first =
+                frame.tables().get(0).columns.get(0);
+        String beforeType = first.type;
+        String ddlBefore = frame.ddlText();
+        first.type = "VARCHAR(123)";
+        frame.refreshPreview();
+        if (!frame.ddlText().contains("VARCHAR(123)")) {
+            problems.add("改了字段类型但 DDL 预览没跟着变");
+        }
+        if (ddlBefore.equals(frame.ddlText())) {
+            problems.add("DDL 预览在数据变了之后文本没变");
+        }
+        first.type = beforeType;
+        frame.refreshPreview();
     }
 }
