@@ -476,6 +476,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return impHint.hintText();
     }
 
+    /** 提示条本体：自检要查它是不是真能拖选，而不是只看文案。 */
+    public HintLabel excelHint() {
+        return impHint;
+    }
+
     public boolean excelHintIsOk() {
         return impHint.isOk();
     }

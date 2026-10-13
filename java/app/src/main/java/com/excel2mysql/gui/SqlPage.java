@@ -313,6 +313,11 @@ public final class SqlPage extends JPanel {
         return hint.hintText();
     }
 
+    /** 提示条本体：自检查它能不能真的拖选复制。 */
+    public HintLabel hintField() {
+        return hint;
+    }
+
     public boolean hintIsOk() {
         return hint.isOk();
     }
