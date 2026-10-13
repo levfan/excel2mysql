@@ -114,3 +114,29 @@ Python 有 9 处走 `_run_modal`（`main.py:1042`），导入那处自建（`155
 `main.py:504` 在 `sql_load_task` 的异常分支里引用了未定义变量 `failed`，
 走到那条路径会抛 `UnboundLocalError`。Java 侧按"正常报错"实现，不复刻这个崩溃；
 Python 线是否修，另议。
+
+## 9. 第二轮补漏（第一轮清单本身漏记的条目）
+
+第一轮把 48 项勾完就报了"清零"，但那一份清单自己漏了几块，而且有两项被我标成
+"部分/有意不同"其实是没做。下面这些是重新对着 `main.py` 逐段比出来的，都已补齐。
+
+| 条目 | Python 位置 | 状态 |
+| --- | --- | --- |
+| 导入逐表头一行、建表 DDL 全文、建表成功/失败、导入完成/失败、已中止、连接失败六类日志 | `main.py:716-772` | 已做（core/ImportRun 的静态文案方法，自检逐字断言） |
+| 导入计项 = 每张表 1 项 + 每个数据行 1 项 | `main.py:702` | 已做（unitsOf 同口径，真库实测 1 表 130 行 → 131 项全推进） |
+| 页面底部进度条跟当前表的行数走 | `main.py:751`、`1572` | 已做（RowProgress 回调，之前只按表计是我自己降的级） |
+| 建表失败/导入失败附「失败的建表语句」原文与 ROLLBACK_NOTE | `main.py:737-740`、`765-768` | 已做（真库实测第 4 条语句报错，前 2 行 INSERT 被回滚、建表因隐式提交保留） |
+| SQL 执行按语句计项，每文件最多刷约 100 次，收尾补齐余数 | `main.py:587`、`607`、`666` | 已做（StatementHook + chunk = max(1, 条数/100)） |
+| SQL 执行在两条语句之间检查取消，取消的文件整文件回滚 | `main.py:614`、`642-646` | 已做（Python 把取消的文件计进"成功"一侧，这里照抄不自行改正） |
+| 文件表第一列 tooltip = 完整路径，包内文件为"包名!包内路径" | `main.py:1444-1446` | 已做（zipOrigin 一路带到 FileRowModel，之前算过却没地方用） |
+| SQL 表第一列 tooltip = 脚本完整路径 | `main.py:1215` | 已做 |
+| 窗口尺寸 1100×780 | `main.py:819` | 已做（之前是 1080×700） |
+| 窗口图标 | `main.py:1722` | 已做（源图仍只有 assets/app_icon.ico 一份，tools/export_icon_png.py 取其中 256×256 那张 PNG 随包） |
+
+真库回归（MySQL 8.0.46，口令只走命令行环境变量）：
+
+- SQL 执行：故意放一条列数不符的 INSERT，实测 `executed=3 failedAt=4`、
+  错误展开为 `SQLException（MySQL 错误码 1136）：Column count doesn't match value count at row 1`，
+  回滚后该表行数为 0，收尾 `DROP TABLE` 后 `testdb` 回到 0 张表。
+- 导入：夹具 `ods_t_big` 130 行，实测 `units=131 / advanced=131 / written=130`，
+  库里 `SELECT COUNT(*)=130`（不是"没报错"，是行数真落进去了），随后清掉。
