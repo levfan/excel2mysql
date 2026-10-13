@@ -92,17 +92,50 @@ public final class GuiMain {
                 if (!status.contains(String.valueOf(tables))) {
                     problems.add("状态栏没反映表数：" + status);
                 }
-                // 编辑一格要能改回来：类型可编辑是"手填 INT 改 VARCHAR"的真实需求
-                if (frame.model().isCellEditable(0, 3)) {
+                if (!frame.model().isCellEditable(0, 3)) {
+                    problems.add("类型列不可编辑");
+                } else {
                     Object before = frame.model().getValueAt(0, 3);
                     frame.model().setValueAt("VARCHAR(64)", 0, 3);
                     if (!"VARCHAR(64)".equals(String.valueOf(frame.model().getValueAt(0, 3)))) {
                         problems.add("类型列改了不生效");
                     }
                     frame.model().setValueAt(before, 0, 3);
-                } else {
-                    problems.add("类型列不可编辑");
                 }
+                // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
+                // 比少一个按钮更糟——用户会以为是自己操作错了
+                for (javax.swing.AbstractButton b : frame.buttons()) {
+                    if (b.getActionListeners().length == 0) {
+                        problems.add("按钮没有绑定动作：" + b.getText());
+                    }
+                }
+                // 没连接之前"开始导入"必须是禁用的，不然点了只会静默失败
+                javax.swing.AbstractButton importBtn = null;
+                for (javax.swing.AbstractButton b : frame.buttons()) {
+                    if ("开始导入".equals(b.getText())) {
+                        importBtn = b;
+                    }
+                }
+                if (importBtn == null) {
+                    problems.add("界面上没有「开始导入」按钮");
+                } else if (frame.isConnected() || importBtn.isEnabled()) {
+                    problems.add("未连接时「开始导入」就可点，点了只会静默失败");
+                }
+                // 进度框按阶段计项：走三步必须三步都记，且总项数一次算准
+                com.excel2mysql.gui.ProgressDialog pd =
+                        new com.excel2mysql.gui.ProgressDialog(null, "自检");
+                pd.setTotal(3);
+                pd.step("a");
+                pd.step("b");
+                pd.step("c");
+                if (pd.steps() != 3 || !pd.isFinished()) {
+                    problems.add("进度框计项不对：steps=" + pd.steps()
+                            + " finished=" + pd.isFinished());
+                }
+                if (pd.isCancelled()) {
+                    problems.add("进度框不该初始就是取消态");
+                }
+                pd.dispose();
                 if (problems.isEmpty()) {
                     System.out.println("+ [OK] GUI-SELFTEST | 窗口构造成功，7 张表 / "
                             + rows + " 个字段进表格，DDL 预览含建表语句与主键");

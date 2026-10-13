@@ -8,8 +8,10 @@ import com.excel2mysql.core.TableBuilder;
 import com.excel2mysql.core.TableOps;
 import com.excel2mysql.core.ZipImport;
 
+import com.excel2mysql.core.Config;
+import com.excel2mysql.core.DbClient;
 import javax.swing.BorderFactory;
-import javax.swing.Box;
+
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
@@ -19,7 +21,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
-import javax.swing.JToolBar;
+
 import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
@@ -27,6 +29,7 @@ import java.awt.Dimension;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 主窗口的第一片：添加 Excel（含 zip 展开）→ 表定义表格 → 建表语句预览 → 日志。
@@ -40,8 +43,20 @@ public final class MainFrame extends JFrame {
     private final javax.swing.JTable table = new javax.swing.JTable(model);
     private final JTextArea ddl = new JTextArea();
     private final JTextArea log = new JTextArea();
-    private final JLabel status = new JLabel("尚未添加文件");
+    private JLabel status;
+    private JButton preview;
+    private JButton connect;
+    private JButton importBtn;
+    private javax.swing.JTextField hostField;
+    private javax.swing.JTextField portField;
+    private javax.swing.JTextField userField;
+    private javax.swing.JPasswordField passField;
+    private javax.swing.JTextField dbField;
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
+    private final Map<TableOps.Table, TableBuilder.Result> byTable =
+            new java.util.LinkedHashMap<TableOps.Table, TableBuilder.Result>();
+    private Config config;
+    private boolean connected;
     private final Names names = new Names(PinyinLoader.get());
     private final TableBuilder builder = new TableBuilder(new Infer(names), names);
 
@@ -52,21 +67,63 @@ public final class MainFrame extends JFrame {
         setLocationByPlatform(true);
         setLayout(new BorderLayout());
 
-        JToolBar bar = new JToolBar();
-        bar.setFloatable(false);
+        add(buildConnectionBar(), BorderLayout.NORTH);
+        add(buildCenter(), BorderLayout.CENTER);
+    }
+
+    /** 连接栏：口令只进 JPasswordField，全程不落文件、不进日志。 */
+    private JPanel buildConnectionBar() {
+        JPanel bar = new JPanel(new BorderLayout(8, 4));
+        bar.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+
+        JPanel tools = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
         JButton add = new JButton("添加 Excel / 压缩包");
         add.addActionListener(e -> chooseFiles());
-        JButton preview = new JButton("预览建表语句");
+        preview = new JButton("预览建表语句");
         preview.addActionListener(e -> refreshPreview());
         JButton clear = new JButton("清空");
         clear.addActionListener(e -> clearAll());
-        bar.add(add);
-        bar.add(preview);
-        bar.add(clear);
-        bar.add(Box.createHorizontalGlue());
-        bar.add(status);
-        add(bar, BorderLayout.NORTH);
+        connect = new JButton("连接并加载库");
+        connect.addActionListener(e -> connectAndLoad());
+        importBtn = new JButton("开始导入");
+        importBtn.setEnabled(false);
+        importBtn.addActionListener(e -> startImport());
+        tools.add(add);
+        tools.add(preview);
+        tools.add(clear);
+        tools.add(connect);
+        tools.add(importBtn);
 
+        JPanel fields = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        hostField = new javax.swing.JTextField(12);
+        portField = new javax.swing.JTextField(5);
+        userField = new javax.swing.JTextField(10);
+        passField = new javax.swing.JPasswordField(10);
+        dbField = new javax.swing.JTextField(14);
+        hostField.setText("127.0.0.1");
+        portField.setText("3306");
+        userField.setText("root");
+        fields.add(new JLabel("主机"));
+        fields.add(hostField);
+        fields.add(new JLabel("端口"));
+        fields.add(portField);
+        fields.add(new JLabel("用户"));
+        fields.add(userField);
+        fields.add(new JLabel("口令"));
+        fields.add(passField);
+        fields.add(new JLabel("库"));
+        fields.add(dbField);
+
+        status = new JLabel("尚未连接");
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(fields, BorderLayout.CENTER);
+        south.add(status, BorderLayout.EAST);
+        bar.add(tools, BorderLayout.NORTH);
+        bar.add(south, BorderLayout.SOUTH);
+        return bar;
+    }
+
+    private java.awt.Component buildCenter() {
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
         table.setRowHeight(22);
@@ -88,7 +145,155 @@ public final class MainFrame extends JFrame {
         right.setResizeWeight(0.62);
         JSplitPane center = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, tableScroll, right);
         center.setResizeWeight(0.52);
-        add(center, BorderLayout.CENTER);
+        return center;
+    }
+
+    /** 连接并加载库：口令只从这里读，连上之前"开始导入"保持禁用。 */
+    public boolean connectAndLoad() {
+        Config cfg = new Config();
+        cfg.host = hostField.getText().trim();
+        try {
+            cfg.port = Integer.parseInt(portField.getText().trim());
+        } catch (NumberFormatException e) {
+            log("端口不是数字：" + portField.getText());
+            return false;
+        }
+        cfg.user = userField.getText().trim();
+        cfg.password = new String(passField.getPassword());
+        cfg.database = dbField.getText().trim();
+        if (!cfg.hasDatabase()) {
+            log("没填目标库，拒绝连接——不然会连到服务器上随便挑一个库");
+            return false;
+        }
+        try {
+            DbClient client = new DbClient(cfg);
+            List<String> dbs = client.listDatabases();
+            client.close();
+            config = cfg;
+            connected = true;
+            importBtn.setEnabled(!tables.isEmpty());
+            status.setText("已连接 " + cfg.host + ":" + cfg.port + " / " + cfg.database
+                    + "（服务器上共 " + dbs.size() + " 个库）");
+            log(status.getText());
+            return true;
+        } catch (Exception e) {
+            connected = false;
+            log("连接失败：" + e.getMessage());
+            status.setText("连接失败");
+            return false;
+        }
+    }
+
+    /** 导入在子线程跑，界面靠模态进度框报进度并可取消。 */
+    public void startImport() {
+        if (!connected || config == null) {
+            log("还没连接，不能导入");
+            return;
+        }
+        if (tables.isEmpty()) {
+            log("没有可导入的表");
+            return;
+        }
+        final List<TableOps.Table> todo = new ArrayList<TableOps.Table>(tables);
+        final ProgressDialog progress = new ProgressDialog(this, "开始导入");
+        progress.setTotal(todo.size() * 2);
+        setEnabledForRun(false);
+        Thread worker = new Thread(() -> {
+            int ok = 0;
+            int failed = 0;
+            DbClient db = null;
+            try {
+                db = new DbClient(config);
+            } catch (Exception e) {
+                final String message = e.getMessage();
+                SwingUtilities.invokeLater(() -> log("连接失败：" + message));
+                setEnabledForRun(true);
+                progress.close();
+                return;
+            }
+            final DbClient client = db;
+            for (TableOps.Table t : todo) {
+                if (progress.isCancelled()) {
+                    break;
+                }
+                TableBuilder.Result r = byTable.get(t);
+                progress.step("建表 " + t.tableName);
+                try {
+                    client.createTable(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, false));
+                } catch (Exception e) {
+                    failed++;
+                    final String message = e.getMessage();
+                    SwingUtilities.invokeLater(() -> log("建表失败 " + t.tableName + " — " + message));
+                    continue;
+                }
+                progress.step("写入 " + t.tableName);
+                try {
+                    final String label = t.tableName;
+                    long written = client.insertData(t.tableName, t.columns,
+                            r == null ? new ArrayList<Object>() : r.headers,
+                            r == null ? new ArrayList<List<Object>>() : r.rows,
+                            new DbClient.WarnCallback() {
+                                public void onWarn(String m) {
+                                    SwingUtilities.invokeLater(() -> log(m));
+                                }
+                            }, null);
+                    ok++;
+                    final long rows = written;
+                    SwingUtilities.invokeLater(() -> log("导入完成 " + label + " 写入 " + rows + " 行"));
+                } catch (Exception e) {
+                    failed++;
+                    final String message = e.getMessage();
+                    SwingUtilities.invokeLater(() -> log("写入失败 " + t.tableName + " — " + message));
+                }
+            }
+            client.close();
+            final int okFinal = ok;
+            final int badFinal = failed;
+            SwingUtilities.invokeLater(() -> {
+                status.setText("导入完成 " + okFinal + " 张，失败 " + badFinal + " 张");
+                log(status.getText() + (progress.isCancelled() ? "（已取消，未继续）" : ""));
+                setEnabledForRun(true);
+                progress.close();
+            });
+        }, "excel2mysql-import");
+        worker.setDaemon(true);
+        worker.start();
+        progress.open();
+    }
+
+    private void setEnabledForRun(boolean on) {
+        connect.setEnabled(on);
+        importBtn.setEnabled(on && connected && !tables.isEmpty());
+    }
+
+    public boolean isConnected() {
+        return connected;
+    }
+
+    /**
+     * 界面上用户能看见、能点的按钮。
+     *
+     * 只收有文字的 JButton：递归整棵树会把滚动条箭头、表头排序控件这些
+     * 外观内部的 AbstractButton 也算进来，它们本来就不该有 ActionListener。
+     */
+    public java.util.List<javax.swing.JButton> buttons() {
+        java.util.List<javax.swing.JButton> out = new ArrayList<javax.swing.JButton>();
+        collectButtons(getContentPane(), out);
+        return out;
+    }
+
+    private static void collectButtons(java.awt.Container c,
+                                        java.util.List<javax.swing.JButton> out) {
+        for (java.awt.Component child : c.getComponents()) {
+            if (child instanceof javax.swing.JButton) {
+                javax.swing.JButton b = (javax.swing.JButton) child;
+                if (b.getText() != null && !b.getText().isEmpty()) {
+                    out.add(b);
+                }
+            } else if (child instanceof java.awt.Container) {
+                collectButtons((java.awt.Container) child, out);
+            }
+        }
     }
 
     private void chooseFiles() {
@@ -155,7 +360,11 @@ public final class MainFrame extends JFrame {
         try {
             TableBuilder.Result r = builder.build(path);
             tables.add(r.table);
+            byTable.put(r.table, r);
             model.addTable(r.table);
+            if (importBtn != null) {
+                importBtn.setEnabled(connected);
+            }
             log("已解析 " + baseName(path) + " → 表 " + r.table.tableName + "（"
                     + r.table.columns.size() + " 列 " + r.rows.size() + " 行，模式 "
                     + r.table.source + "）"
@@ -203,6 +412,7 @@ public final class MainFrame extends JFrame {
 
     private void clearAll() {
         tables.clear();
+        byTable.clear();
         model.clear();
         ddl.setText("");
         status.setText("尚未添加文件");
