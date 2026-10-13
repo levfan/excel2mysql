@@ -8,6 +8,7 @@ import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Frame;
 import java.awt.event.WindowAdapter;
@@ -15,6 +16,7 @@ import java.awt.event.WindowEvent;
 
 /**
  * 模态进度框：耗时操作在子线程跑，界面靠这个框报"还在动"，并且能中途取消。
+ * 对应 main.py:200-265。
  *
  * 总项数必须一次算准再喂，边跑边加会让进度条倒退或卡在半途；
  * 单个几十万行的文件按 1 项计的话进度条五秒纹丝不动，所以按阶段计。
@@ -23,38 +25,61 @@ import java.awt.event.WindowEvent;
 public final class ProgressDialog extends JDialog {
 
     private final JProgressBar bar = new JProgressBar(0, 100);
-    private final JLabel label = new JLabel("准备中…");
+    private final JLabel label = new JLabel();
     private final JButton cancel = new JButton("取消");
     private int total = 1;
     private int done;
     private boolean cancelled;
     private int steps;
+    private int target;
+    private int shown;
+    private String plainText = "准备中…";
+    private String cancelLabel = "取消";
+
+    /**
+     * 16ms 补间：真实推进往往一次跳十几格，直接 setValue 会让进度条一顿一顿地弹，
+     * 看不出还在不在动；逼近式追赶让每次推进都能被眼睛接住。
+     */
+    private final javax.swing.Timer anim;
 
     public ProgressDialog(Frame owner, String title) {
         super(owner, title, true);
         JPanel body = new JPanel(new BorderLayout(8, 8));
         body.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
         bar.setStringPainted(true);
+        bar.setString("%p%");
+        label.setForeground(new Color(0x55, 0x55, 0x55));
         body.add(label, BorderLayout.NORTH);
         body.add(bar, BorderLayout.CENTER);
         body.add(cancel, BorderLayout.SOUTH);
         setContentPane(body);
+        renderLabel();
         cancel.addActionListener(e -> requestCancel());
-        // 点关闭等同于取消：否则框消失了，任务还在后台跑
+        // Windows 上没法只去掉标题栏的关闭按钮，所以点 X 等值于取消：
+        // Python 侧那个框根本没有 X，留下"框消失了任务还在后台跑"这种状态比不给 X 更糟
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
                 requestCancel();
             }
         });
-        setPreferredSize(new Dimension(440, 120));
+        setPreferredSize(new Dimension(480, 140));
         pack();
         setLocationRelativeTo(owner);
+        anim = new javax.swing.Timer(16, e -> tick());
+        anim.setCoalesce(true);
     }
 
     public void setTotal(int total) {
         this.total = Math.max(1, total);
         this.done = 0;
+        this.target = 0;
+        this.shown = 0;
+        this.plainText = "准备中…";
+        SwingUtilities.invokeLater(() -> {
+            anim.stop();
+            bar.setValue(0);
+        });
     }
 
     /** 由工作线程调用。 */
@@ -66,21 +91,83 @@ public final class ProgressDialog extends JDialog {
      * 一次推进若干格。解析一个文件按阶段计 5 格、被跳过的重复项也要一次补齐 5 格，
      * 否则进度条要么停在半途，要么超出总数。
      */
-    public void advance(final int units, String text) {
+    public void advance(final int units, final String text) {
+        // 状态在调用线程上就更新完，控件更新才排队：自检与调用方往往就站在事件分发线程上，
+        // 全排进队列的话它读回来的是旧值（LogPanel 踩过同一个坑）
         done += units;
         steps += units;
-        final int value = Math.min(100, (int) Math.round(done * 100.0 / total));
-        final String shown = text + "（" + done + "/" + total + "）";
+        final boolean over = done >= total;
+        target = over ? 100 : Math.min(100, (int) Math.round(done * 100.0 / total));
+        plainText = "进度 " + Math.min(done, total) + "/" + total + " 项 · " + text;
+        if (over) {
+            // 收尾一定要拉满：停在 98% 会让人以为卡住了，而不是以为跑完了
+            shown = 100;
+        }
         SwingUtilities.invokeLater(() -> {
-            bar.setValue(value);
-            label.setText(shown);
+            renderLabel();
+            if (over) {
+                anim.stop();
+                bar.setValue(100);
+            } else if (shown < target && !anim.isRunning()) {
+                anim.start();
+            }
         });
+    }
+
+    private void tick() {
+        if (shown >= target) {
+            anim.stop();
+            return;
+        }
+        int step = Math.max(1, (target - shown) / 10);
+        shown = Math.min(target, shown + step);
+        bar.setValue(shown);
     }
 
     public void requestCancel() {
         cancelled = true;
-        cancel.setEnabled(false);
-        SwingUtilities.invokeLater(() -> label.setText("正在取消…"));
+        plainText = "正在取消…（当前项做完就停）";
+        SwingUtilities.invokeLater(() -> {
+            cancel.setEnabled(false);
+            renderLabel();
+        });
+    }
+
+    /** 导入这类长任务把"取消"改成读得懂的动作名（main.py:1557）。 */
+    public void setCancelText(String text) {
+        cancelLabel = text;
+        SwingUtilities.invokeLater(() -> cancel.setText(text));
+    }
+
+    public String cancelText() {
+        return cancelLabel;
+    }
+
+    /** 原始文案，不含 html 包装：自检与日志都要读这一份。 */
+    public String statusText() {
+        return plainText;
+    }
+
+    public int percentShown() {
+        return shown;
+    }
+
+    public int percentTarget() {
+        return target;
+    }
+
+    /** Swing 的 JLabel 不折行，用 html 定宽换行（Python 侧是 setWordWrap(True)）。 */
+    private void setPlainText(String text) {
+        plainText = text;
+        renderLabel();
+    }
+
+    private void renderLabel() {
+        label.setText("<html><body style='width: 430px'>" + escape(plainText) + "</body></html>");
+    }
+
+    private static String escape(String text) {
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     public boolean isCancelled() {
@@ -101,6 +188,7 @@ public final class ProgressDialog extends JDialog {
     }
 
     public void close() {
+        anim.stop();
         setVisible(false);
         dispose();
     }

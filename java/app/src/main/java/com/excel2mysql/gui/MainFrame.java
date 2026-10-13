@@ -79,6 +79,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JComboBox<String> dbCombo;
     private HintLabel impHint;
     private SqlPage sqlPage;
+    private ProgressDialog lastTask;
     private javax.swing.JTabbedPane tabs;
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
@@ -574,7 +575,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 勾选状态在 EDT 上读一次：子线程里再点组件属于跨线程摸 Swing
         final boolean drop = dropExisting.isSelected();
         final Config cfg = config;
-        final ProgressDialog progress = new ProgressDialog(this, "开始导入");
+        final ProgressDialog progress = new ProgressDialog(this, "正在导入到目标库…");
+        // 导入是唯一能中止的长任务，按钮名要说清楚"做完当前表才停"
+        progress.setCancelText("停止（当前表完成后中止）");
+        lastTask = progress;
         final ImportParse.Sink sink = sinkFor(progress);
         setEnabledForRun(false);
         setPageProgress(0);
@@ -673,7 +677,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 界面只挂一个可取消的模态进度框。几十万行的表读起来不该让窗口变成白屏。
      */
     public void addFilesAsync(final List<String> paths) {
-        final ProgressDialog progress = new ProgressDialog(this, "添加文件");
+        final ProgressDialog progress = new ProgressDialog(this, "正在解析文件…");
+        lastTask = progress;
         final ImportParse.Sink sink = sinkFor(progress);
         setEnabledForRun(false);
         Thread worker = new Thread(() -> {
@@ -1014,6 +1019,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             out.add(tabs.getTitleAt(i));
         }
         return out;
+    }
+
+    /** 最近一次任务的进度框：自检读标题与按钮文案，真实用户看的是同一个对象。 */
+    public ProgressDialog lastTaskDialog() {
+        return lastTask;
     }
 
     public SqlPage sqlPage() {

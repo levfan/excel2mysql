@@ -480,7 +480,7 @@ public final class SqlPage extends JPanel {
             plans.add(SqlScript.splitStatements(e.text));
         }
         final Config conf = cfg;
-        final ProgressDialog progress = new ProgressDialog(host.owner(), "执行脚本到当前库");
+        final ProgressDialog progress = new ProgressDialog(host.owner(), "正在执行脚本到目标库…");
         // 计项按语句：一个脚本几万条时也照样推进，但每个文件最多刷约 100 次，
         // 不然进度框会被刷屏到看不出动静
         int totalStatements = 0;
