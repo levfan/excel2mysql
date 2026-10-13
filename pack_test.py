@@ -1626,7 +1626,7 @@ app_main.HelpDialog = _real_help
 from PySide6.QtWidgets import QPushButton
 _labels = ["添加文件", "批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "开始导入", "添加 SQL 文件", "保存修改后脚本", "执行脚本到当前库",
-           "连接并加载库"]
+           "连接并加载库", "生成标准excel文件", "生成简易excel文件"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
 _absent = [t for t in _labels if t not in _btns]
 check("P15 说明里点名的按钮在界面上确实存在", not _absent, _absent)
@@ -2014,6 +2014,56 @@ _dead = [b.text() or type(b).__name__
          for b in _probe_win.findChildren(QPushButton)
          if b.receivers("2clicked()") == 0]
 check("Q42 主窗口每个按钮都连着槽函数（没有点了没反应的死按钮）", not _dead, _dead)
+
+# ---- 「生成标准/简易excel文件」两颗按钮：启用条件、真落点、日志与弹窗双写 ----
+_ew = app_main.MainWindow()
+check("Q43 没有表时两颗生成按钮是灰的",
+      _ew.btn_gen_std.isEnabled() is False and _ew.btn_gen_simple.isEnabled() is False)
+_ew._add_files([jx1, jx2])
+_nt = len(_ew.tables)
+check("Q44 有表之后两颗生成按钮自动可点",
+      _nt > 0 and _ew.btn_gen_std.isEnabled() and _ew.btn_gen_simple.isEnabled(),
+      _ew.btn_gen_std.isEnabled())
+check("Q45 两颗按钮与「开始导入」在同一个容器里（同一行动作条）",
+      _ew.btn_gen_std.parentWidget() is _ew.btn_import.parentWidget()
+      and _ew.btn_gen_simple.parentWidget() is _ew.btn_import.parentWidget())
+_ew.task_dialog = object()          # 假装有个任务在跑
+_ew._sync_gen_buttons()
+check("Q46 任务在跑时两颗生成按钮变灰，不会两个任务踩同一份表列表",
+      _ew.btn_gen_std.isEnabled() is False and _ew.btn_gen_simple.isEnabled() is False)
+_ew.task_dialog = None
+_ew._sync_gen_buttons()
+
+_out_root = tempfile.mkdtemp(prefix="pack-meta-out-")
+import shutil as _shutil
+from openpyxl import load_workbook as _lw
+_real_pdir = app_main.program_dir
+app_main.program_dir = lambda: _out_root
+POPUPS.clear()
+_ew._gen_excel(u"标准", True)
+_std = os.path.join(_out_root, "meta_data_file_" + _time.strftime("%Y%m%d"))
+_files = sorted(os.listdir(_std)) if os.path.isdir(_std) else []
+check("Q47 标准件落在程序同级的 meta_data_file_年月日 目录，一张表一个文件",
+      len(_files) == _nt, _files)
+if _files:
+    _sn = list(_lw(os.path.join(_std, _files[0]), read_only=True).sheetnames)
+    check("Q48 标准件是元数据+数据两个 Sheet", _sn == [u"元数据", u"数据"], _sn)
+check("Q49 逐文件日志与收尾汇总都留痕，弹窗把目录名原样报出来",
+      "- [INFO] 导出 | 正在写 " in _ew.log.toPlainText()
+      and ("===== 生成完成：%d/%d 个文件，目录 %s =====" % (_nt, _nt, _std))
+      in _ew.log.toPlainText()
+      and any(t == "生成结果" and _std in m for t, m in POPUPS),
+      [l for l in _ew.log.toPlainText().splitlines() if "生成完成" in l])
+_ew._gen_excel(u"简易", False)
+_simd = os.path.join(_out_root, "simple_meta_data_file_" + _time.strftime("%Y%m%d"))
+_sfiles = sorted(os.listdir(_simd)) if os.path.isdir(_simd) else []
+check("Q50 简易件目录是 simple_meta_data_file_年月日 且只有一个数据 Sheet",
+      len(_sfiles) == _nt and _sfiles and
+      list(_lw(os.path.join(_simd, _sfiles[0]), read_only=True).sheetnames) == [u"数据"],
+      _sfiles)
+app_main.program_dir = _real_pdir
+_shutil.rmtree(_out_root, ignore_errors=True)
+_ew.deleteLater()
 
 app_main.connect = _orig_connect
 

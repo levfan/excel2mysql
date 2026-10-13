@@ -170,6 +170,8 @@ public final class GuiMain {
                 task_crash(frame, problems);
                 // ZIP 展开、汇总计数与临时目录清理
                 zip_roundtrip(frame, files, problems);
+                // 「生成标准/简易 excel 文件」两颗按钮：落点、产物形状、回读与日志弹窗
+                meta_export(frame, files, problems);
                 // 标题版本号、说明窗口与关于框
                 help_and_about(frame, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
@@ -366,7 +368,8 @@ public final class GuiMain {
             texts.add(b.getText());
         }
         String[] wanted = {"添加文件", "清空列表", "生成表结构预览", "预览 DDL", "清除日志",
-                "批量应用前缀", "替换首个前缀", "连接并加载库", "开始导入"};
+                "批量应用前缀", "替换首个前缀", "连接并加载库", "开始导入",
+                "生成标准excel文件", "生成简易excel文件"};
         for (String w : wanted) {
             if (!texts.contains(w)) {
                 problems.add("界面缺少按钮：" + w);
@@ -879,8 +882,8 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
         try {
-            if (hd.tocCount() != 12) {
-                problems.add("说明目录应有 12 章，实际 " + hd.tocCount());
+            if (hd.tocCount() != 13) {
+                problems.add("说明目录应有 13 章，实际 " + hd.tocCount());
             }
             if (hd.bodyLength() < 2000) {
                 problems.add("说明正文没渲染出来，长度只有 " + hd.bodyLength());
@@ -896,6 +899,26 @@ public final class GuiMain {
             if (!"anchor".equals(hd.jumpVia())) {
                 problems.add("目录跳转不是靠锚点实现的（走的是 " + hd.jumpVia()
                         + "），说明 HTML 里的 a name 没被渲染器收下来");
+            }
+            // 文档漂移守卫，与 Python 侧 pack_test 的 P15/P16 同一口径：界面上每个按钮
+            // 都要在说明里点名，说明里点名的按钮也必须真在界面上。两边各写各的，
+            // 早晚会一个有一个没有——加了按钮忘了写说明，用户只能靠猜
+            String doc = com.excel2mysql.gui.HelpDoc.html();
+            java.util.Set<String> onUi = new java.util.LinkedHashSet<String>();
+            for (javax.swing.AbstractButton b : frame.buttons()) {
+                onUi.add(b.getText());
+            }
+            String[] named = {"添加文件", "批量应用前缀", "替换首个前缀", "生成表结构预览",
+                    "预览 DDL", "开始导入", "添加 SQL 文件", "保存修改后脚本",
+                    "执行脚本到当前库", "连接并加载库",
+                    "生成标准excel文件", "生成简易excel文件"};
+            for (String n : named) {
+                if (!onUi.contains(n)) {
+                    problems.add("说明里点名的按钮界面上不存在：" + n);
+                }
+                if (!doc.contains(n)) {
+                    problems.add("按钮没被使用说明覆盖：" + n);
+                }
             }
         } finally {
             hd.dispose();
@@ -1037,6 +1060,8 @@ public final class GuiMain {
         final List<String> errors = new ArrayList<String>();
         int total = -1;
         int advanced;
+        /** 大于 0 时模拟"用户按了停止"：走够这么几项就把取消位置起来。 */
+        int stopAfter;
 
         @Override
         public void setTotal(int n) {
@@ -1065,7 +1090,7 @@ public final class GuiMain {
 
         @Override
         public boolean cancelled() {
-            return false;
+            return stopAfter > 0 && advanced >= stopAfter;
         }
 
         boolean saw(String needle, boolean errorLevel) {
@@ -1330,5 +1355,235 @@ public final class GuiMain {
         if (!frame.logPanel().contains("没有正在执行的任务")) {
             problems.add("空点「停止」的提示语不对");
         }
+    }
+
+    /**
+     * 「生成标准/简易 excel 文件」两条路的界面自检：按钮在不在、排在哪、什么时候能点，
+     * 以及真按一次之后产物落在哪儿、长什么样、能不能被导入那条线读回去。
+     */
+    private static void meta_export(MainFrame frame, List<String> files,
+                                    List<String> problems) {
+        frame.clearAll();
+        javax.swing.JButton std = frame.genStandardButton();
+        javax.swing.JButton simple = frame.genSimpleButton();
+        if (std == null || simple == null) {
+            problems.add("界面上没有「生成标准excel文件」「生成简易excel文件」两颗按钮");
+            return;
+        }
+        // 排布：同一行动作条上，紧跟在「开始导入」右侧（用户要的正是这个位置关系）
+        if (std.getParent() != simple.getParent()) {
+            problems.add("两颗生成按钮不在同一条动作栏上");
+        }
+        List<String> order = new ArrayList<String>();
+        for (java.awt.Component c : std.getParent().getComponents()) {
+            if (c instanceof javax.swing.JButton) {
+                order.add(((javax.swing.JButton) c).getText());
+            }
+        }
+        if (!order.equals(java.util.Arrays.asList("停止", "开始导入",
+                "生成标准excel文件", "生成简易excel文件"))) {
+            problems.add("动作条顺序不是 停止/开始导入/标准/简易：" + order);
+        }
+        // 空列表按下去要有话说，而且不许把任务位占死
+        frame.generateExcel(true);
+        if (!"提示".equals(frame.lastDialogTitle())
+                || !frame.lastDialogText().contains("请先添加 Excel 文件")) {
+            problems.add("列表空着点生成要弹 NO_FILE_HINT，实际标题=" + frame.lastDialogTitle()
+                    + " 正文=" + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        if (frame.taskBusy()) {
+            problems.add("拦下生成之后任务位没还回来，之后每个按钮都会被吃掉");
+            frame.endTask();
+        }
+
+        frame.addFiles(files);
+        int n = frame.tables().size();
+        if (n == 0) {
+            problems.add("生成自检没有可导的表");
+            return;
+        }
+        if (!std.isEnabled() || !simple.isEnabled()) {
+            problems.add("已经有表了，两颗生成按钮还是灰的，点了没反应");
+        }
+        // 忙碌态联动必须走真入口：只看构造时的初始值验不出"任务在跑还能再点一次"
+        frame.startTask();
+        boolean busyOff = !std.isEnabled() && !simple.isEnabled();
+        frame.endTask();
+        if (!busyOff) {
+            problems.add("任务在跑时生成按钮还可点，两个任务会踩同一份表列表");
+        }
+
+        String root = com.excel2mysql.gui.MainFrame.programDir();
+        java.io.File dir = new java.io.File(root,
+                com.excel2mysql.core.MetaExport.STD_PREFIX + "_" + today());
+        frame.generateExcel(true);
+        if (!"正在生成标准excel文件…".equals(frame.lastTaskTitle())) {
+            problems.add("生成任务标题不是 Python 那句原话：" + frame.lastTaskTitle());
+        }
+        if (!"生成结果".equals(frame.lastDialogTitle())) {
+            problems.add("生成完成没弹带标题的结果框：" + frame.lastDialogTitle());
+        }
+        String doneLine = "===== 生成完成：" + n + "/" + n + " 个文件，目录 "
+                + dir.getPath() + " =====";
+        if (!frame.logPanel().contains(doneLine)) {
+            problems.add("生成收尾的汇总行不对，期望：" + doneLine + "；日志尾部："
+                    + tail(frame.logPanel().text()));
+        }
+        if (!frame.lastDialogText().contains(dir.getPath())) {
+            problems.add("弹窗正文没把目录名原样给出来："
+                    + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        if (!frame.logPanel().contains("- [INFO] 导出 | 正在写 ")) {
+            problems.add("逐个文件写之前一条日志都不说，长任务看着像卡死");
+        }
+        if (!frame.logPanel().contains(" 列 / ") || !frame.logPanel().contains(" 行）")) {
+            problems.add("写完没报每个文件的列数与行数");
+        }
+        String[] produced = dir.list();
+        if (produced == null || produced.length != n) {
+            problems.add("程序同级该有 " + n + " 个文件，实际 "
+                    + (produced == null ? 0 : produced.length) + " 个：" + dir.getPath());
+        } else {
+            checkStandardSheets(frame, dir, produced, problems);
+        }
+        // 程序同级这个目录是自检造出来的，验完就清掉，别留给下一次
+        deleteTree(dir);
+
+        java.io.File tmp;
+        try {
+            tmp = java.nio.file.Files.createTempDirectory("e2m-meta-selftest").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建简易件临时目录失败：" + e);
+            return;
+        }
+        frame.generateExcel(false, tmp.getPath());
+        if (!"正在生成简易excel文件…".equals(frame.lastTaskTitle())) {
+            problems.add("简易件任务标题不对：" + frame.lastTaskTitle());
+        }
+        java.io.File simDir = new java.io.File(tmp,
+                com.excel2mysql.core.MetaExport.SIMPLE_PREFIX + "_" + today());
+        String[] simFiles = simDir.list();
+        if (simFiles == null || simFiles.length != n) {
+            problems.add("简易件目录应有 " + n + " 个文件，实际 "
+                    + (simFiles == null ? "目录不存在" : simFiles.length + " 个"));
+        } else {
+            for (String name : simFiles) {
+                try {
+                    List<com.excel2mysql.core.MetaExport.Dump> dumps =
+                            com.excel2mysql.core.MetaExport.dump(
+                                    new java.io.File(simDir, name).getPath());
+                    if (dumps.size() != 1
+                            || !com.excel2mysql.core.MetaExport.DATA_SHEET.equals(
+                                    dumps.get(0).sheet)) {
+                        problems.add("简易件应只有一个数据 Sheet：" + name + " → "
+                                + sheetsOf(dumps));
+                    }
+                } catch (Exception e) {
+                    problems.add("简易件读不回来：" + name + " " + e);
+                }
+            }
+        }
+        deleteTree(tmp);
+
+        // 停止要真的停下来：按了停止却把剩下的文件照写完，收尾那句"已取消，剩余文件未生成"就是假话
+        java.io.File cdir;
+        try {
+            cdir = java.nio.file.Files.createTempDirectory("e2m-meta-cancel").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建取消用例临时目录失败：" + e);
+            return;
+        }
+        List<com.excel2mysql.core.MetaExport.Source> srcs =
+                new ArrayList<com.excel2mysql.core.MetaExport.Source>();
+        List<com.excel2mysql.core.TableOps.Table> ts = frame.tables();
+        List<com.excel2mysql.core.TableBuilder.Result> rs = frame.results();
+        for (int i = 0; i < ts.size(); i++) {
+            srcs.add(com.excel2mysql.core.MetaExport.of(ts.get(i), rs.get(i)));
+        }
+        Recorder crec = new Recorder();
+        crec.stopAfter = 1;
+        com.excel2mysql.core.MetaExport.Outcome co =
+                com.excel2mysql.core.MetaExport.exportTables(srcs, cdir.getPath(), true, crec);
+        if (co.written.size() != 1) {
+            problems.add("按了停止还在写文件：写了 " + co.written.size() + " 个，应为 1 个");
+        }
+        if (co.total != ts.size()) {
+            problems.add("生成任务的总项数没在开跑前算准：" + co.total + " / " + ts.size());
+        }
+        if (!co.cancelled) {
+            problems.add("取消标志没传到收尾，弹窗不会说出「已取消」");
+        }
+        if (!crec.saw("+ [OK] 导出 | ", false)) {
+            problems.add("写完一个文件没有留下成功行");
+        }
+        deleteTree(cdir);
+
+        frame.clearAll();
+        if (std.isEnabled() || simple.isEnabled()) {
+            problems.add("清空列表后生成按钮还亮着");
+        }
+    }
+
+    /**
+     * 标准件的形状：元数据 + 数据两个 Sheet、七列表头一字不差、元数据一行一列，
+     * 而且这份文件要能被导入那条线的 TableBuilder 当结构定义表读回来。
+     */
+    private static void checkStandardSheets(MainFrame frame, java.io.File dir,
+                                            String[] produced, List<String> problems) {
+        java.util.Set<String> wantHead = new java.util.LinkedHashSet<String>();
+        for (String h : com.excel2mysql.core.MetaExport.META_HEADERS) {
+            wantHead.add(h);
+        }
+        for (String name : produced) {
+            String path = new java.io.File(dir, name).getPath();
+            List<com.excel2mysql.core.MetaExport.Dump> dumps;
+            try {
+                dumps = com.excel2mysql.core.MetaExport.dump(path);
+            } catch (Exception e) {
+                problems.add("标准件读不回来：" + name + " " + e);
+                continue;
+            }
+            if (dumps.size() != 2 || !"元数据".equals(dumps.get(0).sheet)
+                    || !"数据".equals(dumps.get(1).sheet)) {
+                problems.add("标准件应有元数据+数据两个 Sheet：" + name + " → "
+                        + sheetsOf(dumps));
+                continue;
+            }
+            List<Object> head = dumps.get(0).cells.isEmpty()
+                    ? new ArrayList<Object>() : dumps.get(0).cells.get(0);
+            java.util.Set<String> gotHead = new java.util.LinkedHashSet<String>();
+            for (Object o : head) {
+                gotHead.add(String.valueOf(o));
+            }
+            if (!wantHead.equals(gotHead)) {
+                problems.add("元数据表头被改动：" + gotHead);
+            }
+            com.excel2mysql.core.TableBuilder.Result back =
+                    new com.excel2mysql.core.TableBuilder(
+                            new com.excel2mysql.core.Infer(frame.names()),
+                            frame.names()).build(path);
+            if (!"structured".equals(back.table.source)) {
+                problems.add("标准件回读没走结构定义那条路：" + name);
+                continue;
+            }
+            if (back.table.columns.size() != dumps.get(0).cells.size() - 1) {
+                problems.add("元数据一行一列对不上：" + name + " 列 "
+                        + back.table.columns.size() + " 行 "
+                        + (dumps.get(0).cells.size() - 1));
+            }
+        }
+    }
+
+    private static String sheetsOf(List<com.excel2mysql.core.MetaExport.Dump> dumps) {
+        List<String> out = new ArrayList<String>();
+        for (com.excel2mysql.core.MetaExport.Dump d : dumps) {
+            out.add(d.sheet);
+        }
+        return out.toString();
+    }
+
+    private static String today() {
+        return java.time.LocalDateTime.now().format(
+                java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"));
     }
 }
