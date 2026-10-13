@@ -913,6 +913,24 @@ public final class GuiMain {
                     com.excel2mysql.core.AppInfo.load().source)) {
                 problems.add("关于框既没有构建日期也没有声明来源，用户无从判断可信度");
             }
+            // 构建时间戳：Maven 打的是 UTC，Python 打的是本机时间，显示前必须换成时区
+            String shifted = com.excel2mysql.core.AppInfo.toLocal("2026-10-13 02:22:08");
+            java.util.Calendar utc = java.util.Calendar.getInstance(
+                    java.util.TimeZone.getTimeZone("UTC"));
+            utc.set(2026, java.util.Calendar.OCTOBER, 13, 2, 22, 8);
+            utc.set(java.util.Calendar.MILLISECOND, 0);
+            long offset = java.util.TimeZone.getDefault().getOffset(utc.getTimeInMillis());
+            if (offset != 0 && "2026-10-13 02:22:08".equals(shifted)) {
+                problems.add("构建日期还是 UTC 原样，没换成本机时间（本机偏移 "
+                        + (offset / 3600000) + " 小时）");
+            }
+            if (shifted == null || shifted.length() != 19) {
+                problems.add("构建日期换算后不成样：" + shifted);
+            }
+            if (!"开发态（未打包）".equals(
+                    com.excel2mysql.core.AppInfo.toLocal("开发态（未打包）"))) {
+                problems.add("不是时间戳的构建日期被时间换算改坏了");
+            }
         } finally {
             ad.dispose();
         }
