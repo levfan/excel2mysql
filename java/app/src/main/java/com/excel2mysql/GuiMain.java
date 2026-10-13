@@ -66,6 +66,10 @@ public final class GuiMain {
                 }
             }
         }
+        // 关掉模态框：任务原地跑完。测的是线上那同一个工作函数与同一个回报接口，
+        // 不是它的复印件（对应 main.py:137 的 MODAL_PROGRESS）。
+        // 模态那一支两条线都没有自动化覆盖，交付前手工点一次，见 GUI-对齐清单.md 第 10 节。
+        com.excel2mysql.gui.MainFrame.modalProgress = false;
         final CountDownLatch done = new CountDownLatch(1);
         final int[] result = {0};
         SwingUtilities.invokeLater(() -> {

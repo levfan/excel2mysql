@@ -74,6 +74,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JButton importBtn;
     private JButton stopBtn;
     private boolean taskRunning;
+    /**
+     * 关掉时任务原地跑完、不弹模态框：自检与非界面调用要靠它验到线上那段代码，
+     * 而不是验一份复印件（对应 main.py:137 的 MODAL_PROGRESS）。
+     */
+    public static boolean modalProgress = true;
     private javax.swing.JTextField hostField;
     private javax.swing.JSpinner portField;
     private javax.swing.JTextField userField;
@@ -655,6 +660,98 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         setEnabledForRun(true);
     }
 
+    /**
+     * 带进度框的任务入口：抢任务位 -> 子线程算 + 模态框报进度 -> 回到事件分发线程落界面。
+     * modalProgress 关掉时同一个 work 原地跑完，只是不弹框。
+     */
+    private void runTask(String title,
+                         java.util.function.Function<ImportParse.Sink, Object> work,
+                         java.util.function.Consumer<Object> onUi) {
+        if (!startTask()) {
+            return;
+        }
+        if (modalProgress) {
+            final ProgressDialog progress = new ProgressDialog(this, title);
+            lastTask = progress;
+            final ImportParse.Sink sink = sinkFor(progress);
+            Thread worker = new Thread(() -> {
+                Object out;
+                try {
+                    out = work.apply(sink);
+                } catch (Throwable t) {
+                    SwingUtilities.invokeLater(() -> {
+                        progress.close();
+                        endTask();
+                        taskCrash(t, true);
+                    });
+                    return;
+                }
+                SwingUtilities.invokeLater(() -> {
+                    progress.close();
+                    endTask();
+                    onUi.accept(out);
+                });
+            }, "excel2mysql-task");
+            worker.setDaemon(true);
+            worker.start();
+            progress.open();
+            return;
+        }
+        Object out;
+        try {
+            out = work.apply(quietSink());
+        } catch (Throwable t) {
+            endTask();
+            taskCrash(t, false);
+            return;
+        }
+        endTask();
+        // 工作函数返回 null 视为"这次没做成"，不回调落界面（与 Python 侧同一处理）
+        if (out != null) {
+            onUi.accept(out);
+        }
+    }
+
+    /** 只写日志不碰进度框的回报口。 */
+    private ImportParse.Sink quietSink() {
+        return new ImportParse.Sink() {
+            @Override
+            public void setTotal(int total) {
+            }
+
+            @Override
+            public void step(String label) {
+            }
+
+            @Override
+            public void advance(int units, String label) {
+            }
+
+            @Override
+            public void log(String text) {
+                MainFrame.this.log(text);
+            }
+
+            @Override
+            public void logError(String text) {
+                MainFrame.this.logError(text);
+            }
+
+            @Override
+            public boolean cancelled() {
+                return false;
+            }
+        };
+    }
+
+    /** 任务出意外：日志必写，弹窗只在模态模式下要（自检在事件分发线程上，弹窗会卡死）。 */
+    private void taskCrash(Throwable t, boolean showDialog) {
+        String text = crashMessage(t);
+        if (showDialog) {
+            inform(text);
+        }
+    }
+
     /** 有长任务在跑吗：护栏与自检都读这一个判定，不留两套状态。 */
     public boolean taskBusy() {
         return taskRunning;
@@ -1156,12 +1253,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             inform(NO_FILE_HINT);
             return;
         }
-        String prefix = Names.pyStrip(prefixField.getText());
-        TableOps.applyPrefix(tables, prefix);
-        fileModel.refresh();
-        log(prefix.isEmpty() ? "[前缀] 已移除前缀，恢复基础表名"
-                             : "[前缀] 已为全部表名批量添加前缀「" + prefix + "」");
-        refreshPreview();
+        final String prefix = Names.pyStrip(prefixField.getText());
+        runTask("正在批量应用表名前缀…", sink -> {
+            sink.setTotal(tables.size() + 1);
+            TableOps.applyPrefix(tables, prefix);
+            for (TableOps.Table t : tables) {
+                sink.step(t.tableName);
+            }
+            sink.step("重名去重");
+            return prefix;
+        }, out -> {
+            fileModel.refresh();
+            log(prefix.isEmpty() ? "[前缀] 已移除前缀，恢复基础表名"
+                                 : "[前缀] 已为全部表名批量添加前缀「" + prefix + "」");
+            refreshPreview();
+        });
     }
 
     /** 替换首个前缀：清洗、校验、跳过规则都在 core 里，界面只负责把改了哪些说清楚。 */
@@ -1180,17 +1286,28 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     + "末尾的下划线不用写，原表名自带。");
             return;
         }
-        TableOps.RenameResult r = TableOps.replaceFirstSegment(tables, head);
-        for (Map<String, String> e : r.renamed) {
-            log("[换前缀] " + e.get("old") + " → " + e.get("new"));
-        }
-        if (!r.skipped.isEmpty()) {
-            log("[跳过] 表名里没有下划线，未改动：" + String.join("、", r.skipped));
-        }
-        log("[换前缀完成] 共改 " + r.renamed.size() + " 张表"
-                + (r.skipped.isEmpty() ? "" : "，跳过 " + r.skipped.size() + " 张"));
-        fileModel.refresh();
-        refreshPreview();
+        final String newHead = head;
+        runTask("正在替换表名前缀…", sink -> {
+            sink.setTotal(tables.size() + 1);
+            TableOps.RenameResult r = TableOps.replaceFirstSegment(tables, newHead);
+            for (TableOps.Table t : tables) {
+                sink.step(t.tableName);
+            }
+            sink.step("重名去重");
+            return r;
+        }, out -> {
+            TableOps.RenameResult r = (TableOps.RenameResult) out;
+            for (Map<String, String> e : r.renamed) {
+                log("[换前缀] " + e.get("old") + " → " + e.get("new"));
+            }
+            if (!r.skipped.isEmpty()) {
+                log("[跳过] 表名里没有下划线，未改动：" + String.join("、", r.skipped));
+            }
+            log("[换前缀完成] 共改 " + r.renamed.size() + " 张表"
+                    + (r.skipped.isEmpty() ? "" : "，跳过 " + r.skipped.size() + " 张"));
+            fileModel.refresh();
+            refreshPreview();
+        });
     }
 
     /** 一张表一个标签页地看建表语句（对应 main.py:1528-1533 的 on_preview_ddl）。 */
