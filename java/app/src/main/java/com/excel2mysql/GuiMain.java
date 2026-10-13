@@ -655,6 +655,16 @@ public final class GuiMain {
             problems.add("界面上没有 SQL 脚本页");
             return;
         }
+        // 分栏配置照 Python：把手 6px、余量 1:3 给日志、初始 260
+        if (page.splitDividerSize() != 6) {
+            problems.add("SQL 页分栏把手宽度不是 6px：" + page.splitDividerSize());
+        }
+        if (Math.abs(page.splitResizeWeight() - 0.25) > 0.001) {
+            problems.add("SQL 页分栏拉伸比例不对，应为 1:3：" + page.splitResizeWeight());
+        }
+        if (page.splitDividerLocation() != 260) {
+            problems.add("SQL 页分栏初始位置不是 260：" + page.splitDividerLocation());
+        }
         java.io.File dir;
         try {
             dir = java.nio.file.Files.createTempDirectory("e2m-sql-selftest").toFile();
