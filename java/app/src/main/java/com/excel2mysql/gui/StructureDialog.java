@@ -127,6 +127,25 @@ public final class StructureDialog extends JDialog {
         setContentPane(body);
         setSize(980, 640);
         setLocationRelativeTo(ownerFrame);
+        // Qt 的 QDialog 按 Esc 就是 reject；Swing 的 JDialog 默认什么都不做，
+        // 得自己绑一条焦点期按键，否则"关了但没取消"和"取消"在用户眼里是一回事，代码里不是。
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                        "close");
+        getRootPane().getActionMap().put("close", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                dispose();
+            }
+        });
+    }
+
+    /** Esc 是否绑到了"关掉且不写回"：自检不开框也能查（开框会把自检自己卡死）。 */
+    public boolean closesOnEscape() {
+        return getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .get(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0))
+                != null;
     }
 
     private final List<String> problems = new ArrayList<String>();
