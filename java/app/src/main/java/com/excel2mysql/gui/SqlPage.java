@@ -233,7 +233,7 @@ public final class SqlPage extends JPanel {
         topRow.add(remove);
 
         JScrollPane logScroll = new JScrollPane(logPanel);
-        logScroll.setBorder(BorderFactory.createTitledBorder("日志"));
+        // Python 的 SQL 日志区同样没有组框标题，只有上面那排按钮
         logScroll.setMinimumSize(new Dimension(300, 100));
 
         // 段数、比例、把手宽度照 main.py:1191-1197：初始 260/290、把手 6px、拉伸 1:3。
@@ -373,8 +373,8 @@ public final class SqlPage extends JPanel {
         chooser.setAcceptAllFileFilterUsed(true);
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
                 "SQL 脚本 (*.sql)", "sql"));
+        // 取消选择器是用户自己的中止动作，Python 那边一句话不说（main.py:1222），照它来
         if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) {
-            log("未选择文件");
             return;
         }
         List<String> paths = new ArrayList<String>();

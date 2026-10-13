@@ -68,7 +68,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     };
     private String ddlText = "";
     private final LogPanel logPanel = new LogPanel();
-    private JLabel status;
     private JButton preview;
     private JButton connect;
     private JButton importBtn;
@@ -302,12 +301,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         fields.add(dbCombo);
         fields.add(connect);
 
-        status = new JLabel("尚未连接");
-        JPanel south = new JPanel(new BorderLayout());
-        south.add(fields, BorderLayout.CENTER);
-        south.add(status, BorderLayout.EAST);
+        // Python 这条框里只有标签、输入框和「连接并加载库」，没有自造的状态文字（main.py:861-878）
         bar.add(tools, BorderLayout.NORTH);
-        bar.add(south, BorderLayout.SOUTH);
+        bar.add(fields, BorderLayout.SOUTH);
         return bar;
     }
 
@@ -341,7 +337,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tableScroll.setMinimumSize(new Dimension(300, 120));
 
         JScrollPane logScroll = new JScrollPane(logPanel);
-        logScroll.setBorder(BorderFactory.createTitledBorder("日志"));
+        // Python 的日志区没有组框标题（main.py:948-960 只有一个只读文本框和「清除日志」按钮）
 
         // 三段纵向分栏：拖拽区 / 文件表 / 日志，段数、比例、把手宽度都照 main.py:964-973。
         // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
@@ -430,15 +426,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             config = cfg;
             connected = true;
             importBtn.setEnabled(!tables.isEmpty());
-            status.setText("已连接 " + cfg.host + ":" + cfg.port + "，服务器上共 "
-                    + dbs.size() + " 个库");
             log("[已加载] 可用数据库：" + String.join(", ", dbs));
             refreshDbLabels();
             return null;
         } catch (Exception e) {
             connected = false;
             dbCombo.setEnabled(false);
-            status.setText("连接失败");
             String detail = LogText.describe(e);
             logError("[连接失败] 无法连接到 " + cfg.host + ":" + cfg.port + "（用户 "
                     + cfg.user + "），库列表未加载" + LogText.NL + LogText.indentDetail(detail));
@@ -545,7 +538,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         fileModel.removeItems(removed);
         setPageProgress(0);
-        status.setText("待导入 " + tables.size() + " 张表");
         importBtn.setEnabled(connected && !tables.isEmpty());
         refreshPreview();
 
@@ -844,8 +836,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         chooser.addChoosableFileFilter(new FileNameExtensionFilter(
                 "ZIP 压缩包 (*.zip)", "zip"));
         chooser.setFileFilter(excelZip);
+        // 取消选择器是用户自己的中止动作，Python 那边一句话不说（main.py:1363），照它来
         if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
-            log("未选择文件");
             return;
         }
         List<String> paths = new ArrayList<String>();
@@ -985,7 +977,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         if (importBtn != null) {
             importBtn.setEnabled(connected);
         }
-        status.setText("已加载 " + tables.size() + " 张表 / " + fileModel.rowTotal() + " 个字段");
         refreshPreview();
         String summary = ImportParse.summaryText(outcome);
         if (outcome.cancelled) {
@@ -1150,17 +1141,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
 
 
-    public String statusText() {
-        return status.getText();
-    }
-
     public void clearAll() {
         tables.clear();
         byTable.clear();
         fileModel.clear();
         zipOrigin.clear();
         ddlText = "";
-        status.setText("尚未添加文件");
         setPageProgress(0);
         log("已清空");
     }
