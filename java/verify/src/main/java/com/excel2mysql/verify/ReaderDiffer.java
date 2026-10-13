@@ -54,7 +54,7 @@ public final class ReaderDiffer {
 
             // pandas 的规则：行尾空串裁掉、尾部整行空裁掉、短行补到最大宽度
             rows = normalize(rows);
-            Frame frame = Frame.of(rows);
+            Frame frame = new Frame("s0", rows);
 
             int height = Math.max(wantRows.size(), frame.rows.size());
             for (int i = -1; i < height; i++) {

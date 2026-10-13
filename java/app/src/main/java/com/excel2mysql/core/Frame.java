@@ -14,38 +14,49 @@ import java.util.Map;
  */
 public final class Frame {
 
+    public final String name;
     public final List<Object> headers;
     public final List<List<Object>> rows;
 
-    private Frame(List<Object> headers, List<List<Object>> rows) {
-        this.headers = headers;
-        this.rows = rows;
-    }
+    private final Map<Object, Integer> headerIndex = new LinkedHashMap<Object, Integer>();
 
-    public static Frame of(List<List<Object>> rawRows) {
+    public Frame(String name, List<List<Object>> rawRows) {
+        this.name = name;
         if (rawRows.isEmpty()) {
-            return new Frame(new ArrayList<Object>(), new ArrayList<List<Object>>());
+            this.headers = new ArrayList<Object>();
+            this.rows = new ArrayList<List<Object>>();
+            return;
         }
         List<Object> first = rawRows.get(0);
         Map<String, Integer> seen = new LinkedHashMap<String, Integer>();
-        List<Object> headers = new ArrayList<Object>();
+        List<Object> hdr = new ArrayList<Object>();
         for (int i = 0; i < first.size(); i++) {
             Object v = first.get(i);
-            String name = blank(v) ? "Unnamed: " + i : String.valueOf(v);
-            Integer count = seen.get(name);
+            String label = blank(v) ? "Unnamed: " + i : String.valueOf(v);
+            Integer count = seen.get(label);
             if (count == null) {
-                seen.put(name, Integer.valueOf(1));
+                seen.put(label, Integer.valueOf(1));
             } else {
-                seen.put(name, Integer.valueOf(count.intValue() + 1));
-                name = name + "." + count.intValue();
+                seen.put(label, Integer.valueOf(count.intValue() + 1));
+                label = label + "." + count.intValue();
             }
-            headers.add(name);
+            hdr.add(label);
+            if (!headerIndex.containsKey(label)) {
+                headerIndex.put(label, Integer.valueOf(hdr.size() - 1));
+            }
         }
-        List<List<Object>> rows = new ArrayList<List<Object>>();
+        this.headers = hdr;
+        List<List<Object>> data = new ArrayList<List<Object>>();
         for (int i = 1; i < rawRows.size(); i++) {
-            rows.add(rawRows.get(i));
+            data.add(rawRows.get(i));
         }
-        return new Frame(headers, rows);
+        this.rows = data;
+    }
+
+    /** 按表头取值所在列号；找不到返回 -1。重复表头取第一次出现的位置，和 pandas 取列一致。 */
+    public int indexOf(Object header) {
+        Integer at = headerIndex.get(header);
+        return at == null ? -1 : at.intValue();
     }
 
     private static boolean blank(Object v) {
