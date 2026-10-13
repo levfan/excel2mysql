@@ -110,6 +110,8 @@ public final class GuiMain {
                 prefix_and_labels(frame, problems);
                 // 拖拽区与页内进度条：真拖进来走的必须是和选择器同一个入口
                 drop_and_progress(frame, files, problems);
+                // 导入收尾：成功文件移出、失败保留，日志与弹窗用的是同一句话
+                import_finish(frame, files, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
                 // 比少一个按钮更糟——用户会以为是自己操作错了
                 for (javax.swing.AbstractButton b : frame.buttons()) {
@@ -374,5 +376,70 @@ public final class GuiMain {
         if (frame.pageProgressValue() != 0 || !frame.tables().isEmpty()) {
             problems.add("「清空列表」没把进度条归零或没清空表");
         }
+    }
+
+    private static void import_finish(MainFrame frame, List<String> files, List<String> problems) {
+        if (files.size() < 2) {
+            problems.add("导入收尾自检需要两个夹具文件");
+            return;
+        }
+        List<String> two = new ArrayList<String>();
+        two.add(files.get(0));
+        two.add(files.get(1));
+        frame.addFiles(two);
+        if (frame.tables().size() != 2) {
+            problems.add("收尾自检前应有 2 张表，实际 " + frame.tables().size());
+            return;
+        }
+        String f0 = frame.tables().get(0).filepath;
+        String f1 = frame.tables().get(1).filepath;
+        List<MainFrame.ImportOutcome> outs = new ArrayList<MainFrame.ImportOutcome>();
+        outs.add(new MainFrame.ImportOutcome(f0, true));
+        outs.add(new MainFrame.ImportOutcome(f1, false));
+        String summary = frame.finishImport(outs, false);
+        if (!summary.contains("成功 1 张表，失败 1 张表")) {
+            problems.add("收尾汇总文案不对：" + summary.replace((char) 10, ' '));
+        }
+        if (!frame.logPanel().contains("===== 全部完成：成功 1 张表，失败 1 张表 =====")) {
+            problems.add("收尾没有写汇总日志行");
+        }
+        if (!frame.logPanel().isErrorLine("===== 全部完成")) {
+            problems.add("有失败时汇总行没标成错误级");
+        }
+        if (!frame.logPanel().contains("[清理] 已从待导入列表移除成功文件")) {
+            problems.add("成功文件移出列表没有留痕");
+        }
+        if (!frame.logPanel().contains("[保留] 导入失败的文件仍在列表中")) {
+            problems.add("失败文件保留没有说明原因");
+        }
+        if (frame.tables().size() != 1 || !f1.equals(frame.tables().get(0).filepath)) {
+            problems.add("收尾后剩下的应该是失败那张表");
+        }
+        if (frame.fileModel().getRowCount() != 1) {
+            problems.add("文件表没跟着移出，还剩 " + frame.fileModel().getRowCount() + " 行");
+        }
+        if (frame.pageProgressValue() != 0) {
+            problems.add("收尾后进度条没归零：" + frame.pageProgressValue());
+        }
+
+        frame.clearAll();
+        frame.addFiles(two);
+        String a = frame.tables().get(0).filepath;
+        String b = frame.tables().get(1).filepath;
+        List<MainFrame.ImportOutcome> allOk = new ArrayList<MainFrame.ImportOutcome>();
+        allOk.add(new MainFrame.ImportOutcome(a, true));
+        allOk.add(new MainFrame.ImportOutcome(b, true));
+        frame.finishImport(allOk, false);
+        if (!frame.tables().isEmpty() || frame.fileModel().getRowCount() != 0) {
+            problems.add("全部成功后列表却没清空");
+        }
+        // 日志是累加的，所以这里按第二场自己的汇总行判：零失败不该被标成错误级
+        if (!frame.logPanel().contains("===== 全部完成：成功 2 张表，失败 0 张表 =====")) {
+            problems.add("全成功场景没有写汇总行");
+        }
+        if (frame.logPanel().isErrorLine("成功 2 张表，失败 0 张表")) {
+            problems.add("零失败的汇总行被标成了错误级");
+        }
+        frame.clearAll();
     }
 }

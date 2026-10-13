@@ -15,13 +15,13 @@ import java.util.List;
  */
 public final class FileRowModel extends AbstractTableModel {
 
-    private static final String[] COLUMNS = {"文件名", "表名", "表注释", "字段数", "行数", "状态"};
+    private static final String[] COLUMNS =
+            {"文件", "表名", "表注释", "字段数", "数据行数", "主键"};
 
     /** 一行文件。 */
     public static final class Item {
         public final TableOps.Table table;
         public final TableBuilder.Result result;
-        public String state = "待导入";
 
         public Item(TableOps.Table table, TableBuilder.Result result) {
             this.table = table;
@@ -63,8 +63,10 @@ public final class FileRowModel extends AbstractTableModel {
                 return String.valueOf(it.table.columns.size());
             case 4:
                 return String.valueOf(it.result == null ? 0 : it.result.rows.size());
+            case 5:
+                return primaryKeyOf(it.table);
             default:
-                return it.state;
+                return "";
             }
         }
 
@@ -82,6 +84,38 @@ public final class FileRowModel extends AbstractTableModel {
         for (int i = 0; i < items.size(); i++) {
             if (!drop.contains(Integer.valueOf(i))) {
                 keep.add(items.get(i));
+            }
+        }
+        items.clear();
+        items.addAll(keep);
+        fireTableDataChanged();
+    }
+
+    /** 主键列：勾了一列或多列就都列出来，一列都没勾写"无"，与 Python 侧同一口径。 */
+    private static String primaryKeyOf(TableOps.Table t) {
+        List<String> pk = new ArrayList<String>();
+        for (com.excel2mysql.core.Infer.Column c : t.columns) {
+            if (c.primaryKey) {
+                pk.add(c.field);
+            }
+        }
+        return pk.isEmpty() ? "无" : String.join(", ", pk);
+    }
+
+    public int indexOf(TableOps.Table t) {
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i).table == t) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    public void removeItems(java.util.Collection<TableOps.Table> ts) {
+        List<Item> keep = new ArrayList<Item>();
+        for (Item it : items) {
+            if (!ts.contains(it.table)) {
+                keep.add(it);
             }
         }
         items.clear();

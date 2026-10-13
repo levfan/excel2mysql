@@ -243,6 +243,87 @@ public final class MainFrame extends JFrame {
         }
     }
 
+    /** 一张表的成功/失败，只带文件路径：收尾要按文件决定留不留。 */
+    public static final class ImportOutcome {
+        public final String filepath;
+        public final boolean ok;
+
+        public ImportOutcome(String filepath, boolean ok) {
+            this.filepath = filepath;
+            this.ok = ok;
+        }
+    }
+
+    /**
+     * 导入收尾：汇总日志 → 成功的文件移出列表、失败的留着便于改了再试 →
+     * 弹窗与日志双写 → 进度归零。对应 main.py:1579-1613 的 _on_finished_all。
+     */
+    public String finishImport(List<ImportOutcome> outcomes, boolean cancelled) {
+        int ok = 0;
+        java.util.Set<String> doneFiles = new java.util.LinkedHashSet<String>();
+        for (ImportOutcome o : outcomes) {
+            if (o.ok) {
+                ok++;
+                doneFiles.add(o.filepath);
+            }
+        }
+        int fail = outcomes.size() - ok;
+        List<TableOps.Table> removed = new ArrayList<TableOps.Table>();
+        List<TableOps.Table> kept = new ArrayList<TableOps.Table>();
+        for (TableOps.Table t : tables) {
+            if (doneFiles.contains(t.filepath)) {
+                removed.add(t);
+            } else {
+                kept.add(t);
+            }
+        }
+        String summary = "===== 全部完成：成功 " + ok + " 张表，失败 " + fail + " 张表 ====="
+                + (cancelled ? "（已取消，未继续）" : "");
+        if (fail > 0) {
+            logError(summary);
+        } else {
+            log(summary);
+        }
+        if (!removed.isEmpty()) {
+            log("[清理] 已从待导入列表移除成功文件：" + names(removed));
+        }
+        if (fail > 0 && !kept.isEmpty()) {
+            log("[保留] 导入失败的文件仍在列表中，可调整后重试：" + names(kept));
+        }
+        tables.clear();
+        tables.addAll(kept);
+        for (TableOps.Table t : removed) {
+            byTable.remove(t);
+        }
+        fileModel.removeItems(removed);
+        setPageProgress(0);
+        status.setText("待导入 " + tables.size() + " 张表");
+        importBtn.setEnabled(connected && !tables.isEmpty());
+        refreshPreview();
+
+        StringBuilder msg = new StringBuilder("成功 ").append(ok).append(" 张表，失败 ")
+                .append(fail).append(" 张表。");
+        if (!removed.isEmpty()) {
+            msg.append(NEWLINE + "已从待导入列表移除 ").append(removed.size()).append(" 个成功文件。");
+        }
+        if (fail > 0) {
+            msg.append(NEWLINE + "失败文件保留在列表中，可调整后重试。");
+        }
+        msg.append(NEWLINE + "详见日志。");
+        return msg.toString();
+    }
+
+    /** Java 源里的换行转义容易被工具链吃掉，弹窗文案统一走这个常量。 */
+    private static final String NEWLINE = String.valueOf((char) 10);
+
+    private static String names(List<TableOps.Table> list) {
+        List<String> out = new ArrayList<String>();
+        for (TableOps.Table t : list) {
+            out.add(baseName(t.filepath));
+        }
+        return String.join("、", out);
+    }
+
     /** 导入在子线程跑，界面靠模态进度框报进度并可取消。 */
     public void startImport() {
         if (!connected || config == null) {
@@ -261,8 +342,7 @@ public final class MainFrame extends JFrame {
         setEnabledForRun(false);
         setPageProgress(0);
         Thread worker = new Thread(() -> {
-            int ok = 0;
-            int failed = 0;
+            List<ImportOutcome> outcomes = new ArrayList<ImportOutcome>();
             int done = 0;
             DbClient db = null;
             try {
@@ -288,9 +368,9 @@ public final class MainFrame extends JFrame {
                 try {
                     client.createTable(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, drop));
                 } catch (Exception e) {
-                    failed++;
                     final String message = e.getMessage();
                     SwingUtilities.invokeLater(() -> logError("建表失败 " + t.tableName + " — " + message));
+                    outcomes.add(new ImportOutcome(t.filepath, false));
                     continue;
                 }
                 progress.step("写入 " + t.tableName);
@@ -304,24 +384,23 @@ public final class MainFrame extends JFrame {
                                     SwingUtilities.invokeLater(() -> log(m));
                                 }
                             }, null);
-                    ok++;
                     final long rows = written;
                     SwingUtilities.invokeLater(() -> log("导入完成 " + label + " 写入 " + rows + " 行"));
                 } catch (Exception e) {
-                    failed++;
                     final String message = e.getMessage();
                     SwingUtilities.invokeLater(() -> logError("写入失败 " + t.tableName + " — " + message));
+                    outcomes.add(new ImportOutcome(t.filepath, false));
+                    continue;
                 }
+                outcomes.add(new ImportOutcome(t.filepath, true));
             }
             client.close();
-            final int okFinal = ok;
-            final int badFinal = failed;
+            final boolean cancelled = progress.isCancelled();
             SwingUtilities.invokeLater(() -> {
-                setPageProgress(0);
-                status.setText("导入完成 " + okFinal + " 张，失败 " + badFinal + " 张");
-                log(status.getText() + (progress.isCancelled() ? "（已取消，未继续）" : ""));
                 setEnabledForRun(true);
                 progress.close();
+                // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
+                inform(finishImport(outcomes, cancelled));
             });
         }, "excel2mysql-import");
         worker.setDaemon(true);
