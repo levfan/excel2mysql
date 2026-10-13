@@ -131,6 +131,8 @@ Python 线是否修，另议。
 | 文件表第一列 tooltip = 完整路径，包内文件为"包名!包内路径" | `main.py:1444-1446` | 已做（zipOrigin 一路带到 FileRowModel，之前算过却没地方用） |
 | SQL 表第一列 tooltip = 脚本完整路径 | `main.py:1215` | 已做 |
 | 窗口尺寸 1100×780 | `main.py:819` | 已做（之前是 1080×700） |
+| 文件选择框四档过滤器（Excel/ZIP、仅 Excel、仅 ZIP、所有文件）与对话框标题 | `main.py:1358-1361`、`1220` | 已做（SQL 页同样补"所有文件"一档） |
+| 文件区组框标题「待导入文件（双击表名/字段可编辑）」 | `main.py:895` | 已做 |
 | 窗口图标 | `main.py:1722` | 已做（源图仍只有 assets/app_icon.ico 一份，tools/export_icon_png.py 取其中 256×256 那张 PNG 随包） |
 
 真库回归（MySQL 8.0.46，口令只走命令行环境变量）：

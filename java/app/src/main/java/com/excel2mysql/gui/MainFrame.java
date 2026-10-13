@@ -304,6 +304,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             }
         });
         JScrollPane tableScroll = new JScrollPane(table);
+        tableScroll.setBorder(BorderFactory.createTitledBorder("待导入文件（双击表名/字段可编辑）"));
         tableScroll.setMinimumSize(new Dimension(300, 120));
 
         ddl.setEditable(false);
@@ -636,9 +637,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     private void chooseFiles() {
         JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("选择 Excel 文件或 ZIP 压缩包");
         chooser.setMultiSelectionEnabled(true);
-        chooser.setFileFilter(new FileNameExtensionFilter(
-                "Excel / 压缩包 (*.xlsx, *.xls, *.zip)", "xlsx", "xls", "zip"));
+        // 四档过滤器与 Python 侧一致：只给一档的话，想单看 zip 或单看 xls 的人筛不出来
+        chooser.setAcceptAllFileFilterUsed(true);
+        FileNameExtensionFilter excelZip = new FileNameExtensionFilter(
+                "Excel / ZIP (*.xlsx *.xls *.zip)", "xlsx", "xls", "zip");
+        chooser.addChoosableFileFilter(excelZip);
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter(
+                "Excel 文件 (*.xlsx *.xls)", "xlsx", "xls"));
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter(
+                "ZIP 压缩包 (*.zip)", "zip"));
+        chooser.setFileFilter(excelZip);
         if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
             log("未选择文件");
             return;

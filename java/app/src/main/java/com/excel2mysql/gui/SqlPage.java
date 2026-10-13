@@ -288,7 +288,9 @@ public final class SqlPage extends JPanel {
 
     private void chooseFiles() {
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
+        chooser.setDialogTitle("选择 SQL 脚本");
         chooser.setMultiSelectionEnabled(true);
+        chooser.setAcceptAllFileFilterUsed(true);
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
                 "SQL 脚本 (*.sql)", "sql"));
         if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) {
