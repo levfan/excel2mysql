@@ -622,14 +622,23 @@ public final class GuiMain {
         paths.add(a);
         paths.add(b);
 
-        if (page.addFiles(paths) != 2) {
-            problems.add("两个脚本应全部加载成功");
+        page.addFiles(paths);
+        if (page.entryCount() != 2) {
+            problems.add("两个脚本应全部加载成功，实际并入 " + page.entryCount() + " 个");
+        }
+        // 四个 SQL 任务都要走主窗口的任务位，标题得是 Python 的那句原话
+        if (!"正在读取 SQL 脚本…".equals(frame.lastTaskTitle())) {
+            problems.add("读取任务标题不对：" + frame.lastTaskTitle());
         }
         if (page.rowCount() != 3) {
             problems.add("表格按表名出行，应有 3 行，实际 " + page.rowCount());
         }
         if (!page.logPanel().contains("[已加载] a.sql：2 个表")) {
             problems.add("加载日志没报每个文件的表数");
+        }
+        // 任务日志按页分家：SQL 页读盘的那几行不该串到 Excel 页面板去
+        if (frame.logPanel().contains("[已加载] a.sql")) {
+            problems.add("SQL 页读取任务的日志漏到了 Excel 页");
         }
         page.addFiles(paths);
         if (!page.logPanel().contains("[跳过] 已在列表：a.sql")) {
@@ -645,6 +654,9 @@ public final class GuiMain {
         page.setPrefixText("ods_");
         if (page.applyPrefix() != null) {
             problems.add("合法前缀被拦住了");
+        }
+        if (!"正在改写脚本中的表名…".equals(frame.lastTaskTitle())) {
+            problems.add("加前缀任务标题不对：" + frame.lastTaskTitle());
         }
         String text = page.textOf(a);
         if (!text.contains("ods_t_order") || !text.contains("ods_plain")) {
@@ -673,6 +685,9 @@ public final class GuiMain {
         if (page.replaceFirstPrefix() != null) {
             problems.add("替换首个前缀被拦住");
         }
+        if (!"正在替换脚本中的表名前缀…".equals(frame.lastTaskTitle())) {
+            problems.add("换前缀任务标题不对：" + frame.lastTaskTitle());
+        }
         String after = page.textOf(a);
         if (!after.contains("change_t_order") || !after.contains("change_plain")) {
             problems.add("替换首段没改到表名：" + after);
@@ -684,8 +699,12 @@ public final class GuiMain {
             problems.add("ods_dim_x 的首段没被换掉：" + page.textOf(b));
         }
 
-        if (page.saveModified() != 2) {
-            problems.add("两个改过的脚本都该落盘");
+        page.saveModified();
+        if (page.isModified(a) || page.isModified(b)) {
+            problems.add("两个改过的脚本都该落盘并清掉已修改标记");
+        }
+        if (!"正在保存修改后的脚本…".equals(frame.lastTaskTitle())) {
+            problems.add("保存任务标题不对：" + frame.lastTaskTitle());
         }
         if (!page.logPanel().contains("[已保存] ")) {
             problems.add("落盘成功没有报出写了哪个文件");
@@ -694,11 +713,14 @@ public final class GuiMain {
         if (!new java.io.File(outA).isFile()) {
             problems.add("保存后没有生成副本：" + outA);
         }
-        if (page.isModified(a)) {
-            problems.add("落盘后还标记着已修改，下次会重复保存");
-        }
-        if (page.saveModified() != 0 || !page.logPanel().contains("[保存] 没有修改过的脚本文件")) {
+        // 没改动时再点一次要说清楚，不能静默返回
+        page.saveModified();
+        if (!page.logPanel().contains("[保存] 没有修改过的脚本文件")) {
             problems.add("没有改动时保存要如实说明，不能静默");
+        }
+        // SQL 页任务的日志要留在 SQL 页那块面板：漏到 Excel 页就等于用户找不到刚才那步
+        if (frame.logPanel().contains("[已保存] ")) {
+            problems.add("SQL 页任务的日志写到了 Excel 页面板");
         }
         if (!"x/y_prefix.sql".equals(com.excel2mysql.gui.SqlPage.modifiedPath("x/y.sql"))) {
             problems.add("副本文件名规则不对：" + com.excel2mysql.gui.SqlPage.modifiedPath("x/y.sql"));
