@@ -539,6 +539,28 @@ public final class GuiMain {
             problems.add("改了主机但提示条还是旧地址：" + frame.excelHintText());
         }
         frame.hostField().setText("127.0.0.1");
+        // 提示条要能真的按住拖选再复制（Python 那边是开了 TextSelectableByMouse 的 QLabel）
+        dragSelectable(frame.excelHint(), "Excel 页提示条", problems);
+        dragSelectable(frame.sqlPage().hintField(), "SQL 页提示条", problems);
+    }
+
+    /**
+     * 拖选复制的取证：运行时判"它是不是文本组件、能不能选出整行"，
+     * 不写成编译期依赖——换成 JLabel 后要的是这条断言变红，不是整包编不过。
+     */
+    private static void dragSelectable(java.awt.Component c, String who, List<String> problems) {
+        if (!(c instanceof javax.swing.text.JTextComponent)) {
+            problems.add(who + "不是可选字的文本组件，拖选复制根本做不到：" + c.getClass().getName());
+            return;
+        }
+        javax.swing.text.JTextComponent t = (javax.swing.text.JTextComponent) c;
+        if (t.isEditable()) {
+            problems.add(who + "还能编辑，那是输入框不是说明条");
+        }
+        t.selectAll();
+        if (t.getSelectedText() == null || !t.getSelectedText().equals(t.getText())) {
+            problems.add(who + "选不出整行文字：" + t.getSelectedText());
+        }
     }
 
     private static void import_finish(MainFrame frame, List<String> files, List<String> problems) {
