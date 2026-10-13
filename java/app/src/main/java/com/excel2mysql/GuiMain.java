@@ -165,6 +165,7 @@ public final class GuiMain {
                 ddl_dialog_and_widgets(frame, files, problems);
                 // 导入那条路的文案与计项口径
                 import_run(problems);
+                sql_run_connect_failure(problems);
                 // 子线程出意外时的兜底文案
                 task_crash(frame, problems);
                 // ZIP 展开、汇总计数与临时目录清理
@@ -1005,6 +1006,49 @@ public final class GuiMain {
         }
         if (!rec.saw("[连接失败] 无法连接到 testdb@127.0.0.1:1（用户 probe）", true)) {
             problems.add("连不上库时没写连接失败日志：" + rec.errors);
+        }
+    }
+
+    /**
+     * 「执行脚本到当前库」任务体的连不上库那一支：端口 1 保证秒失败，不需要真库也能把
+     * 这段代码真跑一遍——断的是 connFailed 标志、计数在连库前就算准、错误行按错误级报出。
+     */
+    private static void sql_run_connect_failure(List<String> problems) {
+        com.excel2mysql.core.Config cfg = new com.excel2mysql.core.Config();
+        cfg.host = "127.0.0.1";
+        cfg.port = 1;
+        cfg.user = "probe";
+        cfg.database = "testdb";
+        String nl = String.valueOf((char) 10);
+        List<com.excel2mysql.gui.SqlPage.Src> items =
+                new ArrayList<com.excel2mysql.gui.SqlPage.Src>();
+        items.add(new com.excel2mysql.gui.SqlPage.Src("x/a.sql",
+                "CREATE TABLE a (id INT);" + nl + "INSERT INTO a VALUES (1);" + nl, null));
+        Recorder rec = new Recorder();
+        com.excel2mysql.gui.SqlPage.RunResult res;
+        try {
+            res = com.excel2mysql.gui.SqlPage.runScripts(items, cfg, rec);
+        } catch (Throwable t) {
+            problems.add("连不上库时任务体不该把异常抛给调用方：" + t);
+            return;
+        }
+        if (!res.connFailed) {
+            problems.add("连不上库却没标 connFailed，收尾会重复报一遍汇总");
+        }
+        if (res.ok != 0 || res.fail != 0 || res.skipped != 0) {
+            problems.add("连不上库时三个计数都该是 0：" + res.ok + "/" + res.fail
+                    + "/" + res.skipped);
+        }
+        // 总项数在连库之前就要算准：边跑边加会让进度条倒退
+        if (rec.total != 2) {
+            problems.add("两个脚本的语句计数应为 2，实际 " + rec.total);
+        }
+        if (!rec.saw("[连接失败] 无法连接到 testdb@127.0.0.1:1（用户 probe），剩余脚本均未执行",
+                true)) {
+            problems.add("执行任务没报出连不上的地址与用户：" + rec.errors);
+        }
+        if (rec.saw("[提交] a.sql", false)) {
+            problems.add("根本没连上库，却报了提交成功");
         }
     }
 
