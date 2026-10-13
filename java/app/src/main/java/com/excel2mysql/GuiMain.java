@@ -256,6 +256,17 @@ public final class GuiMain {
         if (dlg.tabTitles().size() != results.size()) {
             problems.add("结构弹窗标签页数不等于表数：" + dlg.tabTitles().size());
         }
+        if (!"字段名(拼音/首字母)".equals(dlg.columnHeader(0, 1))
+                || !"字段注释(中文表头)".equals(dlg.columnHeader(0, 2))) {
+            problems.add("结构弹窗表头被简写了：" + dlg.columnHeader(0, 1) + " / "
+                    + dlg.columnHeader(0, 2));
+        }
+        if (!dlg.cellEditable(0, 0, 4)) {
+            problems.add("「最大字节长度」列被禁了编辑，Python 那边只是不回写");
+        }
+        if (!dlg.cellEditable(0, 0, 1)) {
+            problems.add("字段名列不可编辑，弹窗就白摆");
+        }
         com.excel2mysql.core.Infer.Column c0 = frame.tables().get(0).columns.get(0);
         String fieldBefore = c0.field;
         String typeBefore = c0.type;
