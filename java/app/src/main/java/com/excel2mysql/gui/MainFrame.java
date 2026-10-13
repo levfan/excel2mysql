@@ -66,14 +66,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return c;
         }
     };
-    private final JTextArea ddl = new JTextArea();
+    private String ddlText = "";
     private final LogPanel logPanel = new LogPanel();
     private JLabel status;
     private JButton preview;
     private JButton connect;
     private JButton importBtn;
     private javax.swing.JTextField hostField;
-    private javax.swing.JTextField portField;
+    private javax.swing.JSpinner portField;
     private javax.swing.JTextField userField;
     private javax.swing.JPasswordField passField;
     private javax.swing.JComboBox<String> dbCombo;
@@ -197,7 +197,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JButton structure = new JButton("生成表结构预览");
         structure.addActionListener(e -> previewStructure());
         preview = new JButton("预览 DDL");
-        preview.addActionListener(e -> refreshPreview());
+        preview.addActionListener(e -> previewDdl());
         connect = new JButton("连接并加载库");
         connect.addActionListener(e -> {
             String failure = loadDatabases();
@@ -249,7 +249,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 refreshDbLabels();
             }
         };
-        portField = new javax.swing.JTextField(5);
+        portField = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(
+                Integer.valueOf(3306), Integer.valueOf(1), Integer.valueOf(65535),
+                Integer.valueOf(1)));
+        portField.setPreferredSize(new Dimension(70, 24));
         userField = new javax.swing.JTextField(10);
         passField = new javax.swing.JPasswordField(10);
         dbCombo = new javax.swing.JComboBox<String>();
@@ -259,10 +262,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         dbCombo.setPreferredSize(new Dimension(180, 24));
         dbCombo.addActionListener(e -> refreshDbLabels());
         hostField.setText("127.0.0.1");
-        portField.setText("3306");
+
         userField.setText("root");
         hostField.getDocument().addDocumentListener(refresher);
-        portField.getDocument().addDocumentListener(refresher);
+        portField.getModel().addChangeListener(new javax.swing.event.ChangeListener() {
+            @Override
+            public void stateChanged(javax.swing.event.ChangeEvent e) {
+                refreshDbLabels();
+            }
+        });
         fields.add(new JLabel("主机："));
         fields.add(hostField);
         fields.add(new JLabel("端口："));
@@ -303,28 +311,32 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 }
             }
         });
+        int[] widths = {320, 200, 280, 80, 90, 160};
+        for (int i = 0; i < widths.length && i < table.getColumnCount(); i++) {
+            table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
+        }
+        // 列宽可自由拖动，最后一列自动吃掉剩余空间（Qt 的 Interactive + stretchLastSection）
+        table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN);
         JScrollPane tableScroll = new JScrollPane(table);
         tableScroll.setBorder(BorderFactory.createTitledBorder("待导入文件（双击表名/字段可编辑）"));
         tableScroll.setMinimumSize(new Dimension(300, 120));
 
-        ddl.setEditable(false);
-        ddl.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
-        JScrollPane ddlScroll = new JScrollPane(ddl);
-        ddlScroll.setBorder(BorderFactory.createTitledBorder("建表语句预览"));
-        ddlScroll.setMinimumSize(new Dimension(300, 120));
-
         JScrollPane logScroll = new JScrollPane(logPanel);
         logScroll.setBorder(BorderFactory.createTitledBorder("日志"));
 
-        JSplitPane right = new JSplitPane(JSplitPane.VERTICAL_SPLIT, ddlScroll, logScroll);
-        right.setResizeWeight(0.62);
-        JSplitPane center = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, tableScroll, right);
-        center.setResizeWeight(0.52);
-
-        // 三段都能拖着调高度：拖拽区被压到 0 就等于没有，所以给它设了最小高度
-        JSplitPane stacked = new JSplitPane(JSplitPane.VERTICAL_SPLIT, drop, center);
-        stacked.setResizeWeight(0.14);
-        stacked.setDividerLocation(96);
+        // 三段纵向分栏：拖拽区 / 文件表 / 日志，段数、比例、把手宽度都照 main.py:964-973。
+        // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
+        drop.setMinimumSize(new Dimension(10, 60));
+        tableScroll.setMinimumSize(new Dimension(10, 80));
+        logScroll.setMinimumSize(new Dimension(10, 80));
+        JSplitPane lower = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScroll, logScroll);
+        lower.setDividerSize(6);
+        lower.setResizeWeight(0.46);
+        JSplitPane stacked = new JSplitPane(JSplitPane.VERTICAL_SPLIT, drop, lower);
+        stacked.setDividerSize(6);
+        stacked.setResizeWeight(0.18);
+        stacked.setDividerLocation(130);
+        lower.setDividerLocation(250);
 
         pageProgress = new javax.swing.JProgressBar();
         pageProgress.setPreferredSize(new Dimension(200, 18));
@@ -339,11 +351,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     public Config currentConfig() {
         Config cfg = new Config();
         cfg.host = hostField.getText().trim();
-        try {
-            cfg.port = Integer.parseInt(portField.getText().trim());
-        } catch (NumberFormatException e) {
-            cfg.port = -1;            // 交给下游按"连不上"处理，日志里会带上端口原文
-        }
+        cfg.port = ((Number) portField.getValue()).intValue();
         cfg.user = userField.getText().trim();
         cfg.password = new String(passField.getPassword());
         cfg.database = selectedDatabase();
@@ -438,7 +446,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return;
         }
         String head = "当前目标库：" + db + "（" + hostField.getText().trim() + ":"
-                + portField.getText().trim() + "）——";
+                + portField.getValue() + "）——";
         impHint.setOk(head + "Excel 数据将导入到这个库");
         if (sqlPage != null) {
             sqlPage.setHint(true, head + "SQL 脚本将执行到这个库");
@@ -895,18 +903,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
     }
 
-    /** 表名可能在界面上被改过口径（前缀、主键勾选），预览每次都按当前状态重建。 */
+    /** 表名可能在界面上被改过口径（前缀、主键勾选），DDL 每次都按当前状态重算。 */
     public void refreshPreview() {
         StringBuilder sb = new StringBuilder();
         for (TableOps.Table t : tables) {
             if (sb.length() > 0) {
                 sb.append("\n\n");
             }
-            sb.append(Ddl.buildDdl(t.tableName, t.tableComment, t.columns,
-                    dropExisting != null && dropExisting.isSelected()));
+            sb.append(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, dropIfExistsNow()));
         }
-        ddl.setText(sb.toString());
-        ddl.setCaretPosition(0);
+        ddlText = sb.toString();
+    }
+
+    /** 勾选状态既影响「预览 DDL」弹窗，也影响真实导入，两处读同一个判定。 */
+    private boolean dropIfExistsNow() {
+        return dropExisting != null && dropExisting.isSelected();
     }
 
     public List<TableOps.Table> tables() {
@@ -946,9 +957,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return true;
     }
 
-    public String ddlText() {
-        return ddl.getText();
-    }
+
 
     public String statusText() {
         return status.getText();
@@ -959,7 +968,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         byTable.clear();
         fileModel.clear();
         zipOrigin.clear();
-        ddl.setText("");
+        ddlText = "";
         status.setText("尚未添加文件");
         setPageProgress(0);
         log("已清空");
@@ -1047,6 +1056,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return pageProgress == null ? -1 : pageProgress.getValue();
     }
 
+    /** 自检与命令行入口读得到这几个控件，才谈得上验它们的配置。 */
+    public javax.swing.JTable fileTable() {
+        return table;
+    }
+
+    public javax.swing.JSpinner portSpinner() {
+        return portField;
+    }
+
     public javax.swing.JTextField hostField() {
         return hostField;
     }
@@ -1103,6 +1121,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 + (r.skipped.isEmpty() ? "" : "，跳过 " + r.skipped.size() + " 张"));
         fileModel.refresh();
         refreshPreview();
+    }
+
+    /** 一张表一个标签页地看建表语句（对应 main.py:1528-1533 的 on_preview_ddl）。 */
+    public void previewDdl() {
+        if (tables.isEmpty()) {
+            inform(NO_FILE_HINT);
+            return;
+        }
+        refreshPreview();
+        new DDLDialog(this, tables, dropIfExistsNow()).setVisible(true);
+    }
+
+    /** 自检与非界面调用用：当前状态下的全部建表语句。 */
+    public String ddlText() {
+        return ddlText;
     }
 
     /** 结构预览：一张表一个标签页，改完确认才整体回写。 */

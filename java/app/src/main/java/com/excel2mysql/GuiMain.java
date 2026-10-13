@@ -124,6 +124,8 @@ public final class GuiMain {
                 import_finish(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
+                // DDL 逐表分页、文件表列宽、端口范围
+                ddl_dialog_and_widgets(frame, files, problems);
                 // 导入那条路的文案与计项口径
                 import_run(problems);
                 // 子线程出意外时的兜底文案
@@ -908,6 +910,70 @@ public final class GuiMain {
         }
         if (!rec.saw("[连接失败] 无法连接到 testdb@127.0.0.1:1（用户 probe）", true)) {
             problems.add("连不上库时没写连接失败日志：" + rec.errors);
+        }
+    }
+
+    private static void ddl_dialog_and_widgets(MainFrame frame, List<String> files,
+                                                List<String> problems) {
+        // 前面的用例跑完会把列表清空，这里自己重新加载，不依赖上一个用例留下的状态
+        frame.clearAll();
+        frame.addFiles(files);
+        int n = frame.tables().size();
+        if (n == 0) {
+            problems.add("DDL 弹窗自检没有表可看");
+            return;
+        }
+        com.excel2mysql.gui.DDLDialog plain =
+                new com.excel2mysql.gui.DDLDialog(null, frame.tables(), false);
+        try {
+            if (plain.tabCount() != n) {
+                problems.add("DDL 弹窗应一张表一页：" + plain.tabCount() + " / " + n + " 张表");
+            }
+            String first = plain.tabText(0);
+            if (!first.contains("CREATE TABLE")) {
+                problems.add("DDL 弹窗第一页没有建表语句");
+            }
+            if (first.contains("DROP TABLE")) {
+                problems.add("没勾覆盖已存在表，DDL 里却出现 DROP");
+            }
+        } finally {
+            plain.dispose();
+        }
+        com.excel2mysql.gui.DDLDialog dropping =
+                new com.excel2mysql.gui.DDLDialog(null, frame.tables(), true);
+        try {
+            if (!dropping.tabText(0).startsWith("DROP TABLE IF EXISTS")) {
+                problems.add("勾了覆盖已存在表，DDL 第一页却没有以 DROP 开头");
+            }
+        } finally {
+            dropping.dispose();
+        }
+
+        int[] want = {320, 200, 280, 80, 90, 160};
+        javax.swing.table.TableColumnModel cols = frame.fileTable().getColumnModel();
+        for (int i = 0; i < want.length && i < cols.getColumnCount(); i++) {
+            if (cols.getColumn(i).getPreferredWidth() != want[i]) {
+                problems.add("文件表第 " + (i + 1) + " 列宽不是 " + want[i] + "，实际 "
+                        + cols.getColumn(i).getPreferredWidth());
+            }
+        }
+        if (frame.fileTable().getAutoResizeMode()
+                != javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN) {
+            problems.add("文件表最后一列没有吃掉剩余宽度");
+        }
+
+        javax.swing.SpinnerNumberModel port =
+                (javax.swing.SpinnerNumberModel) frame.portSpinner().getModel();
+        if (((Number) port.getMinimum()).intValue() != 1
+                || ((Number) port.getMaximum()).intValue() != 65535) {
+            problems.add("端口框没有 1-65535 的范围约束：" + port.getMinimum() + "-"
+                    + port.getMaximum());
+        }
+        if (((Number) port.getValue()).intValue() != 3306) {
+            problems.add("端口默认值不是 3306：" + port.getValue());
+        }
+        if (frame.currentConfig().port != 3306) {
+            problems.add("界面上的端口没进连接配置：" + frame.currentConfig().port);
         }
     }
 }
