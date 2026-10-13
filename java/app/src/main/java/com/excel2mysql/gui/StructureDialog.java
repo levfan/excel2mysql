@@ -1,18 +1,17 @@
 package com.excel2mysql.gui;
 
-import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.TableBuilder;
 import com.excel2mysql.core.TableOps;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JDialog;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTable;
-import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -21,8 +20,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 结构弹窗：双击文件表某行打开，改字段名/注释/类型/主键。
- * 对应 Python 侧 main.py:1619-1693 的 StructureDialog。
+ * 结构弹窗：一张表一个标签页，改字段名/注释/类型/主键。
+ * 对应 Python 侧 main.py:1619-1693 的 StructureDialog（同样是全表标签页，不是单表）。
  *
  * 第 4 列"最大字节长度"只显示不可回写——它是推断的中间量，改了不会改类型，
  * 只会让"改完看起来对、实际按新类型建表"这种错觉发生（Python 侧同样不回写）。
@@ -30,112 +29,168 @@ import java.util.List;
 public final class StructureDialog extends JDialog {
 
     private static final String[] COLUMNS = {"主键", "字段名", "注释", "类型", "最大字节长度"};
+    private static final String TIP =
+            "勾选一列或多列作为主键（多列即组合主键，主键约束至多一个）；"
+            + "主键需全列非空且组合唯一，全部不勾选则不设主键";
 
-    private final JTable table;
-    private final DefaultTableModel model;
-    private final List<Infer.Column> columns;
-    private final TableOps.Table owner;
+    /** 一个标签页背后的一份编辑状态。 */
+    private static final class Editor {
+        final TableOps.Table table;
+        final List<List<Object>> rows;
+        final DefaultTableModel model;
+
+        Editor(TableOps.Table table, List<List<Object>> rows) {
+            this.table = table;
+            this.rows = rows;
+            this.model = new DefaultTableModel(COLUMNS, 0) {
+                @Override
+                public Class<?> getColumnClass(int col) {
+                    return col == 0 ? Boolean.class : String.class;
+                }
+
+                @Override
+                public boolean isCellEditable(int row, int col) {
+                    return col <= 3;
+                }
+            };
+            for (Infer.Column c : table.columns) {
+                this.model.addRow(new Object[]{Boolean.valueOf(c.primaryKey), c.field, c.comment,
+                        c.type, String.valueOf(c.maxLen)});
+            }
+        }
+
+        /** 只收集到副本，不碰 table.columns——校验没过就不能让改动落到表定义上。 */
+        List<Infer.Column> stage() {
+            List<Infer.Column> staged = new ArrayList<Infer.Column>();
+            for (int i = 0; i < table.columns.size(); i++) {
+                Infer.Column c = table.columns.get(i).copied();
+                Object field = model.getValueAt(i, 1);
+                if (field != null && !String.valueOf(field).trim().isEmpty()) {
+                    c.field = String.valueOf(field).trim();
+                }
+                c.comment = String.valueOf(model.getValueAt(i, 2));
+                Object type = model.getValueAt(i, 3);
+                if (type != null && !String.valueOf(type).trim().isEmpty()) {
+                    c.type = String.valueOf(type).trim();
+                }
+                c.primaryKey = Boolean.TRUE.equals(model.getValueAt(i, 0));
+                staged.add(c);
+            }
+            return staged;
+        }
+    }
+
+    private final List<Editor> editors = new ArrayList<Editor>();
     private final LogPanel logPanel;
     private boolean confirmed;
 
-    public StructureDialog(Frame ownerFrame, TableOps.Table table0, TableBuilder.Result result,
-                           LogPanel logPanel) {
-        super(ownerFrame, "表结构 — " + table0.tableName, true);
-        this.owner = table0;
-        this.columns = new ArrayList<Infer.Column>(table0.columns);
+    public StructureDialog(Frame ownerFrame, List<TableBuilder.Result> results, LogPanel logPanel) {
+        super(ownerFrame, "表结构预览（可编辑）", true);
         this.logPanel = logPanel;
-        model = new DefaultTableModel(COLUMNS, 0) {
-            @Override
-            public Class<?> getColumnClass(int col) {
-                return col == 0 ? Boolean.class : String.class;
-            }
 
-            @Override
-            public boolean isCellEditable(int row, int col) {
-                return col <= 3;
-            }
-        };
-        for (Infer.Column c : columns) {
-            model.addRow(new Object[]{Boolean.valueOf(c.primaryKey), c.field, c.comment,
-                    c.type, String.valueOf(c.maxLen)});
+        JTabbedPane tabs = new JTabbedPane();
+        for (TableBuilder.Result r : results) {
+            Editor ed = new Editor(r.table, r.rows);
+            editors.add(ed);
+            JTable table = new JTable(ed.model);
+            table.setFillsViewportHeight(true);
+            table.setRowHeight(22);
+            table.getColumnModel().getColumn(0).setPreferredWidth(46);
+            table.getColumnModel().getColumn(4).setPreferredWidth(96);
+            JScrollPane scroll = new JScrollPane(table);
+            scroll.setPreferredSize(new Dimension(900, 420));
+            tabs.addTab(r.table.tableName, scroll);
         }
-        table = new JTable(model);
-        table.setFillsViewportHeight(true);
-        table.getColumnModel().getColumn(0).setPreferredWidth(46);
-        table.getColumnModel().getColumn(4).setPreferredWidth(96);
 
         JButton ok = new JButton("确定");
-        ok.addActionListener(e -> applyAndClose());
+        ok.addActionListener(e -> confirmClicked());
         JButton cancel = new JButton("取消");
         cancel.addActionListener(e -> dispose());
         JPanel buttons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 4));
         buttons.add(ok);
         buttons.add(cancel);
 
+        JLabel tip = new JLabel(TIP);
+        tip.setForeground(new java.awt.Color(0x66, 0x66, 0x66));
+
         JPanel body = new JPanel(new BorderLayout(8, 8));
         body.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-        JScrollPane scroll = new JScrollPane(table);
-        scroll.setPreferredSize(new Dimension(700, 360));
-        body.add(scroll, BorderLayout.CENTER);
+        body.add(tip, BorderLayout.NORTH);
+        body.add(tabs, BorderLayout.CENTER);
         body.add(buttons, BorderLayout.SOUTH);
         setContentPane(body);
-        pack();
+        setSize(980, 640);
         setLocationRelativeTo(ownerFrame);
     }
 
+    private final List<String> problems = new ArrayList<String>();
+
     /**
-     * 回写只取字段名/注释/类型与主键勾选，第 4 列不参与。
-     * 主键至少要过一遍校验：类型不符、有空值、组合不唯一，弹窗拦住不让带着错的主键去建表。
+     * 先把每张表的编辑收到副本并全部校验，通过后才统一写回：
+     * 一张表的主键无效不能让前面已写回的表停在改了一半的状态。
      */
-    private void applyAndClose() {
-        for (int i = 0; i < columns.size(); i++) {
-            Infer.Column c = columns.get(i);
-            c.field = String.valueOf(model.getValueAt(i, 1));
-            c.comment = String.valueOf(model.getValueAt(i, 2));
-            c.type = String.valueOf(model.getValueAt(i, 3));
-            c.primaryKey = Boolean.TRUE.equals(model.getValueAt(i, 0));
-        }
-        owner.columns.clear();
-        owner.columns.addAll(columns);
-        List<String> problems = checkPrimaryKey();
-        if (!problems.isEmpty()) {
-            for (String p : problems) {
-                if (logPanel != null) { logPanel.error("主键设置无效：" + p); }
+    private boolean applyEdits() {
+        problems.clear();
+        List<List<Infer.Column>> staged = new ArrayList<List<Infer.Column>>();
+        for (Editor ed : editors) {
+            List<Infer.Column> cols = ed.stage();
+            staged.add(cols);
+            String bad = TableBuilder.validatePrimaryKey(ed.rows, cols);
+            if (!bad.isEmpty()) {
+                problems.add("表「" + ed.table.tableName + "」：" + bad);
             }
-            javax.swing.JOptionPane.showMessageDialog(this, String.join("\n", problems),
-                    "主键设置无效", javax.swing.JOptionPane.WARNING_MESSAGE);
-            return;
+        }
+        if (!problems.isEmpty()) {
+            for (String pr : problems) {
+                if (logPanel != null) {
+                    logPanel.error("主键设置无效：" + pr);
+                }
+            }
+            return false;
+        }
+        for (int i = 0; i < editors.size(); i++) {
+            TableOps.Table t = editors.get(i).table;
+            t.columns.clear();
+            t.columns.addAll(staged.get(i));
         }
         confirmed = true;
         dispose();
+        return true;
     }
 
-    private List<String> checkPrimaryKey() {
-        List<String> problems = new ArrayList<String>();
-        List<Integer> pk = new ArrayList<Integer>();
-        for (int i = 0; i < columns.size(); i++) {
-            if (columns.get(i).primaryKey) {
-                pk.add(Integer.valueOf(i));
-            }
+    /** 确定按钮的真实路径：校验不过要弹窗拦住，并让弹窗保持在编辑态。 */
+    private void confirmClicked() {
+        if (applyEdits()) {
+            return;
         }
-        if (pk.isEmpty()) {
-            return problems;
-        }
-        for (Integer i : pk) {
-            Infer.Column c = columns.get(i.intValue());
-            if (!Infer.pkTypeOk(c.type == null ? "" : c.type)) {
-                problems.add("字段 " + c.field + " 类型 " + c.type + " 不能作为主键"
-                        + "（可用 INT/BIGINT 或长度 ≤255 的 VARCHAR/CHAR）");
-            }
-        }
-        return problems;
+        javax.swing.JOptionPane.showMessageDialog(this,
+                String.join("\n", problems) + "\n\n请调整主键勾选或字段类型后重试。",
+                "主键设置无效", javax.swing.JOptionPane.WARNING_MESSAGE);
     }
 
     public boolean isConfirmed() {
         return confirmed;
     }
 
-    public String ddlPreview() {
-        return Ddl.buildDdl(owner.tableName, owner.tableComment, owner.columns, false);
+    /** 供自检直接驱动"确定"背后的逻辑，不必真把模态框摆出来。 */
+    public List<String> tabTitles() {
+        List<String> out = new ArrayList<String>();
+        for (Editor ed : editors) {
+            out.add(ed.table.tableName);
+        }
+        return out;
+    }
+
+    public void setModelValue(int tabIndex, int row, int col, Object value) {
+        editors.get(tabIndex).model.setValueAt(value, row, col);
+    }
+
+    /** 走同一条 applyEdits，只是不弹模态框——自检在 EDT 上，弹窗会把自己卡死。 */
+    public boolean pressOk() {
+        return applyEdits();
+    }
+
+    public List<String> problems() {
+        return problems;
     }
 }

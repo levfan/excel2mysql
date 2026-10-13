@@ -405,6 +405,15 @@ public final class MainFrame extends JFrame {
         return tables;
     }
 
+    /** 结构弹窗要的是"表定义 + 数据行"，数据行只存在 Result 里，按当前表顺序给出去。 */
+    public List<TableBuilder.Result> results() {
+        List<TableBuilder.Result> out = new ArrayList<TableBuilder.Result>();
+        for (TableOps.Table t : tables) {
+            out.add(byTable.get(t));
+        }
+        return out;
+    }
+
     public FileRowModel fileModel() {
         return fileModel;
     }
@@ -416,7 +425,9 @@ public final class MainFrame extends JFrame {
             return false;
         }
         FileRowModel.Item item = fileModel.itemAt(row);
-        StructureDialog dialog = new StructureDialog(this, item.table, item.result, null);
+        List<TableBuilder.Result> one = new ArrayList<TableBuilder.Result>();
+        one.add(item.result);
+        StructureDialog dialog = new StructureDialog(this, one, logPanel);
         dialog.setVisible(true);
         if (!dialog.isConfirmed()) {
             return false;

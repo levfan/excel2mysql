@@ -240,18 +240,22 @@ public final class TableBuilder {
         if (pkFields.isEmpty()) {
             r.pkReason = "结构定义中未标记主键";
         } else {
-            String[] check = validatePrimaryKey(headers, rows, r.table.columns);
+            String bad = validatePrimaryKey(rows, r.table.columns);
             r.pkReason = "结构定义（元数据 Sheet）指定";
-            if (!check[0].isEmpty()) {
-                r.pkReason += "；注意：" + check[0];
+            if (!bad.isEmpty()) {
+                r.pkReason += "；注意：" + bad;
             }
         }
         return r;
     }
 
-    /** 返回 {"", ""} 表示可用；第一个元素非空时是问题说明。 */
-    private String[] validatePrimaryKey(List<Object> headers, List<List<Object>> rows,
-                                        List<Infer.Column> columns) {
+    /**
+     * 主键可用性校验：空串表示可用，非空是问题说明。
+     * 结构弹窗改完勾选也要过同一条，所以这里公开——两处各写一套校验，
+     * 弹窗放行的主键到建表时才发现不能用，用户只能来回猜。
+     */
+    public static String validatePrimaryKey(List<List<Object>> rows,
+                                            List<Infer.Column> columns) {
         List<Integer> idx = new ArrayList<Integer>();
         for (int i = 0; i < columns.size(); i++) {
             if (columns.get(i).primaryKey) {
@@ -259,17 +263,17 @@ public final class TableBuilder {
             }
         }
         if (idx.isEmpty()) {
-            return new String[]{"", ""};
+            return "";
         }
         for (Integer i : idx) {
             Infer.Column c = columns.get(i.intValue());
             if (!Infer.pkTypeOk(c.type == null ? "" : c.type)) {
-                return new String[]{"字段 " + c.field + " 类型 " + c.type
-                        + " 不能作为主键（可用 INT/BIGINT 或长度 ≤255 的 VARCHAR/CHAR）", ""};
+                return "字段 " + c.field + " 类型 " + c.type
+                        + " 不能作为主键（可用 INT/BIGINT 或长度 ≤255 的 VARCHAR/CHAR）";
             }
         }
         if (rows.isEmpty()) {
-            return new String[]{"没有数据行，无法校验主键", ""};
+            return "没有数据行，无法校验主键";
         }
         Set<String> seen = new LinkedHashSet<String>();
         for (int r = 0; r < rows.size(); r++) {
@@ -278,18 +282,18 @@ public final class TableBuilder {
                 List<Object> row = rows.get(r);
                 Object v = i.intValue() < row.size() ? row.get(i.intValue()) : null;
                 if (isNullish(v)) {
-                    return new String[]{"第 " + (r + 1) + " 行存在空值，主键字段不允许为空", ""};
+                    return "第 " + (r + 1) + " 行存在空值，主键字段不允许为空";
                 }
                 if (v instanceof String && Names.pyStrip((String) v).isEmpty()) {
-                    return new String[]{"第 " + (r + 1) + " 行存在空白值，主键字段不允许为空", ""};
+                    return "第 " + (r + 1) + " 行存在空白值，主键字段不允许为空";
                 }
                 parts.add(Infer.pkValueKey(v));
             }
             if (!seen.add(join(parts, "\u001f"))) {
-                return new String[]{"第 " + (r + 1) + " 行主键组合值重复，主键字段组合必须唯一", ""};
+                return "第 " + (r + 1) + " 行主键组合值重复，主键字段组合必须唯一";
             }
         }
-        return new String[]{"", ""};
+        return "";
     }
 
     private static String join(List<String> parts, String sep) {

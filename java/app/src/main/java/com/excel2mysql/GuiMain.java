@@ -104,6 +104,8 @@ public final class GuiMain {
                 }
                 // 结构弹窗要能真的改到表定义：改字段类型后 DDL 必须跟着变
                 table_select_for_dialog(frame, problems);
+                // 多表标签页弹窗：校验不过不能先写回，否则表定义停在改了一半的状态
+                structure_dialog(frame, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
                 // 比少一个按钮更糟——用户会以为是自己操作错了
                 for (javax.swing.AbstractButton b : frame.buttons()) {
@@ -196,5 +198,49 @@ public final class GuiMain {
         }
         first.type = beforeType;
         frame.refreshPreview();
+    }
+
+    /**
+     * 结构弹窗的三件事：标签页一张表一页、非法主键拦住且不写回、合法改动确实落库到表定义。
+     * 和 Python 侧同一条约束——先收副本、全校验通过再统一写回。
+     */
+    private static void structure_dialog(MainFrame frame, List<String> problems) {
+        java.util.List<com.excel2mysql.core.TableBuilder.Result> results = frame.results();
+        if (results.size() != frame.tables().size() || results.contains(null)) {
+            problems.add("results() 与表数量不一致，结构弹窗拿不到数据行");
+            return;
+        }
+        com.excel2mysql.gui.StructureDialog dlg =
+                new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
+        if (dlg.tabTitles().size() != results.size()) {
+            problems.add("结构弹窗标签页数不等于表数：" + dlg.tabTitles().size());
+        }
+        com.excel2mysql.core.Infer.Column c0 = frame.tables().get(0).columns.get(0);
+        String fieldBefore = c0.field;
+        String typeBefore = c0.type;
+        boolean pkBefore = c0.primaryKey;
+
+        dlg.setModelValue(0, 0, 3, "LONGTEXT");
+        dlg.setModelValue(0, 0, 0, Boolean.TRUE);
+        if (dlg.pressOk()) {
+            problems.add("LONGTEXT 勾成主键却被放行，主键校验没起作用");
+        }
+        if (frame.tables().get(0).columns.get(0) != c0) {
+            problems.add("校验没过却已写回新列对象，表定义停在改了一半的状态");
+        }
+        if (!fieldBefore.equals(c0.field) || !typeBefore.equals(c0.type)
+                || c0.primaryKey != pkBefore) {
+            problems.add("校验没过但字段名/类型/主键已经被改动");
+        }
+
+        String probe = "自检注释";
+        dlg.setModelValue(0, 0, 2, probe);
+        dlg.setModelValue(0, 0, 3, typeBefore);
+        dlg.setModelValue(0, 0, 0, Boolean.valueOf(pkBefore));
+        if (!dlg.pressOk()) {
+            problems.add("合法改动被拦住：" + String.join(" | ", dlg.problems()));
+        } else if (!probe.equals(frame.tables().get(0).columns.get(0).comment)) {
+            problems.add("弹窗确认后注释没写回表定义");
+        }
     }
 }

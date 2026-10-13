@@ -75,6 +75,20 @@ public final class Infer {
         public boolean primaryKey;
         public Boolean nullable;
 
+        /** 结构弹窗用的副本：校验通过前先在副本上改，避免无效主键污染表定义。 */
+        public Column copied() {
+            Column n = new Column();
+            n.field = field;
+            n.comment = comment;
+            n.type = type;
+            n.maxLen = maxLen;
+            n.typeNote = typeNote;
+            n.varcharN = varcharN;
+            n.primaryKey = primaryKey;
+            n.nullable = nullable;
+            return n;
+        }
+
         public String toJsonish() {
             return field + "|" + type + "|" + maxLen;
         }
