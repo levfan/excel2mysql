@@ -140,9 +140,14 @@ def count_stubs(path):
 def launcher_text(version):
     """生成启动脚本。
 
-    这里绝不能用 % 格式化拼字符串：批处理里 %% 与 % 的含义不同，
-    一旦只有某几行走过格式化，其余的 %% 会原样落进脚本，变成"成功也报 FAILED"。
-    所以统一用占位符替换，正文里只写单个 %。
+    两条都是踩过的坑：
+    1. 不能用 % 格式化拼字符串——批处理里 %% 与 % 含义不同，只有某几行走过格式化的话，
+       其余的 %% 会原样落进脚本，变成"成功也报 FAILED"。所以统一用占位符替换。
+    2. 脚本正文一律 ASCII，不写中文注释。cmd 按当前代码页逐字节解析，
+       UTF-8 中文里出现会被当成命令分隔符的字节时，一行 rem 能被拆成"命令找不到"，
+       而这台机器与目标机的代码页并不一样。中文说明放 README.txt。
+    3. 无参数也必须开图形界面：双击 启动.bat 的人要的是窗口，不是用法清单。
+       拖文件进来时把文件转给界面（GuiMain 收路径参数并加载）。
     """
     jar = JAR_NAME_TMPL % version
     lines = [
@@ -152,24 +157,23 @@ def launcher_text(version):
         'cd /d "%~dp0"',
         'set "JAVA=%~dp0jre\\bin\\java.exe"',
         'if not exist "%JAVA%" (',
-        "    echo [ERROR] 包里的 jre\\bin\\java.exe 不见了，请重新解压整个目录。",
+        "    echo [ERROR] missing jre\\bin\\java.exe - unpack the whole folder.",
         "    pause",
         "    exit /b 2",
         ")",
-        "rem 用包内运行时，不碰系统 PATH 里的 java：目标机可能根本没装 JDK，也可能装的是别的版本",
-        "rem 参数原样转发：把 .xlsx/.xls/.zip 拖到本脚本图标上就能直接加载",
         'if not exist "__JAR__" (',
-        "    echo [ERROR] 包里的 __JAR__ 不见了。",
+        "    echo [ERROR] missing __JAR__ in this folder.",
         "    pause",
         "    exit /b 3",
         ")",
-        '"%JAVA%" -Dfile.encoding=UTF-8 -jar "__JAR__" %*',
+        "rem Always start the GUI. Dropped files are forwarded to the window as paths.",
+        '"%JAVA%" -Dfile.encoding=UTF-8 -jar "__JAR__" --gui %*',
         'set "RC=%ERRORLEVEL%"',
         'if not "%RC%"=="0" (',
         "    echo [FAILED] exit code %RC%",
         "    pause",
         ")",
-        "if \"%1\"==\"\" pause",
+        'if "%~1"=="" pause',
         "exit /b %RC%",
         "",
     ]
@@ -320,7 +324,18 @@ def main():
          % (removed, stubs_src, pdb))
 
     with open(os.path.join(dist, "启动.bat"), "wb") as fh:
-        fh.write(launcher_text(version))
+        bat = launcher_text(version)
+        # 这两条各对应一个刚踩过的坑：漏了 --gui，双击只会打印 CLI 用法；
+        # 正文混进中文，cmd 按代码页逐字节解析时能把一行 rem 拆成"命令找不到"。
+        if b"--gui" not in bat:
+            fail("启动.bat 没有 --gui：双击 启动.bat 打开的会是用法清单，不是窗口")
+        non_ascii = sum(1 for b in bat if b > 127)
+        if non_ascii:
+            fail("启动.bat 里有 %d 个非 ASCII 字节：目标机代码页不同会被 cmd 解析错" % non_ascii)
+        if b"\r\n" not in bat or bat.count(b"\n") != bat.count(b"\r\n"):
+            fail("启动.bat 行尾不是全 CRLF")
+        fh.write(bat)
+    ok("启动.bat：走图形界面、纯 ASCII、CRLF 行尾")
     size = human(dir_size(dist))
     with open(os.path.join(dist, "README.txt"), "wb") as fh:
         fh.write(readme_text(version, removed, size))
