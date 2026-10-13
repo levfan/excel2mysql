@@ -447,6 +447,24 @@ public final class GuiMain {
             problems.add("「清空列表」没把进度条归零或没清空表");
         }
 
+        // 占位提示必须是空态就能看见的灰字，不是只有悬停才出的 tooltip
+        String excelHint = frame.prefixField().hintText();
+        if (!excelHint.contains("可选，如 dim_") || !excelHint.contains("替换首个前缀")) {
+            problems.add("Excel 页前缀框没有占位提示：" + excelHint);
+        }
+        frame.prefixField().setText("");
+        if (!frame.prefixField().shouldPaintHint()) {
+            problems.add("前缀框空着却没该画占位");
+        }
+        frame.prefixField().setText("ods_");
+        if (frame.prefixField().shouldPaintHint()) {
+            problems.add("已经有内容还画占位，会盖住用户写的字");
+        }
+        frame.prefixField().setText("");
+        String sqlHint = frame.sqlPage().prefixField().hintText();
+        if (!sqlHint.contains("如 dim_") || !sqlHint.contains("change_t_order")) {
+            problems.add("SQL 页前缀框没有占位提示：" + sqlHint);
+        }
         if (frame.databaseChooserEnabled()) {
             problems.add("还没连接就能选库，库名只能靠猜");
         }
