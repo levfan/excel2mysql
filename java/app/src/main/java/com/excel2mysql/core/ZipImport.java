@@ -101,8 +101,15 @@ public final class ZipImport {
                 raf.seek(eocd);
                 byte[] e = new byte[22];
                 raf.readFully(e);
-                int total = (int) readLe32(e, 10);
+                // EOCD 里"条目数"是 16 位（偏移 8 与 10），只有目录大小与偏移才是 32 位。
+                // 读成 32 位会把"目录大小"的低两字节当成条目数，循环一路读出真实目录去，
+                // 最后撞在 EOCD 尾巴上抛 EOFException——整个压缩包会被判成"打不开"。
+                int total = readLe16(e, 10) & 0xFFFF;
+                long cdSize = readLe32(e, 12) & 0xFFFFFFFFL;
                 long cdOffset = readLe32(e, 16) & 0xFFFFFFFFL;
+                if (total <= 0 || cdOffset + cdSize > len) {
+                    return;                 // ZIP64 或结构异常：不去猜，交给上层按"没有位标志"处理
+                }
                 raf.seek(cdOffset);
                 for (int idx = 0; idx < total; idx++) {
                     byte[] h = new byte[46];
@@ -236,7 +243,7 @@ public final class ZipImport {
             flags.load(zipPath);
             z = new ZipFile(f);
         } catch (IOException e) {
-            throw new ZipArchiveException("压缩包无法打开：" + e.getMessage());
+            throw new ZipArchiveException("压缩包无法打开：" + LogText.describe(e));
         }
         try {
             java.util.Enumeration<? extends ZipEntry> en = z.entries();
