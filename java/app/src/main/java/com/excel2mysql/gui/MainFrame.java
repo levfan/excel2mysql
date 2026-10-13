@@ -160,16 +160,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         java.awt.Font bold = row.getFont().deriveFont(java.awt.Font.BOLD);
         JButton about = new JButton("i");
         about.setFont(bold);
-        about.setPreferredSize(new Dimension(26, 22));
         about.setToolTipText("关于：版本、提交号与构建日期");
         about.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
         about.addActionListener(e -> showAbout());
         JButton help = new JButton("?");
         help.setFont(bold);
-        help.setPreferredSize(new Dimension(26, 22));
         help.setToolTipText("使用说明（按 F1 也可打开）");
         help.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
         help.addActionListener(e -> showHelp());
+        // 26×22 里塞得下字符，但 Windows 外观的按钮默认内边距会把一个字挤成省略号
+        JButton[] tiny = {about, help};
+        for (JButton b : tiny) {
+            b.setMargin(new java.awt.Insets(0, 0, 0, 0));
+            b.setPreferredSize(new Dimension(26, 22));
+            b.setMinimumSize(new Dimension(26, 22));
+        }
         row.add(about);
         row.add(help);
         return row;
@@ -197,21 +202,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 连接栏：口令只进 JPasswordField，全程不落文件、不进日志。 */
+    /**
+     * 连接框：Python 是 QFormLayout 五行（主机/端口/用户名/密码/目标库），
+     * 「连接并加载库」跟目标库下拉同一行。Excel 页那些操作按钮不属于这里，
+     * 它们各自在文件组框里和页面底部（见 buildCenter）。
+     */
     private JPanel buildConnectionBar() {
         JPanel bar = new JPanel(new BorderLayout());
         bar.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder("MySQL 连接信息"),
                 BorderFactory.createEmptyBorder(2, 8, 6, 8)));
 
-        JPanel tools = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
-        JButton add = new JButton("添加文件");
-        add.addActionListener(e -> chooseFiles());
-        JButton clear = new JButton("清空列表");
-        clear.addActionListener(e -> clearAll());
-        JButton structure = new JButton("生成表结构预览");
-        structure.addActionListener(e -> previewStructure());
-        preview = new JButton("预览 DDL");
-        preview.addActionListener(e -> previewDdl());
         connect = new JButton("连接并加载库");
         connect.addActionListener(e -> {
             String failure = loadDatabases();
@@ -219,38 +220,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 critical(failure);
             }
         });
-        importBtn = new JButton("开始导入");
-        importBtn.setEnabled(false);
-        importBtn.addActionListener(e -> startImport());
-        // 页面级「停止」：Python 的进度框根本没有 X，中止就靠这个按钮
-        stopBtn = new JButton("停止");
-        stopBtn.setEnabled(false);
-        stopBtn.addActionListener(e -> stopTask());
-        prefixField = new HintTextField(18, PREFIX_HINT);
-        JButton applyPrefix = new JButton("批量应用前缀");
-        applyPrefix.addActionListener(e -> applyPrefix());
-        JButton replacePrefix = new JButton("替换首个前缀");
-        replacePrefix.setToolTipText(REPLACE_HEAD_TIP);
-        replacePrefix.addActionListener(e -> replaceFirstPrefix());
-        dropExisting = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
-        dropExisting.addActionListener(e -> refreshPreview());
-        JButton clearLog = new JButton("清除日志");
-        clearLog.addActionListener(e -> logPanel.clearLog());
-        tools.add(add);
-        tools.add(clear);
-        tools.add(structure);
-        tools.add(preview);
-        tools.add(new JLabel("表名前缀："));
-        tools.add(prefixField);
-        tools.add(applyPrefix);
-        tools.add(replacePrefix);
-        tools.add(dropExisting);
-        tools.add(clearLog);
-        tools.add(stopBtn);
-        tools.add(importBtn);
 
-        JPanel fields = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
-        hostField = new javax.swing.JTextField(12);
+        hostField = new javax.swing.JTextField();
         javax.swing.event.DocumentListener refresher = new javax.swing.event.DocumentListener() {
             @Override
             public void insertUpdate(javax.swing.event.DocumentEvent e) {
@@ -271,6 +242,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 Integer.valueOf(3306), Integer.valueOf(1), Integer.valueOf(65535),
                 Integer.valueOf(1)));
         portField.setPreferredSize(new Dimension(70, 24));
+        // Qt 的 QSpinBox 不带千分位；JSpinner 默认按本地 NumberFormat 会显示成 3,306
+        portField.setEditor(new javax.swing.JSpinner.NumberEditor(portField, "#0"));
         userField = new javax.swing.JTextField(10);
         passField = new javax.swing.JPasswordField(10);
         dbCombo = new javax.swing.JComboBox<String>();
@@ -289,22 +262,39 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 refreshDbLabels();
             }
         });
-        fields.add(new JLabel("主机："));
-        fields.add(hostField);
-        fields.add(new JLabel("端口："));
-        fields.add(portField);
-        fields.add(new JLabel("用户名："));
-        fields.add(userField);
-        fields.add(new JLabel("密码："));
-        fields.add(passField);
-        fields.add(new JLabel("目标库："));
-        fields.add(dbCombo);
-        fields.add(connect);
+
+        JPanel dbRow = new JPanel(new BorderLayout(6, 0));
+        dbRow.add(dbCombo, BorderLayout.CENTER);
+        dbRow.add(connect, BorderLayout.EAST);
+        // QFormLayout 的等价物：标签一列按内容宽，输入一列吃掉剩余宽度，五行各占一行
+        JPanel fields = new JPanel(new java.awt.GridBagLayout());
+        addFormRow(fields, 0, "主机：", hostField, true);
+        // 端口是数字框，跟着窗口拉宽只会显得更空，Python 那边它也是窄窄一个
+        addFormRow(fields, 1, "端口：", portField, false);
+        addFormRow(fields, 2, "用户名：", userField, true);
+        addFormRow(fields, 3, "密码：", passField, true);
+        addFormRow(fields, 4, "目标库：", dbRow, true);
 
         // Python 这条框里只有标签、输入框和「连接并加载库」，没有自造的状态文字（main.py:861-878）
-        bar.add(tools, BorderLayout.NORTH);
-        bar.add(fields, BorderLayout.SOUTH);
+        bar.add(fields, BorderLayout.CENTER);
         return bar;
+    }
+
+    /** 连接框的一行：左边固定宽的标签，右边输入件（stretch 为假时保持自己的偏好宽度）。 */
+    private static void addFormRow(JPanel row, int y, String label, java.awt.Component field,
+                                   boolean stretch) {
+        java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = y;
+        c.anchor = java.awt.GridBagConstraints.WEST;
+        c.insets = new java.awt.Insets(2, 0, 2, 8);
+        row.add(new JLabel(label), c);
+        c.gridx = 1;
+        c.weightx = stretch ? 1.0 : 0.0;
+        c.fill = stretch ? java.awt.GridBagConstraints.HORIZONTAL
+                         : java.awt.GridBagConstraints.NONE;
+        c.insets = new java.awt.Insets(2, 0, 2, 0);
+        row.add(field, c);
     }
 
     private java.awt.Component buildCenter() {
@@ -333,32 +323,112 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 列宽可自由拖动，最后一列自动吃掉剩余空间（Qt 的 Interactive + stretchLastSection）
         table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN);
         JScrollPane tableScroll = new JScrollPane(table);
-        tableScroll.setBorder(BorderFactory.createTitledBorder("待导入文件（双击表名/字段可编辑）"));
         tableScroll.setMinimumSize(new Dimension(300, 120));
 
-        JScrollPane logScroll = new JScrollPane(logPanel);
-        // Python 的日志区没有组框标题（main.py:948-960 只有一个只读文本框和「清除日志」按钮）
+        // 「待导入文件」组框里是三样东西：表格、前缀行、四个操作按钮（main.py:893-946）。
+        // 这些控件原先全被塞在顶部连接栏里，等于把"改表名的输入框"和"连接数据库"混在一处。
+        prefixField = new HintTextField(18, PREFIX_HINT);
+        JButton applyPrefix = new JButton("批量应用前缀");
+        applyPrefix.addActionListener(e -> applyPrefix());
+        JButton replacePrefix = new JButton("替换首个前缀");
+        replacePrefix.setToolTipText(REPLACE_HEAD_TIP);
+        replacePrefix.addActionListener(e -> replaceFirstPrefix());
+        JPanel prefixBtns = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0));
+        prefixBtns.add(applyPrefix);
+        prefixBtns.add(replacePrefix);
+        JPanel prefixRow = new JPanel(new BorderLayout(6, 0));
+        prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
+        prefixRow.add(prefixField, BorderLayout.CENTER);
+        prefixRow.add(prefixBtns, BorderLayout.EAST);
 
-        // 三段纵向分栏：拖拽区 / 文件表 / 日志，段数、比例、把手宽度都照 main.py:964-973。
+        JButton add = new JButton("添加文件");
+        add.addActionListener(e -> chooseFiles());
+        JButton clear = new JButton("清空列表");
+        clear.addActionListener(e -> clearAll());
+        JButton structure = new JButton("生成表结构预览");
+        structure.addActionListener(e -> previewStructure());
+        preview = new JButton("预览 DDL");
+        preview.addActionListener(e -> previewDdl());
+        JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        btnRow.add(add);
+        btnRow.add(clear);
+        btnRow.add(structure);
+        btnRow.add(preview);
+
+        JPanel fileRows = new JPanel(new BorderLayout(0, 2));
+        fileRows.add(prefixRow, BorderLayout.NORTH);
+        fileRows.add(btnRow, BorderLayout.SOUTH);
+        JPanel fileBox = new JPanel(new BorderLayout());
+        fileBox.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("待导入文件（双击表名/字段可编辑）"),
+                BorderFactory.createEmptyBorder(2, 6, 4, 6)));
+        fileBox.add(tableScroll, BorderLayout.CENTER);
+        fileBox.add(fileRows, BorderLayout.SOUTH);
+
+        // 日志区：上面一排只有右对齐的「清除日志」，下面才是文本框（main.py:949-960）
+        JButton clearLog = new JButton("清除日志");
+        clearLog.addActionListener(e -> logPanel.clearLog());
+        JPanel logHead = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 2));
+        logHead.add(clearLog);
+        JScrollPane logScroll = new JScrollPane(logPanel);
+        JPanel logBox = new JPanel(new BorderLayout());
+        logBox.add(logHead, BorderLayout.NORTH);
+        logBox.add(logScroll, BorderLayout.CENTER);
+
+        // 三段纵向分栏：拖拽区 / 文件组框 / 日志，段数、比例、把手宽度都照 main.py:964-971。
         // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
         drop.setMinimumSize(new Dimension(10, 60));
-        tableScroll.setMinimumSize(new Dimension(10, 80));
-        logScroll.setMinimumSize(new Dimension(10, 80));
-        JSplitPane lower = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScroll, logScroll);
+        fileBox.setMinimumSize(new Dimension(300, 150));
+        logBox.setMinimumSize(new Dimension(300, 100));
+        JSplitPane lower = new JSplitPane(JSplitPane.VERTICAL_SPLIT, fileBox, logBox);
         lower.setDividerSize(6);
-        lower.setResizeWeight(0.46);
+        // Qt 的 stretchFactor 0/2/3：拖拽区不参与拉伸，剩下 2:3 分给文件表与日志
+        lower.setResizeWeight(0.4);
         JSplitPane stacked = new JSplitPane(JSplitPane.VERTICAL_SPLIT, drop, lower);
         stacked.setDividerSize(6);
-        stacked.setResizeWeight(0.18);
+        stacked.setResizeWeight(0.0);
         stacked.setDividerLocation(130);
         lower.setDividerLocation(250);
+        excelSplit = stacked;
+        excelLower = lower;
+        excelDrop = drop;
+        excelFileBox = fileBox;
+        // Qt 的 setSizes([130,250,290]) 会按可用高度等比缩放，JSplitPane 只认绝对值：
+        // 窗口比 670 矮时日志段会被挤成一行，所以真拿到尺寸后按同一比例重摆一次
+        stacked.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                applySplitProportions();
+            }
+        });
+
+        // 底部动作条：勾选框在左，停止与开始导入在右，再下面才是页内进度条（main.py:976-994）
+        dropExisting = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
+        dropExisting.addActionListener(e -> refreshPreview());
+        importBtn = new JButton("开始导入");
+        importBtn.setEnabled(false);
+        importBtn.addActionListener(e -> startImport());
+        // 页面级「停止」：Python 的进度框根本没有 X，中止就靠这个按钮
+        stopBtn = new JButton("停止");
+        stopBtn.setEnabled(false);
+        stopBtn.addActionListener(e -> stopTask());
+        JPanel opRight = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 2));
+        opRight.add(stopBtn);
+        opRight.add(importBtn);
+        JPanel op = new JPanel(new BorderLayout());
+        op.add(dropExisting, BorderLayout.WEST);
+        op.add(opRight, BorderLayout.EAST);
 
         pageProgress = new javax.swing.JProgressBar();
         pageProgress.setPreferredSize(new Dimension(200, 18));
+        JPanel south = new JPanel(new BorderLayout(0, 2));
+        south.add(op, BorderLayout.NORTH);
+        south.add(pageProgress, BorderLayout.SOUTH);
+
         JPanel page = new JPanel(new BorderLayout());
         page.add(impHint, BorderLayout.NORTH);
         page.add(stacked, BorderLayout.CENTER);
-        page.add(pageProgress, BorderLayout.SOUTH);
+        page.add(south, BorderLayout.SOUTH);
         return page;
     }
 
@@ -1193,8 +1263,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 页签名要与 Python 完全一致，切页时两条线各自的日志也还在。 */
-    public List<String> tabTitles() {
-        List<String> out = new ArrayList<String>();
+    public List<String> tabTitles() {        List<String> out = new ArrayList<String>();
         for (int i = 0; i < tabs.getTabCount(); i++) {
             out.add(tabs.getTitleAt(i));
         }
@@ -1213,6 +1282,36 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public SqlPage sqlPage() {
         return sqlPage;
+    }
+
+    /** 切到第几页签：与用户点页签走的是同一个模型，渲染对照与自检都用它。 */
+    public void selectTab(int index) {
+        if (tabs != null && index >= 0 && index < tabs.getTabCount()) {
+            tabs.setSelectedIndex(index);
+        }
+    }
+
+    private JSplitPane excelSplit;
+    private JSplitPane excelLower;
+    private java.awt.Component excelDrop;
+    private java.awt.Component excelFileBox;
+    private boolean splitPlaced;
+
+    /**
+     * 把三段分栏按 Python 的 130:250:290 等比摆一次。
+     * 只在真拿到足够高度时做，且做一次就够——用户之后自己拖把手，不该被程序改回去。
+     */
+    public void applySplitProportions() {
+        if (splitPlaced || excelSplit == null || excelSplit.getHeight() < 200) {
+            return;
+        }
+        splitPlaced = true;
+        int first = (int) Math.round(excelSplit.getHeight() * 130.0 / 670.0);
+        excelSplit.setDividerLocation(Math.max(first, excelDrop.getMinimumSize().height));
+        int rest = excelSplit.getHeight() - excelSplit.getDividerLocation()
+                - excelSplit.getDividerSize();
+        int second = (int) Math.round(rest * 250.0 / 540.0);
+        excelLower.setDividerLocation(Math.max(second, excelFileBox.getMinimumSize().height));
     }
 
     /**
