@@ -464,10 +464,52 @@ else:
     skip("V25 真 .xls 可读", "未设 PT_XLS 指向真实 .xls 样本（本机没有该格式文件）")
 
 
+# 「生成标准/简易 excel 文件」这条产物线：3.8 冻结态里 openpyxl 必须真能写，
+# 写出来的标准件还要能被本线原样读回来（用户拿它去继续导入才有意义）
+from core import meta_export as _mx
+from openpyxl import load_workbook as _load
+
+_vt = build_table_def(v_orders)
+_std_root = os.path.join(_tmpdir, "export_std")
+os.makedirs(_std_root, exist_ok=True)
+_vtgt, _vwritten = _mx.export_tables([_vt], _std_root, True)
+check("V26 标准件写出一个文件，命名是表注释（表名）",
+      len(_vwritten) == 1 and os.path.basename(_vwritten[0]) == u"订单（ods_t_order）.xlsx",
+      [os.path.basename(x) for x in _vwritten])
+check("V27 标准件目录名是 meta_data_file_年月日",
+      os.path.basename(_vtgt).startswith("meta_data_file_"), _vtgt)
+if _vwritten:
+    _wb = _load(_vwritten[0], read_only=True)
+    _names = list(_wb.sheetnames)
+    _wb.close()
+    check("V28 标准件是元数据+数据两个 Sheet", _names == [u"元数据", u"数据"], _names)
+    _back = build_table_def(_vwritten[0])
+    check("V29 标准件回读走结构定义那条路", _back["source"] == "structured",
+          _back["source"])
+    check("V30 回读后字段名与类型一字不差",
+          [(c["field"], c["type"]) for c in _back["columns"]]
+          == [(c["field"], c["type"]) for c in _vt["columns"]],
+          [(c["field"], c["type"]) for c in _back["columns"]])
+    check("V31 回读后主键没丢",
+          [c["field"] for c in _back["columns"] if c.get("primary_key")]
+          == [c["field"] for c in _vt["columns"] if c.get("primary_key")],
+          _back.get("primary_key"))
+    check("V32 回读后行数不少", len(_back["df"].index) == len(_vt["df"].index),
+          "%d -> %d" % (len(_vt["df"].index), len(_back["df"].index)))
+_sim_root = os.path.join(_tmpdir, "export_sim")
+os.makedirs(_sim_root, exist_ok=True)
+_vtgt2, _vwritten = _mx.export_tables([_vt], _sim_root, False)
+check("V33 简易件目录名是 simple_meta_data_file_年月日",
+      os.path.basename(_vtgt2).startswith("simple_meta_data_file_"), _vtgt2)
+if _vwritten:
+    _wb2 = _load(_vwritten[0], read_only=True)
+    _names2 = list(_wb2.sheetnames)
+    _wb2.close()
+    check("V34 简易件只有一个数据 Sheet", _names2 == [u"数据"], _names2)
+
+
 # ---------------------------------------------------------------------------
 section("W CLI 参数与连接配置")
-
-
 @contextlib.contextmanager
 def clean_env(**extra):
     """CLI 的用例必须在受控环境变量下跑：本机可能正巧设了 E2M_*/PT_*，会污染优先级断言。"""
