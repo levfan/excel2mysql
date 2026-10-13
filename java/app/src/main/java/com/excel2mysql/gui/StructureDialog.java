@@ -28,7 +28,8 @@ import java.util.List;
  */
 public final class StructureDialog extends JDialog {
 
-    private static final String[] COLUMNS = {"主键", "字段名", "注释", "类型", "最大字节长度"};
+    private static final String[] COLUMNS = {"主键", "字段名(拼音/首字母)", "字段注释(中文表头)",
+            "类型", "最大字节长度"};
     private static final String TIP =
             "勾选一列或多列作为主键（多列即组合主键，主键约束至多一个）；"
             + "主键需全列非空且组合唯一，全部不勾选则不设主键";
@@ -50,7 +51,9 @@ public final class StructureDialog extends JDialog {
 
                 @Override
                 public boolean isCellEditable(int row, int col) {
-                    return col <= 3;
+                    // 五列都可编辑，和 Python 侧一致；第 4 列"最大字节长度"改了也不回写，
+                    // 但禁掉编辑会让人以为它是锁死的关键信息
+                    return true;
                 }
             };
             for (Infer.Column c : table.columns) {
@@ -95,6 +98,9 @@ public final class StructureDialog extends JDialog {
             JTable table = new JTable(ed.model);
             table.setFillsViewportHeight(true);
             table.setRowHeight(22);
+            // 主键列窄、其余列分摊剩余宽度：对应 Qt 的 ResizeToContents(0) + Stretch(1,2)，
+            // Swing 没有"按内容自适应"这一档，用固定窄列 + 后续列均分来贴
+            table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
             table.getColumnModel().getColumn(0).setPreferredWidth(46);
             table.getColumnModel().getColumn(4).setPreferredWidth(96);
             JScrollPane scroll = new JScrollPane(table);
@@ -179,6 +185,15 @@ public final class StructureDialog extends JDialog {
             out.add(ed.table.tableName);
         }
         return out;
+    }
+
+    /** 自检用：表头原文与"哪些格能改"都是界面属性，得能读回来才谈得上盯住。 */
+    public String columnHeader(int tabIndex, int col) {
+        return editors.get(tabIndex).model.getColumnName(col);
+    }
+
+    public boolean cellEditable(int tabIndex, int row, int col) {
+        return editors.get(tabIndex).model.isCellEditable(row, col);
     }
 
     public void setModelValue(int tabIndex, int row, int col, Object value) {
