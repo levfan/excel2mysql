@@ -5,6 +5,7 @@ import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.ImportParse;
 import com.excel2mysql.core.ImportRun;
 import com.excel2mysql.core.Infer;
+import com.excel2mysql.core.MetaExport;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.PinyinLoader;
 import com.excel2mysql.core.Prefix;
@@ -72,6 +73,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JButton connect;
     private JButton importBtn;
     private JButton stopBtn;
+    private JButton genStd;
+    private JButton genSimple;
     private boolean taskRunning;
     /**
      * 关掉时任务原地跑完、不弹模态框：自检与非界面调用要靠它验到线上那段代码，
@@ -413,9 +416,24 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         stopBtn = new JButton("停止");
         stopBtn.setEnabled(false);
         stopBtn.addActionListener(e -> stopTask());
+        // 两个生成按钮排在「开始导入」右侧：它们和导入用的是同一份已解析表定义，
+        // 放在同一排才看得出"这是同一件事的另一种出口"，而不是另一功能
+        genStd = new JButton("生成标准excel文件");
+        // Qt 的 tooltip 认 "\n"，Swing 只认 HTML 换行，所以话术原样、换行换个写法
+        genStd.setToolTipText("<html>在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：<br>"
+                + "Sheet1「元数据」是建表用的字段定义，Sheet2「数据」是数据行</html>");
+        genStd.setEnabled(false);
+        genStd.addActionListener(e -> generateExcel(true));
+        genSimple = new JButton("生成简易excel文件");
+        genSimple.setToolTipText("<html>在程序同级建 simple_meta_data_file_年月日 目录，"
+                + "每张表一个 xlsx：<br>只留「数据」一个 Sheet</html>");
+        genSimple.setEnabled(false);
+        genSimple.addActionListener(e -> generateExcel(false));
         JPanel opRight = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 2));
         opRight.add(stopBtn);
         opRight.add(importBtn);
+        opRight.add(genStd);
+        opRight.add(genSimple);
         JPanel op = new JPanel(new BorderLayout());
         op.add(dropExisting, BorderLayout.WEST);
         op.add(opRight, BorderLayout.EAST);
@@ -610,6 +628,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         fileModel.removeItems(removed);
         setPageProgress(0);
         importBtn.setEnabled(connected && !tables.isEmpty());
+        syncGenButtons();
         refreshPreview();
 
         StringBuilder msg = new StringBuilder("成功 ").append(ok).append(" 张表，失败 ")
@@ -709,6 +728,91 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         connect.setEnabled(on);
         importBtn.setEnabled(on && connected && !tables.isEmpty());
         stopBtn.setEnabled(!on);
+        syncGenButtons();
+    }
+
+    /**
+     * 两个生成按钮只在"有表可导、且没有别的任务在跑"时可点。
+     * 判据取自同一处而不是各写各的：任务跑着的时候表列表正被工作线程读，
+     * 这时候再生成一份就是两个任务共用同一份数据互相踩。
+     */
+    public void syncGenButtons() {
+        if (genStd == null) {
+            return;     // 连接栏比页签里的按钮先建，赋初值阶段还不能动它们
+        }
+        boolean on = !tables.isEmpty() && !taskRunning;
+        genStd.setEnabled(on);
+        genSimple.setEnabled(on);
+    }
+
+    /**
+     * 可执行程序所在目录——生成物的日期目录落在这里。
+     *
+     * 从代码所在的那个 jar 取：交付包里 jar 躺在包根，取到的就是包根；
+     * 开发态从 target/classes 跑，取到的是 classes 那一层，对应 Python 的 program_dir()。
+     */
+    public static String programDir() {
+        try {
+            java.net.URL u = MetaExport.class.getProtectionDomain().getCodeSource()
+                    .getLocation();
+            if (u != null) {
+                File f = new File(u.toURI());
+                return f.isDirectory() ? f.getPath() : f.getParentFile().getPath();
+            }
+        } catch (Exception e) {
+            // 定位失败就退回当前工作目录：不能因为取不到程序目录就不生成
+        }
+        return new File("").getAbsolutePath();
+    }
+
+    /** 界面点出来的入口：输出根目录就是可执行程序同级。 */
+    public void generateExcel(final boolean withMeta) {
+        generateExcel(withMeta, programDir());
+    }
+
+    /**
+     * 生成标准/简易 Excel：写盘在子线程、进度框照弹，与导入同一个任务框架。
+     * 不连库也能用——这份产物是给下游建模用的文件，不是往库里灌数据。
+     *
+     * 输出根目录做成入参：Python 侧的任务函数第一个参数就是 out_root，
+     * 自检要用临时目录，不能往构建产物目录里拉一堆 xlsx。
+     */
+    public void generateExcel(final boolean withMeta, final String outRoot) {
+        if (tables.isEmpty()) {
+            warn(NO_FILE_HINT);
+            return;
+        }
+        final List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
+        for (TableOps.Table t : tables) {
+            work.add(MetaExport.of(t, byTable.get(t)));
+        }
+        log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（输出根目录 "
+                + outRoot + "）=====");
+        runTask(withMeta ? "正在生成标准excel文件…" : "正在生成简易excel文件…",
+                sink -> MetaExport.exportTables(work, outRoot, withMeta, sink),
+                out -> finishMetaExport((MetaExport.Outcome) out));
+    }
+
+    /**
+     * 生成收尾：日志与弹窗双写同一句话。目录名要原样给出来——文件落在程序同级、
+     * 按日期新建的目录里，只说"生成完成"用户不知道该去哪儿找。
+     */
+    public String finishMetaExport(MetaExport.Outcome res) {
+        int n = res.written.size();
+        String note = res.cancelled ? "（已取消，剩余文件未生成）" : "";
+        String text = n > 0
+                ? "已生成 " + n + " 个文件（共 " + res.total + " 张表）。" + NEWLINE
+                        + "目录：" + NEWLINE + res.dir + note
+                : "没有生成任何文件，详见日志。" + note;
+        String summary = "===== 生成完成：" + n + "/" + res.total + " 个文件，目录 "
+                + res.dir + " =====" + note;
+        if (n == 0) {
+            logError(summary);
+        } else {
+            log(summary);
+        }
+        inform2("生成结果", text);
+        return text;
     }
 
     /**
@@ -851,6 +955,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JButton stopButton() {
         return stopBtn;
+    }
+
+    /** 自检与命令行入口按用户的方式点这两颗生成按钮，而不是绕过界面直接调 core。 */
+    public javax.swing.JButton genStandardButton() {
+        return genStd;
+    }
+
+    public javax.swing.JButton genSimpleButton() {
+        return genSimple;
     }
 
     /** 请求中止当前任务：已经做完的那一项会跑完，剩下的不再开工。 */
@@ -1048,6 +1161,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         if (importBtn != null) {
             importBtn.setEnabled(connected);
         }
+        syncGenButtons();
         refreshPreview();
         String summary = ImportParse.summaryText(outcome);
         if (outcome.cancelled) {
@@ -1177,6 +1291,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return tables;
     }
 
+    /** 自检要把生成的文件再读回来，用的必须是窗口上那一份词典，不是新起一套。 */
+    public Names names() {
+        return names;
+    }
+
     /** 结构弹窗要的是"表定义 + 数据行"，数据行只存在 Result 里，按当前表顺序给出去。 */
     public List<TableBuilder.Result> results() {
         List<TableBuilder.Result> out = new ArrayList<TableBuilder.Result>();
@@ -1219,6 +1338,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         zipOrigin.clear();
         ddlText = "";
         setPageProgress(0);
+        syncGenButtons();
         log("已清空");
     }
 
