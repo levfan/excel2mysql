@@ -72,13 +72,19 @@ public final class GuiMain {
             MainFrame frame = null;
             try {
                 frame = new MainFrame();   // 建窗也在 try 里：构造期抛异常要让自检拿到退出码，而不是把闸门挂死
-                frame.addFiles(files);
+                String addSummary = frame.addFiles(files);
                 int tables = frame.tables().size();
                 int fileRows = frame.fileModel().getRowCount();
                 int rows = frame.fileModel().rowTotal();
                 String ddl = frame.ddlText();
                 String status = frame.statusText();
                 List<String> problems = new ArrayList<String>();
+                if (!addSummary.contains("添加 7 项文件")) {
+                    problems.add("添加结果汇总没数清文件：" + addSummary.replace((char) 10, ' '));
+                }
+                if (!frame.logPanel().contains("[添加结果] 添加 7 项文件")) {
+                    problems.add("弹窗那句话没同时写进日志");
+                }
                 if (tables != 7) {
                     problems.add("表数期望 7，实际 " + tables + "（有文件解析失败，看日志）");
                 }
@@ -115,6 +121,10 @@ public final class GuiMain {
                 import_finish(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
+                // 子线程出意外时的兜底文案
+                task_crash(frame, problems);
+                // ZIP 展开、汇总计数与临时目录清理
+                zip_roundtrip(frame, files, problems);
                 // 标题版本号、说明窗口与关于框
                 help_and_about(frame, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
@@ -369,14 +379,25 @@ public final class GuiMain {
         int before = frame.tables().size();
         List<String> one = new ArrayList<String>();
         one.add(files.get(0));
-        drop.fireDrop(one);
-        if (frame.tables().size() <= before) {
-            problems.add("拖进来一个文件后表数没增加：" + before + " → " + frame.tables().size());
+        if (frame.acceptedDrops(one).size() != 1) {
+            problems.add("拖拽把 xlsx 挡在了外面");
         }
-        drop.fireDrop(new ArrayList<String>());
+        // 夹具在第一屏已经全部加载过，再拖一次走的是"重复跳过"那条路
+        String dupSummary = frame.addFiles(one);
+        if (frame.tables().size() != before) {
+            problems.add("重复添加把同一张表加了第二遍：" + before + " → " + frame.tables().size());
+        }
+        if (!frame.logPanel().contains("[重复跳过]")) {
+            problems.add("重复添加没有说明为什么跳过");
+        }
+        if (!dupSummary.contains("另有 1 项重复已跳过")) {
+            problems.add("添加结果汇总没把重复项算进去：" + dupSummary.replace((char) 10, ' '));
+        }
         List<String> junk = new ArrayList<String>();
         junk.add(new java.io.File("readme.txt").getPath());
-        drop.fireDrop(junk);
+        if (!frame.acceptedDrops(junk).isEmpty()) {
+            problems.add("txt 混进了拖拽接收列表");
+        }
         if (!frame.logPanel().contains("拖入的不是 Excel 或 ZIP 文件，已忽略")) {
             problems.add("拖进非 Excel 文件时没有任何说明");
         }
@@ -682,6 +703,85 @@ public final class GuiMain {
             }
         } finally {
             ad.dispose();
+        }
+    }
+
+    /** 把夹具打进一个 zip，验展开、汇总与关窗清理这一整条路。 */
+    private static void zip_roundtrip(MainFrame frame, List<String> files,
+                                      List<String> problems) {
+        if (files.isEmpty()) {
+            problems.add("ZIP 自检没有夹具");
+            return;
+        }
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-zip-selftest").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建 ZIP 临时目录失败：" + e);
+            return;
+        }
+        java.io.File zip = new java.io.File(dir, "pack1.zip");
+        try {
+            java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                    new java.io.FileOutputStream(zip));
+            zos.putNextEntry(new java.util.zip.ZipEntry("readme.txt"));
+            zos.write("不是 Excel".getBytes(java.nio.charset.Charset.forName("UTF-8")));
+            zos.closeEntry();
+            zos.putNextEntry(new java.util.zip.ZipEntry("inner.xlsx"));
+            byte[] raw = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(files.get(0)));
+            zos.write(raw);
+            zos.closeEntry();
+            zos.close();
+        } catch (Exception e) {
+            problems.add("打 ZIP 夹具失败：" + e);
+            deleteTree(dir);
+            return;
+        }
+        int before = frame.tables().size();
+        List<String> one = new ArrayList<String>();
+        one.add(zip.getPath());
+        String summary = frame.addFiles(one);
+        if (frame.tables().size() != before + 1) {
+            problems.add("压缩包里的 Excel 没被展开进列表：" + before + " → "
+                    + frame.tables().size() + "；日志尾部：" + tail(frame.logPanel().text()));
+        }
+        if (!frame.logPanel().contains("[压缩包] pack1.zip：展开 1 个 Excel，忽略 1 个非 Excel 文件")) {
+            problems.add("压缩包展开没报清楚（展开几个、忽略几个）");
+        }
+        if (!summary.contains("添加 1 项 zip 文件")) {
+            problems.add("弹窗汇总没把 zip 单列一行：" + summary.replace((char) 10, ' '));
+        }
+        String tempDir = frame.zipTempDir();
+        if (tempDir == null || !new java.io.File(tempDir).isDirectory()) {
+            problems.add("展开压缩包却没建会话临时目录");
+        }
+        frame.cleanZipTemp();
+        if (tempDir != null && new java.io.File(tempDir).exists()) {
+            problems.add("关窗清理没真的删掉临时目录：" + tempDir);
+        }
+        if (!frame.logPanel().contains("已清理解压临时目录")) {
+            problems.add("清理临时目录没有留痕");
+        }
+        deleteTree(dir);
+        frame.clearAll();
+    }
+
+    private static String tail(String text) {
+        String s = text == null ? "" : text.replace((char) 10, ' ');
+        return s.length() <= 260 ? s : s.substring(s.length() - 260);
+    }
+
+    private static void task_crash(MainFrame frame, List<String> problems) {
+        String dialog = frame.crashMessage(new IllegalStateException("探针异常"));
+        if (!dialog.contains("本次操作未完成，详见日志")) {
+            problems.add("任务异常的弹窗没交代去查日志：" + dialog.replace((char) 10, ' '));
+        }
+        // describe 会把异常类型一起带上，只写 message 的话现场根本分不清是哪类意外
+        if (!frame.logPanel().isErrorLine("[任务异常] IllegalStateException：探针异常")) {
+            problems.add("任务异常没按错误级带上异常类型");
+        }
+        if (!frame.logPanel().contains("本次操作未完成，请查看日志后重试")) {
+            problems.add("任务异常的日志没给下一步动作");
         }
     }
 }
