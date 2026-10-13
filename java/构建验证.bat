@@ -17,49 +17,61 @@ for %%i in (java.exe) do set "RUNTIME=%%~$PATH:i"
 echo - [INFO] BUILD ^| 构建所用 JDK %RUNTIME%
 
 echo.
-echo === 1/8 Maven 编译打包 ===
-call mvn -B clean install || exit /b 1
+echo === 1/9 Maven 编译打包 ===
+rem IDEA 开着工程时 target 会被占用，clean 删不掉。这时降级成增量构建，
+rem 但要把"这一轮没验干净构建"显式说出来——静默当成干净构建才是真隐患。
+call mvn -B clean install 2>nul
+if not errorlevel 1 goto :built
+echo ! [WARN] BUILD ^| clean 失败（多半是 IDEA 占着 target），降级为增量构建
+call mvn -B install || exit /b 1
+echo ! [WARN] BUILD ^| 本轮未验证干净构建，交付前请关掉 IDE 重跑一次
+:built
 
 echo.
-echo === 2/8 收集依赖 jar ===
+echo === 2/9 收集依赖 jar ===
 call mvn -B -q -pl verify dependency:copy-dependencies -DoutputDirectory=target/lib -DincludeScope=runtime || exit /b 1
 
 echo.
-echo === 3/8 class 主版本闸门 ===
+echo === 3/9 class 主版本闸门 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "verify\target\classes" ^
   com.excel2mysql.verify.ClassVersionAudit ^
   app\target\classes verify\target\classes verify\target\lib app\target\excel2mysql-1.0.1.jar || exit /b 1
 
 echo.
-echo === 4/8 拼音金标准差分 ===
+echo === 4/9 拼音金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
   com.excel2mysql.verify.PinyinDiffer ^
   app\src\main\resources\pinyin verify\golden\cases.jsonl.gz || exit /b 1
 
 echo.
-echo === 5/8 表名与字段名金标准差分 ===
+echo === 5/9 表名与字段名金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
   com.excel2mysql.verify.NameDiffer ^
   verify\golden\excel.jsonl.gz || exit /b 1
 
 echo.
-echo === 6/8 类型推断金标准差分 ===
+echo === 6/9 类型推断金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
   com.excel2mysql.verify.TypeDiffer ^
   verify\golden\excel.jsonl.gz || exit /b 1
 
 echo.
-echo === 7/7 读取层逐格金标准差分 ===
+echo === 7/9 读取层逐格金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
   com.excel2mysql.verify.ReaderDiffer ^
   verify\golden\excel.jsonl.gz verify\fixtures || exit /b 1
 
 echo.
-echo === 8/8 SQL 脚本线与 DDL 金标准差分 ===
+echo === 8/9 SQL 脚本线与 DDL 金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
   com.excel2mysql.verify.SqlDiffer ^
   verify\golden\sql.jsonl.gz verify\golden\excel.jsonl.gz || exit /b 1
 
 echo.
-echo + [OK] BUILD ^| Java 线八步全过
+echo === 9/9 Swing 界面自检 ===
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -jar "app\target\excel2mysql-1.0.1.jar" ^
+  --gui --selftest verify\fixtures || exit /b 1
+
+echo.
+echo + [OK] BUILD ^| Java 线九步全过
 exit /b 0
