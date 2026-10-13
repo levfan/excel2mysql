@@ -95,6 +95,29 @@ public final class GuiMain {
                 if (!frame.lastDialogText().contains("添加 7 项文件")) {
                     problems.add("弹窗正文与日志不是同一句话：" + frame.lastDialogText());
                 }
+                // Python 的添加结果用 information，只有任务异常才换 critical 图标
+                if (frame.lastDialogIsError()) {
+                    problems.add("添加结果弹窗不该用出错图标");
+                }
+                // 中途取消：这句话要在弹窗正文里，只写日志的话只看弹窗的人以为整批跑完了
+                com.excel2mysql.core.ImportParse.Outcome part = new com.excel2mysql.core.ImportParse.Outcome();
+                part.addedLoose.add("a.xlsx");
+                part.addedLoose.add("b.xls");
+                part.failed = 1;
+                part.cancelled = true;
+                String partSummary = frame.finishAdd(part);
+                if (!partSummary.startsWith("已取消，只完成了部分解析")) {
+                    problems.add("取消的话没进正文：" + partSummary.replace((char) 10, ' '));
+                }
+                if (!partSummary.contains("添加 2 项文件")) {
+                    problems.add("取消时把已解析的汇总顶掉了：" + partSummary.replace((char) 10, ' '));
+                }
+                if (!frame.lastDialogText().equals(partSummary)) {
+                    problems.add("取消后的弹窗正文和汇总不是同一句话");
+                }
+                if (!frame.logPanel().contains("[添加结果] 已取消，只完成了部分解析")) {
+                    problems.add("取消后的汇总没同时写进日志");
+                }
                 if (tables != 7) {
                     problems.add("表数期望 7，实际 " + tables + "（有文件解析失败，看日志）");
                 }
@@ -851,6 +874,13 @@ public final class GuiMain {
         }
         if (!frame.logPanel().contains("本次操作未完成，请查看日志后重试")) {
             problems.add("任务异常的日志没给下一步动作");
+        }
+        // 同一句话要经弹窗留痕：只写日志的话，走神的用户根本不知道出了意外
+        if (!"任务异常".equals(frame.lastDialogTitle())) {
+            problems.add("任务异常没走带标题的弹窗：" + frame.lastDialogTitle());
+        }
+        if (!frame.lastDialogIsError()) {
+            problems.add("任务异常弹窗没用出错图标（Python 是 critical）");
         }
     }
 
