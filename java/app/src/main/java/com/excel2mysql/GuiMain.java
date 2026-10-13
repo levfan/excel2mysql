@@ -1247,8 +1247,10 @@ public final class GuiMain {
             if (!"正在解析文件…".equals(pd.getTitle())) {
                 problems.add("进度框标题没生效：" + pd.getTitle());
             }
-            if (pd.getPreferredSize().width != 480 || pd.getPreferredSize().height != 140) {
-                problems.add("进度框尺寸与 Python 不一致：" + pd.getPreferredSize());
+            // Qt 的 resize(480,140) 说的是客户区，所以量内容面板而不是整个窗
+            java.awt.Dimension client = pd.getContentPane().getPreferredSize();
+            if (client.width != 480 || client.height != 140) {
+                problems.add("进度框客户区与 Python 不一致：" + client);
             }
             if (!"取消".equals(pd.cancelText())) {
                 problems.add("取消按钮默认文案不对：" + pd.cancelText());
@@ -1257,6 +1259,11 @@ public final class GuiMain {
             pd.step("读盘");
             if (!"进度 1/3 项 · 读盘".equals(pd.statusText())) {
                 problems.add("进度文案格式不对：" + pd.statusText());
+            }
+            // 进度条上印的必须是真百分比：Qt 的 setFormat("%p%") 是格式符，
+            // 照抄成 Swing 的 setString 就会把 "%p%" 四个字原样画出来
+            if (!"0%".equals(pd.percentText())) {
+                problems.add("进度条没印百分比：" + pd.percentText());
             }
             pd.step("识别格式");
             if (pd.percentShown() >= pd.percentTarget() && pd.percentShown() != 0) {
