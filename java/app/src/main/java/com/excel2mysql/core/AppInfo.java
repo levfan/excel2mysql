@@ -46,7 +46,7 @@ public final class AppInfo {
         }
         if (p.getProperty("version") != null) {
             info.version = p.getProperty("version").trim();
-            info.builtAt = orUnknown(p.getProperty("builtAt"));
+            info.builtAt = toLocal(orUnknown(p.getProperty("builtAt")));
             info.commit = orUnknown(p.getProperty("commit"));
             info.branch = trim(p.getProperty("branch"));
             info.dirty = Boolean.parseBoolean(trim(p.getProperty("dirty")));
@@ -91,6 +91,25 @@ public final class AppInfo {
     /** 窗口标题：带版本号，不点开任何对话框也能看见跑的是哪一版。 */
     public String titleText() {
         return "Excel → MySQL 批量导入工具 v" + versionText();
+    }
+
+    /**
+     * Maven 打的时间戳固定是 UTC，而 Python 那边 `time.strftime` 打的是本机时间。
+     * 不换算就等于同一个时刻在两条线上差 8 小时，用户对不上构建号。
+     * 认不出来（不是那 19 个字符）就原样给出，绝不自编一个时间。
+     */
+    public static String toLocal(String utc) {
+        if (utc == null || utc.length() != 19) {
+            return utc;
+        }
+        java.text.SimpleDateFormat in = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        in.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        try {
+            java.util.Date at = in.parse(utc);
+            return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(at);
+        } catch (java.text.ParseException e) {
+            return utc;
+        }
     }
 
     private static String orUnknown(String v) {
