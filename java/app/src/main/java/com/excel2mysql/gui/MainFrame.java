@@ -349,7 +349,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         structure.addActionListener(e -> previewStructure());
         preview = new JButton("预览 DDL");
         preview.addActionListener(e -> previewDdl());
-        JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        // Qt 的 QHBoxLayout 会把四颗按钮等宽铺满整行，Swing 的 FlowLayout 只会左对齐按内容宽
+        JPanel btnRow = new JPanel(new java.awt.GridLayout(1, 4, 6, 0));
         btnRow.add(add);
         btnRow.add(clear);
         btnRow.add(structure);
