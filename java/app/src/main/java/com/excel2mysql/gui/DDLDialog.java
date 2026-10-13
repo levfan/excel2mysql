@@ -28,6 +28,8 @@ public final class DDLDialog extends JDialog {
         setLocationRelativeTo(owner);
 
         JTabbedPane tabs = new JTabbedPane();
+        // 与结构弹窗同理：Qt 的 QTabWidget 默认单行滚动，Swing 默认换行
+        tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
         for (TableOps.Table t : tables) {
             JTextArea area = new JTextArea();
             area.setEditable(false);

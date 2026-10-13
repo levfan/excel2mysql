@@ -92,6 +92,8 @@ public final class StructureDialog extends JDialog {
         this.logPanel = logPanel;
 
         JTabbedPane tabs = new JTabbedPane();
+        // 表多时 Qt 是单行加左右箭头，不是换行堆两排标签
+        tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
         for (TableBuilder.Result r : results) {
             Editor ed = new Editor(r.table, r.rows);
             editors.add(ed);
