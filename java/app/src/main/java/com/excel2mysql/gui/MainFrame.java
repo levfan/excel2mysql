@@ -4,6 +4,7 @@ import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.PinyinLoader;
+import com.excel2mysql.core.Prefix;
 import com.excel2mysql.core.TableBuilder;
 import com.excel2mysql.core.TableOps;
 import com.excel2mysql.core.ZipImport;
@@ -39,6 +40,15 @@ import java.util.Map;
  */
 public final class MainFrame extends JFrame {
 
+    private static final String NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。";
+    private static final String PREFIX_HINT =
+            "可选，如 dim_（新添加的文件自动带上，留空点按钮可移除）；"
+            + "填 change 再点「替换首个前缀」则换掉已有首段";
+    private static final String REPLACE_HEAD_TIP =
+            "把表名第一个下划线之前的部分换成上面填的内容："
+            + "ods_t_order → change_t_order、adb_table2 → change_table2；"
+            + "表名里没有下划线的（如 users）不动，日志会列出。末尾下划线不用写";
+
     private final FileRowModel fileModel = new FileRowModel();
     private final javax.swing.JTable table = new javax.swing.JTable(fileModel);
     private final JTextArea ddl = new JTextArea();
@@ -52,6 +62,8 @@ public final class MainFrame extends JFrame {
     private javax.swing.JTextField userField;
     private javax.swing.JPasswordField passField;
     private javax.swing.JTextField dbField;
+    private javax.swing.JTextField prefixField;
+    private javax.swing.JCheckBox dropExisting;
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
     private final Map<TableOps.Table, TableBuilder.Result> byTable =
             new java.util.LinkedHashMap<TableOps.Table, TableBuilder.Result>();
@@ -77,21 +89,41 @@ public final class MainFrame extends JFrame {
         bar.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
 
         JPanel tools = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
-        JButton add = new JButton("添加 Excel / 压缩包");
+        JButton add = new JButton("添加文件");
         add.addActionListener(e -> chooseFiles());
-        preview = new JButton("预览建表语句");
-        preview.addActionListener(e -> refreshPreview());
-        JButton clear = new JButton("清空");
+        JButton clear = new JButton("清空列表");
         clear.addActionListener(e -> clearAll());
+        JButton structure = new JButton("生成表结构预览");
+        structure.addActionListener(e -> previewStructure());
+        preview = new JButton("预览 DDL");
+        preview.addActionListener(e -> refreshPreview());
         connect = new JButton("连接并加载库");
         connect.addActionListener(e -> connectAndLoad());
         importBtn = new JButton("开始导入");
         importBtn.setEnabled(false);
         importBtn.addActionListener(e -> startImport());
+        prefixField = new javax.swing.JTextField(18);
+        prefixField.setToolTipText(PREFIX_HINT);
+        JButton applyPrefix = new JButton("批量应用前缀");
+        applyPrefix.addActionListener(e -> applyPrefix());
+        JButton replacePrefix = new JButton("替换首个前缀");
+        replacePrefix.setToolTipText(REPLACE_HEAD_TIP);
+        replacePrefix.addActionListener(e -> replaceFirstPrefix());
+        dropExisting = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
+        dropExisting.addActionListener(e -> refreshPreview());
+        JButton clearLog = new JButton("清除日志");
+        clearLog.addActionListener(e -> logPanel.clearLog());
         tools.add(add);
-        tools.add(preview);
         tools.add(clear);
+        tools.add(structure);
+        tools.add(preview);
+        tools.add(new JLabel("表名前缀："));
+        tools.add(prefixField);
+        tools.add(applyPrefix);
+        tools.add(replacePrefix);
+        tools.add(dropExisting);
         tools.add(connect);
+        tools.add(clearLog);
         tools.add(importBtn);
 
         JPanel fields = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
@@ -202,6 +234,8 @@ public final class MainFrame extends JFrame {
             return;
         }
         final List<TableOps.Table> todo = new ArrayList<TableOps.Table>(tables);
+        // 勾选状态在 EDT 上读一次：子线程里再点组件属于跨线程摸 Swing
+        final boolean drop = dropExisting.isSelected();
         final ProgressDialog progress = new ProgressDialog(this, "开始导入");
         progress.setTotal(todo.size() * 2);
         setEnabledForRun(false);
@@ -226,7 +260,7 @@ public final class MainFrame extends JFrame {
                 TableBuilder.Result r = byTable.get(t);
                 progress.step("建表 " + t.tableName);
                 try {
-                    client.createTable(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, false));
+                    client.createTable(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, drop));
                 } catch (Exception e) {
                     failed++;
                     final String message = e.getMessage();
@@ -334,6 +368,14 @@ public final class MainFrame extends JFrame {
                 log("跳过（不是 Excel 或 zip）：" + f.getName());
             }
         }
+        if (!tables.isEmpty()) {
+            String prefix = Names.pyStrip(prefixField == null ? "" : prefixField.getText());
+            if (!prefix.isEmpty()) {
+                TableOps.applyPrefix(tables, prefix);
+            } else {
+                TableOps.makeUniqueNames(tables);
+            }
+        }
         status.setText("已加载 " + tables.size() + " 张表 / " + fileModel.rowTotal() + " 个字段");
         refreshPreview();
         return added;
@@ -395,7 +437,8 @@ public final class MainFrame extends JFrame {
             if (sb.length() > 0) {
                 sb.append("\n\n");
             }
-            sb.append(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, false));
+            sb.append(Ddl.buildDdl(t.tableName, t.tableComment, t.columns,
+                    dropExisting != null && dropExisting.isSelected()));
         }
         ddl.setText(sb.toString());
         ddl.setCaretPosition(0);
@@ -464,8 +507,91 @@ public final class MainFrame extends JFrame {
         logPanel.error(text);
     }
 
+    /** 自检与命令行入口要能按用户的方式操作这两个控件，而不是绕过界面直接改数据。 */
+    public javax.swing.JTextField prefixField() {
+        return prefixField;
+    }
+
+    public javax.swing.JCheckBox dropExistingBox() {
+        return dropExisting;
+    }
+
     public LogPanel logPanel() {
         return logPanel;
+    }
+
+    /**
+     * 批量应用前缀：每张表都按 base_table_name 重算，所以重复点不会把前缀叠上去。
+     * 输入框留空再点就是移除前缀、恢复基础表名，和 Python 侧同一个输入框兼做两件事。
+     */
+    public void applyPrefix() {
+        if (tables.isEmpty()) {
+            inform(NO_FILE_HINT);
+            return;
+        }
+        String prefix = Names.pyStrip(prefixField.getText());
+        TableOps.applyPrefix(tables, prefix);
+        fileModel.refresh();
+        log(prefix.isEmpty() ? "[前缀] 已移除前缀，恢复基础表名"
+                             : "[前缀] 已为全部表名批量添加前缀「" + prefix + "」");
+        refreshPreview();
+    }
+
+    /** 替换首个前缀：清洗、校验、跳过规则都在 core 里，界面只负责把改了哪些说清楚。 */
+    public void replaceFirstPrefix() {
+        if (tables.isEmpty()) {
+            inform(NO_FILE_HINT);
+            return;
+        }
+        String head = Prefix.clean(prefixField.getText());
+        if (head.isEmpty()) {
+            warn("请先输入新的前缀（如 change）。");
+            return;
+        }
+        if (!Prefix.isValid(head)) {
+            warn("前缀「" + head + "」含非法字符：只能用字母、数字、下划线；"
+                    + "末尾的下划线不用写，原表名自带。");
+            return;
+        }
+        TableOps.RenameResult r = TableOps.replaceFirstSegment(tables, head);
+        for (Map<String, String> e : r.renamed) {
+            log("[换前缀] " + e.get("old") + " → " + e.get("new"));
+        }
+        if (!r.skipped.isEmpty()) {
+            log("[跳过] 表名里没有下划线，未改动：" + String.join("、", r.skipped));
+        }
+        log("[换前缀完成] 共改 " + r.renamed.size() + " 张表"
+                + (r.skipped.isEmpty() ? "" : "，跳过 " + r.skipped.size() + " 张"));
+        fileModel.refresh();
+        refreshPreview();
+    }
+
+    /** 结构预览：一张表一个标签页，改完确认才整体回写。 */
+    public void previewStructure() {
+        if (tables.isEmpty()) {
+            inform(NO_FILE_HINT);
+            return;
+        }
+        StructureDialog dialog = new StructureDialog(this, results(), logPanel);
+        dialog.setVisible(true);
+        if (!dialog.isConfirmed()) {
+            return;
+        }
+        fileModel.refresh();
+        refreshPreview();
+        log("[结构] 已按弹窗确认 " + tables.size() + " 张表的字段定义");
+    }
+
+    private void inform(String text) {
+        javax.swing.JOptionPane.showMessageDialog(this, text, "提示",
+                javax.swing.JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** 拦下的操作除了弹窗还要落一行日志：弹窗关掉就没了，日志才是可回溯的那份。 */
+    private void warn(String text) {
+        log("已拦下：" + text);
+        javax.swing.JOptionPane.showMessageDialog(this, text, "提示",
+                javax.swing.JOptionPane.WARNING_MESSAGE);
     }
 
     private static String baseName(String path) {

@@ -106,6 +106,8 @@ public final class GuiMain {
                 table_select_for_dialog(frame, problems);
                 // 多表标签页弹窗：校验不过不能先写回，否则表定义停在改了一半的状态
                 structure_dialog(frame, problems);
+                // 前缀两个按钮与「覆盖已存在表」勾选：文案、幂等、跳过口径都要和 Python 一致
+                prefix_and_labels(frame, problems);
                 // 死按钮守卫：每个按钮都必须挂了监听器，界面上出现点了没反应的按钮
                 // 比少一个按钮更糟——用户会以为是自己操作错了
                 for (javax.swing.AbstractButton b : frame.buttons()) {
@@ -241,6 +243,95 @@ public final class GuiMain {
             problems.add("合法改动被拦住：" + String.join(" | ", dlg.problems()));
         } else if (!probe.equals(frame.tables().get(0).columns.get(0).comment)) {
             problems.add("弹窗确认后注释没写回表定义");
+        }
+    }
+
+    private static java.util.List<String> namesOf(MainFrame frame) {
+        return com.excel2mysql.core.TableOps.namesOf(frame.tables());
+    }
+
+    /** 按钮文案、前缀的幂等与跳过口径、勾选状态到 DDL 预览的传导。 */
+    private static void prefix_and_labels(MainFrame frame, List<String> problems) {
+        java.util.Set<String> texts = new java.util.LinkedHashSet<String>();
+        for (javax.swing.AbstractButton b : frame.buttons()) {
+            texts.add(b.getText());
+        }
+        String[] wanted = {"添加文件", "清空列表", "生成表结构预览", "预览 DDL", "清除日志",
+                "批量应用前缀", "替换首个前缀", "连接并加载库", "开始导入"};
+        for (String w : wanted) {
+            if (!texts.contains(w)) {
+                problems.add("界面缺少按钮：" + w);
+            }
+        }
+        if (frame.tables().isEmpty()) {
+            problems.add("前缀自检没有可改的表");
+            return;
+        }
+
+        List<String> base = new ArrayList<String>();
+        for (com.excel2mysql.core.TableOps.Table t : frame.tables()) {
+            base.add(t.baseTableName);
+        }
+        frame.prefixField().setText("ods_");
+        frame.applyPrefix();
+        List<String> prefixed = namesOf(frame);
+        for (String n : prefixed) {
+            if (!n.startsWith("ods_")) {
+                problems.add("应用前缀后表名没带上 ods_：" + n);
+            }
+        }
+        if (!frame.logPanel().contains("[前缀] 已为全部表名批量添加前缀「ods_」")) {
+            problems.add("批量应用前缀没有留下日志");
+        }
+        frame.applyPrefix();
+        if (!namesOf(frame).equals(prefixed)) {
+            problems.add("重复「批量应用前缀」把前缀叠上了：" + namesOf(frame));
+        }
+        frame.prefixField().setText("");
+        frame.applyPrefix();
+        if (!namesOf(frame).equals(base)) {
+            problems.add("留空再点「批量应用前缀」没恢复基础表名：" + namesOf(frame));
+        }
+        if (!frame.logPanel().contains("[前缀] 已移除前缀，恢复基础表名")) {
+            problems.add("移除前缀没有留下日志");
+        }
+
+        frame.prefixField().setText("ods_");
+        frame.applyPrefix();
+        List<String> beforeReplace = namesOf(frame);
+        frame.prefixField().setText("change");
+        frame.replaceFirstPrefix();
+        List<String> afterReplace = namesOf(frame);
+        if (afterReplace.equals(beforeReplace)) {
+            problems.add("「替换首个前缀」一个表名都没改");
+        }
+        for (String n : afterReplace) {
+            if (!n.startsWith("change_")) {
+                problems.add("换首段后表名不是 change_ 开头：" + n);
+            }
+        }
+        if (!frame.logPanel().contains("[换前缀完成] 共改 " + afterReplace.size() + " 张表")) {
+            problems.add("替换首个前缀没有汇总改了几张表");
+        }
+        // 没有下划线的表名要跳过并写明，不能静默少改
+        frame.prefixField().setText("ods");
+        frame.applyPrefix();
+        frame.prefixField().setText("change");
+        int n1 = namesOf(frame).size();
+        frame.replaceFirstPrefix();
+        if (namesOf(frame).size() != n1) {
+            problems.add("替换首段改变了表的数量");
+        }
+
+        frame.dropExistingBox().setSelected(true);
+        frame.refreshPreview();
+        if (!frame.ddlText().contains("DROP TABLE IF EXISTS")) {
+            problems.add("勾了「覆盖已存在表」但 DDL 预览里没有 DROP");
+        }
+        frame.dropExistingBox().setSelected(false);
+        frame.refreshPreview();
+        if (frame.ddlText().contains("DROP TABLE IF EXISTS")) {
+            problems.add("没勾「覆盖已存在表」DDL 预览里却出现了 DROP");
         }
     }
 }
