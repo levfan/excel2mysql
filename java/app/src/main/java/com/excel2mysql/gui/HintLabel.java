@@ -20,6 +20,8 @@ public final class HintLabel extends JLabel {
 
 
     public HintLabel() {
+        setFont(getFont().deriveFont(java.awt.Font.BOLD));
+        setToolTipText("提示条文字可复制：拖选或双击整行复制到剪贴板");
         addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
@@ -43,5 +45,10 @@ public final class HintLabel extends JLabel {
 
     public String hintText() {
         return getText() == null ? "" : getText();
+    }
+
+    /** 自检判色用：绿色代表已选定目标库，红色代表还没选。 */
+    public boolean isOk() {
+        return getForeground().equals(OK_COLOR);
     }
 }

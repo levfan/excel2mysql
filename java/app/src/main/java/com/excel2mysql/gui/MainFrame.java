@@ -11,6 +11,7 @@ import com.excel2mysql.core.ZipImport;
 
 import com.excel2mysql.core.Config;
 import com.excel2mysql.core.DbClient;
+import com.excel2mysql.core.LogText;
 import javax.swing.BorderFactory;
 
 import javax.swing.BoxLayout;
@@ -61,7 +62,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JTextField portField;
     private javax.swing.JTextField userField;
     private javax.swing.JPasswordField passField;
-    private javax.swing.JTextField dbField;
+    private javax.swing.JComboBox<String> dbCombo;
+    private HintLabel impHint;
     private SqlPage sqlPage;
     private javax.swing.JTabbedPane tabs;
     private DropArea drop;
@@ -87,15 +89,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 两个页签共用上方那条连接栏：口令只有一份，写在页签里会出现"这页连的是哪个库"的歧义
         tabs = new javax.swing.JTabbedPane();
         sqlPage = new SqlPage(this);
+        impHint = new HintLabel();
         tabs.addTab("Excel 导入", buildCenter());
         tabs.addTab("SQL 脚本", sqlPage);
         add(tabs, BorderLayout.CENTER);
+        // 切页也要刷新：两页提示条同源，不刷就会停在"上一个页签当时看到的库"
+        tabs.addChangeListener(e -> refreshDbLabels());
+        refreshDbLabels();
     }
 
     /** 连接栏：口令只进 JPasswordField，全程不落文件、不进日志。 */
     private JPanel buildConnectionBar() {
-        JPanel bar = new JPanel(new BorderLayout(8, 4));
-        bar.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createTitledBorder("MySQL 连接信息"),
+                BorderFactory.createEmptyBorder(2, 8, 6, 8)));
 
         JPanel tools = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
         JButton add = new JButton("添加文件");
@@ -107,7 +115,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         preview = new JButton("预览 DDL");
         preview.addActionListener(e -> refreshPreview());
         connect = new JButton("连接并加载库");
-        connect.addActionListener(e -> connectAndLoad());
+        connect.addActionListener(e -> {
+            String failure = loadDatabases();
+            if (failure != null) {
+                critical(failure);
+            }
+        });
         importBtn = new JButton("开始导入");
         importBtn.setEnabled(false);
         importBtn.addActionListener(e -> startImport());
@@ -131,29 +144,52 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tools.add(applyPrefix);
         tools.add(replacePrefix);
         tools.add(dropExisting);
-        tools.add(connect);
         tools.add(clearLog);
         tools.add(importBtn);
 
         JPanel fields = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
         hostField = new javax.swing.JTextField(12);
+        javax.swing.event.DocumentListener refresher = new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                refreshDbLabels();
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                refreshDbLabels();
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                refreshDbLabels();
+            }
+        };
         portField = new javax.swing.JTextField(5);
         userField = new javax.swing.JTextField(10);
         passField = new javax.swing.JPasswordField(10);
-        dbField = new javax.swing.JTextField(14);
+        dbCombo = new javax.swing.JComboBox<String>();
+        // 库列表要先连上服务器才拿得到，没加载之前下拉是禁用的：
+        // 让用户手填库名，等于把"连到一个不存在的库"推迟到导入那一刻才爆
+        dbCombo.setEnabled(false);
+        dbCombo.setPreferredSize(new Dimension(180, 24));
+        dbCombo.addActionListener(e -> refreshDbLabels());
         hostField.setText("127.0.0.1");
         portField.setText("3306");
         userField.setText("root");
-        fields.add(new JLabel("主机"));
+        hostField.getDocument().addDocumentListener(refresher);
+        portField.getDocument().addDocumentListener(refresher);
+        fields.add(new JLabel("主机："));
         fields.add(hostField);
-        fields.add(new JLabel("端口"));
+        fields.add(new JLabel("端口："));
         fields.add(portField);
-        fields.add(new JLabel("用户"));
+        fields.add(new JLabel("用户名："));
         fields.add(userField);
-        fields.add(new JLabel("口令"));
+        fields.add(new JLabel("密码："));
         fields.add(passField);
-        fields.add(new JLabel("库"));
-        fields.add(dbField);
+        fields.add(new JLabel("目标库："));
+        fields.add(dbCombo);
+        fields.add(connect);
 
         status = new JLabel("尚未连接");
         JPanel south = new JPanel(new BorderLayout());
@@ -166,11 +202,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     private java.awt.Component buildCenter() {
         drop = new DropArea(paths -> {
-            if (paths.isEmpty()) {
-                log("拖拽里没有可读取的文件");
-            } else {
-                addFiles(paths);
+            List<String> accepted = new ArrayList<String>();
+            for (String p : paths) {
+                String low = p.toLowerCase();
+                if (low.endsWith(".xlsx") || low.endsWith(".xls") || low.endsWith(".zip")) {
+                    accepted.add(p);
+                }
             }
+            if (accepted.isEmpty()) {
+                log("[提示] 拖入的不是 Excel 或 ZIP 文件，已忽略。");
+                return;
+            }
+            addFiles(accepted);
         });
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
@@ -209,45 +252,134 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         pageProgress = new javax.swing.JProgressBar();
         pageProgress.setPreferredSize(new Dimension(200, 18));
         JPanel page = new JPanel(new BorderLayout());
+        page.add(impHint, BorderLayout.NORTH);
         page.add(stacked, BorderLayout.CENTER);
         page.add(pageProgress, BorderLayout.SOUTH);
         return page;
     }
 
-    /** 连接并加载库：口令只从这里读，连上之前"开始导入"保持禁用。 */
-    public boolean connectAndLoad() {
+    /** 界面上的连接信息拼成一份 Config；口令只在这一步离开输入框，不落文件。 */
+    public Config currentConfig() {
         Config cfg = new Config();
         cfg.host = hostField.getText().trim();
         try {
             cfg.port = Integer.parseInt(portField.getText().trim());
         } catch (NumberFormatException e) {
-            log("端口不是数字：" + portField.getText());
-            return false;
+            cfg.port = -1;            // 交给下游按"连不上"处理，日志里会带上端口原文
         }
         cfg.user = userField.getText().trim();
         cfg.password = new String(passField.getPassword());
-        cfg.database = dbField.getText().trim();
-        if (!cfg.hasDatabase()) {
-            log("没填目标库，拒绝连接——不然会连到服务器上随便挑一个库");
-            return false;
+        cfg.database = selectedDatabase();
+        return cfg;
+    }
+
+    public String selectedDatabase() {
+        Object v = dbCombo.getSelectedItem();
+        return v == null ? "" : String.valueOf(v).trim();
+    }
+
+    /** 自检与命令行入口选库用；真实用户是从下拉里点，两条路走的是同一个模型。 */
+    public void setSelectedDatabase(String db) {
+        if (dbCombo.getItemCount() == 0) {
+            dbCombo.addItem(db);
+            dbCombo.setEnabled(true);
+        } else {
+            boolean known = false;
+            for (int i = 0; i < dbCombo.getItemCount(); i++) {
+                if (db.equals(dbCombo.getItemAt(i))) {
+                    dbCombo.setSelectedIndex(i);
+                    known = true;
+                    break;
+                }
+            }
+            if (!known) {
+                dbCombo.addItem(db);
+                dbCombo.setSelectedItem(db);
+            }
         }
+        refreshDbLabels();
+    }
+
+    public boolean databaseChooserEnabled() {
+        return dbCombo.isEnabled();
+    }
+
+    /**
+     * 连接服务器并列出库。返回 null 表示成功；非 null 是弹窗正文，
+     * 与日志用的是同一份展开文案（对应 main.py:1334-1355）。
+     */
+    public String loadDatabases() {
+        Config cfg = currentConfig();
         try {
             DbClient client = new DbClient(cfg);
             List<String> dbs = client.listDatabases();
             client.close();
+            String previous = selectedDatabase();
+            dbCombo.removeAllItems();
+            for (String d : dbs) {
+                dbCombo.addItem(d);
+            }
+            dbCombo.setEnabled(true);
+            if (!previous.isEmpty() && dbs.contains(previous)) {
+                dbCombo.setSelectedItem(previous);
+            }
             config = cfg;
             connected = true;
             importBtn.setEnabled(!tables.isEmpty());
-            status.setText("已连接 " + cfg.host + ":" + cfg.port + " / " + cfg.database
-                    + "（服务器上共 " + dbs.size() + " 个库）");
-            log(status.getText());
-            return true;
+            status.setText("已连接 " + cfg.host + ":" + cfg.port + "，服务器上共 "
+                    + dbs.size() + " 个库");
+            log("[已加载] 可用数据库：" + String.join(", ", dbs));
+            refreshDbLabels();
+            return null;
         } catch (Exception e) {
             connected = false;
-            logError("连接失败：" + e.getMessage());
+            dbCombo.setEnabled(false);
             status.setText("连接失败");
-            return false;
+            String detail = LogText.describe(e);
+            logError("[连接失败] 无法连接到 " + cfg.host + ":" + cfg.port + "（用户 "
+                    + cfg.user + "），库列表未加载" + LogText.NL + LogText.indentDetail(detail));
+            refreshDbLabels();
+            return detail;
         }
+    }
+
+    /**
+     * 两页顶部的目标库提示条同源刷新：一条说 Excel 导到哪，一条说 SQL 跑到哪。
+     * 各写一份的话，用户会在两个页签看到两个"当前库"。
+     */
+    public void refreshDbLabels() {
+        if (impHint == null) {
+            return;     // 连接栏比页签里的提示条先建，输入框赋初值时这里还不能动它们
+        }
+        String db = selectedDatabase();
+        if (db.isEmpty()) {
+            String text = "⚠ " + LogText.NO_DB_HINT;
+            impHint.setBad(text);
+            if (sqlPage != null) {
+                sqlPage.setHint(false, text);
+            }
+            return;
+        }
+        String head = "当前目标库：" + db + "（" + hostField.getText().trim() + ":"
+                + portField.getText().trim() + "）——";
+        impHint.setOk(head + "Excel 数据将导入到这个库");
+        if (sqlPage != null) {
+            sqlPage.setHint(true, head + "SQL 脚本将执行到这个库");
+        }
+    }
+
+    public String excelHintText() {
+        return impHint.hintText();
+    }
+
+    public boolean excelHintIsOk() {
+        return impHint.isOk();
+    }
+
+    /** 弹窗按严重级区分：连接失败这种必须用 error 级挡在前面。 */
+    public void critical(String text) {
+        javax.swing.JOptionPane.showMessageDialog(this, text, "连接失败",
+                javax.swing.JOptionPane.ERROR_MESSAGE);
     }
 
     /** 一张表的成功/失败，只带文件路径：收尾要按文件决定留不留。 */
@@ -262,8 +394,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 导入收尾：汇总日志 → 成功的文件移出列表、失败的留着便于改了再试 →
-     * 弹窗与日志双写 → 进度归零。对应 main.py:1579-1613 的 _on_finished_all。
+     * 导入收尾：汇总日志 -> 成功的文件移出列表、失败的留着便于改了再试 ->
+     * 把要在弹窗里重复的那句话返回给调用方。对应 main.py:1579-1613。
      */
     public String finishImport(List<ImportOutcome> outcomes, boolean cancelled) {
         int ok = 0;
@@ -311,7 +443,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         StringBuilder msg = new StringBuilder("成功 ").append(ok).append(" 张表，失败 ")
                 .append(fail).append(" 张表。");
         if (!removed.isEmpty()) {
-            msg.append(NEWLINE + "已从待导入列表移除 ").append(removed.size()).append(" 个成功文件。");
+            msg.append(NEWLINE + "已从待导入列表移除 ").append(removed.size())
+                    .append(" 个成功文件。");
         }
         if (fail > 0) {
             msg.append(NEWLINE + "失败文件保留在列表中，可调整后重试。");
@@ -319,9 +452,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         msg.append(NEWLINE + "详见日志。");
         return msg.toString();
     }
-
-    /** Java 源里的换行转义容易被工具链吃掉，弹窗文案统一走这个常量。 */
-    private static final String NEWLINE = String.valueOf((char) 10);
 
     private static String names(List<TableOps.Table> list) {
         List<String> out = new ArrayList<String>();
@@ -331,12 +461,20 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return String.join("、", out);
     }
 
+    /** Java 源里的换行转义容易被工具链吃掉，弹窗文案统一走这个常量。 */
+    private static final String NEWLINE = String.valueOf((char) 10);
+
     /** 导入在子线程跑，界面靠模态进度框报进度并可取消。 */
     public void startImport() {
         if (!connected || config == null) {
             log("还没连接，不能导入");
             return;
         }
+        if (!currentConfig().hasDatabase()) {
+            warn(LogText.NO_DB_HINT);
+            return;
+        }
+        config = currentConfig();
         if (tables.isEmpty()) {
             log("没有可导入的表");
             return;
@@ -673,6 +811,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public int pageProgressValue() {
         return pageProgress == null ? -1 : pageProgress.getValue();
+    }
+
+    public javax.swing.JTextField hostField() {
+        return hostField;
     }
 
     public DropArea dropArea() {

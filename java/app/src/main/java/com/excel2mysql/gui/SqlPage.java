@@ -87,6 +87,7 @@ public final class SqlPage extends JPanel {
     private final LogPanel logPanel = new LogPanel();
     private final JTextField prefixField;
     private final JButton runButton;
+    private final HintLabel hint = new HintLabel();
 
     public SqlPage(Host host) {
         this.host = host;
@@ -176,7 +177,10 @@ public final class SqlPage extends JPanel {
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
         split.setResizeWeight(0.45);
 
-        add(topRow, BorderLayout.NORTH);
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(hint, BorderLayout.NORTH);
+        north.add(topRow, BorderLayout.SOUTH);
+        add(north, BorderLayout.NORTH);
         add(split, BorderLayout.CENTER);
     }
 
@@ -225,6 +229,23 @@ public final class SqlPage extends JPanel {
             }
         }
         return false;
+    }
+
+    /** 目标库提示条由主窗口同源刷新，两页说的是同一个库。 */
+    public void setHint(boolean ok, String message) {
+        if (ok) {
+            hint.setOk(message);
+        } else {
+            hint.setBad(message);
+        }
+    }
+
+    public String hintText() {
+        return hint.hintText();
+    }
+
+    public boolean hintIsOk() {
+        return hint.isOk();
     }
 
     public LogPanel logPanel() {
