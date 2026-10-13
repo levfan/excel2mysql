@@ -55,21 +55,36 @@ call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\targ
 
 echo.
 echo === 5/9 表名与字段名金标准差分 ===
-call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
   com.excel2mysql.verify.NameDiffer ^
-  verify\golden\excel.jsonl.gz || exit /b 1
+  verify\golden\excel.jsonl.gz verify\fixtures || exit /b 1
+
+echo.
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
+  com.excel2mysql.verify.NameDiffer ^
+  verify\golden\xls.jsonl.gz verify\fixtures || exit /b 1
 
 echo.
 echo === 6/9 类型推断金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
   com.excel2mysql.verify.TypeDiffer ^
-  verify\golden\excel.jsonl.gz || exit /b 1
+  verify\golden\excel.jsonl.gz verify\fixtures || exit /b 1
+
+echo.
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes" ^
+  com.excel2mysql.verify.TypeDiffer ^
+  verify\golden\xls.jsonl.gz verify\fixtures || exit /b 1
 
 echo.
 echo === 7/9 读取层逐格金标准差分 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
   com.excel2mysql.verify.ReaderDiffer ^
   verify\golden\excel.jsonl.gz verify\fixtures || exit /b 1
+
+echo.
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
+  com.excel2mysql.verify.ReaderDiffer ^
+  verify\golden\xls.jsonl.gz verify\fixtures || exit /b 1
 
 echo.
 echo === 8/9 SQL 脚本线与 DDL 金标准差分 ===
