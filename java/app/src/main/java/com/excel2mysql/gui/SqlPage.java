@@ -208,17 +208,22 @@ public final class SqlPage extends JPanel {
         JButton clearLog = new JButton("清除日志");
         clearLog.addActionListener(e -> logPanel.clearLog());
 
-        JPanel prefixRow = flow();
-        prefixRow.add(new JLabel("表名前缀："));
-        prefixRow.add(prefixField);
-        prefixRow.add(apply);
-        prefixRow.add(replace);
+        // 前缀行按 Python 的 addWidget(ed_sql_prefix, 1)：输入框吃掉剩余宽度，两颗按钮贴右
+        JPanel prefixBtns = flow();
+        prefixBtns.add(apply);
+        prefixBtns.add(replace);
+        JPanel prefixRow = new JPanel(new BorderLayout(6, 0));
+        prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
+        prefixRow.add(prefixField, BorderLayout.CENTER);
+        prefixRow.add(prefixBtns, BorderLayout.EAST);
 
-        JPanel actRow = flow();
-        actRow.add(save);
-        actRow.add(runButton);
-        actRow.add(new BoxFill());
-        actRow.add(clearLog);
+        // 保存/执行在左、清除日志在右（main.py:1178-1183 的 addStretch(1)）
+        JPanel runBtns = flow();
+        runBtns.add(save);
+        runBtns.add(runButton);
+        JPanel actRow = new JPanel(new BorderLayout());
+        actRow.add(runBtns, BorderLayout.WEST);
+        actRow.add(clearLog, BorderLayout.EAST);
 
         JPanel actions = new JPanel(new BorderLayout());
         actions.add(prefixRow, BorderLayout.NORTH);
@@ -245,6 +250,16 @@ public final class SqlPage extends JPanel {
         split.setResizeWeight(0.25);
         split.setDividerLocation(260);
         split.setContinuousLayout(true);
+        // 与 Excel 页同一件事：Qt 的 setSizes([260,290]) 会等比缩放，JSplitPane 只认绝对值
+        splitPlaced = false;
+        sqlUpper = upper;
+        sqlLog = logScroll;
+        split.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                applySplitProportions();
+            }
+        });
 
         JPanel north = new JPanel(new BorderLayout());
         north.add(hint, BorderLayout.NORTH);
@@ -255,13 +270,6 @@ public final class SqlPage extends JPanel {
 
     private static JPanel flow() {
         return new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
-    }
-
-    /** 一行里把剩余空间顶开，等价于 Qt 的 addStretch(1)。 */
-    private static final class BoxFill extends javax.swing.Box.Filler {
-        BoxFill() {
-            super(new Dimension(0, 0), new Dimension(20, 0), new Dimension(32767, 0));
-        }
     }
 
     // ---------------------------------------------------------------- 数据
@@ -329,6 +337,22 @@ public final class SqlPage extends JPanel {
     /** 分栏的三个配置值：离屏环境里量不准实际高度，配的是什么至少能核对。 */
     public int splitDividerSize() {
         return split.getDividerSize();
+    }
+
+    private java.awt.Component sqlUpper;
+    private java.awt.Component sqlLog;
+    private boolean splitPlaced;
+
+    /** 表格与日志按 260:290 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
+    public void applySplitProportions() {
+        if (splitPlaced || split == null || split.getHeight() < 120
+                || sqlUpper == null || sqlLog == null) {
+            return;
+        }
+        splitPlaced = true;
+        int usable = split.getHeight() - split.getDividerSize();
+        int first = (int) Math.round(usable * 260.0 / 550.0);
+        split.setDividerLocation(Math.max(first, sqlUpper.getMinimumSize().height));
     }
 
     public double splitResizeWeight() {
