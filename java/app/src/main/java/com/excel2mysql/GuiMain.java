@@ -89,6 +89,12 @@ public final class GuiMain {
                 if (!frame.logPanel().contains("[添加结果] 添加 7 项文件")) {
                     problems.add("弹窗那句话没同时写进日志");
                 }
+                if (!"添加结果".equals(frame.lastDialogTitle())) {
+                    problems.add("添加结果弹窗标题不对：" + frame.lastDialogTitle());
+                }
+                if (!frame.lastDialogText().contains("添加 7 项文件")) {
+                    problems.add("弹窗正文与日志不是同一句话：" + frame.lastDialogText());
+                }
                 if (tables != 7) {
                     problems.add("表数期望 7，实际 " + tables + "（有文件解析失败，看日志）");
                 }
