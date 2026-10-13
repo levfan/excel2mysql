@@ -89,6 +89,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private ProgressDialog lastTask;
     private String lastDialogTitle = "";
     private String lastDialogText = "";
+    private boolean lastDialogIsError;
     private javax.swing.JTabbedPane tabs;
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
@@ -683,7 +684,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     SwingUtilities.invokeLater(() -> {
                         progress.close();
                         endTask();
-                        taskCrash(t, true);
+                        crashMessage(t);
                     });
                     return;
                 }
@@ -703,7 +704,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             out = work.apply(quietSink());
         } catch (Throwable t) {
             endTask();
-            taskCrash(t, false);
+            crashMessage(t);
             return;
         }
         endTask();
@@ -743,14 +744,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 return false;
             }
         };
-    }
-
-    /** 任务出意外：日志必写，弹窗只在模态模式下要（自检在事件分发线程上，弹窗会卡死）。 */
-    private void taskCrash(Throwable t, boolean showDialog) {
-        String text = crashMessage(t);
-        if (showDialog) {
-            inform2("任务异常", text);
-        }
     }
 
     /** 有长任务在跑吗：护栏与自检都读这一个判定，不留两套状态。 */
@@ -936,7 +929,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private final Map<String, String> zipOrigin = new java.util.LinkedHashMap<String, String>();
 
     /** 解析结果落到界面：子线程只算数据，列表、前缀、状态与弹窗都在这里改。 */
-    private String finishAdd(ImportParse.Outcome outcome) {
+    public String finishAdd(ImportParse.Outcome outcome) {
         zipOrigin.putAll(outcome.zipOrigin);
         for (TableBuilder.Result r : outcome.tables) {
             tables.add(r.table);
@@ -1202,15 +1195,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             if (restore != null) {
                 restore.run();
             }
-            inform2("任务异常", LogText.crashDialog(msg));
+            informError("任务异常", LogText.crashDialog(msg));
         });
     }
 
-    /** 自检走同一份文案，只是不弹窗（EDT 上的模态框会把自检卡死）。 */
+    /**
+     * 任务出意外的同一句话：写错误级日志，再走"任务异常"弹窗。
+     * 弹窗只在模态模式下真开——自检站在事件分发线程上，模态框会把自检自己卡死，
+     * 但标题/正文/图标这三样照样留痕，两条路断的是同一份数据。
+     */
     public String crashMessage(Throwable t) {
         String msg = LogText.describe(t);
         logError(LogText.crashLog(msg));
-        return LogText.crashDialog(msg);
+        String text = LogText.crashDialog(msg);
+        informError("任务异常", text);
+        return text;
     }
 
     /** 页内进度条：导入按"当前表完成数 / 总表数"报百分比，跑完归零。 */
@@ -1351,14 +1350,26 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 任务异常），一律写"提示"等于把"这是哪类结果"的分类信息丢掉。
      */
     public void inform2(String title, String text) {
+        dialog(title, text, false);
+    }
+
+    /** 出错类弹窗：Python 用 QMessageBox.critical，图标也是"这次没做成"的一部分。 */
+    @Override
+    public void informError(String title, String text) {
+        dialog(title, text, true);
+    }
+
+    private void dialog(String title, String text, boolean error) {
         lastDialogTitle = title;
         lastDialogText = text == null ? "" : text;
+        lastDialogIsError = error;
         if (!modalProgress || lastDialogText.isEmpty()) {
             // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
             return;
         }
         javax.swing.JOptionPane.showMessageDialog(this, lastDialogText, title,
-                javax.swing.JOptionPane.INFORMATION_MESSAGE);
+                error ? javax.swing.JOptionPane.ERROR_MESSAGE
+                        : javax.swing.JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** 最后一次弹窗的标题与正文：两条路都写满，自检读这一份，模态那条才真弹。 */
@@ -1368,6 +1379,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public String lastDialogText() {
         return lastDialogText;
+    }
+
+    /** 最后一次弹窗是不是出错图标那一档（任务异常用 critical，其余用 information）。 */
+    public boolean lastDialogIsError() {
+        return lastDialogIsError;
     }
 
     /** 拦下的操作除了弹窗还要落一行日志：弹窗关掉就没了，日志才是可回溯的那份。 */
