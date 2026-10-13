@@ -299,6 +299,24 @@ public final class GuiMain {
         if (!dlg.cellEditable(0, 0, 1)) {
             problems.add("字段名列不可编辑，弹窗就白摆");
         }
+        // 点 X / 按 Esc 关掉要等同"取消"：没按确定就绝不能把编辑写回表定义
+        com.excel2mysql.gui.StructureDialog dismissed =
+                new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
+        String commentBefore = frame.tables().get(0).columns.get(0).comment;
+        dismissed.setModelValue(0, 0, 2, "改了但没按确定");
+        dismissed.dispose();
+        if (dismissed.isConfirmed()) {
+            problems.add("没按确定却算已确认");
+        }
+        if (!dismissed.closesOnEscape()) {
+            problems.add("Esc 没绑成\"关掉等同取消\"，Qt 的 QDialog 按 Esc 是 reject");
+        }
+        if (dismissed.getDefaultCloseOperation() != javax.swing.WindowConstants.DISPOSE_ON_CLOSE) {
+            problems.add("点 X 的默认动作不是销毁窗口，和取消不是一回事");
+        }
+        if (!commentBefore.equals(frame.tables().get(0).columns.get(0).comment)) {
+            problems.add("只关掉没按确定，编辑却写回了表定义");
+        }
         com.excel2mysql.core.Infer.Column c0 = frame.tables().get(0).columns.get(0);
         String fieldBefore = c0.field;
         String typeBefore = c0.type;
