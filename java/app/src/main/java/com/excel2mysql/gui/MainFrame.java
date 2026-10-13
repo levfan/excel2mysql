@@ -90,7 +90,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JTabbedPane tabs;
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
-    private javax.swing.JTextField prefixField;
+    private HintTextField prefixField;
     private javax.swing.JCheckBox dropExisting;
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
     private final Map<TableOps.Table, TableBuilder.Result> byTable =
@@ -220,8 +220,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         stopBtn = new JButton("停止");
         stopBtn.setEnabled(false);
         stopBtn.addActionListener(e -> stopTask());
-        prefixField = new javax.swing.JTextField(18);
-        prefixField.setToolTipText(PREFIX_HINT);
+        prefixField = new HintTextField(18, PREFIX_HINT);
         JButton applyPrefix = new JButton("批量应用前缀");
         applyPrefix.addActionListener(e -> applyPrefix());
         JButton replacePrefix = new JButton("替换首个前缀");
@@ -1146,7 +1145,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 自检与命令行入口要能按用户的方式操作这两个控件，而不是绕过界面直接改数据。 */
-    public javax.swing.JTextField prefixField() {
+    public HintTextField prefixField() {
         return prefixField;
     }
 

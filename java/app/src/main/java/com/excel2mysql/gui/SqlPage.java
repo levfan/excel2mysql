@@ -85,7 +85,7 @@ public final class SqlPage extends JPanel {
     private final DefaultTableModel model;
     private final JTable table;
     private final LogPanel logPanel = new LogPanel();
-    private final JTextField prefixField;
+    private final HintTextField prefixField;
     private final JButton runButton;
     private final HintLabel hint = new HintLabel();
 
@@ -128,8 +128,7 @@ public final class SqlPage extends JPanel {
                 log("没选中文件，未移除任何脚本");
             }
         });
-        prefixField = new JTextField(18);
-        prefixField.setToolTipText(PREFIX_HINT);
+        prefixField = new HintTextField(18, PREFIX_HINT);
         JButton apply = new JButton("批量应用前缀");
         apply.addActionListener(e -> {
             String hint = applyPrefix();
@@ -261,6 +260,10 @@ public final class SqlPage extends JPanel {
 
     public LogPanel logPanel() {
         return logPanel;
+    }
+
+    public HintTextField prefixField() {
+        return prefixField;
     }
 
     public String prefixText() {
