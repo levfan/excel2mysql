@@ -3,6 +3,7 @@ package com.excel2mysql.gui;
 import com.excel2mysql.core.AppInfo;
 import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.ImportParse;
+import com.excel2mysql.core.ImportRun;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.PinyinLoader;
@@ -53,7 +54,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             + "表名里没有下划线的（如 users）不动，日志会列出。末尾下划线不用写";
 
     private final FileRowModel fileModel = new FileRowModel();
-    private final javax.swing.JTable table = new javax.swing.JTable(fileModel);
+    private final javax.swing.JTable table = new javax.swing.JTable(fileModel) {
+        @Override
+        public java.awt.Component prepareRenderer(javax.swing.table.TableCellRenderer renderer,
+                                                  int row, int column) {
+            java.awt.Component c = super.prepareRenderer(renderer, row, column);
+            // 只给"文件"那一列挂来源：一行的 tooltip 太长会盖住别的列
+            if (c instanceof javax.swing.JComponent && column == 0) {
+                ((javax.swing.JComponent) c).setToolTipText(fileModel.tooltipAt(row));
+            }
+            return c;
+        }
+    };
     private final JTextArea ddl = new JTextArea();
     private final LogPanel logPanel = new LogPanel();
     private JLabel status;
@@ -86,7 +98,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 标题带版本号：不点开「关于」也能看见现场跑的是哪一版
         super(AppInfo.load().titleText());
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1080, 700);
+        setSize(1100, 780);
+        applyWindowIcon();
         setLocationByPlatform(true);
         setLayout(new BorderLayout());
 
@@ -105,6 +118,23 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tabs.addChangeListener(e -> refreshDbLabels());
         bindHelpKey();
         refreshDbLabels();
+    }
+
+    /**
+     * 窗口图标。源图只有 assets/app_icon.ico 一份，Java 的 ImageIO 不认 ico 容器，
+     * 所以由 tools/export_icon_png.py 把里面最大的那张 PNG 抽成随包资源。
+     */
+    private void applyWindowIcon() {
+        try {
+            java.net.URL u = MainFrame.class.getResource("/app_icon.png");
+            if (u == null) {
+                log("! 缺 app_icon.png，窗口用系统默认图标");
+                return;
+            }
+            setIconImage(javax.imageio.ImageIO.read(u));
+        } catch (Exception e) {
+            log("! 读窗口图标失败：" + LogText.describe(e));
+        }
     }
 
     /**
@@ -525,75 +555,41 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             log("没有可导入的表");
             return;
         }
-        final List<TableOps.Table> todo = new ArrayList<TableOps.Table>(tables);
+        final List<TableBuilder.Result> work = new ArrayList<TableBuilder.Result>();
+        for (TableOps.Table t : tables) {
+            TableBuilder.Result r = byTable.get(t);
+            if (r != null) {
+                work.add(r);
+            }
+        }
         // 勾选状态在 EDT 上读一次：子线程里再点组件属于跨线程摸 Swing
         final boolean drop = dropExisting.isSelected();
+        final Config cfg = config;
         final ProgressDialog progress = new ProgressDialog(this, "开始导入");
-        progress.setTotal(todo.size() * 2);
+        final ImportParse.Sink sink = sinkFor(progress);
         setEnabledForRun(false);
         setPageProgress(0);
         Thread worker = new Thread(() -> {
             try {
-            List<ImportOutcome> outcomes = new ArrayList<ImportOutcome>();
-            int done = 0;
-            DbClient db = null;
-            try {
-                db = new DbClient(config);
-            } catch (Exception e) {
-                final String message = e.getMessage();
-                SwingUtilities.invokeLater(() -> logError("连接失败：" + message));
-                setEnabledForRun(true);
-                progress.close();
-                return;
-            }
-            final DbClient client = db;
-            for (TableOps.Table t : todo) {
-                if (progress.isCancelled()) {
-                    break;
+                final List<ImportRun.Row> rows = ImportRun.run(cfg, work, drop, sink,
+                        new ImportRun.RowProgress() {
+                            @Override
+                            public void onTableProgress(final int done, final int total) {
+                                final int percent = total <= 0 ? 0 : (int) (done * 100L / total);
+                                SwingUtilities.invokeLater(() -> setPageProgress(percent));
+                            }
+                        });
+                final List<ImportOutcome> outcomes = new ArrayList<ImportOutcome>();
+                for (ImportRun.Row r : rows) {
+                    outcomes.add(new ImportOutcome(r.filepath, r.ok));
                 }
-                TableBuilder.Result r = byTable.get(t);
-                done++;
-                // 建表失败也会 continue 走出这一轮，所以计数放在开头：
-                // 半途失败的表照样占一格，进度条不会停在"看起来还剩几张"
-                reportTableProgress(done, todo.size());
-                progress.step("建表 " + t.tableName);
-                try {
-                    client.createTable(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, drop));
-                } catch (Exception e) {
-                    final String message = e.getMessage();
-                    SwingUtilities.invokeLater(() -> logError("建表失败 " + t.tableName + " — " + message));
-                    outcomes.add(new ImportOutcome(t.filepath, false));
-                    continue;
-                }
-                progress.step("写入 " + t.tableName);
-                try {
-                    final String label = t.tableName;
-                    long written = client.insertData(t.tableName, t.columns,
-                            r == null ? new ArrayList<Object>() : r.headers,
-                            r == null ? new ArrayList<List<Object>>() : r.rows,
-                            new DbClient.WarnCallback() {
-                                public void onWarn(String m) {
-                                    SwingUtilities.invokeLater(() -> log(m));
-                                }
-                            }, null);
-                    final long rows = written;
-                    SwingUtilities.invokeLater(() -> log("导入完成 " + label + " 写入 " + rows + " 行"));
-                } catch (Exception e) {
-                    final String message = e.getMessage();
-                    SwingUtilities.invokeLater(() -> logError("写入失败 " + t.tableName + " — " + message));
-                    outcomes.add(new ImportOutcome(t.filepath, false));
-                    continue;
-                }
-                outcomes.add(new ImportOutcome(t.filepath, true));
-            }
-            client.close();
-            final boolean cancelled = progress.isCancelled();
-            SwingUtilities.invokeLater(() -> {
-                setEnabledForRun(true);
-                progress.close();
-                // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
-                inform(finishImport(outcomes, cancelled));
-            });
+                final boolean cancelled = progress.isCancelled();
+                SwingUtilities.invokeLater(() -> {
+                    setEnabledForRun(true);
+                    progress.close();
+                    // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
+                    inform(finishImport(outcomes, cancelled));
+                });
             } catch (Throwable t) {
                 crash(t, progress, () -> setEnabledForRun(true));
             }
@@ -601,12 +597,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         worker.setDaemon(true);
         worker.start();
         progress.open();
-    }
-
-    /** 进度只按表计：行数在子线程里跳太快，页内那条只会被刷成一团糊的。 */
-    private void reportTableProgress(int done, int total) {
-        final int percent = total <= 0 ? 0 : (int) (done * 100L / total);
-        SwingUtilities.invokeLater(() -> setPageProgress(percent));
     }
 
     private void setEnabledForRun(boolean on) {
@@ -767,12 +757,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         };
     }
 
+    /** 压缩包来源映射：文件列表的 tooltip 要用"包名!包内路径"，光看文件名分不出来源。 */
+    private final Map<String, String> zipOrigin = new java.util.LinkedHashMap<String, String>();
+
     /** 解析结果落到界面：子线程只算数据，列表、前缀、状态与弹窗都在这里改。 */
     private String finishAdd(ImportParse.Outcome outcome) {
+        zipOrigin.putAll(outcome.zipOrigin);
         for (TableBuilder.Result r : outcome.tables) {
             tables.add(r.table);
             byTable.put(r.table, r);
-            fileModel.add(new FileRowModel.Item(r.table, r));
+            FileRowModel.Item item = new FileRowModel.Item(r.table, r);
+            item.origin = zipOrigin.get(r.table.filepath);
+            fileModel.add(item);
         }
         if (!tables.isEmpty()) {
             String prefix = Names.pyStrip(prefixField == null ? "" : prefixField.getText());
@@ -952,6 +948,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tables.clear();
         byTable.clear();
         fileModel.clear();
+        zipOrigin.clear();
         ddl.setText("");
         status.setText("尚未添加文件");
         setPageProgress(0);

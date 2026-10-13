@@ -22,6 +22,8 @@ public final class FileRowModel extends AbstractTableModel {
     public static final class Item {
         public final TableOps.Table table;
         public final TableBuilder.Result result;
+        /** 压缩包展开出来的文件写"包名!包内路径"；散装文件留空，tooltip 退回完整路径。 */
+        public String origin;
 
         public Item(TableOps.Table table, TableBuilder.Result result) {
             this.table = table;
@@ -121,6 +123,15 @@ public final class FileRowModel extends AbstractTableModel {
         items.clear();
         items.addAll(keep);
         fireTableDataChanged();
+    }
+
+    /** 第一列的悬停说明：散装文件看全路径，包内文件看是哪个包的哪一条。 */
+    public String tooltipAt(int row) {
+        Item it = items.get(row);
+        if (it.origin != null && !it.origin.isEmpty()) {
+            return it.origin;
+        }
+        return it.table.filepath == null ? "" : it.table.filepath;
     }
 
     public Item itemAt(int row) {

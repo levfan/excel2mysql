@@ -106,6 +106,17 @@ public final class SqlPage extends JPanel {
         table.getColumnModel().getColumn(0).setPreferredWidth(300);
         table.getColumnModel().getColumn(1).setPreferredWidth(260);
         table.getColumnModel().getColumn(2).setPreferredWidth(130);
+        // 第一列挂完整路径：脚本同名时只靠文件名分不出是哪个目录里的那份（同 Python 的 tooltip）
+        table.getColumnModel().getColumn(0).setCellRenderer(new javax.swing.table.DefaultTableCellRenderer() {
+            @Override
+            public java.awt.Component getTableCellRendererComponent(javax.swing.JTable t, Object v,
+                    boolean selected, boolean focus, int row, int column) {
+                super.getTableCellRendererComponent(t, v, selected, focus, row, column);
+                setToolTipText(row < rowPath.size() ? rowPath.get(row) : "");
+                return this;
+            }
+        });
+
         JScrollPane scroll = new JScrollPane(table);
         scroll.setMinimumSize(new Dimension(300, 120));
 
@@ -468,10 +479,13 @@ public final class SqlPage extends JPanel {
         }
         final Config conf = cfg;
         final ProgressDialog progress = new ProgressDialog(host.owner(), "执行脚本到当前库");
-        // 进度按文件计：语句级计数在几十万条的脚本上会把进度框刷成一片糊，
-        // 而"跑到第几个文件"恰好是取消时最该知道的信息
-        progress.setTotal(todo.size());
-        progress.step("切分语句");
+        // 计项按语句：一个脚本几万条时也照样推进，但每个文件最多刷约 100 次，
+        // 不然进度框会被刷屏到看不出动静
+        int totalStatements = 0;
+        for (List<String> stmts : plans) {
+            totalStatements += stmts.size();
+        }
+        progress.setTotal(Math.max(1, totalStatements));
         runButton.setEnabled(false);
         Thread worker = new Thread(() -> {
             try {
@@ -505,9 +519,32 @@ public final class SqlPage extends JPanel {
                     progress.step(fname);
                     continue;
                 }
-                SqlRunner.FileResult r = SqlRunner.runText(client, fname, e.text);
-                progress.step(fname);
-                if (r.ok) {
+                final int size = stmts.size();
+                final int chunk = Math.max(1, size / 100);
+                final int[] reported = {0};
+                SqlRunner.FileResult r = SqlRunner.runText(client, fname, e.text,
+                        new SqlRunner.StatementHook() {
+                            @Override
+                            public boolean cancelled() {
+                                return progress.isCancelled();
+                            }
+
+                            @Override
+                            public void onStatement(int done, int total) {
+                                if (done - reported[0] >= chunk) {
+                                    progress.advance(chunk, fname + " 第 " + done + "/" + total + " 条");
+                                    reported[0] = done;
+                                }
+                            }
+                        });
+                // 把余数补齐，进度条总数才落得准
+                progress.advance(Math.max(0, size - reported[0]), fname + " 收尾");
+                if (r.cancelled) {
+                    // 取消的文件既不算成功也不算失败，但它确实被处理过了
+                    ok++;
+                    log("[已取消] " + fname + "：已执行 " + r.executed + "/" + size + " 条，"
+                            + "本文件事务已回滚" + LogText.NL + "    " + LogText.ROLLBACK_NOTE);
+                } else if (r.ok) {
                     ok++;
                     log("[提交] " + fname + "：" + r.executed + " 条语句已提交");
                 } else {

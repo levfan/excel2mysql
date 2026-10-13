@@ -29,6 +29,18 @@ public final class SqlRunner {
         public int failedAt;
         public int executed;
         public String failedSql;
+        /** 中途被用户取消：本文件已回滚，没提交。 */
+        public boolean cancelled;
+    }
+
+    /**
+     * 逐条语句的回报口：进度按语句推进，取消也要在两条语句之间检查——
+     * 一个几十分钟的脚本只能"跑完这个文件才停"是不够的。
+     */
+    public interface StatementHook {
+        boolean cancelled();
+
+        void onStatement(int done, int total);
     }
 
     private SqlRunner() {
@@ -71,6 +83,10 @@ public final class SqlRunner {
      * 用磁盘上的原文执行会建出一批没改名的表。
      */
     public static FileResult runText(DbClient db, String file, String text) {
+        return runText(db, file, text, null);
+    }
+
+    public static FileResult runText(DbClient db, String file, String text, StatementHook hook) {
         FileResult r = new FileResult();
         r.file = file;
         List<String> statements = SqlScript.splitStatements(text);
@@ -80,6 +96,16 @@ public final class SqlRunner {
         try {
             st = db.connection().createStatement();
             for (int pos = 0; pos < statements.size(); pos++) {
+                if (hook != null && hook.cancelled()) {
+                    r.executed = pos;
+                    try {
+                        db.connection().rollback();
+                    } catch (SQLException ignored) {
+                        // 取消时的回滚失败不覆盖"已取消"这件事
+                    }
+                    r.cancelled = true;
+                    return r;
+                }
                 String sql = statements.get(pos);
                 try {
                     st.execute(sql);
@@ -90,6 +116,9 @@ public final class SqlRunner {
                     throw e;
                 }
                 r.executed = pos + 1;
+                if (hook != null) {
+                    hook.onStatement(pos + 1, statements.size());
+                }
             }
             db.connection().commit();
             r.ok = true;
