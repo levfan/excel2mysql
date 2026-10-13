@@ -54,6 +54,11 @@ public final class SqlPage extends JPanel {
 
         void informError(String title, String text);
 
+        /** 耗时操作交给主窗口的任务位跑：子线程算 + 进度框 + 回事件分发线程落界面。 */
+        void runSqlTask(String title,
+                        java.util.function.Function<com.excel2mysql.core.ImportParse.Sink, Object> work,
+                        java.util.function.Consumer<Object> onUi);
+
         void warn(String text);
     }
 
@@ -74,6 +79,30 @@ public final class SqlPage extends JPanel {
     }
 
     private static final String[] COLUMNS = {"文件", "原表名", "CREATE 出现次数", "当前表名"};
+
+    /**
+     * 交给子线程的输入快照：改写期间主线程可能继续动列表，子线程只读这份拷贝。
+     * 保存这条路径只用 path/text，renameMap 留空。
+     */
+    private static final class Src {
+        final String path;
+        final String text;
+        final Map<String, String> renameMap;
+
+        Src(String path, String text, Map<String, String> renameMap) {
+            this.path = path;
+            this.text = text;
+            this.renameMap = renameMap == null
+                    ? new LinkedHashMap<String, String>() : renameMap;
+        }
+    }
+
+    /** 子线程算好的改写结果，按脚本路径索引；写回 Entries 一律回事件分发线程做。 */
+    private static final class Update {
+        String text;
+        List<Map<String, Object>> tabs;
+        final Map<String, String> renameMap = new LinkedHashMap<String, String>();
+    }
     private static final String PREFIX_HINT =
             "如 dim_（加前缀，已带该前缀的表自动跳过）；填 change 再点「替换首个前缀」"
             + "则把 ods_t_order 换成 change_t_order";
@@ -311,37 +340,61 @@ public final class SqlPage extends JPanel {
         addFiles(paths);
     }
 
-    /** 读盘与提取表名都在这一步，返回真正新增的文件数。 */
-    public int addFiles(List<String> paths) {
+    /**
+     * 读盘与提取表名都在子线程跑（几十万行的脚本不能压在事件分发线程上），
+     * 只有"并入列表 + 刷新表格"回到事件分发线程；日志全程留在 SQL 页。
+     */
+    @SuppressWarnings("unchecked")
+    public void addFiles(List<String> paths) {
         Set<String> existing = new LinkedHashSet<String>(paths());
-        int loaded = 0;
+        List<String> todo = new ArrayList<String>();
         for (String p : paths) {
             if (existing.contains(p)) {
                 log("[跳过] 已在列表：" + baseName(p));
                 continue;
             }
-            String text;
-            try {
-                text = SqlRunner.readScript(new File(p));
-            } catch (Exception ex) {
-                error("[读取失败] " + baseName(p) + " 未能读入，已跳过" + LogText.NL
-                        + LogText.indentDetail(LogText.describe(ex)));
-                continue;
-            }
-            List<Map<String, Object>> tabs = SqlScript.extractCreateTables(text);
-            List<String> names = new ArrayList<String>();
-            for (Map<String, Object> t : tabs) {
-                names.add(String.valueOf(t.get("name")));
-            }
-            log("[已加载] " + baseName(p) + "：" + tabs.size() + " 个表（"
-                    + (names.isEmpty() ? "（未发现 CREATE TABLE 语句）" : String.join("、", names))
-                    + "）");
-            entries.add(new Entry(p, text, tabs));
-            existing.add(p);
-            loaded++;
+            todo.add(p);
         }
-        refreshTable();
-        return loaded;
+        if (todo.isEmpty()) {
+            refreshTable();
+            return;
+        }
+        final List<String> files = todo;
+        host.runSqlTask("正在读取 SQL 脚本…", sink -> {
+            sink.setTotal(files.size());
+            List<Entry> loaded = new ArrayList<Entry>();
+            for (String p : files) {
+                String fname = baseName(p);
+                if (sink.cancelled()) {
+                    break;
+                }
+                String text;
+                try {
+                    text = SqlRunner.readScript(new File(p));
+                } catch (Exception ex) {
+                    sink.logError("[读取失败] " + fname + " 未能读入，已跳过" + LogText.NL
+                            + LogText.indentDetail(LogText.describe(ex)));
+                    sink.step(fname);
+                    continue;
+                }
+                List<Map<String, Object>> tabs = SqlScript.extractCreateTables(text);
+                List<String> names = new ArrayList<String>();
+                for (Map<String, Object> t : tabs) {
+                    names.add(String.valueOf(t.get("name")));
+                }
+                sink.log("[已加载] " + fname + "：" + tabs.size() + " 个表（"
+                        + (names.isEmpty() ? "（未发现 CREATE TABLE 语句）" : String.join("、", names))
+                        + "）");
+                loaded.add(new Entry(p, text, tabs));
+                sink.step(fname);
+            }
+            return loaded;
+        }, out -> {
+            for (Entry e : (List<Entry>) out) {
+                entries.add(e);
+            }
+            refreshTable();
+        });
     }
 
     /** 选中行可能同属一个文件的多个表名，按文件去重后整文件移除。 */
@@ -370,34 +423,47 @@ public final class SqlPage extends JPanel {
 
     /**
      * 批量加前缀：已带该前缀与脚本里找不到引用的都进跳过清单，重复点不会叠前缀。
-     * 返回非 null 表示这次点下去只该弹提示。
+     * 返回非 null 表示这次点下去只该弹提示。改写跑在子线程，表名清单也在工作线程重算。
      */
     public String applyPrefix() {
         String prefix = Names.pyStrip(prefixField.getText());
         if (prefix.isEmpty()) {
             return "请先输入表名前缀（如 dim_）。";
         }
-        int total = 0;
-        for (Entry e : entries) {
-            SqlScript.Rewrite rw = SqlScript.applyPrefix(e.text, prefix);
-            if (!rw.renamed.isEmpty()) {
-                e.text = rw.text;
-                e.tabs = SqlScript.extractCreateTables(rw.text);
-                e.modified = true;
-                mergeRename(e, rw);
-                log("[前缀] " + baseName(e.path) + "：" + describeRenamed(rw.renamed));
-                total += rw.renamed.size();
+        final List<Src> items = snapshot();
+        final String p = prefix;
+        host.runSqlTask("正在改写脚本中的表名…", sink -> {
+            sink.setTotal(items.size());
+            Map<String, Update> updates = new LinkedHashMap<String, Update>();
+            int total = 0;
+            for (Src s : items) {
+                String fname = baseName(s.path);
+                if (sink.cancelled()) {
+                    break;
+                }
+                SqlScript.Rewrite rw = SqlScript.applyPrefix(s.text, p);
+                if (!rw.renamed.isEmpty()) {
+                    Update u = new Update();
+                    u.text = rw.text;
+                    u.tabs = SqlScript.extractCreateTables(rw.text);
+                    u.renameMap.putAll(reverseRename(s.renameMap, rw));
+                    updates.put(s.path, u);
+                    sink.log("[前缀] " + fname + "：" + describeRenamed(rw.renamed));
+                    total += rw.renamed.size();
+                }
+                if (!rw.skipped.isEmpty()) {
+                    sink.log("[跳过] " + fname + "：已带前缀 " + String.join("、", rw.skipped));
+                }
+                sink.step(fname);
             }
-            if (!rw.skipped.isEmpty()) {
-                log("[跳过] " + baseName(e.path) + "：已带前缀 " + String.join("、", rw.skipped));
-            }
-        }
-        log("[前缀完成] 共改写 " + total + " 个表名（修改在内存中，可点「保存修改后脚本」落盘）");
-        refreshTable();
+            sink.log("[前缀完成] 共改写 " + total
+                    + " 个表名（修改在内存中，可点「保存修改后脚本」落盘）");
+            return updates;
+        }, out -> applyUpdates(out));
         return null;
     }
 
-    /** 换首个前缀：清洗与合法性校验走 core 的同一套规则。 */
+    /** 换首个前缀：清洗与合法性校验走 core 的同一套规则，改写同样在子线程。 */
     public String replaceFirstPrefix() {
         String head = Prefix.clean(prefixField.getText());
         if (head.isEmpty()) {
@@ -407,25 +473,64 @@ public final class SqlPage extends JPanel {
             return "前缀「" + head + "」含非法字符：只能用字母、数字、下划线；"
                     + "末尾的下划线不用写，原表名自带。";
         }
-        int total = 0;
-        for (Entry e : entries) {
-            SqlScript.Rewrite rw = SqlScript.replaceFirstSegment(e.text, head);
-            if (!rw.renamed.isEmpty()) {
-                e.text = rw.text;
-                e.tabs = SqlScript.extractCreateTables(rw.text);
-                e.modified = true;
-                mergeRename(e, rw);
-                log("[换前缀] " + baseName(e.path) + "：" + describeRenamed(rw.renamed));
-                total += rw.renamed.size();
+        final List<Src> items = snapshot();
+        final String h = head;
+        host.runSqlTask("正在替换脚本中的表名前缀…", sink -> {
+            sink.setTotal(items.size());
+            Map<String, Update> updates = new LinkedHashMap<String, Update>();
+            int total = 0;
+            for (Src s : items) {
+                String fname = baseName(s.path);
+                if (sink.cancelled()) {
+                    break;
+                }
+                SqlScript.Rewrite rw = SqlScript.replaceFirstSegment(s.text, h);
+                if (!rw.renamed.isEmpty()) {
+                    Update u = new Update();
+                    u.text = rw.text;
+                    u.tabs = SqlScript.extractCreateTables(rw.text);
+                    u.renameMap.putAll(reverseRename(s.renameMap, rw));
+                    updates.put(s.path, u);
+                    sink.log("[换前缀] " + fname + "：" + describeRenamed(rw.renamed));
+                    total += rw.renamed.size();
+                }
+                if (!rw.skipped.isEmpty()) {
+                    sink.log("[跳过] " + fname + "：未改写 " + String.join("、", rw.skipped)
+                            + "（表名里没有下划线，或脚本中找不到引用）");
+                }
+                sink.step(fname);
             }
-            if (!rw.skipped.isEmpty()) {
-                log("[跳过] " + baseName(e.path) + "：未改写 " + String.join("、", rw.skipped)
-                        + "（表名里没有下划线，或脚本中找不到引用）");
-            }
-        }
-        log("[换前缀完成] 共改写 " + total + " 个表名（修改在内存中，可点「保存修改后脚本」落盘）");
-        refreshTable();
+            sink.log("[换前缀完成] 共改写 " + total
+                    + " 个表名（修改在内存中，可点「保存修改后脚本」落盘）");
+            return updates;
+        }, out -> applyUpdates(out));
         return null;
+    }
+
+    /** 快照：子线程只读这份拷贝，不跟主线程的列表共用同一个 Entry。 */
+    private List<Src> snapshot() {
+        List<Src> out = new ArrayList<Src>();
+        for (Entry e : entries) {
+            out.add(new Src(e.path, e.text, new LinkedHashMap<String, String>(e.renameMap)));
+        }
+        return out;
+    }
+
+    /** 按路径把改写结果写回列表：这一步在事件分发线程上，改完才刷新表格。 */
+    @SuppressWarnings("unchecked")
+    private void applyUpdates(Object out) {
+        Map<String, Update> updates = (Map<String, Update>) out;
+        for (Entry e : entries) {
+            Update u = updates.get(e.path);
+            if (u == null) {
+                continue;
+            }
+            e.text = u.text;
+            e.tabs = u.tabs;
+            e.modified = true;
+            e.renameMap.putAll(u.renameMap);
+        }
+        refreshTable();
     }
 
     /** 落盘文件名固定为 原 stem + "_prefix" + 原扩展名，不覆盖原脚本。 */
@@ -439,31 +544,49 @@ public final class SqlPage extends JPanel {
         return slashFree.substring(0, dot) + "_prefix" + slashFree.substring(dot);
     }
 
-    public int saveModified() {
-        List<Entry> modified = new ArrayList<Entry>();
+    /** 几十万行的脚本写盘也放子线程；哪些算"已落盘"要回到事件分发线程才清 modified 标记。 */
+    @SuppressWarnings("unchecked")
+    public void saveModified() {
+        List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
             if (e.modified) {
-                modified.add(e);
+                items.add(new Src(e.path, e.text, null));
             }
         }
-        if (modified.isEmpty()) {
+        if (items.isEmpty()) {
             log("[保存] 没有修改过的脚本文件");
-            return 0;
+            return;
         }
-        int saved = 0;
-        for (Entry e : modified) {
-            String out = modifiedPath(e.path);
-            try {
-                Files.write(Paths.get(out), e.text.getBytes(UTF8));
-            } catch (Exception ex) {
-                error("[保存失败] " + baseName(e.path) + "：" + LogText.describe(ex));
-                continue;
+        final List<Src> todo = items;
+        host.runSqlTask("正在保存修改后的脚本…", sink -> {
+            sink.setTotal(todo.size());
+            List<String> saved = new ArrayList<String>();
+            for (Src s : todo) {
+                String fname = baseName(s.path);
+                if (sink.cancelled()) {
+                    break;
+                }
+                String out = modifiedPath(s.path);
+                try {
+                    Files.write(Paths.get(out), s.text.getBytes(UTF8));
+                } catch (Exception ex) {
+                    sink.logError("[保存失败] " + fname + "：" + LogText.describe(ex));
+                    sink.step(fname);
+                    continue;
+                }
+                saved.add(s.path);
+                sink.log("[已保存] " + out);
+                sink.step(fname);
             }
-            e.modified = false;
-            saved++;
-            log("[已保存] " + out);
-        }
-        return saved;
+            return saved;
+        }, out -> {
+            Set<String> done = new LinkedHashSet<String>((List<String>) out);
+            for (Entry e : entries) {
+                if (done.contains(e.path)) {
+                    e.modified = false;
+                }
+            }
+        });
     }
 
     /**
@@ -612,17 +735,23 @@ public final class SqlPage extends JPanel {
     // ---------------------------------------------------------------- 内部
 
     /** 改名映射按"最初的表名"累计，否则第二轮改写的"原表名"列会显示上一轮的新名。 */
-    private static void mergeRename(Entry e, SqlScript.Rewrite rw) {
+    /**
+     * 把这一轮的改名折成"最初的表名 → 现在的表名"：renamed 里的 old 可能已经是被改过的名字，
+     * 用快照里的映射反查回原名，回主线程再 putAll 累计，"原表名"列才不会显示中间态。
+     */
+    private static Map<String, String> reverseRename(Map<String, String> renameMap,
+                                                     SqlScript.Rewrite rw) {
         Map<String, String> rev = new LinkedHashMap<String, String>();
-        for (Map.Entry<String, String> en : e.renameMap.entrySet()) {
+        for (Map.Entry<String, String> en : renameMap.entrySet()) {
             rev.put(en.getValue(), en.getKey());
         }
+        Map<String, String> out = new LinkedHashMap<String, String>();
         for (Map<String, Object> item : rw.renamed) {
             String old = String.valueOf(item.get("old"));
             String rep = String.valueOf(item.get("new"));
-            String origin = rev.containsKey(old) ? rev.get(old) : old;
-            e.renameMap.put(origin, rep);
+            out.put(rev.containsKey(old) ? rev.get(old) : old, rep);
         }
+        return out;
     }
 
     private static String describeRenamed(List<Map<String, Object>> renamed) {

@@ -87,6 +87,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private HintLabel impHint;
     private SqlPage sqlPage;
     private ProgressDialog lastTask;
+    /** 最近一次请求的任务标题：原地模式不弹框，标题也要留痕才断言得了"用的是 Python 原话"。 */
+    private String lastTaskTitle = "";
+    /** 当前任务的日志面板：null 表示 Excel 页那块，SQL 页的任务把它指到 sql_log。 */
+    private LogPanel taskLogView;
     private String lastDialogTitle = "";
     private String lastDialogText = "";
     private boolean lastDialogIsError;
@@ -659,6 +663,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 释放任务位并复原按钮。 */
     public void endTask() {
+        taskLogView = null;
         setEnabledForRun(true);
     }
 
@@ -669,7 +674,23 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private void runTask(String title,
                          java.util.function.Function<ImportParse.Sink, Object> work,
                          java.util.function.Consumer<Object> onUi) {
+        runTask(title, work, onUi, null);
+    }
+
+    /**
+     * logView 非空时整个任务的日志（含中途的报错行）都写到那块面板去：
+     * SQL 页的任务把日志留在 SQL 页，否则用户在 Excel 页的日志里找不到刚才那步。
+     */
+    private void runTask(String title,
+                         java.util.function.Function<ImportParse.Sink, Object> work,
+                         java.util.function.Consumer<Object> onUi,
+                         LogPanel logView) {
+        lastTaskTitle = title;
+        LogPanel previous = taskLogView;
+        // 先认下面板再抢任务位：抢输的那句"已有任务在跑"要落在用户刚点的那一页
+        taskLogView = logView;
         if (!startTask()) {
+            taskLogView = previous;
             return;
         }
         if (modalProgress) {
@@ -683,15 +704,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 } catch (Throwable t) {
                     SwingUtilities.invokeLater(() -> {
                         progress.close();
-                        endTask();
                         crashMessage(t);
+                        endTask();
                     });
                     return;
                 }
                 SwingUtilities.invokeLater(() -> {
                     progress.close();
+                    // 落界面时也算在任务里：这几行的日志要去同一块面板（与原地那条路同序）
+                    if (out != null) {
+                        onUi.accept(out);
+                    }
                     endTask();
-                    onUi.accept(out);
                 });
             }, "excel2mysql-task");
             worker.setDaemon(true);
@@ -703,20 +727,30 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         try {
             out = work.apply(quietSink());
         } catch (Throwable t) {
-            endTask();
             crashMessage(t);
+            endTask();
             return;
         }
-        endTask();
         // 工作函数返回 null 视为"这次没做成"，不回调落界面（与 Python 侧同一处理）
         if (out != null) {
             onUi.accept(out);
         }
+        endTask();
+    }
+
+    /**
+     * SQL 页的四个耗时操作（读取 / 加前缀 / 换前缀 / 保存）共用 Excel 页那套任务位，
+     * 差别只在日志要去 SQL 页那块面板——否则切回 Excel 页才看得见刚才那步做了什么。
+     */
+    @Override
+    public void runSqlTask(String title,
+                           java.util.function.Function<ImportParse.Sink, Object> work,
+                           java.util.function.Consumer<Object> onUi) {
+        runTask(title, work, onUi, sqlPage == null ? null : sqlPage.logPanel());
     }
 
     /** 只写日志不碰进度框的回报口。 */
-    private ImportParse.Sink quietSink() {
-        return new ImportParse.Sink() {
+    private ImportParse.Sink quietSink() {        return new ImportParse.Sink() {
             @Override
             public void setTotal(int total) {
             }
@@ -1130,13 +1164,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         log("已清空");
     }
 
+    /**
+     * 这句日志该落到哪块面板：任务期间跟着任务的 log_view 走（SQL 页的任务留在 SQL 页），
+     * 空闲时回到 Excel 页。Python 侧是 `self._task_log_view or self.log`，同一回事。
+     */
+    private LogPanel logView() {
+        return taskLogView == null ? logPanel : taskLogView;
+    }
+
     public void log(String text) {
-        logPanel.log(text);
+        logView().log(text);
     }
 
     /** 错误要整条标红：一屏日志里靠眼睛扫"失败"两个字太容易漏。 */
     public void logError(String text) {
-        logPanel.error(text);
+        logView().error(text);
     }
 
     /** 自检与命令行入口要能按用户的方式操作这两个控件，而不是绕过界面直接改数据。 */
@@ -1175,6 +1217,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 最近一次任务的进度框：自检读标题与按钮文案，真实用户看的是同一个对象。 */
     public ProgressDialog lastTaskDialog() {
         return lastTask;
+    }
+
+    /** 最近一次请求的任务标题（九句任务话术里的那一句）。 */
+    public String lastTaskTitle() {
+        return lastTaskTitle;
     }
 
     public SqlPage sqlPage() {
