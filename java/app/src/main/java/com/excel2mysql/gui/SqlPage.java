@@ -474,6 +474,7 @@ public final class SqlPage extends JPanel {
         progress.step("切分语句");
         runButton.setEnabled(false);
         Thread worker = new Thread(() -> {
+            try {
             int ok = 0;
             int fail = 0;
             int skipped = 0;
@@ -529,6 +530,15 @@ public final class SqlPage extends JPanel {
                 progress.close();
                 host.inform(finishRun(okFinal, failFinal, skipFinal, cancelled, target));
             });
+            } catch (Throwable t) {
+                String msg = LogText.describe(t);
+                SwingUtilities.invokeLater(() -> {
+                    error(LogText.crashLog(msg));
+                    runButton.setEnabled(true);
+                    progress.close();
+                    host.inform(LogText.crashDialog(msg));
+                });
+            }
         }, "excel2mysql-sqlrun");
         worker.setDaemon(true);
         worker.start();

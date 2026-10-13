@@ -111,6 +111,18 @@ public final class LogPanel extends javax.swing.JTextPane {
         return entries.size();
     }
 
+    /** 已收到的日志全文。render() 是排队的，控件文档可能还没更新，所以自检读这一份。 */
+    public String text() {
+        StringBuilder sb = new StringBuilder();
+        for (Entry e : entries) {
+            if (sb.length() > 0) {
+                sb.append((char) 10);
+            }
+            sb.append(e.text);
+        }
+        return sb.toString();
+    }
+
     public boolean contains(String needle) {
         for (Entry e : entries) {
             if (e.text.contains(needle)) {

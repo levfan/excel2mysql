@@ -24,6 +24,15 @@ public final class LogText {
             "注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
             + "回滚仅对其后的数据操作生效。";
 
+    /** 任务线程里冒出未预期异常时的固定文案：日志与弹窗同源，两处说的是同一件事。 */
+    public static String crashLog(String msg) {
+        return "[任务异常] " + msg + NL + "    本次操作未完成，请查看日志后重试。";
+    }
+
+    public static String crashDialog(String msg) {
+        return msg + NL + "本次操作未完成，详见日志。";
+    }
+
     private LogText() {
     }
 

@@ -2,6 +2,7 @@ package com.excel2mysql.gui;
 
 import com.excel2mysql.core.AppInfo;
 import com.excel2mysql.core.Ddl;
+import com.excel2mysql.core.ImportParse;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.PinyinLoader;
@@ -35,14 +36,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 主窗口的第一片：添加 Excel（含 zip 展开）→ 表定义表格 → 建表语句预览 → 日志。
+ * 主窗口：添加 Excel（含 zip 展开）→ 表定义 → 建表语句预览 → 连库导入 → 日志。
  *
- * 连库导入的按钮不在这一片里。界面上出现一个点了不会真写库的"开始导入"，
- * 比不给这个按钮更糟。
+ * 每个会耗时的入口都是"子线程算数据 + 模态进度框 + 主线程落界面"三段，
+ * 界面从不自己算——两条路共用 core 里同一个工作函数，测的就是线上跑的那段。
  */
 public final class MainFrame extends JFrame implements SqlPage.Host {
 
-    private static final String NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。";
+    private static final String NO_FILE_HINT = LogText.NO_FILE_HINT;
     private static final String PREFIX_HINT =
             "可选，如 dim_（新添加的文件自动带上，留空点按钮可移除）；"
             + "填 change 再点「替换首个前缀」则换掉已有首段";
@@ -76,6 +77,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             new java.util.LinkedHashMap<TableOps.Table, TableBuilder.Result>();
     private Config config;
     private boolean connected;
+    private String zipSessionDir;
+    private int zipDestSeq;
     private final Names names = new Names(PinyinLoader.get());
     private final TableBuilder builder = new TableBuilder(new Infer(names), names);
 
@@ -253,18 +256,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     private java.awt.Component buildCenter() {
         drop = new DropArea(paths -> {
-            List<String> accepted = new ArrayList<String>();
-            for (String p : paths) {
-                String low = p.toLowerCase();
-                if (low.endsWith(".xlsx") || low.endsWith(".xls") || low.endsWith(".zip")) {
-                    accepted.add(p);
-                }
+            List<String> accepted = acceptedDrops(paths);
+            if (!accepted.isEmpty()) {
+                addFilesAsync(accepted);
             }
-            if (accepted.isEmpty()) {
-                log("[提示] 拖入的不是 Excel 或 ZIP 文件，已忽略。");
-                return;
-            }
-            addFiles(accepted);
         });
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
@@ -538,6 +533,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         setEnabledForRun(false);
         setPageProgress(0);
         Thread worker = new Thread(() -> {
+            try {
             List<ImportOutcome> outcomes = new ArrayList<ImportOutcome>();
             int done = 0;
             DbClient db = null;
@@ -598,6 +594,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
                 inform(finishImport(outcomes, cancelled));
             });
+            } catch (Throwable t) {
+                crash(t, progress, () -> setEnabledForRun(true));
+            }
         }, "excel2mysql-import");
         worker.setDaemon(true);
         worker.start();
@@ -658,23 +657,122 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         for (File f : chooser.getSelectedFiles()) {
             paths.add(f.getPath());
         }
-        addFiles(paths);
+        addFilesAsync(paths);
     }
 
-    /** 给测试和命令行都走同一个入口，避免"测的是一条路、跑的是另一条"。 */
-    public int addFiles(List<String> paths) {
-        int added = 0;
-        for (String path : paths) {
-            File f = new File(path);
-            if (f.isFile() && f.getName().toLowerCase().endsWith(".zip")) {
-                added += expandZip(f);
-            } else if (f.isFile() && ZipImport.isExcel(f.getName())) {
-                if (addOne(path)) {
-                    added++;
+    /**
+     * 添加文件的异步入口：展开压缩包与解析表结构都在子线程，
+     * 界面只挂一个可取消的模态进度框。几十万行的表读起来不该让窗口变成白屏。
+     */
+    public void addFilesAsync(final List<String> paths) {
+        final ProgressDialog progress = new ProgressDialog(this, "添加文件");
+        final ImportParse.Sink sink = sinkFor(progress);
+        setEnabledForRun(false);
+        Thread worker = new Thread(() -> {
+            try {
+            final ImportParse.Outcome outcome =
+                    ImportParse.parse(paths, currentPaths(), zipDirFor(paths), zipDestSeq,
+                            builder, sink);
+            SwingUtilities.invokeLater(() -> {
+                if (outcome.cancelled) {
+                    log("已取消，只完成了部分解析");
                 }
-            } else {
-                log("跳过（不是 Excel 或 zip）：" + f.getName());
+                String summary = finishAdd(outcome);
+                progress.close();
+                setEnabledForRun(true);
+                if (!summary.isEmpty()) {
+                    inform(summary);
+                }
+            });
+            } catch (Throwable t) {
+                // 线程里的意外只会把模态框留在界面上，必须收掉并说出来
+                crash(t, progress, () -> setEnabledForRun(true));
             }
+        }, "excel2mysql-parse");
+        worker.setDaemon(true);
+        worker.start();
+        progress.open();
+    }
+
+    /** 进度框 + 日志区的组合回报口；log/logError 本身就是线程安全的。 */
+    private ImportParse.Sink sinkFor(final ProgressDialog progress) {
+        return new ImportParse.Sink() {
+            @Override
+            public void setTotal(int total) {
+                progress.setTotal(total);
+            }
+
+            @Override
+            public void step(String label) {
+                progress.step(label);
+            }
+
+            @Override
+            public void advance(int units, String label) {
+                progress.advance(units, label);
+            }
+
+            @Override
+            public void log(String text) {
+                MainFrame.this.log(text);
+            }
+
+            @Override
+            public void logError(String text) {
+                MainFrame.this.logError(text);
+            }
+
+            @Override
+            public boolean cancelled() {
+                return progress.isCancelled();
+            }
+        };
+    }
+
+    /** 给测试和命令行用的同步入口：同一个解析函数，只是不挂进度框。 */
+    public String addFiles(List<String> paths) {
+        ImportParse.Outcome outcome = ImportParse.parse(paths, currentPaths(),
+                zipDirFor(paths), zipDestSeq, builder, sinkForLogOnly());
+        return finishAdd(outcome);
+    }
+
+    private ImportParse.Sink sinkForLogOnly() {
+        return new ImportParse.Sink() {
+            @Override
+            public void setTotal(int total) {
+            }
+
+            @Override
+            public void step(String label) {
+            }
+
+            @Override
+            public void advance(int units, String label) {
+            }
+
+            @Override
+            public void log(String text) {
+                MainFrame.this.log(text);
+            }
+
+            @Override
+            public void logError(String text) {
+                MainFrame.this.logError(text);
+            }
+
+            @Override
+            public boolean cancelled() {
+                return false;
+            }
+        };
+    }
+
+    /** 解析结果落到界面：子线程只算数据，列表、前缀、状态与弹窗都在这里改。 */
+    private String finishAdd(ImportParse.Outcome outcome) {
+        for (TableBuilder.Result r : outcome.tables) {
+            tables.add(r.table);
+            byTable.put(r.table, r);
+            fileModel.add(new FileRowModel.Item(r.table, r));
         }
         if (!tables.isEmpty()) {
             String prefix = Names.pyStrip(prefixField == null ? "" : prefixField.getText());
@@ -684,57 +782,110 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 TableOps.makeUniqueNames(tables);
             }
         }
+        zipDestSeq += 1;
+        if (importBtn != null) {
+            importBtn.setEnabled(connected);
+        }
         status.setText("已加载 " + tables.size() + " 张表 / " + fileModel.rowTotal() + " 个字段");
         refreshPreview();
-        return added;
+        String summary = ImportParse.summaryText(outcome);
+        if (!summary.isEmpty()) {
+            // 同一句话既进日志也进弹窗：日志可回溯，弹窗防走神漏看
+            log("[添加结果] " + summary);
+        }
+        return summary;
     }
 
-    private int expandZip(File zip) {
-        File dest = new File(System.getProperty("java.io.tmpdir"),
-                "excel2mysql-gui-" + System.currentTimeMillis());
-        if (!dest.mkdirs()) {
-            log("建解压目录失败：" + dest.getPath());
-            return 0;
+    private List<String> currentPaths() {
+        List<String> out = new ArrayList<String>();
+        for (TableOps.Table t : tables) {
+            out.add(t.filepath);
         }
-        try {
-            ZipImport.Result r = ZipImport.extract(zip.getPath(), dest.getPath());
-            log("展开 " + zip.getName() + "：Excel " + r.files.size() + " 个，忽略非 Excel "
-                    + r.ignored.size() + " 个，嵌套 zip 不递归 " + r.nestedZips + " 个");
-            int n = 0;
-            for (ZipImport.Entry e : r.files) {
-                if (addOne(e.path)) {
-                    n++;
-                }
-            }
-            return n;
-        } catch (Exception e) {
-            log("解压失败：" + zip.getName() + " — " + e.getMessage());
-            return 0;
-        }
+        return out;
     }
 
-    private boolean addOne(String path) {
-        try {
-            TableBuilder.Result r = builder.build(path);
-            tables.add(r.table);
-            byTable.put(r.table, r);
-            fileModel.add(new FileRowModel.Item(r.table, r));
-            if (importBtn != null) {
-                importBtn.setEnabled(connected);
+    /**
+     * 拖拽只收 Excel 与 ZIP。过滤单独成方法、异步添加不掺进来，
+     * 自检才能原地验"拖了个 txt 要怎么说"，而不用去点一个模态进度框。
+     */
+    public List<String> acceptedDrops(List<String> paths) {
+        List<String> accepted = new ArrayList<String>();
+        for (String p : paths) {
+            String low = p.toLowerCase();
+            if (low.endsWith(".xlsx") || low.endsWith(".xls") || low.endsWith(".zip")) {
+                accepted.add(p);
             }
-            log("已解析 " + baseName(path) + " → 表 " + r.table.tableName + "（"
-                    + r.table.columns.size() + " 列 " + r.rows.size() + " 行，模式 "
-                    + r.table.source + "）"
-                    + (r.pkReason == null || r.pkReason.isEmpty() ? "" : "；主键：" + r.pkReason));
-            for (Infer.Column c : r.table.columns) {
-                if (c.typeNote != null) {
-                    log("  类型说明：" + c.typeNote);
+        }
+        if (accepted.isEmpty()) {
+            log("[提示] 拖入的不是 Excel 或 ZIP 文件，已忽略。");
+        }
+        return accepted;
+    }
+
+    /** 这一批里没有压缩包就不该碰临时目录，不然每次添加都留下一个空目录没人清。 */
+    private String zipDirFor(List<String> paths) {
+        for (String p : paths) {
+            if (p.toLowerCase().endsWith(".zip")) {
+                return zipSessionDir();
+            }
+        }
+        return null;
+    }
+
+        /** 会话级解压目录：整个窗口生命周期只建一个，关窗口一次性清掉。 */
+    private String zipSessionDir() {
+        if (zipSessionDir == null) {
+            File base = new File(System.getProperty("java.io.tmpdir"),
+                    "excel2mysql-gui-" + System.nanoTime());
+            if (!base.mkdirs()) {
+                log("建解压目录失败：" + base.getPath());
+                return base.getPath();
+            }
+            zipSessionDir = base.getPath();
+            addWindowListener(new java.awt.event.WindowAdapter() {
+                @Override
+                public void windowClosing(java.awt.event.WindowEvent e) {
+                    cleanZipTemp();
                 }
+            });
+        }
+        return zipSessionDir;
+    }
+
+    /** 自检与日志要用：当前这一会话的解压目录，没解压过就是 null。 */
+    public String zipTempDir() {
+        return zipSessionDir;
+    }
+
+    /** 退出时清掉解压出来的临时文件；清不干净不拦退出，只在日志里说一声。 */
+    public void cleanZipTemp() {
+        if (zipSessionDir == null) {
+            return;
+        }
+        File base = new File(zipSessionDir);
+        if (!base.isDirectory()) {
+            zipSessionDir = null;
+            return;
+        }
+        int[] left = {0};
+        deleteRecursively(base, left);
+        if (left[0] > 0) {
+            log("解压临时目录没能完全清掉，剩 " + left[0] + " 项：" + zipSessionDir);
+        } else {
+            log("已清理解压临时目录：" + zipSessionDir);
+        }
+        zipSessionDir = null;
+    }
+
+    private static void deleteRecursively(File f, int[] left) {
+        File[] kids = f.listFiles();
+        if (kids != null) {
+            for (File k : kids) {
+                deleteRecursively(k, left);
             }
-            return true;
-        } catch (Exception e) {
-            log("解析失败 " + baseName(path) + " — " + e.getMessage());
-            return false;
+        }
+        if (!f.delete()) {
+            left[0]++;
         }
     }
 
@@ -851,6 +1002,31 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public SqlPage sqlPage() {
         return sqlPage;
+    }
+
+    /**
+     * 子线程出意外：收掉模态框、恢复界面，日志与弹窗各写一遍同一句话。
+     * 少这一层，线程里的异常只会被默认处理器吞掉，进度框永远挂在界面上。
+     */
+    private void crash(Throwable t, ProgressDialog progress, Runnable restore) {
+        final String msg = LogText.describe(t);
+        SwingUtilities.invokeLater(() -> {
+            logError(LogText.crashLog(msg));
+            if (progress != null) {
+                progress.close();
+            }
+            if (restore != null) {
+                restore.run();
+            }
+            inform(LogText.crashDialog(msg));
+        });
+    }
+
+    /** 自检走同一份文案，只是不弹窗（EDT 上的模态框会把自检卡死）。 */
+    public String crashMessage(Throwable t) {
+        String msg = LogText.describe(t);
+        logError(LogText.crashLog(msg));
+        return LogText.crashDialog(msg);
     }
 
     /** 页内进度条：导入按"当前表完成数 / 总表数"报百分比，跑完归零。 */

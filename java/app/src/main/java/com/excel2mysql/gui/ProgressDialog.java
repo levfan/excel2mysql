@@ -59,8 +59,16 @@ public final class ProgressDialog extends JDialog {
 
     /** 由工作线程调用。 */
     public void step(String text) {
-        done++;
-        steps++;
+        advance(1, text);
+    }
+
+    /**
+     * 一次推进若干格。解析一个文件按阶段计 5 格、被跳过的重复项也要一次补齐 5 格，
+     * 否则进度条要么停在半途，要么超出总数。
+     */
+    public void advance(final int units, String text) {
+        done += units;
+        steps += units;
         final int value = Math.min(100, (int) Math.round(done * 100.0 / total));
         final String shown = text + "（" + done + "/" + total + "）";
         SwingUtilities.invokeLater(() -> {
