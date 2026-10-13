@@ -137,6 +137,8 @@ public final class SqlPage extends JPanel {
     private final LogPanel logPanel = new LogPanel();
     private final HintTextField prefixField;
     private final JButton runButton;
+    /** 表格与日志之间的分栏：初始比例、把手宽度都要能被读出来核对（Python 那边是 sql_split）。 */
+    private JSplitPane split;
     private final HintLabel hint = new HintLabel();
 
     public SqlPage(Host host) {
@@ -234,8 +236,15 @@ public final class SqlPage extends JPanel {
         logScroll.setBorder(BorderFactory.createTitledBorder("日志"));
         logScroll.setMinimumSize(new Dimension(300, 100));
 
-        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
-        split.setResizeWeight(0.45);
+        // 段数、比例、把手宽度照 main.py:1191-1197：初始 260/290、把手 6px、拉伸 1:3。
+        // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
+        upper.setMinimumSize(new Dimension(10, 80));
+        split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
+        split.setDividerSize(6);
+        // Qt 的 setStretchFactor(1, 3) 换到 Swing 就是"上段拿 1/(1+3) 的余量"
+        split.setResizeWeight(0.25);
+        split.setDividerLocation(260);
+        split.setContinuousLayout(true);
 
         JPanel north = new JPanel(new BorderLayout());
         north.add(hint, BorderLayout.NORTH);
@@ -310,6 +319,19 @@ public final class SqlPage extends JPanel {
 
     public LogPanel logPanel() {
         return logPanel;
+    }
+
+    /** 分栏的三个配置值：离屏环境里量不准实际高度，配的是什么至少能核对。 */
+    public int splitDividerSize() {
+        return split.getDividerSize();
+    }
+
+    public double splitResizeWeight() {
+        return split.getResizeWeight();
+    }
+
+    public int splitDividerLocation() {
+        return split.getDividerLocation();
     }
 
     public HintTextField prefixField() {
