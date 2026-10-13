@@ -124,6 +124,8 @@ public final class GuiMain {
                 import_finish(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
+                // 进度框文案与收尾
+                progress_copy(problems);
                 // DDL 逐表分页、文件表列宽、端口范围
                 ddl_dialog_and_widgets(frame, files, problems);
                 // 导入那条路的文案与计项口径
@@ -974,6 +976,48 @@ public final class GuiMain {
         }
         if (frame.currentConfig().port != 3306) {
             problems.add("界面上的端口没进连接配置：" + frame.currentConfig().port);
+        }
+    }
+
+    private static void progress_copy(List<String> problems) {
+        com.excel2mysql.gui.ProgressDialog pd =
+                new com.excel2mysql.gui.ProgressDialog(null, "正在解析文件…");
+        try {
+            if (!"正在解析文件…".equals(pd.getTitle())) {
+                problems.add("进度框标题没生效：" + pd.getTitle());
+            }
+            if (pd.getPreferredSize().width != 480 || pd.getPreferredSize().height != 140) {
+                problems.add("进度框尺寸与 Python 不一致：" + pd.getPreferredSize());
+            }
+            if (!"取消".equals(pd.cancelText())) {
+                problems.add("取消按钮默认文案不对：" + pd.cancelText());
+            }
+            pd.setTotal(3);
+            pd.step("读盘");
+            if (!"进度 1/3 项 · 读盘".equals(pd.statusText())) {
+                problems.add("进度文案格式不对：" + pd.statusText());
+            }
+            pd.step("识别格式");
+            if (pd.percentShown() >= pd.percentTarget() && pd.percentShown() != 0) {
+                problems.add("补间起点不应已经等于目标值：" + pd.percentShown());
+            }
+            pd.step("选主键");
+            if (pd.percentShown() != 100) {
+                problems.add("跑完最后一项进度条没拉满：" + pd.percentShown());
+            }
+            pd.setCancelText("停止（当前表完成后中止）");
+            if (!"停止（当前表完成后中止）".equals(pd.cancelText())) {
+                problems.add("取消按钮改字没生效：" + pd.cancelText());
+            }
+            pd.requestCancel();
+            if (!pd.statusText().contains("当前项做完就停")) {
+                problems.add("取消后的话术没说清什么时候停：" + pd.statusText());
+            }
+            if (!pd.isCancelled()) {
+                problems.add("requestCancel 没置取消位，工作线程不会停");
+            }
+        } finally {
+            pd.dispose();
         }
     }
 }
