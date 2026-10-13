@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 
@@ -26,6 +27,11 @@ JAVA_DIR = os.path.dirname(HERE)                 # .../excel2mysql/java
 ROOT = os.path.dirname(JAVA_DIR)                 # .../excel2mysql
 JDK8_DEFAULT = r"C:\Program Files\Java\jdk1.8.0_202"
 STUB_PREFIX = "api-ms-win-"
+# 与那批转发桩同一来源的 CRT 运行时：PE 头声明的最低系统是 10.0，
+# 留在包里就等于把 Win10 下限搬到 Win7 上赌它不被加载。
+# msvcr100.dll 不在名单里——JVM 自己链的是 VC2010 运行时，Win7 上装得到，删了直接起不来。
+CRT_BATCH = ("ucrtbase.dll", "vcruntime140.dll", "vcruntime140_1.dll",
+             "concrt140.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll")
 JAR_NAME_TMPL = "excel2mysql-%s.jar"
 
 
@@ -102,6 +108,7 @@ def copy_jre(src_jre, dst_jre):
     info("拷贝 JRE：%s" % src_jre)
     shutil.copytree(src_jre, dst_jre)
     removed = 0
+    crt = 0
     pdb = 0
     for base, _dirs, files in os.walk(dst_jre):
         for f in files:
@@ -110,18 +117,22 @@ def copy_jre(src_jre, dst_jre):
             if low.startswith(STUB_PREFIX):
                 os.remove(p)
                 removed += 1
+            elif low in CRT_BATCH:
+                os.remove(p)
+                crt += 1
             elif low.endswith(".pdb"):
                 # 调试符号：只在崩溃转储分析时用，交付包里没人用，且单个就有几十兆
                 os.remove(p)
                 pdb += 1
-    return removed, pdb
+    return removed + crt, pdb
 
 
 def count_stubs(path):
     n = 0
     for base, _dirs, files in os.walk(path):
         for f in files:
-            if f.lower().startswith(STUB_PREFIX):
+            low = f.lower()
+            if low.startswith(STUB_PREFIX) or low in CRT_BATCH:
                 n += 1
     return n
 
@@ -147,12 +158,12 @@ def launcher_text(version):
         ")",
         "rem 用包内运行时，不碰系统 PATH 里的 java：目标机可能根本没装 JDK，也可能装的是别的版本",
         "rem 参数原样转发：把 .xlsx/.xls/.zip 拖到本脚本图标上就能直接加载",
-        'if not exist "app\\__JAR__" (',
-        "    echo [ERROR] 包里的 app\\__JAR__ 不见了。",
+        'if not exist "__JAR__" (',
+        "    echo [ERROR] 包里的 __JAR__ 不见了。",
         "    pause",
         "    exit /b 3",
         ")",
-        '"%JAVA%" -Dfile.encoding=UTF-8 -jar "app\\__JAR__" %*',
+        '"%JAVA%" -Dfile.encoding=UTF-8 -jar "__JAR__" %*',
         'set "RC=%ERRORLEVEL%"',
         'if not "%RC%"=="0" (',
         "    echo [FAILED] exit code %RC%",
@@ -172,16 +183,24 @@ def readme_text(version, stubs, size):
         "",
         "怎么用",
         "  双击 启动.bat。想一次带上文件，把 .xlsx/.xls/.zip 拖到 启动.bat 图标上即可。",
-        "  命令行：启动.bat --gui --selftest   （自检，不开真库也能跑）",
+        "  命令行：启动.bat --gui --selftest   （界面自检，不连库也能跑）",
+        "",
+        "命令行（同一份程序，无界面）",
+        "  jre\\bin\\java.exe -jar %s --check            只测连接并列出数据库" % jar,
+        "  jre\\bin\\java.exe -jar %s C:\\数据 --prefix ods_   建表并导入目录下全部 Excel" % jar,
+        "  jre\\bin\\java.exe -jar %s 脚本目录 --run-sql      把目录下 .sql 执行到目标库" % jar,
+        "  不带 -c 时自动读产物同级的 conn.ini；口令建议留空、用环境变量传：set E2M_PASS=你的密码",
+        "  优先级：命令行参数 > 环境变量 E2M_HOST/E2M_PORT/E2M_USER/E2M_PASS/E2M_DB > conn.ini",
         "",
         "目录",
         "  启动.bat            启动脚本，用包内那个 java.exe，不依赖系统装没装 Java",
-        "  app\\%s   程序本体（已把所有依赖打成一个 jar）" % jar,
+        "  %s   程序本体（所有依赖已打成一个 jar，界面与命令行同一个包）" % jar,
+        "  conn.ini            默认连接配置模板；库名留空是有意为之，没指定目标库会直接报用法错误",
         "  jre\\               随包的 Java 8 运行时",
         "  README.txt          本文件",
         "",
         "目标系统",
-        "  64 位 Windows 7 及以上。随包 JRE 已剔除 %d 个 api-ms-win-* 转发桩 DLL，" % stubs,
+        "  64 位 Windows 7 及以上。随包 JRE 已剔除 %d 个 api-ms-win-* 转发桩与 CRT 批文件，" % stubs,
         "  留着它们在没有 UCRT 更新的 Win7 上会直接起不来。",
         "",
         "体积",
@@ -217,6 +236,41 @@ def max_class_major(jar_path):
     return top
 
 
+def cli_discovery(java_exe, jar, dist, fixtures):
+    """验"程序同级 conn.ini 真被自动读到"：在一个毫不相干的临时目录里跑，且不带 -c。
+
+    这条必须单独验：命令行缺配置时的报错是"没指定目标库"，
+    跟"没读到随包那份 conn.ini"长得一模一样——只有跑在别处、看来源路径才能分清。
+    用 --dry-run 是因为随包模板里 database 有意留空，真跑会被用法检查拦下。
+    """
+    tmp = tempfile.mkdtemp(prefix="e2m-dist-cli-")
+    try:
+        cmd = [java_exe, "-Dfile.encoding=UTF-8", "-jar", jar, "--dry-run", fixtures]
+        info("配置发现测试：cwd=%s（不带 -c）" % tmp)
+        env = dict(os.environ)
+        env.pop("JAVA_HOME", None)
+        for k in list(env):
+            if k.startswith("E2M_"):
+                env.pop(k)
+        proc = subprocess.Popen(cmd, cwd=tmp, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, env=env)
+        out = proc.communicate()[0].decode("utf-8", "replace")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    want = os.path.join(dist, "conn.ini").replace("/", "\\")
+    hit = None
+    for line in out.splitlines():
+        if "配置来源" in line:
+            hit = line.strip()
+    if hit is None:
+        print(out[-600:])
+        fail("没打印配置来源，随包 conn.ini 的自动发现没验成")
+    info(hit[:160])
+    if want.lower() not in hit.lower():
+        fail("自动读到的不是随包那份 conn.ini（期望 %s）" % want)
+    ok("在别的工作目录里自动读到产物同级 conn.ini")
+
+
 def smoke(java_exe, jar, fixtures):
     """冒烟：用包内的运行时跑界面自检。跑不过就说明这个包在目标机上也是起不来的。"""
     cmd = [java_exe, "-Dfile.encoding=UTF-8", "-jar", jar,
@@ -249,13 +303,21 @@ def main():
 
     dist = os.path.join(JAVA_DIR, "dist", "excel2mysql-java-%s-win64" % version)
     rmtree_writable(dist)
-    os.makedirs(os.path.join(dist, "app"))
     info("输出目录 %s" % dist)
+    os.makedirs(dist)
 
-    shutil.copy2(jar_src, os.path.join(dist, "app", os.path.basename(jar_src)))
+    # jar 放产物根，不放 app\ 子目录：命令行找随包配置用的是"jar 同级"，
+    # 只有 jar 在根上，conn.ini 才真是用户看到的"程序旁边那份"
+    jar_dst = os.path.join(dist, os.path.basename(jar_src))
+    shutil.copy2(jar_src, jar_dst)
+    conn_src = os.path.join(JAVA_DIR, "assets", "conn.ini")
+    if not os.path.isfile(conn_src):
+        fail("缺模板 %s：命令行会报「没指定目标库」，跟没带配置长得一模一样" % conn_src)
+    shutil.copy2(conn_src, os.path.join(dist, "conn.ini"))
     stubs_src = count_stubs(src_jre)
     removed, pdb = copy_jre(src_jre, os.path.join(dist, "jre"))
-    info("剔除转发桩 DLL %d 个（源 JRE 里有 %d 个）、调试符号 %d 个" % (removed, stubs_src, pdb))
+    info("剔除转发桩与 CRT 批 %d 个（源 JRE 里有 %d 个）、调试符号 %d 个"
+         % (removed, stubs_src, pdb))
 
     with open(os.path.join(dist, "启动.bat"), "wb") as fh:
         fh.write(launcher_text(version))
@@ -263,19 +325,25 @@ def main():
     with open(os.path.join(dist, "README.txt"), "wb") as fh:
         fh.write(readme_text(version, removed, size))
 
+    for want in ("conn.ini", "README.txt"):
+        if not os.path.isfile(os.path.join(dist, want)):
+            fail("产物里缺 %s" % want)
+    ok("产物含 conn.ini 与 README.txt")
+
     left = count_stubs(os.path.join(dist, "jre"))
     if left:
-        fail("剔桩没剔干净，包里还剩 %d 个 api-ms-win-*" % left)
-    ok("剔桩闸门：包内 api-ms-win-* 为 0")
+        fail("剔桩没剔干净，包里还剩 %d 个 api-ms-win-* / CRT 批文件" % left)
+    ok("剔桩闸门：包内 api-ms-win-* 与 ucrt/vcruntime/concrt/msvcp 为 0")
 
     major = max_class_major(jar_src)
     if major > 52:
         fail("交付 jar 里有主版本 %d 的 class，Win7 上的 Java 8 加载不了" % major)
     ok("class 主版本 %d <= 52（Java 8）" % major)
 
-    smoke(os.path.join(dist, "jre", "bin", "java.exe"),
-          os.path.join(dist, "app", os.path.basename(jar_src)),
-          os.path.join(JAVA_DIR, "verify", "fixtures"))
+    java_exe = os.path.join(dist, "jre", "bin", "java.exe")
+    fixtures = os.path.join(JAVA_DIR, "verify", "fixtures")
+    smoke(java_exe, jar_dst, fixtures)
+    cli_discovery(java_exe, jar_dst, dist, fixtures)
 
     print("+ [OK] DIST | 交付包 %s | %s" % (os.path.basename(dist), size))
     return 0
