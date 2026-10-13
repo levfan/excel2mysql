@@ -133,7 +133,7 @@ public final class ReaderDiffer {
         }
         reader.close();
         System.out.println("- [INFO] READER-DIFF | 表 " + files + " 张 | 比对 " + cells
-                + " 格 | 不一致 " + bad + " 处 | 空白折叠 " + blankFolded + " 格"
+                + " 格 | 不一致 " + bad + " 处 | 纯空白格 " + blankFolded + " 格（两边同值）"
                 + " | 结构定义表端到端比对 " + structuredFiles + " 张"
                 + " | 合并区检测 " + mergedFiles + " 个文件（其中按拒绝记账 " + rejected + "）");
         for (String s : shown) {
@@ -193,9 +193,9 @@ public final class ReaderDiffer {
             return "float\u0000" + canonical(Double.valueOf(text).doubleValue());
         }
         if ("str".equals(kind) && !text.isEmpty() && text.trim().isEmpty()) {
-            // 只在 Python 侧计数：Java 侧本来就是 null，不折也一致
+            // 纯空白不再折成空值：读取层关掉 autoTrim 后两条线都原样给出，
+            // 折一下等于把"空格丢了"这类真差异记成一致
             blankFolded++;
-            return "none\u0000";
         }
         return kind + "\u0000" + text;
     }
@@ -240,15 +240,9 @@ public final class ReaderDiffer {
             return "date\u0000" + v.toString();
         }
         if (v instanceof String) {
-            String s = (String) v;
-            // 纯空白文本按空值等价处理：infer_columns 在统计字节宽度之前就 continue 掉它，
-            // _convert 也把它写成 NULL，所以"null vs \"   \""产品层面观察不到。
-            // 这类折叠要计数报出来，不能静默——它确实是两条链取值的差别，只是不可观测。
-            if (!s.isEmpty() && s.trim().isEmpty()) {
-                blankFolded++;
-                return "none\u0000";
-            }
-            return "str\u0000" + s;
+            // 纯空白文本按原样比：读取层已关掉 autoTrim，两边都拿得到 "   "，
+            // 再折一次就把"这一格到底是空格还是空"这类真差异记成一致
+            return "str\u0000" + v;
         }
         return "str\u0000" + String.valueOf(v);
     }

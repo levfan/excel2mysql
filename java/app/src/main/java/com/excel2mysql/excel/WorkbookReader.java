@@ -80,6 +80,10 @@ public final class WorkbookReader {
                         .readDefaultReturn(ReadDefaultReturnEnum.READ_CELL_DATA)
                         .ignoreEmptyRow(Boolean.FALSE)
                         .headRowNumber(0)
+                        // 关掉 FastExcel 的默认裁剪：它把"    "裁成空再变成 null，
+                        // 一整列纯空白的数据因此在 dropna 那步被删掉，DDL 少一个字段；
+                        // pandas/openpyxl 那边"    " 是有效值，列会留下。
+                        .autoTrim(Boolean.FALSE)
                         .autoCloseStream(Boolean.FALSE)
                         .sheet(Integer.valueOf(i))
                         .doRead();
