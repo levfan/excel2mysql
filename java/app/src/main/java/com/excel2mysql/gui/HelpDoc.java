@@ -43,6 +43,56 @@ public final class HelpDoc {
                     "<code>当前目标库：库名（主机:端口）</code>，没选库时是红色告警。切库、改端口都会实时刷新，" + NL +
                     "导入前扫一眼能确认没写错库。</p>"
         ),
+        new Section("lines", "三条线与选型",
+                "<h2>三条线与选型</h2>" + NL +
+                    "<p>同一个工具现在有三份可交付的程序：解析、类型推断与建表逻辑同源，" + NL +
+                    "差别在有没有界面、能跑在什么系统上、以及命令行选项集。</p>" + NL +
+                    "<table class=\"t\">" + NL +
+                    "<tr><th>交付线</th><th>入口</th><th>能跑的系统</th><th>界面</th><th>命令行</th></tr>" + NL +
+                    "<tr><td>图形版（Python）</td><td><code>excel2mysql.exe</code></td>" + NL +
+                    "<td>64 位 Windows 10 1809+ / Windows 11</td><td>有</td><td>无</td></tr>" + NL +
+                    "<tr><td>命令行版（Python，Windows 7 专用）</td><td><code>excel2mysql-cli.exe</code></td>" + NL +
+                    "<td>Windows 7 SP1 及以上，且系统 UCRT 补丁与系统文件完整</td><td>无</td><td>有</td></tr>" + NL +
+                    "<tr><td>Java 版</td><td><code>启动.bat</code> 或" + NL +
+                    "<code>java -jar excel2mysql-*.jar</code></td>" + NL +
+                    "<td>64 位 Windows 7 及以上；包内自带 Java 运行时，目标机器不用装任何东西</td>" + NL +
+                    "<td>有</td><td>有</td></tr>" + NL +
+                    "</table>" + NL +
+                    "" + NL +
+                    "<h3>界面功能：图形版与 Java 版等价</h3>" + NL +
+                    "<p>两边都有这些动作：拖文件与「添加文件」、ZIP 展开、<code>.xlsx</code> 与" + NL +
+                    "<code>.xls</code>、拼音表名、「批量应用前缀」与「替换首个前缀」、" + NL +
+                    "「生成表结构预览」（可编辑字段名、类型与主键）、「预览 DDL」、" + NL +
+                    "「SQL 脚本」页的保存与执行、「生成标准excel文件」与「生成简易excel文件」、" + NL +
+                    "耗时任务的进度框，以及这份《使用说明》（右上角「?」或 F1）。</p>" + NL +
+                    "<p>这份等价是逐项称出来的，不是估计：两条线的窗口控件、文案、按钮启用条件、" + NL +
+                    "弹窗文字、日志与写出的文件会被各自枚举成一份清单，再逐键比对，共 183 项。</p>" + NL +
+                    "" + NL +
+                    "<h3>什么时候选哪条</h3>" + NL +
+                    "<ul>" + NL +
+                    "<li>机器是 Windows 10/11，要改字段名和主键：图形版。</li>" + NL +
+                    "<li>机器只有 Windows 7、又没法确认打过补丁：Java 版，它自带运行时。</li>" + NL +
+                    "<li>要放进批处理或定时任务：两条命令行线都行，但它们的选项集不一样，" + NL +
+                    "见下一段和各自随包的 <code>README.txt</code>。</li>" + NL +
+                    "</ul>" + NL +
+                    "" + NL +
+                    "<h3>命令行选项并不完全相同</h3>" + NL +
+                    "<ul>" + NL +
+                    "<li>Python 命令行版：<code>.sql</code> 默认只登记不执行，要加" + NL +
+                    "<code>--run-sql</code> 才真的写到库里。连接信息可以逐个给" + NL +
+                    "（<code>--host --port --user --password -d</code>），另有" + NL +
+                    "<code>--swap-prefix</code>（替换首个前缀）、<code>--drop-if-exists</code>、" + NL +
+                    "<code>--batch</code>、<code>--log</code>、<code>--quiet</code>、" + NL +
+                    "<code>--no-recursive</code>、<code>--keep-temp</code>。</li>" + NL +
+                    "<li>Java 版：动作由路径类型决定——给 <code>.sql</code> 就执行脚本，" + NL +
+                    "给目录两类都干，用 <code>--no-sql</code> / <code>--no-excel</code> 各自排除，" + NL +
+                    "没有 <code>--run-sql</code> 这个开关。连接信息走同级 <code>conn.ini</code>" + NL +
+                    "或环境变量 <code>E2M_HOST / E2M_PORT / E2M_USER / E2M_PASS / E2M_DB</code>，" + NL +
+                    "选项只有 <code>--dry-run --check --prefix -c --debug --gui --version</code>。</li>" + NL +
+                    "<li>「生成标准excel文件」与「生成简易excel文件」这两件只在界面上有，" + NL +
+                    "两条命令行线都没有对应的动作。</li>" + NL +
+                    "</ul>"
+        ),
         new Section("files", "支持哪些文件",
                 "<h2>支持哪些文件</h2>" + NL +
                     "<table class=\"t\">" + NL +
