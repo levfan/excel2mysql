@@ -22,6 +22,18 @@
       <groupId>com.excel2mysql</groupId>
       <artifactId>excel2mysql-app</artifactId>
       <version>${project.version}</version>
+      <exclusions>
+        <!--
+          app 的产物是 shade 之后的胖 jar，NOP 绑定已经在里面了。
+          这里再让 maven 单独拷一份 slf4j-nop 到 verify/target/lib，
+          差分工具的 classpath 上就出现两个绑定，slf4j 每次启动都打四行
+          "Class path contains multiple SLF4J bindings"。排掉，只留胖 jar 里那一份。
+        -->
+        <exclusion>
+          <groupId>org.slf4j</groupId>
+          <artifactId>slf4j-nop</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>cn.idev.excel</groupId>

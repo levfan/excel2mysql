@@ -31,6 +31,9 @@
     <fastexcel.version>1.3.0</fastexcel.version>
     <mysql.version>8.0.33</mysql.version>
     <jpinyin.version>1.1.8</jpinyin.version>
+    <!-- NOP 绑定必须与依赖树里那份 slf4j-api 同版本（现在是 1.7.36，由 fastexcel 带进来）。
+         版本对不上时 slf4j 会退回去打那三行 "Failed to load StaticLoggerBinder" 噪声。 -->
+    <slf4j.version>1.7.36</slf4j.version>
     <!-- 随包信息：提交号与构建日期只有打包那一刻知道，默认留空由构建命令 -D 覆盖 -->
     <git.commit></git.commit>
     <git.branch></git.branch>
@@ -69,6 +72,11 @@
             <artifactId>protobuf-java</artifactId>
           </exclusion>
         </exclusions>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-nop</artifactId>
+        <version>${slf4j.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

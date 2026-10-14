@@ -23,6 +23,17 @@
       <groupId>com.mysql</groupId>
       <artifactId>mysql-connector-j</artifactId>
     </dependency>
+    <!--
+      FastExcel 用 slf4j 打内部日志，而依赖树里只有 slf4j-api、没有绑定。
+      不给一个，slf4j 每次启动都往 stderr 甩三行
+      "Failed to load class org.slf4j.impl.StaticLoggerBinder / Defaulting to NOP"，
+      混在我们的日志里，现场读日志的人会以为出了事。NOP 绑定就是"官方认可的什么都不打"，
+      比我们自己造 org.slf4j.impl 那几个类稳。
+    -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-nop</artifactId>
+    </dependency>
   </dependencies>
 
   <build>

@@ -308,6 +308,13 @@ def smoke(java_exe, jar, fixtures):
     if code != 0:
         fail("包内运行时跑自检失败，退出码 %d" % code)
     ok("包内运行时自检通过（退出码 0）")
+    # 依赖树里的 log4j-api / slf4j-api 没有实现时会各打几行"找不到日志实现"，
+    # 其中一行开头就是 ERROR。它跟着 stdout 一起进现场日志，读的人只会以为导表失败了。
+    noise = [l.strip() for l in text.splitlines()
+             if "SLF4J:" in l or "could not find a logging provider" in l]
+    if noise:
+        fail("输出里混进第三方日志框架的噪声（会被现场当成报错）：%s" % noise[0][:120])
+    ok("输出干净，没有第三方日志框架的噪声行")
 
 
 def main():
