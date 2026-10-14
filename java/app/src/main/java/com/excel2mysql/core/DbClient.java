@@ -149,10 +149,24 @@ public final class DbClient implements AutoCloseable {
         return ok;
     }
 
-    /** LocalDate/LocalDateTime/BigInteger 要转成 JDBC 认得的形式。 */
-    private static Object toJdbc(Object v) {
+    /**
+     * LocalDate/LocalDateTime/BigInteger 要转成 JDBC 认得的形式。
+     *
+     * 这条就是"值怎么发进库"的契约，界面与命令行共用；
+     * GuiMain 的自检直接断这里（超出 BIGINT 的那个分支），改坏了自检会红。
+     */
+    public static Object toJdbc(Object v) {
         if (v instanceof BigInteger) {
-            return v;
+            BigInteger b = (BigInteger) v;
+            // 装不进 64 位的整数必须原样交给服务端：Connector/J 对 BigInteger 走
+            // longValue()，9223372036854775808 会被截成 -9223372036854775808，
+            // 库那头看着完全合法，数已经在库里变了——现场查不出来，只能事后对账才发现。
+            // 转成 BigDecimal 发出去，MySQL 按 BIGINT 上限判它越界，报 1264，
+            // 与 Python 线（pymysql 发原始值）的结局和文案一致。
+            if (b.bitLength() <= 63) {
+                return Long.valueOf(b.longValue());
+            }
+            return new java.math.BigDecimal(b);
         }
         if (v instanceof java.time.LocalDateTime) {
             return java.sql.Timestamp.valueOf((java.time.LocalDateTime) v);
