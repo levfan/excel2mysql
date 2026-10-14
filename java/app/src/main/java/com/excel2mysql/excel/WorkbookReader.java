@@ -58,7 +58,15 @@ public final class WorkbookReader {
         if (!file.exists()) {
             throw new IllegalArgumentException("文件不存在：" + path);
         }
+        sniffContainer(file);
         int sheetCount = countSheets(file);
+        if (sheetCount == 0) {
+            // "扩展名叫 .xlsx 但内容不是 Excel"的文件，FastExcel 不抛异常，只回一张空清单；
+            // 放过去就会产出一张 0 列的表，最后变成库里的一条语法错误、退出码还归到"导入失败"。
+            // Python 侧 pandas 对这种文件直接判"格式无法识别"，所以这边也必须卡在解析阶段。
+            throw new IllegalArgumentException("不是可识别的 Excel 文件（既不是 zip 容器也不是 OLE2 老格式）："
+                    + file.getName());
+        }
         List<Sheet> sheets = new ArrayList<Sheet>();
         for (int i = 0; i < sheetCount; i++) {
             Collector collector = new Collector();
@@ -104,6 +112,47 @@ public final class WorkbookReader {
     private static String nameOf(File file, int index) {
         List<String> names = sheetNames(file);
         return index < names.size() ? names.get(index) : ("sheet" + (index + 1));
+    }
+
+    /**
+     * 容器嗅探：真 Excel 只有两种壳——.xlsx 是 zip（PK\\x03\\x04），
+     * .xls 是 OLE2 复合文档（D0 CF 11 E0 A1 B1 1A E1）。
+     *
+     * FastExcel 对"扩展名对、内容不是 Excel"的文件不抛异常也不报空清单，
+     * 一路走下去会被当成一张空表，最后到库里变成一条 SQL 语法错误、退出码归到"导入失败"，
+     * 现场按"导入失败"去查库是查不出东西的。Python 侧 pandas 会直接报
+     * "Excel file format cannot be determined"，所以这边必须在读之前就拒掉，
+     * 并把原因说成"文件不是 Excel"而不是"表是空的"。
+     */
+    static void sniffContainer(File file) {
+        byte[] head = new byte[8];
+        int got = 0;
+        InputStream in = null;
+        try {
+            in = new FileInputStream(file);
+            while (got < head.length) {
+                int r = in.read(head, got, head.length - got);
+                if (r < 0) {
+                    break;
+                }
+                got += r;
+            }
+        } catch (IOException e) {
+            throw new IllegalArgumentException("读文件头失败：" + file.getName() + " — " + e, e);
+        } finally {
+            close(in);
+        }
+        boolean zip = got >= 4 && head[0] == 'P' && head[1] == 'K'
+                && (head[2] == 3 || head[2] == 5 || head[2] == 7) && head[3] == 4;
+        boolean ole2 = got >= 8
+                && (head[0] & 0xFF) == 0xD0 && (head[1] & 0xFF) == 0xCF
+                && (head[2] & 0xFF) == 0x11 && (head[3] & 0xFF) == 0xE0
+                && (head[4] & 0xFF) == 0xA1 && (head[5] & 0xFF) == 0xB1
+                && (head[6] & 0xFF) == 0x1A && (head[7] & 0xFF) == 0xE1;
+        if (!zip && !ole2) {
+            throw new IllegalArgumentException("不是可识别的 Excel 文件（.xlsx 要以 PK 03 04 开头、"
+                    + ".xls 要以 D0 CF 11 E0 开头）：" + file.getName());
+        }
     }
 
     private static int countSheets(File file) {

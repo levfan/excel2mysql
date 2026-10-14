@@ -120,6 +120,12 @@ public final class TableBuilder {
             cb.stage("推断字段类型");
         }
         r.table.columns = infer.inferColumns(grid.headers, grid.rows);
+        // 与 Python 侧同一道闸：一列都没有就别往下走，
+        // 否则建出来是 `CREATE TABLE x ( )`，现场只看到"导入失败"，猜不到是拖了张空表
+        if (r.table.columns.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "没有解析到任何字段：表里没有可用的表头行（空表，或整列都是空值）");
+        }
         if (cb != null) {
             cb.stage("选择主键");
         }

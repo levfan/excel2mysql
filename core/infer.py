@@ -806,6 +806,10 @@ def build_table_def(filepath: str, progress_cb=None) -> dict:
     table_name, table_comment = parse_table_name_and_comment(filepath)
     _note("推断字段类型")
     columns = infer_columns(df)
+    # 一列都没有就别往下走了：这种表建出来是 `CREATE TABLE x ( )`，
+    # MySQL 会回一条语法错误，现场看到"导入失败"却猜不到是自己拖了张空表
+    if not columns:
+        raise ValueError("没有解析到任何字段：表里没有可用的表头行（空表，或整列都是空值）")
     # 主键自动选择：至多一个，详见 select_primary_key
     _note("选择主键")
     pk_field, pk_reason = select_primary_key(df, columns)
