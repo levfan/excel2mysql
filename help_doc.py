@@ -286,6 +286,12 @@ rate/ratio/percent 的列不算金额（<code>年利率</code> 按实测小数�
 保证建表不报 Row size too large</li>
 <li>数值列中无法转换的值按 NULL 写入，并在日志里汇总告警（列名、数量、行号示例），
 不静默丢数据</li>
+<li><b>装不进 BIGINT 的整数会被整张表拒绝</b>：推断只能给到 <code>BIGINT</code>，
+超过 <code>±9223372036854775807</code> 时 MySQL 报
+<code>1264 Out of range value</code>，该表事务回滚、其余表继续，不会把一个变过样的数写进库。
+Excel 的数值单元格本身是双精度浮点，<code>9223372036854775807</code> 存进去就已经变成
+<code>2^63</code>，所以要落这种量级的数，得在结构定义 Sheet 里把该列写成
+<code>DECIMAL(20,0)</code>，或者当文本列导</li>
 </ul>
 <p>所有推断结果都可以在<b>「生成表结构预览」</b>里逐列改。</p>
 """),

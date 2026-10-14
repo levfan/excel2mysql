@@ -7,7 +7,7 @@ Excel → MySQL 批量导入工具（Java 线）v{version}
 命令行（同一份程序，无界面）
   jre\bin\java.exe -jar {jar} --check            只测连接并列出数据库
   jre\bin\java.exe -jar {jar} C:\数据 --prefix ods_   建表并导入目录下全部 Excel
-  jre\bin\java.exe -jar {jar} C:\数据 --dry-run      只看建表语句，完全不碰库
+  jre\bin\java.exe -jar {jar} C:\数据 --dry-run      只看建表语句与脚本预览，完全不碰库
   jre\bin\java.exe -jar {jar} 脚本目录 --no-excel    只把目录里的 .sql 执行到目标库
   动作由路径类型决定：给 .sql 就执行脚本，给 Excel/zip 就建表导入，给目录两件都干，
   再用 --no-sql / --no-excel 各自排除一类。
