@@ -168,6 +168,11 @@ def main():
 
     a, b = load(py_json), load(java_json)
     ka, kb = set(a), set(b)
+    # env.* 记的是"这台机器上量到的现场值"（窗口实测尺寸、可用区多大）。
+    # 两边的屏幕不一样，这类值天生不可比；跨线比的是配置值（*.want）与折行结果（wrap.*）。
+    env_keys = sorted({k for k in (ka | kb) if k.startswith("env.")})
+    ka -= set(env_keys)
+    kb -= set(env_keys)
     only_py = sorted(ka - kb)
     only_java = sorted(kb - ka)
     diffs = []
@@ -183,6 +188,9 @@ def main():
 
     print("- [INFO] GUI-PARITY | Python 侧 %d 键 | Java 侧 %d 键 | 共有 %d 键"
           % (len(ka), len(kb), len(ka & kb)))
+    for k in env_keys:
+        print("     现场值（不比）%s | Python=%s Java=%s"
+              % (k, one(a.get(k, "-")), one(b.get(k, "-"))))
     for k in only_py:
         print("     仅 Python 有 | %s = %s" % (k, one(a[k])))
     for k in only_java:

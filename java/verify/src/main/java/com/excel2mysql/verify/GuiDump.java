@@ -165,14 +165,33 @@ public final class GuiDump {
                 put("loaded.log", frame.logPanel().text());
                 put("loaded.hint.excel", frame.excelHintText());
                 put("add.popup", popup());
-                // Qt 顶层窗口的 width/height 量的是客户区，Java 的外框还含标题栏和边框，
-                // 拿外框比就是在比两套窗口装饰，不是比界面本身
-                java.awt.Dimension client = frame.getContentPane().getSize();
-                put("window.size", client.width + "x" + client.height);
+                // 跨线比配置值（两边写死的客户区尺寸必须同一个数）；
+                // 实测尺寸受现场屏幕与夹取影响，记成 env.* 只留档不比。
+                // Qt 的 resize 与 Swing 的 pack 说的都是客户区，外框由操作系统加，不拿来比。
+                put("window.want", want(frame));
+                put("env.window.size", clientSize(frame));
                 java.awt.Image icon = frame.getIconImage();
                 put("window.icon", icon == null ? "none"
                         : "max=" + Math.max(icon.getWidth(null), icon.getHeight(null)));
                 put("file.tooltip.0", frame.fileModel().tooltipAt(0));
+                // 折行规则本身也要跨线比：同一段最坏文案，两边必须折出同一个字符串
+                put("wrap.single", com.excel2mysql.gui.PopupText.wrap(
+                        "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"
+                        + "内部单元格 D17 的类型与推断结果冲突，需要人工确认这一列到底是文本还是数字，"
+                        + "详见日志里的完整堆栈信息。"));
+                put("wrap.path", com.excel2mysql.gui.PopupText.wrap(
+                        "已生成 24 个文件（共 158 张表）。\n目录：\n"
+                        + "D:\\00.personal\\4.code\\excel2mysql\\java\\dist"
+                        + "\\excel2mysql-java-1.0.1-win64\\app\\meta_data_file_20261014"));
+                StringBuilder tall = new StringBuilder();
+                for (int i = 1; i <= 30; i++) {
+                    if (i > 1) {
+                        tall.append('\n');
+                    }
+                    tall.append("第 ").append(i)
+                            .append(" 行：这一行本身就不短，加上中文标点和路径信息会更长一些一些一些。");
+                }
+                put("wrap.tall", com.excel2mysql.gui.PopupText.wrap(tall.toString()));
                 frame.startImport();
                 put("guard.nodb.import", popup());
 
@@ -335,6 +354,8 @@ public final class GuiDump {
                         }
                         tabs.append(plain.tabTitleAt(i));
                     }
+                    put("dlg.ddl.want", want(plain));
+                    put("env.dlg.ddl.size", clientSize(plain));
                     put("ddl.tabs", tabs.toString());
                     put("ddl.first", plain.tabCount() == 0 ? "" : plain.tabText(0));
                 } finally {
@@ -360,6 +381,8 @@ public final class GuiDump {
                 StructureDialog sd = new StructureDialog(frame, two, frame.logPanel());
                 try {
                     put("dlg.structure.title", sd.getTitle());
+                    put("dlg.structure.want", want(sd));
+                    put("env.dlg.structure.size", clientSize(sd));
                     put("dlg.structure.tabs", join(sd.tabTitles(), "|"));
                     StringBuilder cols = new StringBuilder();
                     for (int c = 0; c < 5; c++) {
@@ -389,6 +412,8 @@ public final class GuiDump {
                 HelpDialog hd = new HelpDialog(frame);
                 try {
                     put("dlg.help.title", hd.getTitle());
+                    put("dlg.help.want", want(hd));
+                    put("env.dlg.help.size", clientSize(hd));
                     StringBuilder toc = new StringBuilder();
                     for (int i = 0; i < hd.tocCount(); i++) {
                         if (i > 0) {
@@ -404,6 +429,8 @@ public final class GuiDump {
                 AboutDialog ad = new AboutDialog(frame);
                 try {
                     put("dlg.about.title", ad.getTitle());
+                    put("dlg.about.want", want(ad));
+                    put("env.dlg.about.size", clientSize(ad));
                     put("dlg.about.rows", join(ad.rowCaptions(), "|"));
                 } finally {
                     ad.dispose();
@@ -414,6 +441,8 @@ public final class GuiDump {
                     pd.setTotal(3);
                     pd.step("读盘");
                     put("dlg.progress.title", pd.getTitle());
+                    put("dlg.progress.want", want(pd));
+                    put("env.dlg.progress.size", clientSize(pd));
                     put("dlg.progress.status", pd.statusText());
                     put("dlg.progress.percent", pd.percentText());
                     put("dlg.progress.cancel", pd.cancelText());
@@ -429,9 +458,42 @@ public final class GuiDump {
     }
 
     /** 最近一次弹窗的"图标|标题|正文"，与 Python 侧 popup_text() 同一形状。 */
+    /**
+     * 最近一次弹窗的"图标|标题|正文"。
+     *
+     * 正文去掉换行再比：换行位置由折行规则按字符宽度算，两边弹窗里带的产物目录
+     * 长度本来就不一样，折出来的行也不同。排版本身另有 wrap.single / wrap.path /
+     * wrap.tall 三个键钉住（同样的输入必须折出同样的串），这里只比"说的话"。
+     */
     private static String popup() {
         return frame.lastDialogIcon() + "|" + frame.lastDialogTitle() + "|"
-                + frame.lastDialogText();
+                + popupBody(frame.lastDialogText());
+    }
+
+    /** 弹窗正文去掉折行引入的换行，只留内容。 */
+    private static String popupBody(String text) {
+        return text == null ? "" : text.replace("\n", "");
+    }
+
+    /** 配置值：Windows.clientSize 把"客户区本应多大"记在内容面板上，两条线必须写同一个数。 */
+    private static String want(java.awt.Window w) {
+        javax.swing.JComponent c = content(w);
+        Object v = c == null ? null : c.getClientProperty("e2mWant");
+        return v == null ? "" : String.valueOf(v);
+    }
+
+    /** 实测客户区尺寸：现场屏幕不同、夹取结果就不同，只留档不跨线比。 */
+    private static String clientSize(java.awt.Window w) {
+        javax.swing.JComponent c = content(w);
+        return c == null ? "" : c.getWidth() + "x" + c.getHeight();
+    }
+
+    private static javax.swing.JComponent content(java.awt.Window w) {
+        java.awt.Container c = w instanceof javax.swing.JFrame
+                ? ((javax.swing.JFrame) w).getContentPane()
+                : w instanceof javax.swing.JDialog
+                        ? ((javax.swing.JDialog) w).getContentPane() : null;
+        return c instanceof javax.swing.JComponent ? (javax.swing.JComponent) c : null;
     }
 
     /** 日志新增的那几行：两边都按"操作前后取差"来读，不靠整篇文本对齐。 */
@@ -460,7 +522,7 @@ public final class GuiDump {
                 frame.generateExcel(true, outRoot.getPath());
                 put("export.std.log", frame.logPanel().text());
                 put("export.std.popup.title", frame.lastDialogTitle());
-                put("export.std.popup.text", frame.lastDialogText());
+                put("export.std.popup.text", popupBody(frame.lastDialogText()));
             }
         });
         File std = firstDir(outRoot, "meta_data_file_");

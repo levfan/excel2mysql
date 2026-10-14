@@ -111,7 +111,7 @@ public final class GuiMain {
                 if (!partSummary.contains("添加 2 项文件")) {
                     problems.add("取消时把已解析的汇总顶掉了：" + partSummary.replace((char) 10, ' '));
                 }
-                if (!frame.lastDialogText().equals(partSummary)) {
+                if (!flat(frame.lastDialogText()).equals(flat(partSummary))) {
                     problems.add("取消后的弹窗正文和汇总不是同一句话");
                 }
                 if (!frame.logPanel().contains("[添加结果] 已取消，只完成了部分解析")) {
@@ -477,10 +477,47 @@ public final class GuiMain {
             problems.add("窗口图标取小了，任务栏会糊：" + icon.getWidth(null) + "x"
                     + icon.getHeight(null));
         }
-        // Qt 的 resize(1100,780) 说的是客户区，所以这里量内容面板而不是整个外框
+        // 窗口尺寸：客户区不得小于设计值（内容要摆得开），整窗必须落在屏幕可用区内
+        // （首次打开就能看见全部文字与按钮，老屏上也不会被任务栏吃掉半截）
+        java.awt.Rectangle work = com.excel2mysql.gui.Windows.workArea(frame);
         java.awt.Dimension client = frame.getContentPane().getSize();
-        if (client.width != 1100 || client.height != 780) {
-            problems.add("窗口客户区与 Python 侧不一致：" + client);
+        if (client.width < 1100 || client.height < 780) {
+            problems.add("客户区比设计的 1100x780 还小：" + client);
+        }
+        if (!work.contains(frame.getBounds())) {
+            problems.add("主窗口超出屏幕可用区：" + frame.getBounds() + " 可用 " + work);
+        }
+        checkPopupWrap(problems);
+        // 故意要一个装不下的尺寸：夹取逻辑没生效的话，这条会红
+        // （本机屏幕大，"没超屏"那种断言在这台机器上咬不住东西）
+        javax.swing.JFrame huge = new javax.swing.JFrame("夹取检查");
+        huge.getContentPane().add(new javax.swing.JLabel("占位"));
+        com.excel2mysql.gui.Windows.clientSize(huge.getContentPane(), huge, 99999, 99999);
+        if (!work.contains(huge.getBounds())) {
+            problems.add("要求 99999 宽时没夹回屏幕可用区：" + huge.getBounds()
+                    + " 可用 " + work);
+        }
+        huge.dispose();
+        for (java.awt.Window dlg : fitCheckDialogs(frame)) {
+            try {
+                if (!work.contains(dlg.getBounds())) {
+                    problems.add("弹窗超出屏幕可用区：" + dlg.getClass().getSimpleName()
+                            + " " + dlg.getBounds() + " 可用 " + work);
+                }
+                java.awt.Dimension dc = ((java.awt.Container) dlg).getSize();
+                if (dc.width < 1 || dc.height < 1) {
+                    problems.add("弹窗没算出尺寸：" + dlg.getClass().getSimpleName() + dc);
+                }
+                java.awt.Container dcontent = (java.awt.Container) dlg;
+                java.awt.Dimension dmin = dcontent.getMinimumSize();
+                if (dc.width < dmin.width || dc.height < dmin.height) {
+                    problems.add("弹窗比内容要求的最小尺寸还小，文字会被裁："
+                            + dlg.getClass().getSimpleName() + " 实测 " + dc
+                            + " 最小 " + dmin);
+                }
+            } finally {
+                dlg.dispose();
+            }
         }
         if (files.isEmpty()) {
             problems.add("自检没有夹具可拖");
@@ -1051,6 +1088,84 @@ public final class GuiMain {
         frame.clearAll();
     }
 
+    /**
+     * 折行规则自己的红线：预算、行数、不丢字、截断时留话。
+     *
+     * 这条规则决定弹窗里到底看得见哪些字，两边各写一份迟早会飘，
+     * 所以除了对撞器比整串折行结果，这边再钉一遍绝对约束。
+     */
+    private static void checkPopupWrap(java.util.List<String> problems) {
+        // 期望值写死成契约数字：拿常量当期望值的断言是恒真的，
+        // 把预算改成 400 它照样绿，洞还留着。常量本身另外钉一条。
+        if (com.excel2mysql.gui.PopupText.WRAP_COLS != 56
+                || com.excel2mysql.gui.PopupText.MAX_LINES != 22) {
+            problems.add("折行预算与上限应当是 56 列 / 22 行，实际 "
+                    + com.excel2mysql.gui.PopupText.WRAP_COLS + " 列 / "
+                    + com.excel2mysql.gui.PopupText.MAX_LINES + " 行");
+        }
+        String longLine = "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息"
+                + "（dim_air_raid_siren）.xlsx 时失败，内部单元格 D17 的类型与推断结果冲突，"
+                + "需要人工确认这一列到底是文本还是数字，详见日志里的完整堆栈信息。";
+        StringBuilder tall = new StringBuilder();
+        for (int i = 1; i <= 30; i++) {
+            tall.append("第 ").append(i).append(" 行：这一行本身就不短，")
+                    .append("加上中文标点和路径信息会更长一些一些一些。");
+            if (i < 30) {
+                tall.append('\n');
+            }
+        }
+        String[] samples = {longLine, tall.toString(), "短的一句"};
+        for (String src : samples) {
+            String out = com.excel2mysql.gui.PopupText.wrap(src);
+            String[] lines = out.split("\n", -1);
+            if (lines.length > 22) {
+                problems.add("折行后仍有 " + lines.length + " 行，超过 22 行上限");
+            }
+            for (String ln : lines) {
+                if (com.excel2mysql.gui.PopupText.width(ln) > 56) {
+                    problems.add("折行后有一行超出 56 列预算：" + ln);
+                }
+            }
+            if (lines.length == 22
+                    && !lines[lines.length - 1].contains("完整内容见底部日志")) {
+                problems.add("行数正好卡在 22 上限，却没告诉用户其余内容在日志里");
+            }
+            if (!flat(out).startsWith(flat(src).substring(0, Math.min(12,
+                    flat(src).length())))) {
+                problems.add("折行把开头都改动了：" + out.substring(0, Math.min(40, out.length())));
+            }
+        }
+        // 不截断时内容必须一字不少：去掉换行要和原文对得上
+        String shortOut = com.excel2mysql.gui.PopupText.wrap("第一行\n第二行");
+        if (!"第一行第二行".equals(flat(shortOut))) {
+            problems.add("折行丢了原有的分段：" + shortOut);
+        }
+    }
+
+    /**
+     * 摆出来但不开框的各弹窗：这里只量尺寸。
+     *
+     * 不开框是故意的——这几个窗是模态的，真开会把自检自己卡住；
+     * 而客户区尺寸在构造函数的 pack 里就算完了，不必显示出来才量得到。
+     */
+    private static java.awt.Window[] fitCheckDialogs(MainFrame frame) {
+        java.util.List<java.awt.Window> out = new java.util.ArrayList<java.awt.Window>();
+        out.add(new com.excel2mysql.gui.HelpDialog(frame));
+        out.add(new com.excel2mysql.gui.AboutDialog(frame));
+        out.add(new com.excel2mysql.gui.ProgressDialog(null, "正在解析文件…"));
+        if (!frame.results().isEmpty()) {
+            out.add(new com.excel2mysql.gui.DDLDialog(frame, frame.tables(), false));
+            out.add(new com.excel2mysql.gui.StructureDialog(frame, frame.results(),
+                    frame.logPanel()));
+        }
+        return out.toArray(new java.awt.Window[out.size()]);
+    }
+
+    /** 比内容不比排版：弹窗正文按显示列宽折过行，断言里去掉换行再比。 */
+    private static String flat(String s) {
+        return s == null ? "" : s.replace("\n", "");
+    }
+
     private static String tail(String text) {
         String s = text == null ? "" : text.replace((char) 10, ' ');
         return s.length() <= 260 ? s : s.substring(s.length() - 260);
@@ -1452,7 +1567,7 @@ public final class GuiMain {
             problems.add("生成收尾的汇总行不对，期望：" + doneLine + "；日志尾部："
                     + tail(frame.logPanel().text()));
         }
-        if (!frame.lastDialogText().contains(dir.getPath())) {
+        if (!flat(frame.lastDialogText()).contains(flat(dir.getPath()))) {
             problems.add("弹窗正文没把目录名原样给出来："
                     + frame.lastDialogText().replace((char) 10, ' '));
         }

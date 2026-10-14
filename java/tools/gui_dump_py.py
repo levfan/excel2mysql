@@ -190,12 +190,22 @@ def find_layout(root, target):
     return None
 
 
+def popup_body(text):
+    """弹窗正文去掉折行引入的换行，只留内容（与 Java 侧 popupBody 同一件事）。"""
+    return (text or "").replace("\n", "")
+
+
 def popup_text():
-    """最近一次弹窗的"标题|正文"，没弹就是空串。"""
+    """最近一次弹窗的"图标|标题|正文"，没弹就是空串。
+
+    正文去掉换行再比：换行位置由折行规则按字符宽度算，而两边弹窗里带的产物目录
+    长度本来就不一样，折出来的行也不同。排版本身另有 wrap.single / wrap.path /
+    wrap.tall 三个键钉住（同样的输入必须折出同样的串），这里只比"说的话"。
+    """
     if not POPUPS:
         return ""
     _kind, title, text = POPUPS[-1]
-    return "%s|%s|%s" % (_kind, title, text)
+    return "%s|%s|%s" % (_kind, title, text.replace("\n", ""))
 
 
 def btn_on(win, text):
@@ -283,15 +293,28 @@ def main():
     put("loaded.log", win.log.toPlainText())
     put("loaded.hint.excel", win.lbl_imp_db.text())
     put("add.popup", popup_text())
-    # 两侧都量"程序自己画的那块地方"：Qt 顶层窗口的 width/height 就是客户区，
-    # Java 那边对应的是 getContentPane()，外框由操作系统加、两边口径不同源。
-    put("window.size", "%dx%d" % (win.width(), win.height()))
+    # 两侧都量"程序自己画的那块地方"：Qt 顶层窗口的 width/height 就是客户区。
+    # 跨线比的是配置值 want（两边必须写同一个数）；实测值受现场屏幕与夹取影响，只记不比。
+    put("window.want", str(win.property("e2mWant") or ""))
+    put("env.window.size", "%dx%d" % (win.width(), win.height()))
     ic = app.windowIcon()   # 图标挂在 QApplication 上（main.py 末尾 setWindowIcon），不是挂在窗口上
     sizes = sorted(ic.availableSizes(), key=lambda s: max(s.width(), s.height()))
     put("window.icon", "none" if not sizes
         else "max=%d" % max(sizes[-1].width(), sizes[-1].height()))
     tip0 = win.file_table.item(0, 0)
     put("file.tooltip.0", tip0.toolTip() if tip0 else "")
+    # 折行规则本身也要跨线比：同一段最坏文案，两边必须折出同一个字符串
+    put("wrap.single", m.wrap_popup_text(
+        "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"
+        "内部单元格 D17 的类型与推断结果冲突，需要人工确认这一列到底是文本还是数字，"
+        "详见日志里的完整堆栈信息。"))
+    put("wrap.path", m.wrap_popup_text(
+        "已生成 24 个文件（共 158 张表）。\n目录：\n"
+        "D:\\00.personal\\4.code\\excel2mysql\\java\\dist\\excel2mysql-java-1.0.1-win64"
+        "\\app\\meta_data_file_20261014"))
+    put("wrap.tall", m.wrap_popup_text("\n".join(
+        "第 %d 行：这一行本身就不短，加上中文标点和路径信息会更长一些一些一些。" % i
+        for i in range(1, 31))))
     # 双击不是"接了信号"就算数，要真的建出那一张表的结构窗口。
     # 真窗口是模态的，离屏 exec() 会挂住进程，所以只把 exec 换成"记一笔、返回取消"，
     # 构造过程走真代码。
@@ -366,6 +389,8 @@ def main():
 
     # ---- DDL：不勾选与勾选覆盖已存在表 ----
     dlg = m.DDLDialog(win.tables, False, win)
+    put("dlg.ddl.want", str(dlg.property("e2mWant") or ""))
+    put("env.dlg.ddl.size", "%dx%d" % (dlg.width(), dlg.height()))
     put("ddl.tabs", "|".join(dlg.tabs.tabText(i) for i in range(dlg.tabs.count())))
     put("ddl.first", dlg.tabs.widget(0).toPlainText())
     dlg.deleteLater()
@@ -378,6 +403,8 @@ def main():
     # ---- 结构弹窗 ----
     sd = m.StructureDialog(win.tables[:2], win)
     put("dlg.structure.title", sd.windowTitle())
+    put("dlg.structure.want", str(sd.property("e2mWant") or ""))
+    put("env.dlg.structure.size", "%dx%d" % (sd.width(), sd.height()))
     put("dlg.structure.tabs", "|".join(sd.tabs.tabText(i)
                                        for i in range(sd.tabs.count())))
     first = sd.tabs.widget(0)
@@ -400,11 +427,15 @@ def main():
     # ---- 说明与关于 ----
     hd = m.HelpDialog(win)
     put("dlg.help.title", hd.windowTitle())
+    put("dlg.help.want", str(hd.property("e2mWant") or ""))
+    put("env.dlg.help.size", "%dx%d" % (hd.width(), hd.height()))
     lst = hd.findChild(QListWidget)
     put("dlg.help.toc", "|".join(lst.item(i).text() for i in range(lst.count())))
     hd.deleteLater()
     ad = m.AboutDialog(win)
     put("dlg.about.title", ad.windowTitle())
+    put("dlg.about.want", str(ad.property("e2mWant") or ""))
+    put("env.dlg.about.size", "%dx%d" % (ad.width(), ad.height()))
     captions = []
     for lay in ad.findChildren(QGridLayout):
         for i in range(lay.rowCount()):
@@ -418,6 +449,8 @@ def main():
     # ---- 进度框文案 ----
     pd = m.ProgressDialog(u"正在解析文件…", win)
     put("dlg.progress.title", pd.windowTitle())
+    put("dlg.progress.want", str(pd.property("e2mWant") or ""))
+    put("env.dlg.progress.size", "%dx%d" % (pd.width(), pd.height()))
     pd.set_progress(1, 3, u"读盘")
     put("dlg.progress.status", pd.lbl_step.text())
     put("dlg.progress.percent", pd.bar.text())
@@ -433,7 +466,8 @@ def main():
     app.processEvents()
     put("export.std.log", win.log.toPlainText())
     put("export.std.popup.title", next((t for _k, t, _b in POPUPS if t == u"生成结果"), ""))
-    put("export.std.popup.text", next((b for _k, _t, b in POPUPS if _t == u"生成结果"), ""))
+    put("export.std.popup.text", popup_body(
+        next((b for _k, _t, b in POPUPS if _t == u"生成结果"), "")))
     std = os.path.join(out_root, [x for x in sorted(os.listdir(out_root))
                                   if x.startswith("meta_data_file_")][0])
     put("export.std.dir", os.path.basename(std))

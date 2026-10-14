@@ -2052,7 +2052,7 @@ check("Q49 逐文件日志与收尾汇总都留痕，弹窗把目录名原样报
       "- [INFO] 导出 | 正在写 " in _ew.log.toPlainText()
       and ("===== 生成完成：%d/%d 个文件，目录 %s =====" % (_nt, _nt, _std))
       in _ew.log.toPlainText()
-      and any(t == "生成结果" and _std in m for t, m in POPUPS),
+      and any(t == "生成结果" and _std in m.replace("\n", "") for t, m in POPUPS),
       [l for l in _ew.log.toPlainText().splitlines() if "生成完成" in l])
 _ew._gen_excel(u"简易", False)
 _simd = os.path.join(_out_root, "simple_meta_data_file_" + _time.strftime("%Y%m%d"))
@@ -2413,6 +2413,76 @@ if getattr(sys, "frozen", False):
           and _ai.build_info()["commit"] not in ("unknown", "无 git 信息"), _ai.build_info())
 else:
     skip("T14 冻结态提交号取证", "开发态跑不到 exe 环境，打包闸门里会跑")
+
+section("U 弹窗尺寸与折行（首次打开就得看得见全部文字）")
+
+# 期望值一律写死成契约数字，不写 POPUP_WRAP_COLS 这类常量本身——
+# 拿常量当期望值的断言是恒真的：把预算改成 400，断言照样绿，洞还在。
+_LONG_ONE_LINE = ("任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息"
+                  "（dim_air_raid_siren）.xlsx 时失败，内部单元格 D17 的类型与推断结果冲突，"
+                  "需要人工确认这一列到底是文本还是数字，详见日志里的完整堆栈信息。")
+_TALL_TEXT = "\n".join("第 %d 行：这一行本身就不短，加上中文标点和路径信息会更长一些一些一些。"
+                       % i for i in range(1, 31))
+_COLS = lambda s: sum(app_main._display_cols(c) for c in s)
+
+check("U1 折行预算与上限钉死在 56 列 / 22 行",
+      app_main.POPUP_WRAP_COLS == 56 and app_main.POPUP_MAX_LINES == 22,
+      (app_main.POPUP_WRAP_COLS, app_main.POPUP_MAX_LINES))
+_w1 = app_main.wrap_popup_text(_LONG_ONE_LINE)
+check("U2 一条长文被折进列预算里（不再靠控件库横向撑宽）",
+      all(_COLS(ln) <= 56 for ln in _w1.split("\n")) and len(_w1.split("\n")) > 1,
+      [_COLS(ln) for ln in _w1.split("\n")])
+check("U3 折行只加换行、不改字",
+      _w1.replace("\n", "") == _LONG_ONE_LINE.replace("\n", ""), _w1[:60])
+_w2 = app_main.wrap_popup_text(_TALL_TEXT)
+check("U4 放不下的正文换成一句『去日志看』，行数不超 22",
+      len(_w2.split("\n")) <= 22 and "完整内容见底部日志" in _w2,
+      len(_w2.split("\n")))
+check("U5 未截断时原文的分段被保留",
+      app_main.wrap_popup_text("第一行\n第二行").replace("\n", "") == "第一行第二行",
+      app_main.wrap_popup_text("第一行\n第二行"))
+check("U6 短文案原样不动（不给正常提示加多余换行）",
+      app_main.wrap_popup_text("请先添加 Excel 文件或 ZIP 压缩包。")
+      == "请先添加 Excel 文件或 ZIP 压缩包。",
+      app_main.wrap_popup_text("请先添加 Excel 文件或 ZIP 压缩包。"))
+
+_geo = _app.primaryScreen().availableGeometry()
+_suites = [("主窗口", app_main.MainWindow(), "1100x780"),
+           ("使用说明", app_main.HelpDialog(), "960x700"),
+           ("关于", app_main.AboutDialog(), "380x168"),
+           ("进度框", REAL_PROGRESS("正在解析文件…"), "480x140"),
+           ("表结构预览", app_main.StructureDialog([]), "980x640"),
+           ("DDL 预览", app_main.DDLDialog([], False), "900x600")]
+for _nm, _win, _want in _suites:
+    _win.show()
+    _app.processEvents()
+    check("U7 %s 的客户区按配置值摆，且整窗落在屏幕可用区内" % _nm,
+          _win.property("e2mWant") == _want and _geo.contains(_win.geometry()),
+          (_win.property("e2mWant"), _win.geometry().getRect(), _geo.getRect()))
+    _win.close()
+    _win.deleteLater()
+_app.processEvents()
+
+POPUPS.clear()
+app_main.popup_box(None, "任务异常", _LONG_ONE_LINE, "critical")
+_shown = POPUPS[-1][1] if POPUPS else ""
+check("U8 消息弹窗真的走了折行那一道（首屏不会横向撑出屏外）",
+      "\n" in _shown and all(_COLS(ln) <= 56 for ln in _shown.split("\n")), _shown[:60])
+check("U9 折行后说的话与原来同一句",
+      _shown.replace("\n", "") == _LONG_ONE_LINE, _shown[:60])
+
+# 故意要一个装不下的尺寸：夹取逻辑没生效的话这条会红。
+# 本机屏幕大，"没超屏"那种断言在这台机器上咬不住东西
+_huge = REAL_PROGRESS("夹取检查")
+app_main.fit_client(_huge, 99999, 99999)
+_huge.show()
+_app.processEvents()
+check("U10 要求超大尺寸时被夹回屏幕可用区内",
+      _geo.contains(_huge.geometry()) and _huge.width() < 99999,
+      (_huge.geometry().getRect(), _geo.getRect()))
+_huge.close()
+_huge.deleteLater()
+_app.processEvents()
 
 section("G MySQL 真实读写（建表→导入→查询→回滚）")
 
