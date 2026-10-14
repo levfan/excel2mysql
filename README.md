@@ -22,20 +22,57 @@
 
 ## 运行环境要求
 
-本项目现在有**两条发布线，共用同一份 `core/`（解析、类型推断、DDL、导入逻辑）**：
+本项目现在有**三条发布线，共用同一套口径（解析、类型推断、DDL、导入逻辑）**：
+Python 侧同源靠同一个 `core/` 包，Java 侧是把 `core/` 重写一遍后用金标准差分对平。
 
-| | 图形版（GUI） | 命令行版（CLI） |
-| --- | --- | --- |
-| 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` |
-| 能跑的系统 | **64 位 Windows 10 1809+ / Windows 11** | **Windows 7 SP1 及以上** |
-| Python | 3.10+（本机 `.venv` 用 3.12.8） | 3.8.10（本机 `.venv38`） |
-| 依赖清单 | `requirements.txt` | `requirements38.txt` |
-| 打包闸门 | `一键打包.bat` → `build_exe.py` | `一键打包38.bat` → `build_exe38.py` |
-| 用例集 | `pack_test.py`（403 项，含 GUI 各组） | `pack_test38.py`（227 项，含真库读写与 `.sql` 执行；同一份在旧栈与新栈各跑一遍） |
-| 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 |
+| | 图形版（GUI） | 命令行版（CLI，Windows 7 专用） | Java 版（GUI + CLI 同一个包） |
+| --- | --- | --- | --- |
+| 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` | `java/` → `启动.bat`（界面）／`jre\bin\java.exe -jar`（命令行） |
+| 能跑的系统 | **64 位 Windows 10 1809+ / Windows 11** | **Windows 7 SP1 及以上**，且系统 UCRT 补丁与系统文件完整 | **64 位 Windows 7 及以上**；包内自带 Java 8 运行时，目标机器不用装任何东西 |
+| 语言与依赖 | Python 3.10+（本机 `.venv` 用 3.12.8）+ PySide6 | Python 3.8.10（本机 `.venv38`），不含任何 Qt | Java 8（本机 `jdk1.8.0_202`），依赖见 `java/pom.xml` |
+| 打包闸门 | `一键打包.bat` → `build_exe.py` | `一键打包38.bat` → `build_exe38.py` | `java/一键打包.bat` → `tools/build_java_dist.py` |
+| 用例与守卫 | `pack_test.py`（403 项，含 GUI 各组） | `pack_test38.py`（227 项，含真库读写与 `.sql` 执行；同一份在旧栈与新栈各跑一遍） | `java/构建验证.bat` 十步闸门 + `java/界面双端对撞.bat` + `--gui --selftest` |
+| 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 | 两种都有：同一个 jar，`--gui` 起界面，不给 `--gui` 就是命令行 |
 
-两条线各自的环境与产物互不影响：GUI 包该多大还多大（153 MB）、该要 Win10 还 Win10；
-命令行包不含任何 Qt，产物 79 MB，能在 Windows 7 SP1 上跑。
+三条线各自的环境与产物互不影响：GUI 包该多大还多大（162 MB）、该要 Win10 还 Win10；
+命令行包不含任何 Qt，产物 89 MB，能在 Windows 7 SP1 上跑；
+Java 包 232 MB，绝大部分是随包的运行时。
+
+### 三条线的功能区别
+
+选型只看三件事：**界面要不要、机器是什么系统、要不要写进批处理**。
+
+| 能力 | 图形版 | 命令行版 | Java 版 |
+| --- | --- | --- | --- |
+| 拖文件 / 添加文件 / ZIP 展开 / `.xlsx` 与 `.xls` | 有 | 有（给路径） | 三种输入都有，界面与命令行各一套入口 |
+| 表名拼音、批量应用前缀 | 有 | 有（`--prefix`） | 有（界面两个按钮 + `--prefix`） |
+| 替换首个前缀 | 有 | 有（`--swap-prefix`） | **只有界面有**，命令行没给对应开关 |
+| 生成表结构预览（改字段名/类型/主键） | 有 | 无 | 有 |
+| 预览 DDL | 有 | 有（`--dry-run` 打印） | 有（界面 + `--dry-run`） |
+| 生成标准 / 简易 Excel 交付件 | 有 | 无 | **只有界面有** |
+| 执行 `.sql` 脚本 | 有（SQL 脚本页） | 默认只登记，加 `--run-sql` 才执行 | **动作由路径类型决定**：给 `.sql` 就执行，`--no-sql` / `--no-excel` 各自排除；没有 `--run-sql` |
+| 连接信息怎么给 | 界面上填 | `--host/--port/--user/--password/-d` 或 `E2M_*` 或配置文件 | 同级 `conn.ini` 或 `E2M_*`（命令行只认 `-c` 指定配置文件） |
+| 随包使用说明 | 内置《使用说明》（右上角「?」/ F1） | 包内 `README.txt` | 界面内置同一份《使用说明》 + 包内 `README.txt` |
+| 其余命令行开关 | — | `--drop-if-exists` `--batch` `--no-recursive` `--keep-temp` `--log` `--quiet` `--check` `--dry-run` | `--check` `--dry-run` `--prefix` `-c/--conn` `--debug` `--version` `--gui` |
+
+**图形版与 Java 版的界面是等价的**，而且这条等价是机器判定的：`java/界面双端对撞.bat`
+把两条线的控件文案、按钮启用条件、弹窗文字、日志、写出的文件内容各自枚举成一份清单，
+逐键比对（当前 183 项），任何一项不一致就红。所以"Java 版界面少个按钮"这类事瞒不住。
+
+两条命令行线的**选项集并不相同**，别把一边的命令照抄到另一边：
+`--run-sql`、`--swap-prefix`、`--drop-if-exists`、`--log` 这些只在 Python 命令行版有；
+`--no-sql`、`--no-excel`、`--gui` 只在 Java 版有。各自的准确清单以 `--help` 输出和随包
+`README.txt` 为准。
+
+**Java 版是为"只能开在老 Windows 7 上"准备的**：Qt 6 要 Win10 1809+，Python 3.8 打的包
+还要系统自带 UCRT（KB2999226）；JDK 8 那一代运行时链的是 `msvcr100.dll`，
+随包就带着，不吃 UCRT。所以同一台没打过补丁的 Win7，命令行版可能起不来，Java 版能起。
+
+这句"能起"的取证强度要说清：它是**按依赖契约判定**的——打包闸门逐 jar 核 class 主版本
+≤52、核包内没有任何 `api-ms-win-*` 转发桩与 CRT 批文件，这几条不满足就不出包。
+它不等于"在任意一台 Win7 上都实测过"。真机上如果起不来，先按包内 `README.txt`
+的排错条目查（`jre\bin\java.exe -version` 能不能起、包是不是整目录拷全）。
+
 
 ### 为什么图形版跑不了 Windows 7
 
@@ -235,7 +272,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 辅助开关：`--fast`（只打产品包）、`--no-parity`（跳过 3.12 那轮跨栈）、`--keep-cache`。
 
-**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **79 MB / 1382 个文件**（GUI 线那个包是 153 MB）。
+**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **89 MB / 1395 个文件**（GUI 线那个包是 162 MB / 920 个文件）。
 这条线用的是 PyInstaller **5.x**，onedir 是**平铺布局**——`excel2mysql-cli.exe`、`python38.dll`、
 `*.pyd`、`base_library.zip`、默认配置 `conn.ini`、使用说明 `README.txt` 全在同一层，
 **没有 GUI 线的 `_internal` 目录**（那是 6.x 才改的布局）。整个目录一起拷走或压成 zip，只拷 exe 跑不起来。
@@ -260,7 +297,9 @@ W31 保证说明里不会带出口令或内网地址。
 
 ## 安装
 
-两条线各装各的环境，互不干扰（本机分别是 `.venv` 与 `.venv38`）：
+使用者拿到三条线的任一**产物包**都不用在目标机上装东西（Java 包连 Java 运行时都带着）。
+下面是在**这台开发机**上重建三条线的环境：两个 Python 环境各装各的，互不干扰
+（本机分别是 `.venv` 与 `.venv38`），Java 线用本机 `jdk1.8.0_202`：
 
 ```bash
 # 图形版：Windows 10 1809+ / 11，Python 3.10+（本机 .venv = 3.12.8）
@@ -283,16 +322,21 @@ pip install -r requirements.txt
 ```bash
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
+
+java\dist\excel2mysql-java-1.0.1-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-1.0.1-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-1.0.1-win64\excel2mysql-1.0.1.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
 
-**有两套打包闸门，各产一条线的包，跑在不同 Python 上，互不影响：**
+**有三套打包闸门，各产一条线的包，跑在不同环境上，互不影响：**
 
 | 产物 | 双击入口 | 实际执行 | 用什么环境 |
 | --- | --- | --- | --- |
-| 图形版 `dist\excel2mysql\`（153 MB，带 `_internal`） | `一键打包.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
-| 命令行版 `dist\excel2mysql-cli\`（79 MB，平铺无 `_internal`） | `一键打包38.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
+| 图形版 `dist\excel2mysql\`（162 MB，带 `_internal`） | `一键打包.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
+| 命令行版 `dist\excel2mysql-cli\`（89 MB，平铺无 `_internal`） | `一键打包38.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
+| Java 版 `java\dist\excel2mysql-java-<版本>-win64\`（约 232 MB，含随包 JRE） | `java\一键打包.bat` | `java/tools/build_java_dist.py`（剔桩 + 逐 jar class 版本 + 冒烟 + README/启动.bat 内容校验） | 本机 `jdk1.8.0_202` + Maven |
 
 下面「一键打包」到「已知限制」讲的是**图形版**那条闸门；
 命令行版的完整步骤、产物体检项与分发说明在本文件前面的「Windows 7 命令行版」一节。
@@ -359,7 +403,7 @@ dist\excel2mysql\
 └── _internal\          145 MB  Qt / pandas / numpy / pypinyin 词典等运行时
 ```
 
-合计 **153 MB / 908 个文件**。`excel2mysql.exe` 与 `_internal` 必须同级放在一起，不能只拷 exe。
+合计 **162 MB / 920 个文件**。`excel2mysql.exe` 与 `_internal` 必须同级放在一起，不能只拷 exe。
 
 ### 分发方式
 
@@ -485,14 +529,22 @@ qtvirtualkeyboardplugin`。后两个是插件文件本身——它们依赖的 D
 （详见下方「导出标准/简易 Excel 交付件」）。两者都不连库、不改动列表。
 
 界面上任何一步都可以点**右上角的「?」**（或按 **F1**）打开内置的《使用说明》：
-左侧目录点章节即跳转，右侧是可整篇滚动的正文，覆盖文件类型、命名与类型推断规则、
-主键、进度框与取消语义、日志读法、常见问题等——不装 Python、不联网也能查。
+左侧目录点章节即跳转，右侧是可整篇滚动的正文，覆盖三条交付线的功能区别、
+文件类型、命名与类型推断规则、主键、进度框与取消语义、日志读法、常见问题等
+——不装 Python、不联网也能查。Java 版的说明窗是同一份正文（由 `help_doc.py`
+导出成 `HelpDoc.java`），所以这两条线的《使用说明》不会各写各的。
 
 ## 使用说明对话框（「?」/ F1）
 
 - 入口：主窗口**右上角「?」**按钮（贴在标题栏下方最右侧）、**F1**；说明窗内 **Esc** 或「关闭」退出
 - 内容全部写在 `help_doc.py` 的 `SECTIONS` 里，每节是 `(锚点 id, 目录标题, HTML 正文)`；
   `ui_help.py` 负责渲染成"左目录 + 右正文"，正文拼成一份带锚点的长文档，点目录即 `scrollToAnchor`
+- **Java 版走的是同一份正文**：`java/tools/export_help_java.py` 把 `SECTIONS` 原样导出成
+  `HelpDoc.java`（改文案改 `help_doc.py` 再重导，别手改那个 Java 文件），
+  所以"三条线与选型"这类章节两条线同时有。防分叉靠两处断言：Java 侧 `GuiMain`
+  核目录条数（当前 14 章，改了 `help_doc.py` 忘了重导就变红），并且按**标题**而不是
+  序号找章节做跳转断言（插一章不该让守卫假红）；Python 侧 P 组的条数直接从
+  `SECTIONS` 取
 - 排版只用 Qt Rich Text 认得的 CSS 子集（表格边框、代码块底色、`.tip` / `.warn` 提示条），
   不认的属性写了也不生效，所以样式表里只保留能生效的那部分
 - **文档漂移有守卫**：用例 P 组会检查说明里点名的每个按钮在界面上真实存在、

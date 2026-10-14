@@ -423,3 +423,85 @@ Java 线 `GuiMain` 新增同名检查（界面上每个按钮要在说明里点�
 - 渲染成图的比对仍是人眼看（`UiShot` / `py_ui_shot.py` 各出 10 张），没做像素差；
   offscreen 平台没有 CJK 字体，Qt 那侧截图里中文是豆腐块，只能看布局。
 - 交付包本轮没重跑，两颗新按钮与这几处修复要等下次打包才进产物。
+
+## 16. 第九轮：三条探针从"代理"改成"真做一件事"，三条线的区别打进产物
+
+### 16.1 `dblclick` 从"线接没接"改成"真开一次弹窗"
+
+原来的断言是 `getMouseListeners().length > 0` / `receivers(...) > 0`，
+那只能证明信号线上挂了个东西，证明不了点开的是不是那一张表。改成两侧真的建弹窗：
+
+- Python：把真 `StructureDialog` 子类化，只替换模态的 `exec()`（记一笔、返回取消），
+  所以表体、标签页都是真渲染出来的。直接 `emit(0, 0)` 走的是真接线。
+- Java：这里踩了一次死锁——`StructureDialog` 是**模态**的，
+  把派发放在枚举主体的 `invokeAndWait` 里，`setVisible(true)` 就在 EDT 上开了第二层
+  事件循环，整份枚举卡住（`java.exe` 挂了一分多钟不退出，量到的还是上一份残留 json）。
+  改成：派发丢 `invokeLater`，由非 EDT 线程轮询 `Window.getWindows()` 等窗口出现，
+  再 `invokeAndWait` 读标签页并 `dispose()` 放行（模态嵌套循环仍会处理事件队列，
+  所以这个 `invokeAndWait` 进得去）。10 秒等不到就记 `0|0|sel=… seen=…`，
+  是红线不是静默跳过。
+- 两侧同报 `1|1|ren_yuan_xin_xi_biao_ren_shi_chu`。
+
+顺带查出一条**真差距**：Java 双击文件列表只弹那一行的表，Python 之前弹整张列表——
+组框标题写的是"双击表名/字段可编辑"，弹整张列表等于让用户猜改的是谁。
+Python 补 `on_edit_structure_row(row, col)`：只装那一行、回写只替换那一条。
+日志也补齐：确认后 Java 的 `[结构] xxx 已按弹窗修改` 与按钮路径的
+`[结构] 已按弹窗确认 N 张表的字段定义`，Python 现在两条都有（Java 按钮路径本来就写，
+Python 之前两条都不写，属于"改完了界面上没痕迹"）。
+
+### 16.2 `window.size` / `window.icon` 是两边探针不同源
+
+- 尺寸：Qt 顶层的 `resize` 说的是客户区，Swing 的 `setSize` 说的是外框。
+  Java 早先用 `setPreferredSize + pack` 把内容面板钉成 1100x780（外框 1122x836 由系统加），
+  而探针还在量 `getWidth()`——所以"差 22x56"差的是操作系统那条标题栏，不是界面。
+  两侧统一改成量客户区 / 内容面板，`GuiMain` 的断言同步改成
+  `frame.getContentPane().getSize()`；顺手删掉构造里已被 `pack()` 覆盖的那句 `setSize`。
+- 图标：Python 报 `none` 不是产品没图标，是探针绕过了生产入口——
+  `setWindowIcon` 原来写在 `if __name__ == "__main__":` 里，对撞器自己 `MainWindow()`
+  就永远看不到。把应用级设置提成 `setup_app(app)`，`__main__` 与对撞器都调它，
+  两侧同报 `max=256`。
+
+### 16.3 变异抽查
+
+把 `main.py` 的 `cellDoubleClicked.connect(...)` 注释掉重跑 Python 枚举 →
+对撞器报 `值不等 dblclick.structure  Python: 0|0| / Java: 1|1|ren_yuan_xin_xi_biao_ren_shi_chu`；
+还原后恢复 183 键逐键一致。这条探针咬得住。
+
+### 16.4 三条线的功能区别写进文档，并打进各自产物
+
+- `README.md`：两条线改成三条线（矩阵 + 新增「三条线的功能区别」一节，
+  含只有界面有的动作、两条命令行线**选项集不同**、Java 线 Win7 可跑性的取证强度怎么说）
+- `help_doc.py` 新增第 14 章「三条线与选型」→ `tools/export_help_java.py` 重导出
+  `HelpDoc.java`，两条 GUI 线的内置《使用说明》同源；`GuiMain` 的守卫从 13 改 14，
+  并把"按序号点第 4 章"改成**按标题**找章节（插一章就假红的守卫是坏守卫）
+- `assets/README.txt`（Python 命令行版随包）新增「关于三条交付线」
+- `build_java_dist.py` 生成的 `README.txt`（Java 包随包）新增「另外两条线，以及三条线的功能区别」
+- **修掉交付物里一条假事实**：Java 包的 README.txt 一直写着
+  `java -jar excel2mysql-*.jar 脚本目录 --run-sql`，而实测（同一个 jar）报
+  `x [ERROR] USAGE | 未知选项 --run-sql`——那是 Python 命令行版的口径。
+  示例改成给 `.sql` 路径 + `--no-excel`，并明确"动作由后缀决定、没有执行开关"。
+- 两条防漂移守卫：`pack_test38.py` 新增 **W31d**（随包说明必须写清另外两条线与系统门槛）；
+  `build_java_dist.py` 新增"README 的可照抄命令行里不许出现本包不认的开关名"
+  （第一版把范围写成"整份文档"，结果它把自己那句"本包没有 `--run-sql`"的提醒也判成错误、
+  打包退出码 1——守卫该管"照抄会错"，不是管"提到"，已收窄到可照抄行）。
+
+### 16.5 本轮验证与产物
+
+| 项 | 结果 |
+| --- | --- |
+| `界面双端对撞.bat` | Python 183 键 / Java 183 键 / 共有 183 键，逐键一致（RC=0） |
+| `java/构建验证.bat` | 十步全过（META-DIFF 2133 格 0 处不一致；GUI-SELFTEST 含 14 章目录守卫） |
+| `GuiMain --gui --selftest` | 绿（客户区 1100x780、目录 14 章、按标题跳转） |
+| `pack_test.py`（3.12） | 通过 397 / 失败 0 / 跳过 6（G 组真库与 PT_XLS、T14 冻结态取证未提供凭据） |
+| `pack_test38.py` | `.venv38` 与 `.venv` 两栈各跑一遍，RC=0（含新 W31d 通过、W29 仍绿） |
+| 三条线重新打包 | 图形版 `dist/excel2mysql` 162.5 MB / 920 文件；命令行版 89.1 MB / 1395 文件；Java 版 `java/dist/excel2mysql-java-1.0.1-win64` 232.1 MB / 200 文件，`[OK] All checks passed` |
+| 产物内容取证 | 两份随包 `README.txt` 实测已含三条线说明（`grep 另外两条线 / 关于三条交付线` 命中） |
+
+### 16.6 仍未闭合的（照实记）
+
+- 三条线**命令行选项集并不相同**（Python 有 `--run-sql` / `--swap-prefix` / `--drop-if-exists`
+  / `--log` 等，Java 有 `--no-sql` / `--no-excel` / `--gui` / `--debug`），本轮只写清楚，
+  没去统一；统一属于改变现有批处理口径的动作。
+- "Java 版能跑 64 位 Win7"仍是**契约级取证**（逐 jar class ≤52、包内无转发桩、
+  随包 `java.exe` 冒烟起得来 + PE 分析），不是每台真机都点过；文档按这个强度写。
+- 真库导入成功的收尾文案、模态进度框那一支：两条线各有用例，仍没有跨线对撞。
