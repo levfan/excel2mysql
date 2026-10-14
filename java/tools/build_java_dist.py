@@ -204,6 +204,31 @@ def readme_text(version, stubs, size):
     return text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
 
 
+def write_manual(dist, version):
+    """把内置《使用说明》的完整正文也放一份进包里（Java 线：界面 + 命令行同一个包）。
+
+    只带 README.txt 的话，图形版的操作细节全在 jar 里，现场要先双击才知道怎么用；
+    内容不另写一遍，走仓库根目录那份 export_manual_txt（与 Python 图形版同一来源），
+    两条 GUI 线的随包手册因此是同一份东西，只有抬头那行的产品线不同。
+    """
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    import export_manual_txt
+    from help_doc import SECTIONS
+    label = "Java 版（界面 + 命令行同一个包），v%s，需 64 位 Windows 7 及以上" % version
+    text = export_manual_txt.render(label)
+    out = os.path.join(dist, "使用说明.txt")
+    with io.open(out, "wb") as fh:
+        fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+    missing = [t for _a, t, _b in SECTIONS if t not in text]
+    if missing:
+        fail("随包使用说明缺章节 %s（渲染不完整）" % missing)
+    if "<" in text:
+        fail("随包使用说明里有没去掉的 HTML 标签，现场读不下去")
+    ok("使用说明.txt：%d 字符 / %d 章，与界面内置那份同一来源" % (len(text), len(SECTIONS)))
+    return text
+
+
 def max_class_major(jar_path):
     """扫 jar 里每个 class 的主版本号。
 
@@ -334,6 +359,7 @@ def main():
         if not os.path.isfile(os.path.join(dist, want)):
             fail("产物里缺 %s" % want)
     ok("产物含 conn.ini 与 README.txt")
+    write_manual(dist, version)
     # 说明里的开关名必须真是这个 jar 认的：Python 命令行版那套 --run-sql / --swap-prefix
     # 抄到这里会让现场敲出一条"未知选项"。只核能照抄的那几行（含 java.exe -jar 或 启动.bat
     # 的示例）——"本包没有 --run-sql"这种提醒也得允许写出来，否则守卫会把解释当成错误

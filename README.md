@@ -56,11 +56,11 @@ Python 3.8 那条**只有命令行**（`.venv38` 里没装 PySide6，实测确�
 
 每个产物的随包必备件（打包脚本里逐条硬校验，缺一件就不出包）：
 
-| 产物 | `conn.ini` | 操作手册 `README.txt` | 手册在项目侧的源文件 |
+| 产物 | `conn.ini` | 操作手册 | 手册在项目侧的源文件 |
 | --- | --- | --- | --- |
-| 图形版（Python） | 不需要（连接信息在界面上填） | 有 | `help_doc.py` → `export_manual_txt.py` 渲染 |
-| 命令行版（Python） | 有 | 有 | `assets/README.txt` |
-| Java 版（界面 + 命令行） | 有 | 有 | `java/assets/README.txt`（脚本填 `{version}`/`{jar}`/`{stubs}`/`{size}` 四个占位） |
+| 图形版（Python） | 不需要（连接信息在界面上填） | `README.txt`（完整 14 章） | `help_doc.py` → `export_manual_txt.py` 渲染 |
+| 命令行版（Python） | 有 | `README.txt`（前置条件、四条命令、开关、退出码、排错） | `assets/README.txt` |
+| Java 版（界面 + 命令行） | 有 | `README.txt`（快速上手与命令行）+ `使用说明.txt`（完整 14 章） | `java/assets/README.txt`（脚本填 `{version}`/`{jar}`/`{stubs}`/`{size}` 四个占位）；完整手册同由 `export_manual_txt.py` 渲染 |
 
 图形版那份手册**不是另写一遍**：它由内置《使用说明》的 `help_doc.py` 渲染出来，
 闸门再核"每个章节标题都在手册里、没有残留 HTML 标签"，所以界面里的说明和随包的文本

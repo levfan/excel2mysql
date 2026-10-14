@@ -571,7 +571,7 @@ Python 之前两条都不写，属于"改完了界面上没痕迹"）。
 | --- | --- | --- | --- | --- |
 | 图形版 `dist\excel2mysql\` | `一键打包.bat` | 不需要（界面上填） | **本轮补上**（原先只有 exe + `_internal`） | `help_doc.py` → `export_manual_txt.py` 渲染 |
 | 命令行版 `dist\excel2mysql-cli\` | `一键打包38.bat` | 有 | 有 | `assets/README.txt` |
-| Java 版 `java\dist\excel2mysql-java-<版本>-win64\` | `java\一键打包.bat` | 有 | 有 | **本轮搬出来**：原先正文写死在 `build_java_dist.py` 里，仓库看不见；现在是 `java/assets/README.txt` + 四个占位符 |
+| Java 版 `java\dist\excel2mysql-java-<版本>-win64\` | `java\一键打包.bat` | 有 | 有 `README.txt` + `使用说明.txt`（完整 14 章，同一份渲染） | **本轮搬出来**：原先正文写死在 `build_java_dist.py` 里，仓库看不见；现在是 `java/assets/README.txt` + 四个占位符 |
 
 图形版那份手册不重写一遍，由内置《使用说明》渲染，闸门里核"每个章节标题都在、没有残留标签"，
 所以随包文本和界面内置说明不会分叉。为什么必须带文本：现场的顺序是先翻文件再决定要不要
