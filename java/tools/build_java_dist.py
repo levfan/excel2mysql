@@ -192,9 +192,27 @@ def readme_text(version, stubs, size):
         "命令行（同一份程序，无界面）",
         "  jre\\bin\\java.exe -jar %s --check            只测连接并列出数据库" % jar,
         "  jre\\bin\\java.exe -jar %s C:\\数据 --prefix ods_   建表并导入目录下全部 Excel" % jar,
-        "  jre\\bin\\java.exe -jar %s 脚本目录 --run-sql      把目录下 .sql 执行到目标库" % jar,
+        "  jre\\bin\\java.exe -jar %s C:\\数据 --dry-run      只看建表语句，完全不碰库" % jar,
+        "  jre\\bin\\java.exe -jar %s 脚本目录 --no-excel    只把目录里的 .sql 执行到目标库" % jar,
+        "  动作由路径类型决定：给 .sql 就执行脚本，给 Excel/zip 就建表导入，给目录两件都干，",
+        "  再用 --no-sql / --no-excel 各自排除一类。",
+        "  注意：Python 命令行版那个『执行脚本』开关在这里不存在，抄过来会报未知选项——",
+        "  这边不用开关，给什么后缀就干对应的活。",
         "  不带 -c 时自动读产物同级的 conn.ini；口令建议留空、用环境变量传：set E2M_PASS=你的密码",
         "  优先级：命令行参数 > 环境变量 E2M_HOST/E2M_PORT/E2M_USER/E2M_PASS/E2M_DB > conn.ini",
+        "",
+        "另外两条线，以及三条线的功能区别",
+        "  图形版 excel2mysql.exe（Python）：界面与本包逐项目等价（两条线的界面由机器逐项",
+        "    比对判定），但它要 64 位 Windows 10 1809+ 或 Windows 11。",
+        "  命令行版 excel2mysql-cli.exe（Python）：给路径就干活、没有界面，能跑在 Windows 7 SP1",
+        "    上，前提是那台机器的 UCRT 补丁（KB2999226）和系统文件完整——不满足就起不来，",
+        "    连日志都看不到。它的命令行选项与本包不同：它有 --run-sql、--swap-prefix、",
+        "    --drop-if-exists、--batch、--log、--quiet、--no-recursive、--keep-temp，本包没有；",
+        "    本包有 --gui、--no-sql、--no-excel、--debug，它没有。",
+        "  本包（Java）：目标机器什么都不用装（Java 运行时随包带着），64 位 Windows 7 起就能跑，",
+        "    界面和命令行是同一个 jar。",
+        "  只有界面能做、命令行做不了的几件：生成表结构预览（改字段名、类型、主键）、",
+        "    替换首个前缀、生成标准/简易 Excel 交付件。",
         "",
         "目录",
         "  启动.bat            启动脚本，用包内那个 java.exe，不依赖系统装没装 Java",
@@ -344,6 +362,20 @@ def main():
         if not os.path.isfile(os.path.join(dist, want)):
             fail("产物里缺 %s" % want)
     ok("产物含 conn.ini 与 README.txt")
+    # 说明里的开关名必须真是这个 jar 认的：Python 命令行版那套 --run-sql / --swap-prefix
+    # 抄到这里会让现场敲出一条"未知选项"。只核能照抄的那几行（含 java.exe -jar 或 启动.bat
+    # 的示例）——"本包没有 --run-sql"这种提醒也得允许写出来，否则守卫会把解释当成错误
+    doc = readme_text(version, removed, size).decode("utf-8")
+    copyable = [ln for ln in doc.split("\n")
+                if "java.exe -jar" in ln or "启动.bat" in ln]
+    for ghost in ("--run-sql", "--swap-prefix", "--drop-if-exists", "--keep-temp"):
+        hit = [ln for ln in copyable if ghost in ln]
+        if hit:
+            fail("README.txt 的可照抄命令里写了本包不认的开关 %s：%s" % (ghost, hit[0]))
+    for must in ("--no-sql", "--no-excel", "另外两条线", "Windows 7"):
+        if must not in doc:
+            fail("README.txt 缺了该有的内容：%s" % must)
+    ok("README.txt 的开关名与三条线说明对得上（可照抄行 %d 条）" % len(copyable))
 
     left = count_stubs(os.path.join(dist, "jre"))
     if left:

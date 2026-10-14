@@ -752,7 +752,8 @@ W_DOC_LABELS = ("W29 说明里出现的长选项都在 argparse 里真实存在"
                 "W30 说明里的退出码清单与代码常量一一对应",
                 "W31 说明里不含真实口令或内网地址",
                 "W31b 说明写清了 --prefix 的下划线要自己写上",
-                "W31c 说明写清了缺 UCRT 的症状、KB 号与拷贝方式")
+                "W31c 说明写清了缺 UCRT 的症状、KB 号与拷贝方式",
+                "W31d 说明写清了另外两条线与各自系统门槛")
 doc_path = os.path.join(ROOT, "assets", "README.txt")
 if not os.path.isfile(doc_path):
     for _lbl in W_DOC_LABELS:
@@ -782,6 +783,8 @@ else:
     check(W_DOC_LABELS[5], "下划线要自己写上" in doc, doc.count("--prefix"))
     check(W_DOC_LABELS[6],
           "KB2999226" in doc and "api-ms-win-crt" in doc and "只拷 exe 跑不起来" in doc)
+    check(W_DOC_LABELS[7],
+          "Java 版" in doc and "Windows 10 1809" in doc and "表结构是一样的" in doc)
 
 
 # ---------------------------------------------------------------------------
