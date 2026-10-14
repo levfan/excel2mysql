@@ -1304,10 +1304,19 @@ class MainWindow(QWidget):
         self._refresh_sql_table()
         self.sql_log.appendPlainText(f"[移除] {len(paths)} 个脚本文件")
 
+    def _warn(self, text):
+        """拦下一次点击：日志与弹窗双写同一句话。
+
+        只弹窗不写日志的话，用户回头查日志找不到"刚才那下为什么没动"；
+        Swing 那条线的 warn() 一直是两处都写，两条线要同一口径。
+        """
+        append_log(self.log, "已拦下：" + text)
+        QMessageBox.warning(self, "提示", text)
+
     def on_sql_apply_prefix(self):
         prefix = self.ed_sql_prefix.text().strip()
         if not prefix:
-            QMessageBox.warning(self, "提示", "请先输入表名前缀（如 dim_）。")
+            self._warn("请先输入表名前缀（如 dim_）。")
             return
         items = [(s["path"], s["text"], dict(s["rename_map"])) for s in self.sql_files]
         self._run_modal("正在改写脚本中的表名…", sql_prefix_task, (items, prefix),
@@ -1327,7 +1336,7 @@ class MainWindow(QWidget):
     def on_sql_replace_prefix(self):
         head, why = self._clean_head(self.ed_sql_prefix.text())
         if head is None:
-            QMessageBox.warning(self, "提示", why)
+            self._warn(why)
             return
         items = [(r["path"], r["text"], dict(r["rename_map"])) for r in self.sql_files]
         self._run_modal("正在替换脚本中的表名前缀…", sql_replace_prefix_task, (items, head),
@@ -1351,10 +1360,10 @@ class MainWindow(QWidget):
         cfg = self._conn_cfg()
         db = cfg["database"]
         if not db:
-            QMessageBox.warning(self, "提示", NO_DB_HINT)
+            self._warn(NO_DB_HINT)
             return
         if not self.sql_files:
-            QMessageBox.warning(self, "提示", "请先添加 SQL 脚本文件。")
+            self._warn("请先添加 SQL 脚本文件。")
             return
         self.sql_log.appendPlainText(
             f"===== 开始执行脚本（目标库 {db}，每个文件一个事务）=====")
@@ -1536,7 +1545,7 @@ class MainWindow(QWidget):
             return
         head, why = self._clean_head(self.ed_prefix.text())
         if head is None:
-            QMessageBox.warning(self, "提示", why)
+            self._warn(why)
             return
         self._run_modal("正在替换表名前缀…", table_replace_task, (self.tables, head),
                         on_done=self._finish_replace_prefix)
@@ -1596,7 +1605,7 @@ class MainWindow(QWidget):
     def _gen_excel(self, label, with_meta):
         """写盘在子线程、进度框照弹，与导入同一个任务框架；输出落在程序同级。"""
         if not self.tables:
-            QMessageBox.warning(self, "提示", NO_FILE_HINT)
+            self._warn(NO_FILE_HINT)
             return
         out_root = program_dir()
         title = ("正在生成标准excel文件…" if with_meta else "正在生成简易excel文件…")
@@ -1624,7 +1633,7 @@ class MainWindow(QWidget):
             return
         db = self._conn_cfg()["database"]
         if not db:
-            QMessageBox.warning(self, "提示", NO_DB_HINT)
+            self._warn(NO_DB_HINT)
             return
         self.btn_import.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -1651,6 +1660,10 @@ class MainWindow(QWidget):
         if self.worker:
             self.worker.abort()
             self.log.appendPlainText("[正在中止...]")
+        else:
+            # 空点「停止」也要留痕：什么都不说会让人以为自己按错了，
+            # 而 Swing 那条线同一句已经写在日志里，两边口径要一致
+            self.log.appendPlainText("没有正在执行的任务")
 
     def _on_worker_error(self, msg):
         append_log(self.log, msg, error=True)

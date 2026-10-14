@@ -96,6 +96,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private String lastDialogTitle = "";
     private String lastDialogText = "";
     private boolean lastDialogIsError;
+    private String lastDialogIcon = "information";
     private javax.swing.JTabbedPane tabs;
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
@@ -439,6 +440,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         op.add(opRight, BorderLayout.EAST);
 
         pageProgress = new javax.swing.JProgressBar();
+        // Qt 的 QProgressBar 默认就在条上印百分比，Swing 默认什么都不画：
+        // 不开这个，页内进度条在两条线上看起来是两种东西
+        pageProgress.setStringPainted(true);
         pageProgress.setPreferredSize(new Dimension(200, 18));
         JPanel south = new JPanel(new BorderLayout(0, 2));
         south.add(op, BorderLayout.NORTH);
@@ -569,8 +573,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 弹窗按严重级区分：连接失败这种必须用 error 级挡在前面。 */
     public void critical(String text) {
-        javax.swing.JOptionPane.showMessageDialog(this, text, "连接失败",
-                javax.swing.JOptionPane.ERROR_MESSAGE);
+        // 走 dialog() 而不是直接 showMessageDialog：那条路会记录图标/标题，
+        // 原地模式（自检与双端对撞器站在事件分发线程上）也不会把线程卡死
+        dialog("连接失败", text, javax.swing.JOptionPane.ERROR_MESSAGE);
     }
 
     /** 一张表的成功/失败，只带文件路径：收尾要按文件决定留不留。 */
@@ -627,7 +632,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         fileModel.removeItems(removed);
         setPageProgress(0);
-        importBtn.setEnabled(connected && !tables.isEmpty());
+        importBtn.setEnabled(!tables.isEmpty());
         syncGenButtons();
         refreshPreview();
 
@@ -726,7 +731,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private void setEnabledForRun(boolean on) {
         taskRunning = !on;
         connect.setEnabled(on);
-        importBtn.setEnabled(on && connected && !tables.isEmpty());
+        // 「有表就能点」，与 Python 侧同一口径：没选库时点下去由 startImport 弹 NO_DB_HINT，
+        // 而不是把按钮一直灰着让人以为是坏了
+        importBtn.setEnabled(on && !tables.isEmpty());
         stopBtn.setEnabled(!on);
         syncGenButtons();
     }
@@ -1159,7 +1166,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         zipDestSeq += 1;
         if (importBtn != null) {
-            importBtn.setEnabled(connected);
+            importBtn.setEnabled(!tables.isEmpty());
         }
         syncGenButtons();
         refreshPreview();
@@ -1338,6 +1345,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         zipOrigin.clear();
         ddlText = "";
         setPageProgress(0);
+        // 清空后「开始导入」要跟着变灰：Python 的 on_clear 就是这么做的，
+        // 留着亮按钮等于允许点一次只会弹"请先添加文件"的空操作
+        importBtn.setEnabled(!tables.isEmpty());
         syncGenButtons();
         log("已清空");
     }
@@ -1494,6 +1504,33 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return drop;
     }
 
+    /** 双端界面枚举对撞器要读的那几个控件（见 java/tools/gui_parity.py）。 */
+    public javax.swing.JTextField userField() {
+        return userField;
+    }
+
+    public javax.swing.JPasswordField passField() {
+        return passField;
+    }
+
+    public javax.swing.JComboBox<String> dbCombo() {
+        return dbCombo;
+    }
+
+    public javax.swing.JProgressBar pageProgressBar() {
+        return pageProgress;
+    }
+
+    /** 双端界面枚举对撞器要按页归属分按钮（两页有重名按钮）。 */
+    public javax.swing.JTabbedPane tabs() {
+        return tabs;
+    }
+
+    /** 底部动作条那个容器：两条线都按"从左到右的组件序"比对按钮排布。 */
+    public java.awt.Container actionBar() {
+        return importBtn.getParent();
+    }
+
     public LogPanel logPanel() {
         return logPanel;
     }
@@ -1617,6 +1654,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         lastDialogTitle = title;
         lastDialogText = text == null ? "" : text;
         lastDialogIsError = icon == javax.swing.JOptionPane.ERROR_MESSAGE;
+        lastDialogIcon = icon == javax.swing.JOptionPane.ERROR_MESSAGE ? "critical"
+                : icon == javax.swing.JOptionPane.WARNING_MESSAGE ? "warning" : "information";
         if (!modalProgress || lastDialogText.isEmpty()) {
             // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
             return;
@@ -1631,6 +1670,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public String lastDialogText() {
         return lastDialogText;
+    }
+
+    /** 弹窗用的是哪种图标：information / warning / critical，两条线要能逐字对上。 */
+    public String lastDialogIcon() {
+        return lastDialogIcon;
     }
 
     /** 最后一次弹窗是不是出错图标那一档（任务异常用 critical，其余用 information）。 */

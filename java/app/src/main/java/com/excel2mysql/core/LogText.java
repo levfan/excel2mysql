@@ -44,6 +44,11 @@ public final class LogText {
     public static String describe(Throwable e) {
         if (e instanceof SQLException) {
             SQLException se = (SQLException) e;
+            // 连不上库这类驱动自己抛的异常 vendor code 是 0，写出来只会让人以为
+            // MySQL 回了个 0 号错误；没有码就只报类型与原文
+            if (se.getErrorCode() == 0) {
+                return se.getClass().getSimpleName() + "：" + se.getMessage();
+            }
             return se.getClass().getSimpleName() + "（MySQL 错误码 " + se.getErrorCode()
                     + "）：" + se.getMessage();
         }

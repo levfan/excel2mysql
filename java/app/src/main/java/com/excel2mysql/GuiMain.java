@@ -192,7 +192,10 @@ public final class GuiMain {
                         }
                     }
                 }
-                // 没连接之前"开始导入"必须是禁用的，不然点了只会静默失败
+                // 「开始导入」的启用条件与 Python 同：有表就可点，没选库由入口自己拦下并弹提示，
+                // 而不是把按钮一直灰着——灰着的按钮会让人以为程序坏了
+                frame.clearAll();
+                frame.addFiles(files);
                 javax.swing.AbstractButton importBtn = null;
                 for (javax.swing.AbstractButton b : frame.buttons()) {
                     if ("开始导入".equals(b.getText())) {
@@ -201,8 +204,15 @@ public final class GuiMain {
                 }
                 if (importBtn == null) {
                     problems.add("界面上没有「开始导入」按钮");
-                } else if (frame.isConnected() || importBtn.isEnabled()) {
-                    problems.add("未连接时「开始导入」就可点，点了只会静默失败");
+                } else {
+                    if (frame.isConnected() || !importBtn.isEnabled()) {
+                        problems.add("有表但没连库时「开始导入」应可点（与 Python 同口径），实际 enabled="
+                                + importBtn.isEnabled() + " connected=" + frame.isConnected());
+                    }
+                    frame.clearAll();
+                    if (importBtn.isEnabled()) {
+                        problems.add("列表空着时「开始导入」还是可点");
+                    }
                 }
                 // 日志的红色与行数上限：错误没标红、或日志无限涨，都只会在现场翻车时才发现
                 frame.logError("自检错误行");
