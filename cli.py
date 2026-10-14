@@ -34,8 +34,18 @@ import shutil
 import sys
 import tempfile
 import time
+import warnings
 
-from core.infer import (
+# 第三方库的警告要在 pandas / cryptography 被引进来之前就压掉，晚一行都收不住：
+# openpyxl 读"生成器只写了最小样式表"的 Excel（真实数据包里全是这种）会给每张表打一行
+# "UserWarning: Workbook contains no default style"，冻结态的 cryptography 还会在 import
+# 期打一行 Python 3.8 弃用警告。它们都不影响结果，但会混进操作员的日志里，
+# 既不是本工具的日志格式，也会把真正的 错误 淹掉。其它警告照常打出来。
+warnings.filterwarnings("ignore", message=".*no default style.*", append=True)
+warnings.filterwarnings("ignore", message=".*no longer supported by the Python core team.*",
+                        append=True)
+
+from core.infer import (  # noqa: E402
     build_table_def, make_unique_names, apply_table_prefix, replace_first_segment,
 )
 from core.merge_check import MergedCellsError
@@ -735,13 +745,16 @@ def run(argv=None):
             cfg = resolve_cfg(args, log)
         except ValueError as e:
             log.error("配置错误 | %s" % e)
-            return EXIT_USAGE
+            code = EXIT_USAGE
+            return code
         bad = validate(args, cfg, log)
         if bad:
-            return bad
+            code = bad    # finally 里那行"退出码 N"读的是 code：不写回去，日志会报 0 而进程退 1
+            return code
 
         if args.check:
-            return do_check(cfg, log)
+            code = do_check(cfg, log)
+            return code
 
         entries, zips, sqls = collect_inputs(args.inputs, not args.no_recursive, log)
         if zips:
@@ -768,7 +781,8 @@ def run(argv=None):
                     tables.append(td)
             if not tables:
                 log.error("全部 Excel 输入解析失败 | 共 %d 项" % parse_failed)
-                return EXIT_PARSE
+                code = EXIT_PARSE
+                return code
             if parse_failed:
                 log.warn("解析阶段有失败 | %d 项未进入待导入列表，其余 %d 张继续"
                          % (parse_failed, len(tables)))
@@ -777,7 +791,8 @@ def run(argv=None):
                 log.warn("危险开关 | --drop-if-exists 已开启：目标库里的同名表会先被删除")
         elif not plans:
             log.error("没有可处理的输入 | 输入里没有 .xlsx / .xls / .zip / .sql 文件")
-            return EXIT_PARSE if parse_failed else EXIT_USAGE
+            code = EXIT_PARSE if parse_failed else EXIT_USAGE
+            return code
 
         # Excel 侧与脚本侧各跑各的（GUI 上也是两个页签），退出码取最严重的一档
         codes = []
@@ -793,7 +808,8 @@ def run(argv=None):
         return code
     except KeyboardInterrupt:
         log.error("已中止 | 用户按 Ctrl+C，剩余表未执行")
-        return 130
+        code = 130
+        return code
     finally:
         log.info("耗时 | %.1f 秒 | 退出码 %s" % (time.time() - t0, code))
         if args.log:

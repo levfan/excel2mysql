@@ -25,6 +25,14 @@ import shutil
 import sys
 import tempfile
 import unicodedata
+import warnings
+
+# 与 cli.py 同一条口径：openpyxl 读"没有命名样式"的 Excel（真实数据包里全是这种）会给每张表
+# 打一行 UserWarning，pandas/cryptography 在 import 期也有自己的警告。这些必须在
+# core.infer 被引进来之前压掉，否则日志里会淹出一堆不属于本工具格式的行。
+warnings.filterwarnings("ignore", message=".*no default style.*", append=True)
+warnings.filterwarnings("ignore", message=".*no longer supported by the Python core team.*",
+                        append=True)
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat
