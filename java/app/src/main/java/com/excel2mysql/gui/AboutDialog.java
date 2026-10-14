@@ -12,7 +12,9 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Frame;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -25,6 +27,7 @@ import java.util.Map;
 public final class AboutDialog extends JDialog {
 
     private final Map<String, HintLabel> rows = new LinkedHashMap<String, HintLabel>();
+    private final List<String> captions = new ArrayList<String>();
 
     public AboutDialog(Frame owner) {
         super(owner, "关于", true);
@@ -68,6 +71,7 @@ public final class AboutDialog extends JDialog {
     private void addRow(JPanel grid, String key, String label, String value) {
         JLabel head = new JLabel(label);
         head.setForeground(new Color(0x66, 0x66, 0x66));
+        captions.add(label);
         // 值用 HintLabel：提交号要能取走，JLabel 不能拖选，双击即整行复制到剪贴板
         HintLabel body = new HintLabel();
         body.setText(value);
@@ -81,5 +85,10 @@ public final class AboutDialog extends JDialog {
     public String valueOf(String key) {
         HintLabel label = rows.get(key);
         return label == null ? null : label.hintText();
+    }
+
+    /** 三行的行名。双端对撞器只比行名：值里带提交号与构建时刻，两边必然不同。 */
+    public List<String> rowCaptions() {
+        return captions;
     }
 }

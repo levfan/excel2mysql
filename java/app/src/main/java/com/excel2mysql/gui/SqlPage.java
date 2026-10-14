@@ -380,6 +380,15 @@ public final class SqlPage extends JPanel {
         return v == null ? "" : String.valueOf(v);
     }
 
+    /** 双端界面枚举对撞器要读的表格列头与列数（见 java/tools/gui_parity.py）。 */
+    public int columnCount() {
+        return model.getColumnCount();
+    }
+
+    public String columnName(int col) {
+        return String.valueOf(model.getColumnName(col));
+    }
+
     public int selectedRowCount() {
         return table.getSelectedRowCount();
     }

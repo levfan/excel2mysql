@@ -221,6 +221,15 @@ public final class StructureDialog extends JDialog {
         editors.get(tabIndex).model.setValueAt(value, row, col);
     }
 
+    public String modelValue(int tabIndex, int row, int col) {
+        Object v = editors.get(tabIndex).model.getValueAt(row, col);
+        return v == null ? "" : String.valueOf(v);
+    }
+
+    public int rowCount(int tabIndex) {
+        return editors.get(tabIndex).model.getRowCount();
+    }
+
     /** 走同一条 applyEdits，只是不弹模态框——自检在 EDT 上，弹窗会把自己卡死。 */
     public boolean pressOk() {
         return applyEdits();

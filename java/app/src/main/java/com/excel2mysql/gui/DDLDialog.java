@@ -69,6 +69,12 @@ public final class DDLDialog extends JDialog {
         return tabs == null ? -1 : tabs.getTabCount();
     }
 
+    /** 标签页标题（表名）：双端界面枚举对撞器要按标题比，正文另有 tabText。 */
+    public String tabTitleAt(int index) {
+        JTabbedPane tabs = findTabs(getContentPane());
+        return tabs == null ? "" : tabs.getTitleAt(index);
+    }
+
     public String tabText(int index) {
         JTabbedPane tabs = findTabs(getContentPane());
         if (tabs == null) {
