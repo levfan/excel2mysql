@@ -933,6 +933,9 @@ class MainWindow(QWidget):
         self.file_table.setColumnWidth(4, 90)
         self.file_table.setColumnWidth(5, 160)
         self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # 组框标题写着"双击表名/字段可编辑"，就得真的接上：
+        # 双击哪一行就只弹那一张表（Swing 那条线一直是这个口径）
+        self.file_table.cellDoubleClicked.connect(self.on_edit_structure_row)
         fl.addWidget(self.file_table)
 
         # 表名前缀（批量应用到全部表）
@@ -1586,6 +1589,24 @@ class MainWindow(QWidget):
             # 用户编辑后回写
             self.tables = dlg.get_tables()
             self._refresh_file_table()
+            append_log(self.log, "[结构] 已按弹窗确认 %d 张表的字段定义" % len(self.tables))
+
+    def on_edit_structure_row(self, row: int, _col: int = 0) -> None:
+        """双击文件列表某一行：只弹那一张表的结构窗口。
+
+        整列表一起弹会让人分不清改的是哪张表，Swing 那条线一直是按行弹的。
+        """
+        if not self.tables:
+            QMessageBox.information(self, "提示", NO_FILE_HINT)
+            return
+        if not 0 <= row < len(self.tables):
+            return
+        t = self.tables[row]
+        dlg = StructureDialog([t], self)
+        if dlg.exec():
+            self.tables[row] = dlg.get_tables()[0]
+            self._refresh_file_table()
+            append_log(self.log, "[结构] %s 已按弹窗修改" % t["table_name"])
 
     # ---- DDL 预览 ----
     def on_preview_ddl(self):
@@ -1816,9 +1837,18 @@ class DDLDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+def setup_app(app: QApplication) -> None:
+    """应用级设置。
+
+    单独成函数是因为两条 GUI 线的对撞器要跑同一段代码，
+    放在 __main__ 里就只有人手双击才能验到。
+    """
+    app.setWindowIcon(QIcon(resource_path(os.path.join("assets", "app_icon.ico"))))
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon(resource_path(os.path.join("assets", "app_icon.ico"))))
+    setup_app(app)
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

@@ -116,7 +116,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 标题带版本号：不点开「关于」也能看见现场跑的是哪一版
         super(AppInfo.load().titleText());
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1100, 780);
         applyWindowIcon();
         setLocationByPlatform(true);
         setLayout(new BorderLayout());
@@ -136,6 +135,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tabs.addChangeListener(e -> refreshDbLabels());
         bindHelpKey();
         refreshDbLabels();
+        // Qt 的 resize(1100,780) 说的是客户区，Swing 的 setSize 说的是整个外框：
+        // 照抄数字会让这边的内容区比 Python 小掉一条标题栏加边框，
+        // 表格与日志就那么被挤矮了。所以把尺寸钉在内容面板上再 pack。
+        getContentPane().setPreferredSize(new Dimension(1100, 780));
+        pack();
     }
 
     /**
