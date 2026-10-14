@@ -4,8 +4,11 @@ import com.excel2mysql.core.Config;
 import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.DbClient;
 import com.excel2mysql.core.Infer;
+import com.excel2mysql.core.LogText;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.PinyinLoader;
+import com.excel2mysql.core.SqlRunner;
+import com.excel2mysql.core.SqlScript;
 import com.excel2mysql.core.TableBuilder;
 import com.excel2mysql.core.TableOps;
 import com.excel2mysql.core.ZipImport;
@@ -266,6 +269,16 @@ public final class Main {
             TableOps.makeUniqueNames(tables);
         }
 
+        // 脚本先读盘并按 --prefix 改写完，再打印——和 Python 一样：
+        // 载入与改写发生在"打印会做什么"之前，dry-run 与真导入用的是同一份已改写的文本，
+        // 不会出现预览里是 A 表名、落库时建出 B 表名。
+        List<ScriptPlan> plans = new ArrayList<ScriptPlan>();
+        if (!noSql) {
+            for (File f : scan.scripts) {
+                plans.add(planScript(f, prefix));
+            }
+        }
+
         if (dryRun) {
             for (TableOps.Table t : tables) {
                 TableBuilder.Result r = byTable.get(t);
@@ -285,6 +298,25 @@ public final class Main {
             System.out.println();
             System.out.println("+ [OK] DRY-RUN | 表 " + tables.size() + " 张，解析失败 "
                     + parseFailed + " 个（未连库，未建表，未写入任何数据）");
+            // dry-run 也得把 .sql 会做什么说出来：现场靠这一眼核对前缀改写对不对，
+            // 只报 Excel 的话，脚本要建哪些表得等真连库才知道。
+            for (ScriptPlan p : plans) {
+                if (p.statements.isEmpty()) {
+                    continue;
+                }
+                System.out.println("- [INFO] 脚本预览 | " + p.name + " | 待执行 "
+                        + p.statements.size() + " 条语句（本次没有连库）");
+                for (int i = 0; i < p.statements.size() && i < 3; i++) {
+                    detail(cut(p.statements.get(i), 200));
+                }
+                if (p.statements.size() > 3) {
+                    detail("…（其余 " + (p.statements.size() - 3) + " 条未打印）");
+                }
+            }
+            if (!plans.isEmpty()) {
+                System.out.println("+ [OK] 脚本预览完成 | 共 " + plans.size()
+                        + " 个脚本未执行（本次没有连接 MySQL）");
+            }
             return parseFailed == 0 ? EXIT_OK : EXIT_PARSE;
         }
 
@@ -307,8 +339,10 @@ public final class Main {
                             + written + " 行");
                 } catch (Exception e) {
                     importFailed++;
-                    System.out.println("x [ERROR] IMPORT | " + t.tableName + " | "
-                            + e.getMessage());
+                    System.out.println("x [ERROR] IMPORT | `" + t.tableName + "` | "
+                            + r.rows.size() + " 行数据未写入，本表事务已回滚 | "
+                            + LogText.describe(e));
+                    detail(LogText.ROLLBACK_NOTE);
                 }
             }
         } finally {
@@ -316,18 +350,27 @@ public final class Main {
         }
 
         int scriptFailed = 0;
-        if (!noSql && !scan.scripts.isEmpty()) {
+        if (!plans.isEmpty()) {
             DbClient db2 = open(cfg);
             try {
-                for (File f : scan.scripts) {
-                    SqlRunResult res = runScript(db2, f);
+                for (ScriptPlan p : plans) {
+                    if (p.readFailed) {
+                        scriptFailed++;
+                        continue;
+                    }
+                    if (p.statements.isEmpty()) {
+                        // 空脚本在 planScript 里已经报过"脚本为空"，Python 也不把它算进失败
+                        continue;
+                    }
+                    SqlRunResult res = runPlan(db2, p);
                     if (res.ok) {
-                        System.out.println("+ [OK] SCRIPT | " + f.getName() + " | 语句 "
+                        System.out.println("+ [OK] SCRIPT | " + p.name + " | 语句 "
                                 + res.statements + " 条 | CREATE " + res.creates + " 个");
                     } else {
                         scriptFailed++;
-                        System.out.println("x [ERROR] SCRIPT | " + f.getName() + " | 整文件已回滚 | "
+                        System.out.println("x [ERROR] SCRIPT | " + p.name + " | 整文件已回滚 | "
                                 + res.error);
+                        detail(LogText.ROLLBACK_NOTE);
                     }
                 }
             } finally {
@@ -360,10 +403,76 @@ public final class Main {
         String error;
     }
 
-    private static SqlRunResult runScript(DbClient db, File f) {
+    /** 一个脚本读盘并改写完的结果。 */
+    private static final class ScriptPlan {
+        String name;
+        String text;
+        boolean readFailed;
+        List<String> statements = new ArrayList<String>();
+    }
+
+    /**
+     * 读脚本、报条数、按 --prefix 改写，全在连库之前做完。
+     *
+     * 前缀这一步必须做：Python 线会先把脚本里的表名整体改写再执行，
+     * 少这一步的话同一个命令两条线建出来的表名不一样，现场按"加了前缀"去查表一张也找不到。
+     */
+    private static ScriptPlan planScript(File f, String prefix) {
+        ScriptPlan p = new ScriptPlan();
+        p.name = f.getName();
+        String text;
+        try {
+            text = SqlRunner.readScript(f);
+        } catch (java.io.IOException e) {
+            System.out.println("x [ERROR] 脚本读取失败 | " + p.name + " | " + e.getMessage());
+            p.readFailed = true;
+            return p;
+        }
+        List<Map<String, Object>> created = SqlScript.extractCreateTables(text);
+        int spots = 0;
+        StringBuilder listed = new StringBuilder();
+        for (Map<String, Object> c : created) {
+            spots += ((Integer) c.get("count")).intValue();
+            if (listed.length() > 0) {
+                listed.append("、");
+            }
+            listed.append(c.get("name")).append("(").append(c.get("count")).append(")");
+        }
+        System.out.println("- [INFO] 脚本载入 | " + p.name + " | CREATE TABLE " + spots
+                + " 处 / 表 " + created.size() + " 张："
+                + (listed.length() == 0 ? "无" : listed.toString()));
+        if (prefix != null && !prefix.trim().isEmpty()) {
+            SqlScript.Rewrite rw = SqlScript.applyPrefix(text, prefix.trim());
+            text = rw.text;
+            StringBuilder changed = new StringBuilder();
+            for (Map<String, Object> r : rw.renamed) {
+                if (changed.length() > 0) {
+                    changed.append("、");
+                }
+                changed.append(r.get("old")).append("→").append(r.get("new"))
+                        .append("（").append(r.get("n")).append(" 处）");
+            }
+            System.out.println("+ [OK] 脚本前缀 | " + p.name + " | 改写 " + rw.renamed.size()
+                    + " 张表：" + (changed.length() == 0 ? "无" : changed.toString()));
+            if (!rw.skipped.isEmpty()) {
+                System.out.println("- [INFO] 脚本前缀 | " + p.name + " | 未改写 "
+                        + rw.skipped.size() + " 张（已带该前缀，或脚本里没有它的引用）："
+                        + join(rw.skipped));
+            }
+        }
+        p.text = text;
+        p.statements = SqlScript.splitStatements(text);
+        if (p.statements.isEmpty()) {
+            System.out.println("! [WARN] 脚本为空 | " + p.name + " | 没有可执行的语句");
+        }
+        return p;
+    }
+
+    private static SqlRunResult runPlan(DbClient db, ScriptPlan p) {
         SqlRunResult out = new SqlRunResult();
         try {
-            com.excel2mysql.core.SqlRunner.FileResult r = com.excel2mysql.core.SqlRunner.runOne(db, f);
+            com.excel2mysql.core.SqlRunner.FileResult r =
+                    SqlRunner.runText(db, p.name, p.text);
             out.ok = r.ok;
             out.statements = r.statements.size();
             out.creates = r.creates;
@@ -373,6 +482,29 @@ public final class Main {
             out.error = e.getMessage();
         }
         return out;
+    }
+
+    /** 与 Python 的 log.detail 同形：每条详情缩进六格跟在上一条记录后面。 */
+    private static void detail(String text) {
+        String[] lines = text.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            System.out.println("      " + lines[i]);
+        }
+    }
+
+    private static String cut(String text, int max) {
+        return text.length() <= max ? text : text.substring(0, max);
+    }
+
+    private static String join(List<String> items) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) {
+                sb.append("、");
+            }
+            sb.append(items.get(i));
+        }
+        return sb.toString();
     }
 
     private static final class Scan {
@@ -482,7 +614,7 @@ public final class Main {
         System.out.println("      动作由路径类型决定：给 .sql 执行脚本，给 Excel/zip 建表导入，");
         System.out.println("      给目录两件都干；--no-sql / --no-excel 各自排除");
         System.out.println("选项:");
-        System.out.println("  --dry-run          只解析并打印建表语句，不连库");
+        System.out.println("  --dry-run          只打印建表语句与脚本预览，不连库");
         System.out.println("  --check            只测连接并列出数据库");
         System.out.println("  --prefix 文本      表名批量前缀");
         System.out.println("  -c, --conn 文件    指定 conn.ini；不给时自动读程序同级、再读当前目录");

@@ -64,20 +64,6 @@ public final class SqlRunner {
         return text.length() > 0 && text.charAt(0) == '﻿' ? text.substring(1) : text;
     }
 
-    public static FileResult runOne(DbClient db, File file) {
-        String text;
-        try {
-            text = readScript(file);
-        } catch (IOException e) {
-            FileResult r = new FileResult();
-            r.file = file.getName();
-            r.ok = false;
-            r.error = e.getMessage();
-            return r;
-        }
-        return runText(db, file.getName(), text);
-    }
-
     /**
      * 执行内存里的脚本文本：SQL 页改过表名后不落盘也要能直接跑，
      * 用磁盘上的原文执行会建出一批没改名的表。
