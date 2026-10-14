@@ -24,8 +24,6 @@ public final class DDLDialog extends JDialog {
 
     public DDLDialog(Frame owner, List<TableOps.Table> tables, boolean dropIfExists) {
         super(owner, "DDL 预览", false);
-        setSize(900, 600);
-        setLocationRelativeTo(owner);
 
         JTabbedPane tabs = new JTabbedPane();
         // 与结构弹窗同理：Qt 的 QTabWidget 默认单行滚动，Swing 默认换行
@@ -61,6 +59,7 @@ public final class DDLDialog extends JDialog {
                 dispose();
             }
         });
+        Windows.clientSize(getContentPane(), this, 900, 600);
     }
 
     /** 自检用：标签页数与每页正文，逐表分开这件事只能这样验。 */

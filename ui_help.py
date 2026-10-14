@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
-    QTextBrowser, QPushButton, QLabel, QFrame, QGridLayout,
+    QTextBrowser, QPushButton, QLabel, QFrame, QGridLayout, QApplication,
 )
 
 from appinfo import build_info, commit_display
@@ -35,6 +35,27 @@ p.warn { background-color: #fdf3f2; border-left: 4px solid #c62828; padding: 6px
 """
 
 
+def fit_client(win, w: int, h: int) -> None:
+    """把窗口摆成"客户区 w x h"，装不下就缩进当前屏幕的可用区并居中。
+
+    Qt 的 resize 说的就是客户区；这里补两道保险：窗口别大过当前可用区（老机器
+    1024x768 上按钮不会被任务栏吃掉），也别摆到屏幕外去。Swing 那条线用
+    `Windows.clientSize` 做同一件事——两边的 setSize 含外框，得钉在内容面板上才对等。
+    """
+    screen = QApplication.primaryScreen()
+    geo = screen.availableGeometry() if screen is not None else None
+    win.setProperty("e2mWant", "%dx%d" % (w, h))   # 配置值留给取证用
+    cw, ch = w, h
+    if geo is not None:
+        # 32/48 是留给边框与标题栏的余量：客户区再加上下左右那条框仍在可用区内才算放得下
+        cw = min(cw, max(320, geo.width() - 32))
+        ch = min(ch, max(200, geo.height() - 48))
+    win.resize(cw, ch)
+    if geo is not None:
+        win.move(geo.x() + (geo.width() - cw) // 2,
+                 geo.y() + (geo.height() - ch) // 2)
+
+
 def build_html() -> str:
     """把 SECTIONS 拼成一份带锚点的长文档，供目录跳转，也能整篇往下滚。"""
     parts = [f'<a name="{anchor}"></a>{body}' for anchor, _title, body in SECTIONS]
@@ -48,7 +69,7 @@ class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("使用说明")
-        self.resize(960, 700)
+        fit_client(self, 960, 700)
 
         self.toc = QListWidget()
         self.toc.setFixedWidth(170)
@@ -112,7 +133,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("关于")
         self.setModal(True)
-        self.resize(380, 168)
+        fit_client(self, 380, 168)
         info = build_info()
 
         title = QLabel(f"Excel → MySQL 批量导入工具")

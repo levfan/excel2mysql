@@ -137,9 +137,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         refreshDbLabels();
         // Qt 的 resize(1100,780) 说的是客户区，Swing 的 setSize 说的是整个外框：
         // 照抄数字会让这边的内容区比 Python 小掉一条标题栏加边框，
-        // 表格与日志就那么被挤矮了。所以把尺寸钉在内容面板上再 pack。
-        getContentPane().setPreferredSize(new Dimension(1100, 780));
-        pack();
+        // 表格与日志就那么被挤矮了。客户区尺寸、屏幕夹取与居中统一走 Windows.clientSize。
+        Windows.clientSize(getContentPane(), this, 1100, 780);
     }
 
     /**
@@ -1655,8 +1654,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     private void dialog(String title, String text, int icon) {
+        // 显示与记录都用折好行的那份：Python 侧弹窗走的同一道折行，
+        // 两边比的就是用户实际看到的文字，不是各自排版前的半成品
+        String body = PopupText.wrap(text);
         lastDialogTitle = title;
-        lastDialogText = text == null ? "" : text;
+        lastDialogText = body;
         lastDialogIsError = icon == javax.swing.JOptionPane.ERROR_MESSAGE;
         lastDialogIcon = icon == javax.swing.JOptionPane.ERROR_MESSAGE ? "critical"
                 : icon == javax.swing.JOptionPane.WARNING_MESSAGE ? "warning" : "information";
@@ -1664,7 +1666,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
             return;
         }
-        javax.swing.JOptionPane.showMessageDialog(this, lastDialogText, title, icon);
+        javax.swing.JOptionPane.showMessageDialog(this, body, title, icon);
     }
 
     /** 最后一次弹窗的标题与正文：两条路都写满，自检读这一份，模态那条才真弹。 */

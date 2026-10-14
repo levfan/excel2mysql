@@ -36,9 +36,6 @@ public final class HelpDialog extends JDialog {
 
     public HelpDialog(Frame owner) {
         super(owner, "使用说明", true);
-        setSize(960, 700);
-        setLocationRelativeTo(owner);
-
         HelpDoc.Section[] sections = HelpDoc.sections();
         DefaultListModel<String> model = new DefaultListModel<String>();
         for (HelpDoc.Section s : sections) {
@@ -95,6 +92,7 @@ public final class HelpDialog extends JDialog {
         setContentPane(root);
 
         closeOnEscape();
+        Windows.clientSize(getContentPane(), this, 960, 700);
     }
 
     private void closeOnEscape() {

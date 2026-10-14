@@ -127,8 +127,6 @@ public final class StructureDialog extends JDialog {
         body.add(tabs, BorderLayout.CENTER);
         body.add(buttons, BorderLayout.SOUTH);
         setContentPane(body);
-        setSize(980, 640);
-        setLocationRelativeTo(ownerFrame);
         // Qt 的 QDialog 按 Esc 就是 reject；Swing 的 JDialog 默认什么都不做，
         // 得自己绑一条焦点期按键，否则"关了但没取消"和"取消"在用户眼里是一回事，代码里不是。
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
@@ -141,6 +139,7 @@ public final class StructureDialog extends JDialog {
                 dispose();
             }
         });
+        Windows.clientSize(getContentPane(), this, 980, 640);
     }
 
     /** Esc 是否绑到了"关掉且不写回"：自检不开框也能查（开框会把自检自己卡死）。 */

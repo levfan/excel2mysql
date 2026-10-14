@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 import tempfile
+import unicodedata
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat
@@ -51,7 +52,7 @@ from core.zip_import import (
     extract_excel_archive, count_excel_entries, ZipArchiveError, EXCEL_EXTS,
 )
 from core.merge_check import MergedCellsError
-from ui_help import HelpDialog, AboutDialog
+from ui_help import HelpDialog, AboutDialog, fit_client
 from appinfo import build_info, title_text
 from version import APP_VERSION
 
@@ -90,6 +91,55 @@ NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
 
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
+
+# 弹窗正文的折行预算，两个数都按最小的目标机 1024x768 算：
+# 56 显示列（汉字/全角算 2 列）约等于 28 个汉字的宽度，加上图标与边框仍远在屏内；
+# 22 行连标题栏和按钮也还在可用高度里。再长就不往弹窗里硬塞了——放不下的部分
+# 会把开头几行顶出屏幕，那才是真的看不见；完整内容本来就写在底部日志里。
+POPUP_WRAP_COLS = 56
+POPUP_MAX_LINES = 22
+POPUP_OVERFLOW_NOTE = "……（其余 %d 行放不下，完整内容见底部日志）"
+
+
+def _display_cols(ch: str) -> int:
+    """一个字符占几个显示列：全角与宽字符算 2，其余算 1。"""
+    return 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+
+
+def wrap_popup_text(text: str) -> str:
+    """把弹窗正文按显示列宽折行，并给放不下的行留一句去日志里看的提示。
+
+    两边的控件库默认排版不一样：Swing 的消息框完全折不了一行（一条长路径能把它
+    撑到 1286 像素宽），Qt 会折但会把 30 行正文撑到比屏幕还高。所以折行自己算，
+    算完两边拿到的是同一个字符串，界面上才谈得上等价。
+    """
+    lines = []
+    for seg in text.split("\n"):
+        buf = ""
+        wide = 0
+        for ch in seg:
+            w = _display_cols(ch)
+            if buf and wide + w > POPUP_WRAP_COLS:
+                lines.append(buf)
+                buf = ""
+                wide = 0
+            buf += ch
+            wide += w
+        lines.append(buf)
+    if len(lines) <= POPUP_MAX_LINES:
+        return "\n".join(lines)
+    kept = lines[:POPUP_MAX_LINES - 1]
+    kept.append(POPUP_OVERFLOW_NOTE % (len(lines) - len(kept)))
+    return "\n".join(kept)
+
+
+def popup_box(parent, title: str, text: str, kind: str = "information"):
+    """消息弹窗都走这一道：折行与限高只在这里写一遍，两条线同一口径。"""
+    fn = {"information": QMessageBox.information,
+          "warning": QMessageBox.warning,
+          "critical": QMessageBox.critical}[kind]
+    return fn(parent, title, wrap_popup_text(text))
+
 
 
 def append_log(view: QPlainTextEdit, text: str, error: bool = False) -> None:
@@ -218,7 +268,7 @@ class ProgressDialog(QDialog):
         # 只保留标题：任务进行中不能从标题栏关窗（线程还在跑），退出只走「取消」
         self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
         self.setModal(True)
-        self.resize(480, 140)
+        fit_client(self, 480, 140)
         self._target = 0
 
         head = QLabel(title)
@@ -841,7 +891,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(title_text())     # 标题带版本号，不点开对话框也能看见
-        self.resize(1100, 780)
+        fit_client(self, 1100, 780)
         self.tables = []            # 解析后的表定义列表
         self.worker = None
         self.sql_files = []         # SQL 脚本页：[{"path","text","modified","rename_map"}]
@@ -1141,7 +1191,7 @@ class MainWindow(QWidget):
         self._task_result = None
         append_log(self._task_log_view or self.log,
                    f"[任务异常] {msg}\n    本次操作未完成，请查看日志后重试。", error=True)
-        QMessageBox.critical(self, "任务异常", f"{msg}\n本次操作未完成，详见日志。")
+        popup_box(self, "任务异常", f"{msg}\n本次操作未完成，详见日志。", "critical")
 
     def _sync_gen_buttons(self):
         """两个生成按钮只在"有表可导、且没有别的任务在跑"时可点。
@@ -1314,7 +1364,7 @@ class MainWindow(QWidget):
         Swing 那条线的 warn() 一直是两处都写，两条线要同一口径。
         """
         append_log(self.log, "已拦下：" + text)
-        QMessageBox.warning(self, "提示", text)
+        popup_box(self, "提示", text, "warning")
 
     def on_sql_apply_prefix(self):
         prefix = self.ed_sql_prefix.text().strip()
@@ -1381,9 +1431,8 @@ class MainWindow(QWidget):
         append_log(self.sql_log,
                    f"===== 执行完成：成功 {res['ok']} 个文件，失败 {res['fail']} 个文件"
                    f"{note} =====", error=bool(res["fail"]))
-        QMessageBox.information(
-            self, "执行完成",
-            f"成功 {res['ok']} 个文件，失败 {res['fail']} 个文件{note}。\n详见日志。")
+        popup_box(self, "执行完成",
+                  f"成功 {res['ok']} 个文件，失败 {res['fail']} 个文件{note}。\n详见日志。")
 
     def on_sql_clear_log(self):
         self.sql_log.clear()
@@ -1412,7 +1461,7 @@ class MainWindow(QWidget):
             self.log.appendPlainText(f"[已加载] 可用数据库：{', '.join(dbs)}")
         except Exception as e:
             # 弹窗与日志用同一套展开格式，否则弹窗里是 (2003, '...') 这种元组原文
-            QMessageBox.critical(self, "连接失败", describe_db_error(e))
+            popup_box(self, "连接失败", describe_db_error(e), "critical")
             cfg = self._conn_cfg()
             append_log(self.log,
                        f"[连接失败] 无法连接到 "
@@ -1501,7 +1550,7 @@ class MainWindow(QWidget):
             text = "已取消，只完成了部分解析\n" + text
         # 同一句话既进日志也进弹窗：日志可回溯，弹窗防走神漏看
         self.log.appendPlainText(f"[添加结果] {text}")
-        QMessageBox.information(self, "添加结果", text)
+        popup_box(self, "添加结果", text)
 
     def _refresh_file_table(self):
         self.file_table.setRowCount(len(self.tables))
@@ -1544,7 +1593,7 @@ class MainWindow(QWidget):
 
     def on_replace_prefix(self):
         if not self.tables:
-            QMessageBox.information(self, "提示", NO_FILE_HINT)
+            popup_box(self, "提示", NO_FILE_HINT)
             return
         head, why = self._clean_head(self.ed_prefix.text())
         if head is None:
@@ -1566,7 +1615,7 @@ class MainWindow(QWidget):
 
     def on_apply_prefix(self):
         if not self.tables:
-            QMessageBox.information(self, "提示", NO_FILE_HINT)
+            popup_box(self, "提示", NO_FILE_HINT)
             return
         prefix = self.ed_prefix.text().strip()
         self._run_modal("正在批量应用表名前缀…", table_prefix_task, (self.tables, prefix),
@@ -1582,7 +1631,7 @@ class MainWindow(QWidget):
     # ---- 表结构预览（弹窗表格） ----
     def on_preview_structure(self):
         if not self.tables:
-            QMessageBox.information(self, "提示", NO_FILE_HINT)
+            popup_box(self, "提示", NO_FILE_HINT)
             return
         dlg = StructureDialog(self.tables, self)
         if dlg.exec():
@@ -1597,7 +1646,7 @@ class MainWindow(QWidget):
         整列表一起弹会让人分不清改的是哪张表，Swing 那条线一直是按行弹的。
         """
         if not self.tables:
-            QMessageBox.information(self, "提示", NO_FILE_HINT)
+            popup_box(self, "提示", NO_FILE_HINT)
             return
         if not 0 <= row < len(self.tables):
             return
@@ -1611,7 +1660,7 @@ class MainWindow(QWidget):
     # ---- DDL 预览 ----
     def on_preview_ddl(self):
         if not self.tables:
-            QMessageBox.information(self, "提示", NO_FILE_HINT)
+            popup_box(self, "提示", NO_FILE_HINT)
             return
         dlg = DDLDialog(self.tables, self.chk_drop.isChecked(), self)
         dlg.exec()
@@ -1646,7 +1695,7 @@ class MainWindow(QWidget):
         append_log(self.log,
                    f"===== 生成完成：{n}/{res['total']} 个文件，目录 {res['dir']} ====={note}",
                    error=(n == 0))
-        QMessageBox.information(self, "生成结果", text)
+        popup_box(self, "生成结果", text)
 
     # ---- 开始导入 ----
     def on_start_import(self):
@@ -1727,7 +1776,7 @@ class MainWindow(QWidget):
             msg += f"\n已从待导入列表移除 {len(removed)} 个成功文件。"
         if fail:
             msg += "\n失败文件保留在列表中，可调整后重试。"
-        QMessageBox.information(self, "导入完成", msg + "\n详见日志。")
+        popup_box(self, "导入完成", msg + "\n详见日志。")
         # 结果已经由弹窗和日志交代清楚，进度条回到初始的 0%：
         # 停在 100% 会让人分不清"这是上一批的尾巴，还是这一批的当前进度"
         self.progress.setValue(0)
@@ -1740,7 +1789,7 @@ class StructureDialog(QDialog):
     def __init__(self, tables, parent=None):
         super().__init__(parent)
         self.setWindowTitle("表结构预览（可编辑）")
-        self.resize(980, 640)
+        fit_client(self, 980, 640)
         self.tables = tables
         self.editors = []  # 每个 tab 一个 (table_dict, tablewidget)
 
@@ -1801,8 +1850,9 @@ class StructureDialog(QDialog):
             if not good:
                 problems.append(f"表「{t['table_name']}」：{msg}")
         if problems:
-            QMessageBox.warning(self, "主键设置无效",
-                                "\n".join(problems) + "\n\n请调整主键勾选或字段类型后重试。")
+            popup_box(self, "主键设置无效",
+                      "\n".join(problems) + "\n\n请调整主键勾选或字段类型后重试。",
+                      "warning")
             return    # 校验不过不放行，保持弹窗打开让用户调整
 
         for t, cols in staged:
@@ -1820,7 +1870,7 @@ class DDLDialog(QDialog):
     def __init__(self, tables, drop_if_exists, parent=None):
         super().__init__(parent)
         self.setWindowTitle("DDL 预览")
-        self.resize(900, 600)
+        fit_client(self, 900, 600)
         lay = QVBoxLayout(self)
         self.tabs = QTabWidget()
         for t in tables:

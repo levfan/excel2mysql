@@ -75,11 +75,9 @@ public final class ProgressDialog extends JDialog {
                 requestCancel();
             }
         });
-        // Python 的 resize(480,140) 说的是客户区；setPreferredSize 打在窗体上会被 pack 覆盖，
-        // 所以把尺寸钉在内容面板上，让客户区真就是 480×140
-        body.setPreferredSize(new Dimension(480, 140));
-        pack();
-        setLocationRelativeTo(owner);
+        // Python 的 resize(480,140) 说的是客户区，这边把尺寸钉在内容面板上再 pack，
+        // 客户区才真就是 480x140；夹屏幕与居中也走同一道
+        Windows.clientSize(body, this, 480, 140);
         anim = new javax.swing.Timer(16, e -> tick());
         anim.setCoalesce(true);
     }
@@ -200,7 +198,12 @@ public final class ProgressDialog extends JDialog {
     }
 
     private void renderLabel() {
-        label.setText("<html><body style='width: 430px'>" + escape(plainText) + "</body></html>");
+        // 套两条线共用的那道折行，再把换行换成 <br>。
+        // 原来那句 CSS 定宽（width: 430px）会让 JLabel 把整篇文档的宽度当成自己的
+        // 首选尺寸，进度框被顶到 583 宽，比 Python 的 480 宽出一截——同一句话两边不一样高宽，
+        // 而且夹屏幕时反而更容易放不下。
+        String wrapped = PopupText.wrap(plainText);
+        label.setText("<html><body>" + escape(wrapped).replace("\n", "<br>") + "</body></html>");
     }
 
     private static String escape(String text) {

@@ -31,8 +31,6 @@ public final class AboutDialog extends JDialog {
 
     public AboutDialog(Frame owner) {
         super(owner, "关于", true);
-        setSize(380, 168);
-        setLocationRelativeTo(owner);
         AppInfo info = AppInfo.load();
 
         JLabel title = new JLabel("Excel → MySQL 批量导入工具");
@@ -66,6 +64,8 @@ public final class AboutDialog extends JDialog {
                 dispose();
             }
         });
+        // 尺寸要等组件都摆好再算：pack 之前设尺寸等于跟布局抢活
+        Windows.clientSize(getContentPane(), this, 380, 168);
     }
 
     private void addRow(JPanel grid, String key, String label, String value) {
