@@ -1,10 +1,27 @@
 Excel → MySQL 批量导入工具（Java 线）v{version}
 
-怎么用
-  双击 启动.bat。想一次带上文件，把 .xlsx/.xls/.zip 拖到 启动.bat 图标上即可。
-  命令行：启动.bat --gui --selftest   （界面自检，不连库也能跑）
+两种用法，同一个 jar（记住这一句就够了）
+  界面和命令行在同一个文件里，靠第一个参数分开：
+    首参给 --gui  ⇒ 开图形界面（窗口出来，什么都不用敲）
+    不给 --gui    ⇒ 命令行模式，给路径就干活，靠日志和退出码说话
 
-命令行（同一份程序，无界面）
+  要用界面：双击 启动.bat
+    这个脚本只做一件事——用包内那个 java.exe 跑 -jar {jar} --gui。
+    想一次带上文件，把 .xlsx/.xls/.zip 拖到 启动.bat 的图标上。
+    不想用脚本也行，手敲等价命令：
+      jre\bin\java.exe -Dfile.encoding=UTF-8 -jar {jar} --gui
+
+  要用命令行：在 cmd（或 PowerShell）里敲
+      jre\bin\java.exe -Dfile.encoding=UTF-8 -jar {jar} <路径> [选项]
+    例：jre\bin\java.exe -jar {jar} --check
+    双击 {jar} 文件本身不会有任何反应（系统里 jar 通常没关联到 java.exe），
+    必须走上面这条命令行。
+
+界面自检（不需要连库，验证这份包在这台机器上起得来）
+  jre\bin\java.exe -Dfile.encoding=UTF-8 -jar {jar} --gui --selftest <放 Excel 的目录>
+  通过会打一行 + [OK] GUI-SELFTEST | …；只在这台机器上验界面起不起得来，不写库。
+
+命令行模式的四条常用写法（不给 --gui 就是命令行模式）
   jre\bin\java.exe -jar {jar} --check            只测连接并列出数据库
   jre\bin\java.exe -jar {jar} C:\数据 --prefix ods_   建表并导入目录下全部 Excel
   jre\bin\java.exe -jar {jar} C:\数据 --dry-run      只看建表语句与脚本预览，完全不碰库
@@ -30,10 +47,10 @@ Excel → MySQL 批量导入工具（Java 线）v{version}
     替换首个前缀、生成标准/简易 Excel 交付件。
 
 目录
-  启动.bat            启动脚本，用包内那个 java.exe，不依赖系统装没装 Java
-  {jar}   程序本体（所有依赖已打成一个 jar，界面与命令行同一个包）
+  启动.bat            界面入口：双击就开图形界面（内部就是 -jar … --gui）
+  {jar}   程序本体（所有依赖已打成一个 jar；界面与命令行是这同一个 jar，靠 --gui 分）
   conn.ini            默认连接配置模板；库名留空是有意为之，没指定目标库会直接报用法错误
-  jre\               随包的 Java 8 运行时
+  jre\               随包的 Java 8 运行时，命令行里那个 java.exe 就在 jre\bin\ 下
   README.txt          本文件（快速上手与命令行）
   使用说明.txt        完整操作手册，14 章；与界面里按 F1 打开的是同一份内容
 

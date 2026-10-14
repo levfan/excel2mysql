@@ -42,6 +42,26 @@ SECTIONS = [
 <td>有</td><td>有</td></tr>
 </table>
 
+<h3>每个包怎么启动（界面与命令行的分别入口）</h3>
+<ul>
+<li>图形版 <code>excel2mysql.exe</code>：双击即开界面，没有命令行模式。</li>
+<li>Python 命令行版 <code>excel2mysql-cli.exe</code>：控制台程序，在 cmd 里带参数
+运行（<code>excel2mysql-cli.exe --check</code>）。直接双击它会打一句"没有输入"的用法后
+立刻退出，黑窗口一闪而过，这是预期行为而不是坏了——不带参数它就没有可干的活；
+它也没有界面模式。</li>
+<li>Java 版：界面与命令行是同一个 jar，靠第一个参数分开。
+<ul>
+<li>要界面：双击 <code>启动.bat</code>。这个脚本只做一件事——用包内的
+<code>jre\bin\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。
+想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>
+<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如
+<code>jre\bin\java.exe -jar excel2mysql-1.0.1.jar --check</code>。</li>
+<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。
+双击 jar 文件本身不会有任何反应。</li>
+</ul>
+</li>
+</ul>
+
 <h3>界面功能：图形版与 Java 版等价</h3>
 <p>两边都有这些动作：拖文件与「添加文件」、ZIP 展开、<code>.xlsx</code> 与
 <code>.xls</code>、拼音表名、「批量应用前缀」与「替换首个前缀」、
