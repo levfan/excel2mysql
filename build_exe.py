@@ -202,6 +202,29 @@ def build_app():
     return f"{size:.0f} MB / {n} 个文件"
 
 
+def write_manual():
+    """把内置《使用说明》导成随包 README.txt，并核它真的能当手册用。
+
+    现场拿到包的顺序是"先翻文件、再决定要不要双击 exe"，所以没有这份文件时，
+    一台可能跑不起来的机器上没人知道要求是什么。内容不重写一遍，
+    由 export_manual_txt 从 help_doc.py 渲染，与界面内置说明同一份来源。
+    """
+    import export_manual_txt
+    from help_doc import SECTIONS
+    text = export_manual_txt.render("图形版，需 64 位 Windows 10 1809+ / Windows 11")
+    out = os.path.join(APP_DIST, "README.txt")
+    with open(out, "wb") as fh:
+        fh.write(text.replace("\n", "\r\n").encode("utf-8"))
+    if not os.path.isfile(out):
+        raise RuntimeError("随包操作手册没写出来")
+    missing = [t for _anchor, t, _body in SECTIONS if t not in text]
+    if missing:
+        raise RuntimeError(f"随包手册缺章节 {missing}，导出不全")
+    if "<" in text:
+        raise RuntimeError("随包手册里还有没去掉的 HTML 标签，现场读不下去")
+    return f"README.txt {len(text)} 字符 / {len(SECTIONS)} 章"
+
+
 def build_and_run_frozen_tests():
     rmtree_retry(TEST_DIST)
     run([PYINSTALLER, "--noconfirm", "--distpath", "dist_packtest",
@@ -320,6 +343,7 @@ def main():
     step("开发态功能用例集", run_dev_tests)
     step("生成 build_stamp.py（版本/提交/构建时间）", write_build_stamp)
     step("构建产品包（onedir + GUI）", build_app)
+    step("随包操作手册（与内置《使用说明》同一份来源）", write_manual)
     if not (fast or app_only):
         step("构建并运行冻结态用例集", build_and_run_frozen_tests)
         step("启动验收：真实窗口出现且可交互", check_launch)
