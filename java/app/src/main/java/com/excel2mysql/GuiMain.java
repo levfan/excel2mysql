@@ -170,6 +170,12 @@ public final class GuiMain {
                 task_crash(frame, problems);
                 // ZIP 展开、汇总计数与临时目录清理
                 zip_roundtrip(frame, files, problems);
+                // 建不出表的输入必须在解析阶段就拒（空表 / 只有表头 / 内容是文本的假 .xlsx）
+                checkRejects(frame, problems);
+                // 命令行的 --prefix 对 .sql 也要生效，且 dry-run 要能预览脚本
+                checkSqlCliPrefix(problems);
+                // 超出 BIGINT 的整数要原样发进库，不能让驱动截成负数
+                checkBigIntWire(problems);
                 // 「生成标准/简易 excel 文件」两颗按钮：落点、产物形状、回读与日志弹窗
                 meta_export(frame, files, problems);
                 // 标题版本号、说明窗口与关于框
@@ -1164,6 +1170,198 @@ public final class GuiMain {
     /** 比内容不比排版：弹窗正文按显示列宽折过行，断言里去掉换行再比。 */
     private static String flat(String s) {
         return s == null ? "" : s.replace("\n", "");
+    }
+
+    /**
+     * 建不出表的输入必须卡在解析阶段。
+     *
+     * 现场实测抓出来的两类：一张格子都没有的表、以及扩展名是 .xlsx 但内容不是 Excel 的文件。
+     * 前者从前会产出 `CREATE TABLE x ( )`，到库里变成一条 SQL 语法错误、退出码归到"导入失败"；
+     * 后者连语法错误都没有，直接当空表放过。两边现在都在解析阶段就拒，这里钉住 Java 侧。
+     */
+    private static void checkRejects(MainFrame frame, java.util.List<String> problems) {
+        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
+                "e2m-reject-" + System.nanoTime());
+        if (!dir.mkdirs()) {
+            problems.add("建不出拒绝检查的临时目录：" + dir.getPath());
+            return;
+        }
+        try {
+            java.io.File empty = new java.io.File(dir, "空表（rej_empty）.xlsx");
+            org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                    new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+            wb.createSheet("数据");
+            writeWorkbook(wb, empty);
+            java.io.File header = new java.io.File(dir, "只有表头（rej_header）.xlsx");
+            org.apache.poi.xssf.usermodel.XSSFWorkbook wb2 =
+                    new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+            org.apache.poi.ss.usermodel.Sheet sh = wb2.createSheet("数据");
+            org.apache.poi.ss.usermodel.Row row = sh.createRow(0);
+            row.createCell(0).setCellValue("编号");
+            row.createCell(1).setCellValue("名称");
+            writeWorkbook(wb2, header);
+            java.io.File fake = new java.io.File(dir, "假excel（rej_fake）.xlsx");
+            java.io.FileOutputStream fo = new java.io.FileOutputStream(fake);
+            try {
+                fo.write("this is not a workbook".getBytes("UTF-8"));
+            } finally {
+                fo.close();
+            }
+
+            com.excel2mysql.core.TableBuilder tb = new com.excel2mysql.core.TableBuilder(
+                    new com.excel2mysql.core.Infer(frame.names()), frame.names());
+            expectReject(tb, empty, "没有解析到任何字段", "空表", problems);
+            expectReject(tb, header, "没有解析到任何字段", "只有表头", problems);
+            expectReject(tb, fake, "不是可识别的 Excel 文件", "假 Excel", problems);
+        } catch (Exception e) {
+            problems.add("拒绝检查本身出错：" + e);
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    private static void writeWorkbook(org.apache.poi.ss.usermodel.Workbook wb,
+                                      java.io.File to) throws java.io.IOException {
+        java.io.FileOutputStream out = new java.io.FileOutputStream(to);
+        try {
+            wb.write(out);
+        } finally {
+            out.close();
+        }
+        wb.close();
+    }
+
+    private static void expectReject(com.excel2mysql.core.TableBuilder tb, java.io.File f,
+                                     String wantInMessage, String what,
+                                     java.util.List<String> problems) {
+        try {
+            tb.build(f.getPath());
+            problems.add(what + "没被拒，反而产出了表定义：" + f.getName());
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage() == null || !e.getMessage().contains(wantInMessage)) {
+                problems.add(what + " 被拒了，但原因说错了：" + e.getMessage());
+            }
+        } catch (Exception e) {
+            problems.add(what + "抛的不是解析类异常：" + e);
+        }
+    }
+
+    /**
+     * 命令行那条路的 --prefix 必须真的改到脚本里落库的表名。
+     *
+     * 现场实测抓出来的：Java 的 CLI 从前只把前缀加在 Excel 表名上，.sql 原样执行，
+     * 同一个命令 Python 线建出 ods_t_x、Java 线建出 t_x——按"加了前缀"去查表会一张也找不到。
+     * 这里跑的是 Main.run 本体（dry-run，不连库），断的是那条接线本身：
+     * SqlScript.applyPrefix 这个纯函数早有差分覆盖，接线断了它照样是绿的。
+     */
+    private static void checkSqlCliPrefix(java.util.List<String> problems) {
+        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
+                "e2m-sqlprefix-" + System.nanoTime());
+        if (!dir.mkdirs()) {
+            problems.add("建不出脚本前缀检查的临时目录：" + dir.getPath());
+            return;
+        }
+        try {
+            java.io.File sql = new java.io.File(dir, "cli_prefix_probe.sql");
+            String body = "DROP TABLE IF EXISTS `t_a`;" + (char) 10
+                    + "CREATE TABLE `t_a` (`id` INT NOT NULL, `v` VARCHAR(8), PRIMARY KEY (`id`));"
+                    + (char) 10
+                    + "INSERT INTO `t_a` VALUES (1, 'x');" + (char) 10;
+            java.io.FileOutputStream fo = new java.io.FileOutputStream(sql);
+            try {
+                fo.write(body.getBytes("UTF-8"));
+            } finally {
+                fo.close();
+            }
+            String with = captureMainRun(new String[]{"--dry-run", "--prefix", "clix_",
+                    sql.getPath()});
+            String bare = captureMainRun(new String[]{"--dry-run", sql.getPath()});
+            wantIn(with, "脚本载入 | cli_prefix_probe.sql | CREATE TABLE 1 处 / 表 1 张：t_a(1)",
+                    "脚本载入没报出 CREATE 处数与表名", problems);
+            wantIn(with, "+ [OK] 脚本前缀 | cli_prefix_probe.sql | 改写 1 张表：t_a→clix_t_a（3 处）",
+                    "CLI 没把 --prefix 用到 .sql 上（表名没改写）", problems);
+            wantIn(with, "      DROP TABLE IF EXISTS `clix_t_a`",
+                    "预览里打印的还是没改写的语句", problems);
+            wantIn(with, "待执行 3 条语句（本次没有连库）", "脚本预览没报条数", problems);
+            wantIn(with, "+ [OK] 脚本预览完成 | 共 1 个脚本未执行（本次没有连接 MySQL）",
+                    "脚本预览完成没记账", problems);
+            if (with.contains("+ [OK] SCRIPT |")) {
+                problems.add("dry-run 把脚本执行到库了：" + tail(with));
+            }
+            wantIn(bare, "      DROP TABLE IF EXISTS `t_a`",
+                    "不加 --prefix 时脚本原样预览失败", problems);
+            if (bare.contains("脚本前缀")) {
+                problems.add("没给 --prefix 却报了脚本前缀改写");
+            }
+        } catch (Exception e) {
+            problems.add("脚本前缀检查本身出错：" + e);
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    private static void wantIn(String haystack, String needle, String what,
+                               java.util.List<String> problems) {
+        if (haystack == null || !haystack.contains(needle)) {
+            problems.add(what + "；缺" + needle);
+        }
+    }
+
+    /** 在进程内跑一次命令行入口并收走它的 stdout。 */
+    private static String captureMainRun(String[] argv) {
+        java.io.PrintStream real = System.out;
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        try {
+            System.setOut(new java.io.PrintStream(buf, true, "UTF-8"));
+            Main.run(argv);
+        } catch (Exception e) {
+            return "!!捕获失败：" + e;
+        } finally {
+            System.setOut(real);
+        }
+        try {
+            return new String(buf.toByteArray(), "UTF-8");
+        } catch (java.io.UnsupportedEncodingException e) {
+            return "!!UTF-8 不可用";
+        }
+    }
+
+    /**
+     * 超出 BIGINT 的整数必须原样发给库，由 MySQL 判越界。
+     *
+     * 生产前实测抓出来的：驱动收到 BigInteger 走的是 longValue()，
+     * 9223372036854775808 被截成 -9223372036854775808 存进库，
+     * 导入日志写着"成功"，数已经在库里了——这种错现场查不出来，只能事后对账才发现。
+     */
+    private static void checkBigIntWire(java.util.List<String> problems) {
+        Object over = com.excel2mysql.core.DbClient.toJdbc(
+                new java.math.BigInteger("9223372036854775808"));
+        if (!(over instanceof java.math.BigDecimal)) {
+            problems.add("超出 BIGINT 的整数没按原值发出去，应为 BigDecimal：" + over);
+        }
+        if (String.valueOf(over).startsWith("-")) {
+            problems.add("超出 BIGINT 的整数被截成了负数发进库：" + over);
+        }
+        Object in = com.excel2mysql.core.DbClient.toJdbc(
+                new java.math.BigInteger("12345678901234"));
+        if (!Long.valueOf(12345678901234L).equals(in)) {
+            problems.add("范围内的整数没走 Long 这条路：" + in);
+        }
+        Object max = com.excel2mysql.core.DbClient.toJdbc(
+                new java.math.BigInteger("9223372036854775807"));
+        if (!Long.valueOf(Long.MAX_VALUE).equals(max)) {
+            problems.add("BIGINT 上界被误判成越界：" + max);
+        }
+        Object min = com.excel2mysql.core.DbClient.toJdbc(
+                new java.math.BigInteger("-9223372036854775808"));
+        if (!Long.valueOf(Long.MIN_VALUE).equals(min)) {
+            problems.add("BIGINT 下界被误判成越界：" + min);
+        }
+        Object under = com.excel2mysql.core.DbClient.toJdbc(
+                new java.math.BigInteger("-9223372036854775809"));
+        if (!(under instanceof java.math.BigDecimal)) {
+            problems.add("低于 BIGINT 下界的整数没按原值发出去：" + under);
+        }
     }
 
     private static String tail(String text) {

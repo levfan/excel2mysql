@@ -596,6 +596,23 @@ code, out, _ = run_cli(["--dry-run", "--check", _tmpdir])
 check("W4 --dry-run 与 --check 互斥", code == cli_mod.EXIT_USAGE, code)
 check("W5 互斥提示点出两个参数名", "--dry-run" in out and "--check" in out, out.strip()[:80])
 
+# 收尾那行"退出码 N"是批处理排障第一眼看的字：早退路径（参数冲突、配置错误、
+# 没有可处理输入、Ctrl+C）以前都报 0，而进程实际退 1/2/3/130 —— 现场会照着 0 继续往下跑
+_logged = re.search(r"退出码\s+(\S+)", out)
+check("W5b 日志里自报的退出码等于真实返回码（互斥路径）",
+      bool(_logged) and _logged.group(1) == str(code),
+      (_logged.group(1) if _logged else None, code))
+code, out2, _ = run_cli([_tmpdir, "-d", "db1", "--prefix", "a_", "--swap-prefix", "b_",
+                         "--dry-run"])
+_l2 = re.search(r"退出码\s+(\S+)", out2)
+check("W5c 前缀两开关同时给：退 1 且日志也写 1",
+      code == cli_mod.EXIT_USAGE and _l2 and _l2.group(1) == "1",
+      (code, _l2.group(1) if _l2 else None))
+code, out3, _ = run_cli([os.path.join(_tmpdir, "根本不存在.xlsx"), "-d", "db1"])
+_l3 = re.search(r"退出码\s+(\S+)", out3)
+check("W5d 输入不存在时日志自报的码与返回值一致",
+      _l3 is None or _l3.group(1) == str(code), (code, _l3.group(1) if _l3 else None))
+
 code, out, _ = run_cli([os.path.join(_tmpdir, "订单（ods_t_order）.xlsx")])
 check("W6 未指定目标库直接判用法错误（不做半截导入）", code == cli_mod.EXIT_USAGE, code)
 check("W7 缺库提示给了三种补救办法",
@@ -788,6 +805,121 @@ else:
 
 
 # ---------------------------------------------------------------------------
+# --- W32-W36：建不出表的输入必须卡在解析阶段（生产实测抓出来的两类） ---
+from openpyxl import Workbook as _WB
+
+_empty = os.path.join(_tmpdir, "空表（w_empty）.xlsx")
+_wb = _WB()
+_wb.active.title = "数据"
+_wb.save(_empty)
+_header_only = os.path.join(_tmpdir, "只有表头（w_header）.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append(["编号", "名称"])
+_wb.save(_header_only)
+_fake = os.path.join(_tmpdir, "假excel（w_fake）.xlsx")
+with open(_fake, "wb") as _fh:
+    _fh.write(b"this is not a workbook")
+_good = os.path.join(_tmpdir, "正常表（w_good）.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append(["序号", "数值"])
+_ws.append([1, 2.5])
+_wb.save(_good)
+
+code, out, _con = run_cli(["--dry-run", _empty, "-d", "db1"])
+check("W32 一张格子都没有的表被判解析失败（不给库里发非法建表语句）",
+      code == cli_mod.EXIT_PARSE and "没有解析到任何字段" in out, out.strip()[:90])
+code, out, _con = run_cli(["--dry-run", _header_only, "-d", "db1"])
+check("W33 只有表头、数据行全空的表同样被拒（dropna 之后确实一列不剩）",
+      code == cli_mod.EXIT_PARSE and "没有解析到任何字段" in out, out.strip()[:90])
+code, out, _con = run_cli(["--dry-run", _fake, "-d", "db1"])
+check("W34 扩展名对但内容不是 Excel：拦在解析阶段而不是 SQL 语法错误",
+      code == cli_mod.EXIT_PARSE and "解析失败" in out, out.strip()[:90])
+code, out, _con = run_cli(["--dry-run", _good, _fake, "-d", "db1"])
+check("W35 一批里混一张坏表：好表照常出 DDL，坏表单独记账并抬退出码",
+      code == cli_mod.EXIT_PARSE and "w_good" in out and "解析失败" in out,
+      out.strip()[-120:])
+code, out, _con = run_cli([_fake, "-d", "db1"])
+check("W36 真导入路径同样不透出 CREATE TABLE（坏表不会去碰库）",
+      code in (cli_mod.EXIT_PARSE, cli_mod.EXIT_IMPORT)
+      and "CREATE TABLE" not in out, code)
+
+# W37：真实数据包里的 Excel 多是生成器写的"最小样式表"，openpyxl 读它会 warn
+# "Workbook contains no default style"，每张表一行混进日志。那既不是本工具的日志格式，
+# 也不影响结果，只会把真正的错误淹掉——日志里不该出现第三方警告。
+import zipfile as _zip
+
+_style_raw = os.path.join(_tmpdir, "_style_raw.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append(["编号", "名称"])
+_ws.append([1, "甲"])
+_ws.append([2, "乙"])
+_wb.save(_style_raw)
+_no_style = os.path.join(_tmpdir, "无默认样式（w_style）.xlsx")
+_zin = _zip.ZipFile(_style_raw, "r")
+_zout = _zip.ZipFile(_no_style, "w", _zip.ZIP_DEFLATED)
+for _item in _zin.infolist():
+    _data = _zin.read(_item.filename)
+    if _item.filename == "xl/styles.xml":
+        _text = _data.decode("utf-8")
+        _s = _text.find("<cellStyles")
+        if _s >= 0:
+            _e = _text.find("</cellStyles>", _s)
+            _text = _text[:_s] + _text[_e + len("</cellStyles>"):]
+        _data = _text.encode("utf-8")
+    _zout.writestr(_item, _data)
+_zout.close()
+_zin.close()
+os.remove(_style_raw)
+import warnings as _warn
+
+import openpyxl as _oxl
+
+with _warn.catch_warnings(record=True) as _caught:
+    _warn.simplefilter("always")
+    _oxl.load_workbook(_no_style)
+check("W37 夹具确实是没有命名样式的那种表（openpyxl 会 warn）",
+      any("no default style" in str(_w.message) for _w in _caught),
+      [str(_w.message)[:40] for _w in _caught])
+code, out, _con = run_cli(["--dry-run", _no_style, "-d", "db1"])
+check("W37b 这种表照样出 DDL（压警告没把读表一起压坏）",
+      code == cli_mod.EXIT_OK and "CREATE TABLE" in out, out.strip()[:90])
+
+# W37c 关键的一条：第三方警告不能出现在 stderr 上。
+# run_cli 只看 stdout 与 --log 那个日志文件，而警告是打到 stderr 的——
+# 断"日志文件里没有警告行"是条永真断言，把 cli.py 的过滤器全删了它照样绿。
+# 所以这里自己抓 stderr，并且先清掉 openpyxl 的 __warningregistry__：
+# 默认动作是 once，同一处只打一次，不清就测不到第二次。
+import contextlib as _ctx
+import openpyxl.styles.stylesheet as _ss
+
+_LOG = os.path.join(_tmpdir, "logs", "w37c.log")
+_seq = os.path.dirname(_LOG)
+os.makedirs(_seq, exist_ok=True)
+if os.path.isfile(_LOG):
+    os.remove(_LOG)
+_err = io.StringIO()
+_reg = getattr(_ss, "__warningregistry__", None)
+if isinstance(_reg, dict):
+    _reg.clear()
+with _ctx.redirect_stderr(_err):
+    with _ctx.redirect_stdout(io.StringIO()):
+        cli_mod.run(["--dry-run", _no_style, "-d", "db1", "--log", _LOG])
+check("W37c 读这种表的 stderr 上没有第三方警告行",
+      "no default style" not in _err.getvalue() and "UserWarning" not in _err.getvalue(),
+      _err.getvalue().strip()[:120])
+# 同一段 stderr 里，与本工具无关但属于别类的警告还是要打出来——压的是那两类，不是全部
+_probe = io.StringIO()
+with _ctx.redirect_stderr(_probe):
+    _warn.warn("别的警告照常打出来", UserWarning)
+check("W37d 只压那两类第三方警告，没有把警告整体静音",
+      "别的警告照常打出来" in _probe.getvalue(), _probe.getvalue().strip()[:80])
+
 section("X CLI 端到端·假连接（断到真实落库调用序列，不只看退出码）")
 
 

@@ -2484,6 +2484,17 @@ _huge.close()
 _huge.deleteLater()
 _app.processEvents()
 
+# U11 入口在 import 期就压掉了两类第三方警告（openpyxl 读"最小样式表"的每张表一行、
+# 冻结态 cryptography 的 Python 3.8 弃用一行）。这里只钉"过滤器还在"，
+# 真的行为断言在 3.8 线 W37c：抓 stderr 跑一次命令行，看上面还有没有警告行。
+import warnings as _warnings
+
+_pats = [getattr(_f[1], "pattern", str(_f[1])) for _f in _warnings.filters if _f[0] == "ignore"]
+check("U11 入口装了压掉第三方警告的过滤器（行为断言见 3.8 线 W37c）",
+      any("no default style" in str(_p) for _p in _pats)
+      and any("core team" in str(_p) for _p in _pats),
+      [str(_p)[:40] for _p in _pats if _p][:4])
+
 section("G MySQL 真实读写（建表→导入→查询→回滚）")
 
 _cfg = {"host": os.environ.get("PT_HOST", "127.0.0.1"),
