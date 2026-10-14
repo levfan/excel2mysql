@@ -164,10 +164,102 @@ public final class GuiDump {
                 }
                 put("loaded.log", frame.logPanel().text());
                 put("loaded.hint.excel", frame.excelHintText());
+                put("add.popup", popup());
+                // Qt 顶层窗口的 width/height 量的是客户区，Java 的外框还含标题栏和边框，
+                // 拿外框比就是在比两套窗口装饰，不是比界面本身
+                java.awt.Dimension client = frame.getContentPane().getSize();
+                put("window.size", client.width + "x" + client.height);
+                java.awt.Image icon = frame.getIconImage();
+                put("window.icon", icon == null ? "none"
+                        : "max=" + Math.max(icon.getWidth(null), icon.getHeight(null)));
+                put("file.tooltip.0", frame.fileModel().tooltipAt(0));
                 frame.startImport();
                 put("guard.nodb.import", popup());
+
+                // 结构弹窗改一格 → DDL 要跟着变（编辑真的落进表定义）
+                com.excel2mysql.core.Infer.Column c0 =
+                        frame.tables().get(0).columns.get(0);
+                String beforeType = c0.type;
+                c0.type = "VARCHAR(123)";
+                frame.refreshPreview();
+                put("structure.edit.ddl",
+                        frame.ddlText().contains("VARCHAR(123)") ? "1" : "0");
+                c0.type = beforeType;
+                frame.refreshPreview();
             }
         });
+        doubleClickProbe();
+        zipRoundtrip(files);
+    }
+
+    /**
+     * 双击文件列表第一行，看真开出来的结构弹窗装的是哪张表。
+     *
+     * 这个弹窗是模态的：setVisible 会在 EDT 上再开一层事件循环，
+     * 所以派发要丢给 invokeLater，由调用线程等它出现、读出标签页、再 dispose 放行。
+     * 等不到就记 0——这是一条会变的红线，不是静默跳过。
+     */
+    private static void doubleClickProbe() {
+        try {
+            final String[] dbg = new String[]{"start"};
+            SwingUtilities.invokeLater(new Runnable() {
+                @Override
+                public void run() {
+                    frame.fileTable().changeSelection(0, 0, false, false);
+                    dbg[0] = "sel=" + frame.fileTable().getSelectedRow()
+                            + " rows=" + frame.fileTable().getRowCount()
+                            + " lsn=" + frame.fileTable().getMouseListeners().length;
+                    java.awt.Rectangle cell = frame.fileTable().getCellRect(0, 0, true);
+                    java.awt.event.MouseEvent dbl = new java.awt.event.MouseEvent(
+                            frame.fileTable(), java.awt.event.MouseEvent.MOUSE_CLICKED,
+                            System.currentTimeMillis(), 0,
+                            cell.x + 5, cell.y + 5, 2, false);
+                    for (java.awt.event.MouseListener ml
+                            : frame.fileTable().getMouseListeners()) {
+                        ml.mouseClicked(dbl);
+                    }
+                    dbg[0] = dbg[0] + " fired";
+                }
+            });
+            StructureDialog opened = null;
+            long deadline = System.currentTimeMillis() + 10000;
+            int seen = 0;
+            while (opened == null && System.currentTimeMillis() < deadline) {
+                java.awt.Window[] ws = java.awt.Window.getWindows();
+                seen = ws.length;
+                for (java.awt.Window w : ws) {
+                    if (w instanceof StructureDialog && w.isShowing()) {
+                        opened = (StructureDialog) w;
+                    }
+                }
+                if (opened == null) {
+                    Thread.sleep(50);
+                }
+            }
+            if (opened == null) {
+                put("dblclick.structure", "0|0|" + dbg[0] + " seen=" + seen);
+                return;
+            }
+            final StructureDialog sd = opened;
+            final String[] titles = new String[1];
+            SwingUtilities.invokeAndWait(new Runnable() {
+                @Override
+                public void run() {
+                    titles[0] = join(sd.tabTitles(), "|");
+                }
+            });
+            SwingUtilities.invokeAndWait(new Runnable() {
+                @Override
+                public void run() {
+                    sd.dispose();
+                }
+            });
+            int n = titles[0] == null || titles[0].isEmpty()
+                    ? 0 : titles[0].split("\\|").length;
+            put("dblclick.structure", "1|" + n + "|" + titles[0]);
+        } catch (Exception e) {
+            put("dblclick.structure", "err|0|" + e);
+        }
     }
 
     private static String names() {
@@ -179,6 +271,38 @@ public final class GuiDump {
             sb.append(t.tableName);
         }
         return sb.toString();
+    }
+
+    /** 压缩包：展开几个、汇总怎么说、包内文件的来源 tooltip、临时目录能不能清掉。 */
+    private static void zipRoundtrip(final List<String> files) throws Exception {
+        final File zdir = new File(tmp, "zip");
+        mkdirs(zdir);
+        final File zip = new File(zdir, "pack1.zip");
+        java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                new java.io.FileOutputStream(zip));
+        zos.putNextEntry(new java.util.zip.ZipEntry("readme.txt"));
+        zos.write("不是 Excel".getBytes(java.nio.charset.Charset.forName("UTF-8")));
+        zos.closeEntry();
+        zos.putNextEntry(new java.util.zip.ZipEntry("inner.xlsx"));
+        zos.write(java.nio.file.Files.readAllBytes(
+                new File(files.get(0)).toPath()));
+        zos.closeEntry();
+        zos.close();
+        ui(new Runnable() {
+            @Override
+            public void run() {
+                int before = frame.tables().size();
+                String mark = frame.logPanel().text();
+                List<String> one = new ArrayList<String>();
+                one.add(zip.getPath());
+                frame.addFiles(one);
+                put("zip.log", tail(mark, frame.logPanel().text()));
+                put("zip.added", String.valueOf(frame.tables().size() - before));
+                put("zip.popup", popup());
+                int last = frame.fileModel().getRowCount() - 1;
+                put("zip.tooltip", last < 0 ? "" : frame.fileModel().tooltipAt(last));
+            }
+        });
     }
 
     private static void prefixSteps() throws Exception {
@@ -387,6 +511,19 @@ public final class GuiDump {
                     frame.warn(hint);
                 }
                 put("guard.sql.empty_prefix", popup());
+
+                String smark = frame.sqlPage().logPanel().text();
+                frame.sqlPage().selectRow(0);
+                frame.sqlPage().removeSelected();
+                put("sql.remove.log", tail(smark, frame.sqlPage().logPanel().text()));
+                smark = frame.sqlPage().logPanel().text();
+                frame.sqlPage().saveModified();
+                put("sql.save.log", tail(smark, frame.sqlPage().logPanel().text()));
+                String ehint = frame.sqlPage().execute();
+                if (ehint != null) {
+                    frame.warn(ehint);
+                }
+                put("sql.execute.nodb", popup());
             }
         });
     }

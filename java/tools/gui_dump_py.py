@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, 
 import main as m  # noqa: E402
 
 app = QApplication(sys.argv)
+m.setup_app(app)   # 图标等应用级设置走生产同一段代码
 m.MODAL_PROGRESS = False
 POPUPS = []
 
@@ -211,7 +212,6 @@ def names(win):
 
 def main():
     win = m.MainWindow()
-    win.resize(1100, 780)
     win.show()
     app.processEvents()
 
@@ -282,9 +282,73 @@ def main():
         put("loaded.on.%s" % t, btn_on(win, t))
     put("loaded.log", win.log.toPlainText())
     put("loaded.hint.excel", win.lbl_imp_db.text())
+    put("add.popup", popup_text())
+    # 两侧都量"程序自己画的那块地方"：Qt 顶层窗口的 width/height 就是客户区，
+    # Java 那边对应的是 getContentPane()，外框由操作系统加、两边口径不同源。
+    put("window.size", "%dx%d" % (win.width(), win.height()))
+    ic = app.windowIcon()   # 图标挂在 QApplication 上（main.py 末尾 setWindowIcon），不是挂在窗口上
+    sizes = sorted(ic.availableSizes(), key=lambda s: max(s.width(), s.height()))
+    put("window.icon", "none" if not sizes
+        else "max=%d" % max(sizes[-1].width(), sizes[-1].height()))
+    tip0 = win.file_table.item(0, 0)
+    put("file.tooltip.0", tip0.toolTip() if tip0 else "")
+    # 双击不是"接了信号"就算数，要真的建出那一张表的结构窗口。
+    # 真窗口是模态的，离屏 exec() 会挂住进程，所以只把 exec 换成"记一笔、返回取消"，
+    # 构造过程走真代码。
+    _real_sd = m.StructureDialog
+    _opened = []
+
+    class _ProbeSd(_real_sd):
+        def exec(self):
+            _opened.append(self)
+            return 0
+
+    m.StructureDialog = _ProbeSd
+    try:
+        win.file_table.setCurrentCell(0, 0)
+        win.file_table.cellDoubleClicked.emit(0, 0)
+    finally:
+        m.StructureDialog = _real_sd
+    if _opened:
+        _sd = _opened[0]
+        _titles = "|".join(_sd.tabs.tabText(i) for i in range(_sd.tabs.count()))
+        _sd.deleteLater()
+        put("dblclick.structure", "1|%d|%s" % (_sd.tabs.count(), _titles))
+    else:
+        put("dblclick.structure", "0|0|")
     POPUPS.clear()
     win.on_start_import()
     put("guard.nodb.import", popup_text())
+
+    # ---- 结构弹窗改一格 → DDL 要跟着变（编辑真的落进表定义）----
+    _t0 = win.tables[0]["columns"][0]
+    _before_type, _before_ddl = _t0["type"], None
+    _t0["type"] = "VARCHAR(123)"
+    _dlg = m.DDLDialog(win.tables, False, win)
+    put("structure.edit.ddl", "1" if "VARCHAR(123)" in _dlg.tabs.widget(0).toPlainText() else "0")
+    _dlg.deleteLater()
+    _t0["type"] = _before_type
+
+    # ---- 压缩包：展开、汇总、来源 tooltip、临时目录清理 ----
+    zdir = os.path.join(TMP, "zip")
+    os.makedirs(zdir)
+    import zipfile as _zf
+    zpath = os.path.join(zdir, "pack1.zip")
+    with _zf.ZipFile(zpath, "w") as zf:
+        zf.writestr("readme.txt", "不是 Excel")
+        with open(files[0], "rb") as fh:
+            zf.writestr("inner.xlsx", fh.read())
+    _n_before = len(win.tables)
+    POPUPS.clear()
+    mark = win.log.toPlainText()
+    win._add_files([zpath])
+    app.processEvents()
+    put("zip.added", len(win.tables) - _n_before)
+    put("zip.log", win.log.toPlainText()[len(mark):].strip())
+    put("zip.popup", popup_text())
+    _last = win.file_table.rowCount() - 1
+    _it = win.file_table.item(_last, 0)
+    put("zip.tooltip", _it.toolTip() if _it else "")
 
     # ---- 前缀两步 ----
     win.ed_prefix.setText("ods_")
@@ -411,6 +475,20 @@ def main():
     win.ed_sql_prefix.setText("")
     win.on_sql_apply_prefix()
     put("guard.sql.empty_prefix", popup_text())
+
+    # ---- SQL 页：移除选中、保存副本、没选库就执行 ----
+    POPUPS.clear()
+    mark = win.sql_log.toPlainText()
+    win.sql_table.selectRow(0)
+    win.on_sql_remove_selected()
+    put("sql.remove.log", win.sql_log.toPlainText()[len(mark):].strip())
+    mark = win.sql_log.toPlainText()
+    win.on_sql_save_modified()
+    app.processEvents()
+    put("sql.save.log", win.sql_log.toPlainText()[len(mark):].strip())
+    POPUPS.clear()
+    win.on_sql_execute()
+    put("sql.execute.nodb", popup_text())
 
     # ---- 清空 ----
     win.on_clear()

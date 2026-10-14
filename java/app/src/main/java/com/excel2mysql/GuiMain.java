@@ -477,8 +477,10 @@ public final class GuiMain {
             problems.add("窗口图标取小了，任务栏会糊：" + icon.getWidth(null) + "x"
                     + icon.getHeight(null));
         }
-        if (frame.getWidth() != 1100 || frame.getHeight() != 780) {
-            problems.add("窗口尺寸与 Python 侧不一致：" + frame.getWidth() + "x" + frame.getHeight());
+        // Qt 的 resize(1100,780) 说的是客户区，所以这里量内容面板而不是整个外框
+        java.awt.Dimension client = frame.getContentPane().getSize();
+        if (client.width != 1100 || client.height != 780) {
+            problems.add("窗口客户区与 Python 侧不一致：" + client);
         }
         if (files.isEmpty()) {
             problems.add("自检没有夹具可拖");
@@ -892,15 +894,26 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
         try {
-            if (hd.tocCount() != 13) {
-                problems.add("说明目录应有 13 章，实际 " + hd.tocCount());
+            if (hd.tocCount() != 14) {
+                problems.add("说明目录应有 14 章，实际 " + hd.tocCount());
             }
             if (hd.bodyLength() < 2000) {
                 problems.add("说明正文没渲染出来，长度只有 " + hd.bodyLength());
             }
-            hd.selectToc(3);
-            if (!"excel".equals(hd.currentAnchor())) {
-                problems.add("点目录第 4 章没跳到「两类 Excel 格式」，锚点=" + hd.currentAnchor());
+            // 按标题找而不是按序号：说明里插一章就会把序号挪位，写死序号的守卫会假红
+            int excelChapter = -1;
+            for (int i = 0; i < hd.tocCount(); i++) {
+                if ("两类 Excel 格式".equals(hd.tocTitle(i))) {
+                    excelChapter = i;
+                }
+            }
+            if (excelChapter < 0) {
+                problems.add("说明目录里没有「两类 Excel 格式」这一章");
+            } else {
+                hd.selectToc(excelChapter);
+                if (!"excel".equals(hd.currentAnchor())) {
+                    problems.add("点「两类 Excel 格式」没跳到对应锚点，锚点=" + hd.currentAnchor());
+                }
             }
             hd.selectToc(0);
             if (!"start".equals(hd.currentAnchor())) {
