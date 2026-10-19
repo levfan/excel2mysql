@@ -48,6 +48,7 @@ warnings.filterwarnings("ignore", message=".*no longer supported by the Python c
 from core.infer import (  # noqa: E402
     build_table_def, make_unique_names, apply_table_prefix, replace_first_segment,
 )
+from core.log_text import DDL_NO_ROLLBACK_NOTE, describe_db_error
 from core.merge_check import MergedCellsError
 from core.mysql_io import build_ddl, connect, create_table, insert_data, list_databases
 from core.naming import clean_prefix, is_valid_prefix
@@ -129,17 +130,6 @@ class Log:
             self._fh = None
 
 
-def describe_db_error(e):
-    """展开 pymysql 异常为「异常类型 + MySQL 错误码 + 完整报错文本」。
-
-    与 main.py 里的同名函数保持同一口径：pymysql 的 args 形如 (1064, '...')，
-    直接 str(e) 会把元组原样打出来，错误码和正文混在一起读不出。
-    """
-    args = getattr(e, "args", ())
-    if args and isinstance(args[0], int):
-        detail = args[1] if len(args) > 1 else ""
-        return "%s（MySQL 错误码 %s）：%s" % (type(e).__name__, args[0], detail)
-    return "%s：%s" % (type(e).__name__, e)
 
 
 # ---------------------------------------------------------------------------
@@ -627,8 +617,6 @@ def do_import(tables, args, cfg, log):
     return EXIT_OK
 
 
-DDL_NO_ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
-                        "回滚仅对其后的数据操作生效。")
 
 
 def do_dry_run_sql(plans, log):
