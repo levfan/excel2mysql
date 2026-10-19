@@ -52,7 +52,7 @@ Excel → MySQL 批量导入工具（Java 线）v{version}
   conn.ini            默认连接配置模板；库名留空是有意为之，没指定目标库会直接报用法错误
   jre\               随包的 Java 8 运行时，命令行里那个 java.exe 就在 jre\bin\ 下
   README.txt          本文件（快速上手与命令行）
-  使用说明.txt        完整操作手册，14 章；与界面里按 F1 打开的是同一份内容
+  使用说明.txt        完整操作手册，15 章；与界面里按 F1 打开的是同一份内容
 
 目标系统
   64 位 Windows 7 及以上。随包 JRE 已剔除 {stubs} 个 api-ms-win-* 转发桩与 CRT 批文件，
