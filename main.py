@@ -1503,7 +1503,7 @@ class MainWindow(QWidget):
     def _zip_dir(self):
         """会话级临时目录，窗口关闭时清理；导入失败的文件在会话内可重试。"""
         if self._zip_tmp is None:
-            self._zip_tmp = tempfile.mkdtemp(prefix="excel2mysql_zip_")
+            self._zip_tmp = tempfile.mkdtemp(prefix="e2m_gui_")
         return self._zip_tmp
 
     @staticmethod

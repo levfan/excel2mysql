@@ -1223,13 +1223,20 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return null;
     }
 
-        /** 会话级解压目录：整个窗口生命周期只建一个，关窗口一次性清掉。 */
+        /** 会话级解压目录：整个窗口生命周期只建一个，关窗口一次性清掉。
+         *
+         * 根目录名刻意压到最短（e2m-<纳秒>）：解压后的完整路径是
+         * 「TEMP + 根名 + 包名_序号 + 包内目录 + 包内文件名」，现场机器的用户名动辄比
+         * 开发机长二三十字符，客户数据包里还有几十字的中文文件名与目录层级，
+         * 顶到 Windows 的 260 上限时症状是"拖进来就报"，而且只在现场报、开发机不复现。
+         */
     private String zipSessionDir() {
         if (zipSessionDir == null) {
             File base = new File(System.getProperty("java.io.tmpdir"),
-                    "excel2mysql-gui-" + System.nanoTime());
+                    "e2m-" + System.nanoTime());
             if (!base.mkdirs()) {
-                log("建解压目录失败：" + base.getPath());
+                log("建解压目录失败：" + base.getPath()
+                        + "；可在日志里看到这行，改短 TEMP 或换 Python 命令行版再试");
                 return base.getPath();
             }
             zipSessionDir = base.getPath();

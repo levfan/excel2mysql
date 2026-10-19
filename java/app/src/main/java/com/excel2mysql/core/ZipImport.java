@@ -6,9 +6,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -31,6 +33,8 @@ public final class ZipImport {
     public static final class Result {
         public final List<Entry> files = new ArrayList<Entry>();
         public final List<String> ignored = new ArrayList<String>();
+        /** 因为"解压后路径太长"而被去掉包内目录层级的条目名，日志要单独说一句。 */
+        public final List<String> flattened = new ArrayList<String>();
         public int dirs;
         public int nestedZips;
     }
@@ -43,6 +47,9 @@ public final class ZipImport {
     }
 
     private static final Charset CP437 = Charset.forName("CP437");
+    /** 解压落点的长度预算：Windows 上限 260，留 20 给后续可能的短文件名转换与反斜杠。 */
+    static final int PATH_BUDGET = 240;
+
     private static final Charset GBK = Charset.forName("GBK");
 
     private ZipImport() {
@@ -238,6 +245,8 @@ public final class ZipImport {
             throw new ZipArchiveException("不是有效的 ZIP 文件（或文件已损坏）");
         }
         Result result = new Result();
+        // 平铺时不能把两个同名文件写到同一个落点：那样后一张表会静默盖掉前一张
+        Set<String> written = new HashSet<String>();
         ZipFile z;
         try {
             flags.load(zipPath);
@@ -273,7 +282,27 @@ public final class ZipImport {
                     result.ignored.add(name);
                     continue;
                 }
-                String target = destDir + File.separatorChar + safeRelPath(name);
+                String rel = safeRelPath(name);
+                String target = destDir + File.separatorChar + rel;
+                // Windows 传统路径上限是 260 字符，而这条路径的四段里三段不可控：
+                // 现场机器的 TEMP（用户名长）、包名、包内目录层级与中文文件名。
+                // 顶到上限时症状是"拖进来就报"，且只在现场报、开发机不复现。
+                // 先压掉包内目录层级——表名取自文件名，这一刀不改表名；
+                // 压完还太长就明说该怎么做，别抛一句 "系统找不到指定的路径"。
+                if (target.length() > PATH_BUDGET) {
+                    String flat = new File(rel).getName();
+                    String flatTarget = destDir + File.separatorChar + flat;
+                    if (flatTarget.length() <= PATH_BUDGET && !written.contains(flatTarget)) {
+                        target = flatTarget;
+                        result.flattened.add(name);
+                    } else {
+                        throw new ZipArchiveException("解压后的路径过长（" + target.length()
+                                + " 字符，Windows 上限 260）：" + name
+                                + "；把压缩包拷到一个短路径目录（如 D:\\data）再拖，"
+                                + "或改短环境变量 TEMP 后重试");
+                    }
+                }
+                written.add(target);
                 File out = new File(target);
                 File parent = out.getParentFile();
                 if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {

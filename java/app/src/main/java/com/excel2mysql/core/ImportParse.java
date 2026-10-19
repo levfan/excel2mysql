@@ -112,6 +112,12 @@ public final class ImportParse {
             }
             String zname = baseName(f);
             String stem = stripExtension(zname);
+            // 解压目录名只占路径预算、不参与表名（表名来自包内那个文件名）。
+            // 现场机器的 TEMP 本身就比开发机长，包名又是几十字中文时，
+            // 把这层压短是最划算的一刀——超过 12 个字符就截，尾号仍然唯一。
+            if (stem.length() > 12) {
+                stem = stem.substring(0, 12);
+            }
             String dest = new File(zipDir, stem + "_" + (destStart + out.zipOrigin.size() + 1))
                     .getPath();
             ZipImport.Result r;
@@ -154,6 +160,12 @@ public final class ImportParse {
             }
             if (r.nestedZips > 0) {
                 msg.append("，跳过 ").append(r.nestedZips).append(" 个嵌套 zip（不支持递归展开）");
+            }
+            if (!r.flattened.isEmpty()) {
+                // 平铺只砍包内目录层级，文件名不变所以表名也不变；
+                // 但"解出来的路径和包里不一样"这件事必须说，否则现场按包内层级去找文件会找不到
+                msg.append("，另有 ").append(r.flattened.size())
+                        .append(" 个文件因解压路径过长被平铺到根目录（表名不受影响）");
             }
             sink.log(msg.toString());
             if (r.files.isEmpty()) {

@@ -516,7 +516,7 @@ public final class Main {
     private static Scan collect(List<String> paths, boolean noSql, boolean noExcel) {
         Scan scan = new Scan();
         File work = new File(System.getProperty("java.io.tmpdir"),
-                "excel2mysql-" + System.currentTimeMillis());
+                "e2m-" + System.currentTimeMillis());
         for (String p : paths) {
             File f = new File(p);
             if (!f.exists()) {

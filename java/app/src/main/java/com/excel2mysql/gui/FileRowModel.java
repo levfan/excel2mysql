@@ -127,6 +127,11 @@ public final class FileRowModel extends AbstractTableModel {
 
     /** 第一列的悬停说明：散装文件看全路径，包内文件看是哪个包的哪一条。 */
     public String tooltipAt(int row) {
+        // 渲染器拿到的行号可能已经不在模型里了：导入成功的文件会被移出列表，
+        // 而 Swing 会在移除之后还按旧行数重绘一次，越界就是 EDT 上一个未捕获异常
+        if (row < 0 || row >= items.size()) {
+            return "";
+        }
         Item it = items.get(row);
         if (it.origin != null && !it.origin.isEmpty()) {
             return it.origin;

@@ -45,12 +45,14 @@ public final class WorkbookReader {
     }
 
     static {
-        // POI 默认压缩比下限 0.01 会把"高重复列"的正常业务表判成 zip bomb 直接拒读，
-        // 而 Python 线（openpyxl/pandas）没有这道检查、照样读得进来。
-        // 放到 0.001 是折中：既让实测 0.0095 的夹具过，又给极端膨胀留一道闸。
-        // 已知残留差异：压缩比低于 0.001 的文件 Java 会拒、Python 会读，这类文件
-        // 现实中出现在几十万字重复长文本的表上，P3 交付说明里要写清。
-        org.apache.poi.openxml4j.util.ZipSecureFile.setMinInflateRatio(0.001d);
+        // POI 的压缩比下限（默认 0.01）会把"列里全是重复文本"的正常业务表判成 zip bomb 直接拒读，
+        // 而 Python 线（openpyxl/pandas）没有这道检查、照样读得进来 —— 这是两条线的一处真实分歧。
+        // 0.001 是第一轮给的折中；本轮实测过一张 40000 行、区划名高度重复的表（压缩比 ~0.0015），
+        // 两个阈值下都读得进来，也就是说"现场拖 zip 报错"是不是它引起的，本轮没证明。
+        // 这里仍然把它降到 0，理由是威胁模型而不是已抓到的事故：读的全是操作员自己给的本机文件，
+        // 不是第三方上传物；宁可慢一点读一个膨胀很大的表（结果仍然对），
+        // 也不能让"读不进自己的数据"这种失败有存在的可能。
+        org.apache.poi.openxml4j.util.ZipSecureFile.setMinInflateRatio(0.000d);
     }
 
     public static List<Sheet> read(String path) {
