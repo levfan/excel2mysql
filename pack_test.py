@@ -142,7 +142,9 @@ from core.infer import (
 )
 from core.sql_script import (
     extract_create_tables, apply_table_prefix_sql, split_sql_statements,
+    has_executable_content as has_exec,
 )
+from core.sql_execute import executable_statements
 from core.mysql_io import (
     build_ddl, build_insert_sql, connect, list_databases, create_table, insert_data,
 )
@@ -333,6 +335,30 @@ check("E7 纯分号不产生语句",
 check("E8 反引号标识符内的分号不切", len(split_sql_statements("CREATE TABLE `a;b` (x INT);")) == 1)
 check("E9 块注释内的分号不切",
       len(split_sql_statements("/* a; b; */ SELECT 1;")) == 1)
+# 「只写注释也不算」这句文案的判据表。Java 侧 GuiMain 用同一张表断
+# SqlScript.hasExecutableContent，两边判定不一样就会出现"一能说得出执行了 0 条、
+# 另一边说执行了 1 条"。字符串里的 -- 不算注释，这条是最容易写错的一格。
+_EXEC_TABLE = [
+    ("-- 只是一句注释", False),
+    ("# 老式行注释", False),
+    ("/* 纯块注释 */", False),
+    ("", False),
+    ("   \n\t ", False),
+    ("SELECT 1", True),
+    ("SELECT '-- x'", True),
+    ("SELECT `--a` FROM t", True),
+    ("/* 头注释 */ SELECT 2", True),
+    ("-- 头注释\nINSERT INTO t VALUES (1)", True),
+    ("SELECT 'a''b' -- 尾注释", True),
+    ("INSERT INTO t VALUES ('/* 不是块注释 */')", True),
+    ("/* 注释; 里有分号 */ ", False),
+]
+check("E10 整句只剩注释的片段判为无可执行内容（字符串里的 -- 不算注释）",
+      [(s, has_exec(s)) for s, _ in _EXEC_TABLE] == [(s, want) for s, want in _EXEC_TABLE],
+      [(s, has_exec(s), want) for s, want in _EXEC_TABLE if has_exec(s) != want])
+check("E11 执行器把纯注释整批剔掉：一句都不执行，也不报「已提交 1 条」",
+      executable_statements("-- a\n; /* b */ ; SELECT 1;") == ["SELECT 1"],
+      executable_statements("-- a\n; /* b */ ; SELECT 1;"))
 
 gbk = os.path.join(_tmpdir, "gbk.sql")
 open(gbk, "wb").write("CREATE TABLE `t` (`id` INT); -- 中文注释".encode("gbk"))
@@ -416,7 +442,7 @@ w = app_main.MainWindow()
 check("F1 MainWindow 构造成功，标题带版本号",
       w.windowTitle().startswith("Excel → MySQL 批量导入工具 v")
       and app_main.APP_VERSION in w.windowTitle(), w.windowTitle())
-check("F2 两个页签齐全", [w.main_tabs.tabText(i) for i in range(2)]
+check("F2 前两个页签齐全", [w.main_tabs.tabText(i) for i in range(2)]
       == ["Excel 导入", "SQL 脚本"])
 w.cb_db.blockSignals(True); w.cb_db.clear()
 w.cb_db.addItem("testdb", "testdb")
@@ -478,6 +504,15 @@ check("F13 数据库异常展开为错误码+原文",
       "MySQL 错误码 1064" in app_main.describe_db_error(
           pymysql.err.ProgrammingError(1064, "syntax error near 'x'")),
       app_main.describe_db_error(pymysql.err.ProgrammingError(1064, "syntax error near 'x'")))
+# 口令里有中文时 pymysql 抛的是 UnicodeEncodeError，跟数据库毫无关系；
+# 不打一句人话，现场就会拿着它去翻 my.cnf
+from core.log_text import PASSWORD_ENCODING_HINT as _PW_HINT
+_enc_err = app_main.describe_db_error(
+    UnicodeEncodeError("latin-1", "测试口令", 0, 2, "ordinal not in range(256)"))
+check("F13b 口令编码那句给了可操作的出口（改 ASCII 口令 / 换 Java 版）",
+      "latin-1" in _PW_HINT and "ASCII" in _PW_HINT and "Java" in _PW_HINT, _PW_HINT)
+check("F13c UnicodeEncodeError 展开里带着那句指引",
+      "多半出在口令上" in _enc_err and "JDBC" in _enc_err, _enc_err)
 check("F14 超长语句截断但标注原文长度",
       "已截断" in app_main.format_statement("INSERT INTO t VALUES (" + "1," * 3000 + ")"))
 wk = app_main.ImportWorker({"host": "h", "port": 3306, "user": "u", "password": "",
@@ -500,6 +535,155 @@ check("F17 保存改名后的脚本落在源文件旁且不覆盖原文件",
       and open(sqlfile, encoding="utf-8").read() == sql_text)
 check("F18 保存后 modified 标记复位，重复保存不再产生新写入",
       w.sql_files[-1]["modified"] is False)
+
+# ---- 第三个页签「SQL 执行器」：编辑区、三颗按钮、示例对话框与执行语义 ----
+check("F19 页签顺序为 Excel 导入 / SQL 脚本 / SQL 执行器",
+      [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())]
+      == ["Excel 导入", "SQL 脚本", "SQL 执行器"],
+      [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())])
+check("F20 编辑区开场就是那句连通检查且不折行",
+      w.sql_run_input.toPlainText() == app_main.SQL_RUN_DEFAULT
+      and w.sql_run_input.lineWrapMode() == QPlainTextEdit.NoWrap,
+      w.sql_run_input.toPlainText())
+_run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
+             w.btn_sql_run_exec.text(): w.btn_sql_run_exec,
+             w.btn_sql_run_clear.text(): w.btn_sql_run_clear}
+check("F21 三颗按钮齐备且可点",
+      len(_run_btns) == 3 and set(_run_btns) == {u"示例 (?)", u"执行", u"清空"}
+      and all(b.isEnabled() for b in _run_btns.values()), sorted(_run_btns))
+check("F22 执行按钮的 tooltip 把事务语义写全",
+      "全部成功才提交，中途出错整批回滚" in w.btn_sql_run_exec.toolTip(),
+      w.btn_sql_run_exec.toolTip())
+
+
+class _RunCursor:
+    """顶替 pymysql 游标：记下每条 execute 的语句，按 fail_on 造一条报错。"""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.description = None
+
+    def execute(self, sql):
+        self.owner.calls.append(sql)
+        if sql == self.owner.fail_on:
+            raise RuntimeError("(1064, '语法错误')")
+        return 2
+
+
+class _RunConn:
+    def __init__(self, fail_on=None):
+        self.calls = []
+        self.fail_on = fail_on
+
+    def cursor(self):
+        return _RunCursor(self)
+
+    def commit(self):
+        self.calls.append("commit")
+
+    def rollback(self):
+        self.calls.append("rollback")
+
+    def close(self):
+        self.calls.append("close")
+
+
+_real_connect = app_main.connect
+w.main_tabs.setCurrentIndex(2)
+POPUPS.clear()
+w.sql_run_input.setPlainText("SELECT 1 AS 连通检查;")
+w.on_sql_run_clear()
+check("F23 清空同时清掉编辑区和结果区",
+      w.sql_run_input.toPlainText() == "" and w.sql_run_log.toPlainText() == "")
+w.on_sql_run()
+check("F24 空编辑区被拦下：弹窗与「已拦下」日志双写同一句",
+      any(t == "提示" and "编辑区是空的" in x for t, x in POPUPS)
+      and "已拦下：没有可执行的 SQL" in w.log.toPlainText(), (POPUPS, w.log.toPlainText()))
+
+_conn1 = _RunConn()
+app_main.connect = lambda cfg: _conn1
+POPUPS.clear()
+w.sql_run_log.clear()
+w.sql_run_input.setPlainText("CREATE TABLE t_a (id INT);\nINSERT INTO t_a VALUES (1);")
+w.on_sql_run()
+_run_log = w.sql_run_log.toPlainText()
+check("F25 落到库上的语句序列与提交次序正确",
+      _conn1.calls == ["CREATE TABLE t_a (id INT)", "INSERT INTO t_a VALUES (1)",
+                       "commit", "close"], _conn1.calls)
+check("F26 逐条进度与汇总都写进结果区",
+      "第 1/2 条" in _run_log and "第 2/2 条" in _run_log
+      and "全部完成 | 2 条语句已提交" in _run_log, _run_log)
+_conn2 = _RunConn(fail_on="INSERT INTO t_a VALUES (2)")
+app_main.connect = lambda cfg: _conn2
+w.sql_run_log.clear()
+w.sql_run_input.setPlainText("CREATE TABLE t_b (id INT);\nINSERT INTO t_a VALUES (2);")
+w.on_sql_run()
+_run_log = w.sql_run_log.toPlainText()
+check("F27 中途出错整批回滚：全程一次都不提交，失败那句直接 rollback",
+      _conn2.calls == ["CREATE TABLE t_b (id INT)",
+                       "INSERT INTO t_a VALUES (2)", "rollback", "close"], _conn2.calls)
+check("F28 失败行标红并附 DDL 隐式提交提醒",
+      "第 2 条被拒绝" in _run_log and "隐式提交" in _run_log, _run_log)
+check("F29 执行结果不额外弹窗（这一页是给人来回试语句的）", not POPUPS, POPUPS)
+
+
+def _boom(cfg):
+    raise RuntimeError("(2003, \"Can't connect to MySQL server\")")
+
+
+app_main.connect = _boom
+POPUPS.clear()
+w.sql_run_log.clear()
+w.sql_run_input.setPlainText("SELECT 1;")
+w.on_sql_run()
+check("F30 连不上库只写结果区、不弹任务异常",
+      "连不上库" in w.sql_run_log.toPlainText()
+      and not any(t == "任务异常" for t, _ in POPUPS),
+      (w.sql_run_log.toPlainText()[-120:], POPUPS))
+app_main.connect = _real_connect
+
+_groups = []
+for _s in app_main.SQL_SAMPLES:
+    if not _groups or _groups[-1] != _s[0]:
+        _groups.append(_s[0])
+check("F31 示例库 30 条、5 个分组，且每条都带分组/说明/语句",
+      len(app_main.SQL_SAMPLES) == 30 and len(_groups) == 5
+      and all(len(s) == 3 and s[0] and s[1] and s[2] for s in app_main.SQL_SAMPLES),
+      (len(app_main.SQL_SAMPLES), _groups))
+_dlg = app_main.SqlSamplesDialog(w.sql_run_input)
+check("F32 示例对话框标题带条数、清单与示例表同条数",
+      _dlg.windowTitle() == "SQL 示例（30 条）" and _dlg.list.count() == 30,
+      (_dlg.windowTitle(), _dlg.list.count()))
+check("F33 条目文案为「【分组】说明」，打开即选中第一条",
+      _dlg.list.item(0).text() == "【建库与选库】%s" % app_main.SQL_SAMPLES[0][1]
+      and _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[0][2],
+      _dlg.list.item(0).text())
+check("F34 每条示例都能切成至少一句可执行语句",
+      all(split_sql_statements(s[2]) for s in app_main.SQL_SAMPLES),
+      [i for i, s in enumerate(app_main.SQL_SAMPLES) if not split_sql_statements(s[2])])
+_dlg.list.setCurrentRow(7)
+check("F35 切换选中行，右侧全文跟着换",
+      _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[7][2], _dlg.list.currentRow())
+_dlg.show()
+w.sql_run_input.setPlainText(app_main.SQL_RUN_DEFAULT)
+_dlg.list.setCurrentRow(3)
+_dlg.on_insert()
+check("F36 编辑区还是默认那句时，插入直接换成正题并收起对话框",
+      w.sql_run_input.toPlainText() == app_main.SQL_SAMPLES[3][2]
+      and not _dlg.isVisible(), w.sql_run_input.toPlainText())
+_dlg.show()
+w.sql_run_input.setPlainText("SELECT 1")
+_dlg.list.setCurrentRow(1)
+_dlg.on_insert()
+check("F37 已有内容时插入会补分号换行再接，不覆盖原句",
+      w.sql_run_input.toPlainText()
+      == "SELECT 1;\n" + app_main.SQL_SAMPLES[1][2], w.sql_run_input.toPlainText())
+_dlg.show()
+_dlg.list.setCurrentRow(2)
+_dlg.on_copy()
+check("F38 复制到剪贴板在标题上给回执",
+      _dlg.windowTitle().endswith("· 已复制到剪贴板"), _dlg.windowTitle())
+_dlg.deleteLater()
 
 
 # ---------------------------------------------------------------------------
@@ -1566,6 +1750,18 @@ check("P2 每节锚点都写进了同一份文档（目录跳转的前提）",
       all(f'<a name="{x[0]}"></a>' in _html for x in HELP_SECTIONS), len(_html))
 check("P3 样式表带上了（表格/代码块/提示条靠它排版）",
       "table.t td" in _html and "p.tip" in _html and "p.warn" in _html)
+# 说明正文里写的是 Windows 路径，字符串没转义的话 \b 会被当成退格符吃掉一个字母，
+# 现场照着这句敲命令就会撞"找不到文件"——正文里不许出现控制字符，路径要按字面留存
+check("P3b 说明正文没有控制字符，jre\\bin\\java.exe 按字面写着",
+      all((not any(ord(c) < 9 or 11 <= ord(c) < 32 for c in body))
+          for _k, _t, body in HELP_SECTIONS)
+      and r"jre\bin\java.exe" in _html,
+      [(_k, [ord(c) for c in body if ord(c) < 9]) for _k, _t, body in HELP_SECTIONS
+       if any(ord(c) < 9 for c in body)])
+check("P3c 第三个页签「SQL 执行器」在使用说明里有专节",
+      any(x[0] == "sqlrun" and "SQL 执行器页" in x[1] for x in HELP_SECTIONS)
+      and "示例 (?)" in _html and "全部成功才提交" in _html,
+      [x[0] for x in HELP_SECTIONS])
 
 pw = app_main.MainWindow()
 hd = HelpDialog(pw)

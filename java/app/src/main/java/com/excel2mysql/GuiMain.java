@@ -174,6 +174,8 @@ public final class GuiMain {
                 import_guard(frame, files, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
+                // 第三个页签「SQL 执行器」：编辑区、示例清单与空输入那道闸
+                sql_run_tab(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
                 // 进度框文案与收尾
@@ -191,6 +193,11 @@ public final class GuiMain {
                 checkRejects(frame, problems);
                 // 命令行的 --prefix 对 .sql 也要生效，且 dry-run 要能预览脚本
                 checkSqlCliPrefix(problems);
+                // 「只写注释也不算」的判据表，与 Python 侧 pack_test 的 E10/E11 同一张
+                checkCommentOnly(problems);
+                // 日志面板的线程安全：工作线程加行的同时有人在遍历，锁没加对就会炸 CME，
+                // 那个异常会把日志刷新整个带走——现场看到的就是"跑到一半日志不动了"
+                checkLogPanelThreadSafe(problems);
                 // 超出 BIGINT 的整数要原样发进库，不能让驱动截成负数
                 checkBigIntWire(problems);
                 // 「生成标准/简易 excel 文件」两颗按钮：落点、产物形状、回读与日志弹窗
@@ -766,6 +773,108 @@ public final class GuiMain {
         }
     }
 
+    /** 第三个页签「SQL 执行器」：常驻可见量、示例清单的一来一回与空输入那道闸。 */
+    private static void sql_run_tab(MainFrame frame, List<String> problems) {
+        List<String> titles = frame.tabTitles();
+        if (titles.size() != 3 || !"SQL 执行器".equals(titles.get(2))) {
+            problems.add("第三个页签不对：" + titles);
+        }
+        if (!"直接输入 SQL 执行：建库、建表、改结构、查元数据都行；一次可以写多条，用分号分隔"
+                .equals(frame.sqlRunHintText())) {
+            problems.add("「SQL 执行器」的提示文案不对：" + frame.sqlRunHintText());
+        }
+        if (!"nowrap".equals(frame.sqlRunWrap())) {
+            problems.add("SQL 编辑区应不折行（折行后分号要数着看），实际 " + frame.sqlRunWrap());
+        }
+        if (!"SELECT 1 AS 连通检查;".equals(frame.sqlRunInputText())) {
+            problems.add("编辑区开场不是那句连通检查：" + frame.sqlRunInputText());
+        }
+        javax.swing.AbstractButton clearBtn = null, execBtn = frame.sqlRunButton(),
+                helpBtn = frame.sqlRunHelpButton();
+        for (javax.swing.AbstractButton b : frame.buttons()) {
+            if ("清空".equals(b.getText())) {
+                clearBtn = b;
+            }
+        }
+        if (clearBtn == null || execBtn == null || helpBtn == null
+                || !"示例 (?)".equals(helpBtn.getText()) || !"执行".equals(execBtn.getText())) {
+            problems.add("「SQL 执行器」的三颗按钮不齐（示例 (?) / 执行 / 清空）");
+        }
+        if (execBtn != null && !execBtn.getToolTipText().contains("中途出错整批回滚")) {
+            problems.add("「执行」按钮没把事务语义写在 tooltip 上：" + execBtn.getToolTipText());
+        }
+        // 空输入必须当场拦下：既不连库也不起任务，日志与弹窗同一句
+        frame.setSqlRunInputText("");
+        frame.runSqlFromUi();
+        if (!"提示".equals(frame.lastDialogTitle())
+                || !frame.lastDialogText().contains("编辑区是空的")) {
+            problems.add("空编辑区没拦下：标题=" + frame.lastDialogTitle()
+                    + " 正文=" + frame.lastDialogText().replace((char) 10, ' '));
+        }
+
+        // 示例清单：条数、条目文案、选中切换预览
+        if (frame.sqlSamplesCount() != 30) {
+            problems.add("SQL 示例不是 30 条：" + frame.sqlSamplesCount());
+        }
+        for (int i = 0; i < frame.sqlSamplesCount(); i++) {
+            String sql = frame.sqlSampleSql(i);
+            if (sql == null || sql.trim().isEmpty()
+                    || com.excel2mysql.core.SqlScript.splitStatements(sql).isEmpty()) {
+                problems.add("第 " + (i + 1) + " 条示例切不出语句：" + sql);
+            }
+        }
+        frame.showSqlSamples();
+        if (!frame.sqlSamplesShowing()) {
+            problems.add("「示例 (?)」点了没开出对话框");
+        }
+        if (!"SQL 示例（30 条）".equals(frame.sqlSamplesTitle())) {
+            problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
+        }
+        if (!frame.sqlSamplesItemText(0).startsWith("【")
+                || !frame.sqlSamplesPreviewText().equals(frame.sqlSampleSql(0))) {
+            problems.add("示例清单打开后没选中第一条：" + frame.sqlSamplesItemText(0));
+        }
+        frame.setSqlSamplesRow(7);
+        if (!frame.sqlSamplesPreviewText().equals(frame.sqlSampleSql(7))) {
+            problems.add("切换选中行，右侧语句没跟着换");
+        }
+        frame.clickSqlSamplesCopy();
+        // 剪贴板可能被别的进程占用，两条回执都算有回执；点了之后标题一动不动才是问题
+        if (!frame.sqlSamplesTitle().endsWith("已复制到剪贴板")
+                && !frame.sqlSamplesTitle().endsWith("剪贴板正被占用，可再点一次）")) {
+            problems.add("复制到剪贴板没有任何回执：" + frame.sqlSamplesTitle());
+        }
+        // 插入：编辑区还是默认那句时直接换成正题；已有内容时补分号换行再接
+        frame.showSqlSamples();
+        frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+        frame.setSqlSamplesRow(3);
+        frame.clickSqlSamplesInsert();
+        if (!frame.sqlRunInputText().equals(frame.sqlSampleSql(3))) {
+            problems.add("默认文本上插入没换成正题：" + frame.sqlRunInputText());
+        }
+        if (frame.sqlSamplesShowing()) {
+            problems.add("插入之后示例对话框应收起");
+        }
+        frame.showSqlSamples();
+        frame.setSqlRunInputText("SELECT 1");
+        frame.setSqlSamplesRow(1);
+        frame.clickSqlSamplesInsert();
+        if (!frame.sqlRunInputText().startsWith("SELECT 1;")
+                || !frame.sqlRunInputText().endsWith(frame.sqlSampleSql(1))) {
+            problems.add("已有内容时插入没补分号或覆盖了原句：" + frame.sqlRunInputText());
+        }
+        // 清空：编辑区与结果区一起清，留着半截最容易拿旧结果当这次看的
+        frame.setSqlRunInputText("SELECT 2;");
+        if (clearBtn != null) {
+            clearBtn.doClick();
+        }
+        if (!frame.sqlRunInputText().isEmpty()) {
+            problems.add("「清空」没清掉编辑区：" + frame.sqlRunInputText());
+        }
+        frame.showSqlSamples();
+        frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+    }
+
     private static void sql_page(MainFrame frame, List<String> problems) {
         List<String> titles = frame.tabTitles();
         if (!titles.contains("Excel 导入") || !titles.contains("SQL 脚本")) {
@@ -954,8 +1063,9 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
         try {
-            if (hd.tocCount() != 14) {
-                problems.add("说明目录应有 14 章，实际 " + hd.tocCount());
+            if (hd.tocCount() != 15) {
+                problems.add("说明目录应有 15 章（与 help_doc.py 同步，改了要重导 HelpDoc.java），"
+                        + "实际 " + hd.tocCount());
             }
             if (hd.bodyLength() < 2000) {
                 problems.add("说明正文没渲染出来，长度只有 " + hd.bodyLength());
@@ -994,7 +1104,7 @@ public final class GuiMain {
             String[] named = {"添加文件", "批量应用前缀", "替换首个前缀", "生成表结构预览",
                     "预览 DDL", "开始导入", "添加 SQL 文件", "保存修改后脚本",
                     "执行脚本到当前库", "连接并加载库",
-                    "生成标准excel文件", "生成简易excel文件"};
+                    "生成标准excel文件", "生成简易excel文件", "示例 (?)", "清空"};
             for (String n : named) {
                 if (!onUi.contains(n)) {
                     problems.add("说明里点名的按钮界面上不存在：" + n);
@@ -1271,6 +1381,151 @@ public final class GuiMain {
      * 这里跑的是 Main.run 本体（dry-run，不连库），断的是那条接线本身：
      * SqlScript.applyPrefix 这个纯函数早有差分覆盖，接线断了它照样是绿的。
      */
+    /**
+     * 「只写注释也不算」的判据表。Python 侧 pack_test 的 E10/E11 断的是同一张表：
+     * 两边判定不一样就会出现一句同样的输入，一边报"执行了 0 条"、另一边报"执行了 1 条"。
+     * 字符串里的 -- 不算注释，这一格最容易写错。
+     */
+    /**
+     * 日志面板的并发收口检查：两个线程猛加行，主线程一边读全文一边数行数。
+     *
+     * 现场是真的两头同时在动——导入在子线程里逐表写日志，界面上有人在翻日志。
+     * 少了那把锁，ArrayDeque 会在"遍历到一半被加了行"时抛 ConcurrentModificationException；
+     * 这个异常发生在事件分发线程上就会把当次渲染连同后面的刷新一起带走，
+     * 用户看到的正是"进度跑到一半，日志不再动了"。
+     */
+    /** 自检跑在事件分发线程上，不能把 InterruptedException 抛出去，只能就地认下。 */
+    private static void quietSleep(int ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void checkLogPanelThreadSafe(List<String> problems) {
+        final com.excel2mysql.gui.LogPanel panel = new com.excel2mysql.gui.LogPanel();
+        final java.util.concurrent.atomic.AtomicReference<String> boom =
+                new java.util.concurrent.atomic.AtomicReference<String>(null);
+        final java.util.concurrent.atomic.AtomicBoolean stop =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        Runnable writer = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    int i = 0;
+                    while (!stop.get()) {
+                        panel.append("并发行 " + i, i % 503 == 0);
+                        i++;
+                    }
+                } catch (Throwable t) {
+                    boom.compareAndSet(null, "写线程炸了 " + t.getClass().getName());
+                }
+            }
+        };
+        Thread a = new Thread(writer, "probe-log-a");
+        Thread b = new Thread(writer, "probe-log-b");
+        a.start();
+        b.start();
+        // 读写都得持续到"已经封顶、开始裁最早的行"之后：现场那次
+        // ConcurrentModificationException 就是这么来的——遍历到一半，插入那边把 first 动了。
+        // 只读到刚封顶就收工正好把最危险的那段跳过去，那样这条守卫就是空枪。
+        long deadline = System.currentTimeMillis() + 4000;
+        while (System.currentTimeMillis() < deadline && panel.lineCount() < panel.maxLines()) {
+            quietSleep(2);
+        }
+        if (panel.lineCount() < panel.maxLines()) {
+            problems.add("日志四秒还没涨到上限，读写重叠没建立起来：" + panel.lineCount());
+        }
+        // 封顶之后再让两边对着跑一段：写侧继续加（每加一行都要裁一行），
+        // 读侧全程在遍历同一份条目
+        final java.util.concurrent.atomic.AtomicBoolean readStop =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        List<Thread> readers = new ArrayList<Thread>();
+        for (int r = 0; r < 2; r++) {
+            Thread t = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        while (!readStop.get()) {
+                            panel.text();
+                            panel.isErrorLine("并发行 1509");
+                            panel.lineCount();
+                        }
+                    } catch (Throwable th) {
+                        boom.compareAndSet(null, "读侧炸了 " + th.getClass().getName()
+                                + "：" + String.valueOf(th.getMessage()).replace((char) 10, ' '));
+                    }
+                }
+            }, "probe-log-read");
+            readers.add(t);
+            t.start();
+        }
+        quietSleep(1200);
+        readStop.set(true);
+        stop.set(true);
+        for (Thread t : readers) {
+            try {
+                t.join(3000);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                boom.compareAndSet(null, "读线程没收口");
+            }
+        }
+        try {
+            a.join(5000);
+            b.join(5000);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            boom.compareAndSet(null, "join 被中断，写线程没收口");
+        }
+        if (boom.get() != null) {
+            problems.add("日志面板并发下不成立：" + boom.get());
+        }
+        if (panel.lineCount() != panel.maxLines()) {
+            problems.add("日志没裁到上限：" + panel.lineCount() + " / " + panel.maxLines());
+        }
+        if (panel.text().split("\n").length != panel.lineCount()) {
+            problems.add("text() 数出来的行数与 lineCount() 不一致："
+                    + panel.text().split("\n").length + " vs " + panel.lineCount());
+        }
+        panel.clearLog();
+        if (panel.lineCount() != 0) {
+            problems.add("清空后还有 " + panel.lineCount() + " 行");
+        }
+    }
+
+    private static void checkCommentOnly(List<String> problems) {
+        String[][] table = {
+                {"-- 只是一句注释", "0"},
+                {"# 老式行注释", "0"},
+                {"/* 纯块注释 */", "0"},
+                {"", "0"},
+                {"   \n\t ", "0"},
+                {"SELECT 1", "1"},
+                {"SELECT '-- x'", "1"},
+                {"SELECT `--a` FROM t", "1"},
+                {"/* 头注释 */ SELECT 2", "1"},
+                {"-- 头注释\nINSERT INTO t VALUES (1)", "1"},
+                {"SELECT 'a''b' -- 尾注释", "1"},
+                {"INSERT INTO t VALUES ('/* 不是块注释 */')", "1"},
+                {"/* 注释; 里有分号 */ ", "0"},
+        };
+        for (int i = 0; i < table.length; i++) {
+            boolean got = com.excel2mysql.core.SqlScript.hasExecutableContent(table[i][0]);
+            boolean want = "1".equals(table[i][1]);
+            if (got != want) {
+                problems.add("第 " + (i + 1) + " 格判错：" + table[i][0].replace((char) 10, ' ')
+                        .replace((char) 9, 'T') + " 应为 " + want + "，实际 " + got);
+            }
+        }
+        List<String> kept = com.excel2mysql.core.SqlScript.executableStatements(
+                "-- a" + (char) 10 + "; /* b */ ; SELECT 1;");
+        if (kept.size() != 1 || !"SELECT 1".equals(kept.get(0))) {
+            problems.add("执行器的切句没把纯注释片段剔掉：" + kept);
+        }
+    }
+
     private static void checkSqlCliPrefix(java.util.List<String> problems) {
         java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
                 "e2m-sqlprefix-" + System.nanoTime());

@@ -107,6 +107,51 @@ public final class GuiDump {
                 put("hint.excel", frame.excelHintText());
                 put("hint.sql", frame.sqlPage().hintText());
                 put("drop.hint", frame.dropArea().hintText());
+
+                // ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
+                put("hint.sqlrun", norm(frame.sqlRunHintText()));
+                // 页面上的静态标签按字典序连起来比：两边的控件遍历顺序本来就不同
+                // （Qt 按创建序、Swing 按加进容器的序），排序后比的是"这一页上有哪几句话"。
+                java.util.List<String> runLabels = new ArrayList<String>();
+                traverseLabels(frame.tabs().getComponentAt(2), runLabels);
+                java.util.Collections.sort(runLabels);
+                StringBuilder lbSb = new StringBuilder();
+                for (int i = 0; i < runLabels.size(); i++) {
+                    if (i > 0) {
+                        lbSb.append('|');
+                    }
+                    lbSb.append(runLabels.get(i));
+                }
+                put("sqlrun.labels", lbSb.toString());
+                put("sqlrun.default", frame.sqlRunInputText());
+                put("sqlrun.wrap", frame.sqlRunWrap());
+                frame.setSqlRunInputText("");
+                frame.runSqlFromUi();
+                put("guard.sqlrun.empty", popup());
+                frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+                frame.showSqlSamples();
+                put("samples.title", frame.sqlSamplesTitle());
+                put("samples.count", String.valueOf(frame.sqlSamplesCount()));
+                put("samples.item.0", norm(frame.sqlSamplesItemText(0)));
+                put("samples.preview.0", frame.sqlSamplesPreviewText());
+                frame.setSqlSamplesRow(7);
+                put("samples.preview.7", frame.sqlSamplesPreviewText());
+                // 不比对「复制到剪贴板」的那句回执：剪贴板可能被别的进程占用，
+                // 两条线各跑一次的成败不同，那是现场状态不是界面差异（Java 自检里咬回执本身）
+                frame.showSqlSamples();
+                frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+                frame.setSqlSamplesRow(3);
+                frame.clickSqlSamplesInsert();
+                put("samples.insert.default", frame.sqlRunInputText());
+                frame.showSqlSamples();
+                frame.setSqlRunInputText("SELECT 1");
+                frame.setSqlSamplesRow(1);
+                frame.clickSqlSamplesInsert();
+                // 追加那条只比"补没补分号换行"：两条线的行分隔符不同（\r\n 与 \n），
+                // 正文本身已由 samples.preview.* 那两键钉住。
+                put("samples.insert.append",
+                        frame.sqlRunInputText().startsWith("SELECT 1;\n") ? "yes" : "no");
+                frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
                 for (String t : new String[]{"开始导入", "生成标准excel文件", "生成简易excel文件",
                         "预览 DDL", "生成表结构预览", "停止"}) {
                     put("empty.on." + t, btnOn(t));
@@ -684,6 +729,21 @@ public final class GuiDump {
         m.appendTail(sb);
         s = DAY_RE.matcher(sb.toString()).replaceAll("$1<DAY>");
         return s.trim();
+    }
+
+    /** 递归收集这棵子树上的静态文案（去空白后的 JLabel 文字）。 */
+    private static void traverseLabels(java.awt.Component c, java.util.List<String> out) {
+        if (c instanceof javax.swing.JLabel) {
+            String t = norm(((javax.swing.JLabel) c).getText());
+            if (!t.isEmpty()) {
+                out.add(t);
+            }
+        }
+        if (c instanceof java.awt.Container) {
+            for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
+                traverseLabels(kid, out);
+            }
+        }
     }
 
     private static String pageOf(java.awt.Component c) {

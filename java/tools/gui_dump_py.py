@@ -25,8 +25,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, REPO)
 
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QLabel,  # noqa: E402
-                               QLineEdit, QListWidget, QProgressBar, QPushButton, QSpinBox,
-                               QTableWidget)
+                               QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
+                               QPushButton, QSpinBox, QTableWidget)
 import main as m  # noqa: E402
 
 app = QApplication(sys.argv)
@@ -242,6 +242,46 @@ def main():
     put("hint.excel", win.lbl_imp_db.text())
     put("hint.sql", win.lbl_sql_db.text())
     put("drop.hint", win.drop.label.text())
+
+    # ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
+    put("hint.sqlrun", norm(win.sql_run_hint.text()))
+    # 页面上的静态标签按字典序连起来比：两边的控件遍历顺序本来就不同（Qt 按创建序、
+    # Swing 按加进容器的序），排序后比的是"这一页上有哪几句话"。
+    put("sqlrun.labels", "|".join(sorted(
+        norm(l.text()) for l in win.main_tabs.widget(2).findChildren(QLabel) if norm(l.text()))))
+    put("sqlrun.default", win.sql_run_input.toPlainText())
+    put("sqlrun.wrap", "wrap" if win.sql_run_input.lineWrapMode()
+        == QPlainTextEdit.WidgetWidth else "nowrap")
+    POPUPS.clear()
+    win.sql_run_input.clear()
+    win.on_sql_run()
+    put("guard.sqlrun.empty", popup_text())
+    win.sql_run_input.setPlainText(m.SQL_RUN_DEFAULT)
+    win.on_sql_samples()
+    app.processEvents()
+    _sd = win.sql_run_samples
+    put("samples.title", _sd.windowTitle())
+    put("samples.count", _sd.list.count())
+    put("samples.item.0", norm(_sd.list.item(0).text()))
+    put("samples.preview.0", _sd.preview.toPlainText())
+    _sd.list.setCurrentRow(7)
+    put("samples.preview.7", _sd.preview.toPlainText())
+    # 不比对「复制到剪贴板」的那句回执：剪贴板可能被别的进程占用，
+    # 两条线各跑一次的成败不同，那是现场状态不是界面差异（两条线各自的自检里咬回执本身）
+    _sd.show()
+    win.sql_run_input.setPlainText(m.SQL_RUN_DEFAULT)
+    _sd.list.setCurrentRow(3)
+    _sd.btn_insert.click()
+    put("samples.insert.default", win.sql_run_input.toPlainText())
+    _sd.show()
+    win.sql_run_input.setPlainText("SELECT 1")
+    _sd.list.setCurrentRow(1)
+    _sd.btn_insert.click()
+    # 追加那条只比"补没补分号换行"：两条线的行分隔符不同（\r\n 与 \n），
+    # 正文本身已由 samples.sql.1 那一键钉住。
+    put("samples.insert.append",
+        "yes" if win.sql_run_input.toPlainText().startswith("SELECT 1;\n") else "no")
+    win.sql_run_input.setPlainText(m.SQL_RUN_DEFAULT)
 
     # ---- 空态：哪些按钮该是灰的 ----
     for t in ("开始导入", "生成标准excel文件", "生成简易excel文件", "预览 DDL",

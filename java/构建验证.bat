@@ -27,6 +27,14 @@ for /f "delims=" %%d in ('git status --porcelain -uno 2^>nul') do set "GIT_DIRTY
 set "GIT_ARGS=-Dgit.commit=%GIT_COMMIT% -Dgit.branch=%GIT_BRANCH% -Dgit.dirty=%GIT_DIRTY%"
 echo - [INFO] BUILD ^| 随包提交号 %GIT_COMMIT%（%GIT_BRANCH%，未提交改动 %GIT_DIRTY%）
 
+echo === 0/10 生成物与源一致（HelpDoc / SqlSamples 不是手抄的）===
+set "PY=..\.venv\Scripts\python.exe"
+if not exist "%PY%" (
+    echo x [ERROR] BUILD ^| 找不到 venv python：%PY%
+    exit /b 3
+)
+"%PY%" tools\check_generated.py || exit /b 1
+
 echo === 1/10 Maven 编译打包 ===
 rem IDEA 开着工程时 target 会被占用，clean 删不掉。这时降级成增量构建，
 rem 但要把"这一轮没验干净构建"显式说出来——静默当成干净构建才是真隐患。

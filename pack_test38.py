@@ -110,7 +110,8 @@ check("U1 当前解释器与用例集预期一致",
 # 冻结态里 cli.py 没有源码，静态守卫逐条 SKIP，不参与通过数
 _GUARD_TARGETS = ["cli.py", os.path.join("core", "infer.py"), os.path.join("core", "mysql_io.py"),
                   os.path.join("core", "sql_script.py"), os.path.join("core", "naming.py"),
-                  os.path.join("core", "zip_import.py"), os.path.join("core", "merge_check.py")]
+                  os.path.join("core", "zip_import.py"), os.path.join("core", "merge_check.py"),
+                  os.path.join("core", "log_text.py")]
 _sources = {t: source_of(t) for t in _GUARD_TARGETS}
 
 if any(v is None for v in _sources.values()):
@@ -176,8 +177,17 @@ else:
           not re.search(r"\bPySide|PyQt|\bQt(Core|Widgets|Gui)\b", cli_src), "无 Qt 依赖才能进 Win7 包")
     check("U7 cli.py 不 import main（避免把 GUI 拖进旧包）",
           not re.search(r"^\s*(?:import|from)\s+main\b", cli_src, re.M))
-    check("U8 cli.py 里 describe_db_error 与 GUI 同口径展开错误码",
-          "MySQL 错误码" in cli_src and "args[0]" in cli_src)
+    # 报错展开已经收进 core/log_text.py 三条线共用（cli 与 GUI 各一份必然有一天只改一处），
+    # 所以这条断的是两件事：共用那份里真的写着错误码展开，cli 真的在用它而不是自己另写。
+    _log_src = _sources.get(os.path.join("core", "log_text.py")) or ""
+    check("U8 数据库报错展开在 core/log_text 里，cli 是引用它而不是另抄一份",
+          "MySQL 错误码" in _log_src and "args[0]" in _log_src
+          and re.search(r"^\s*from core\.log_text import .*describe_db_error", cli_src, re.M)
+          is not None and "def describe_db_error" not in cli_src,
+          "core/log_text.py 命中=%s，cli 引用=%s，cli 自带定义=%s"
+          % ("MySQL 错误码" in _log_src,
+             bool(re.search(r"^\s*from core\.log_text import", cli_src, re.M)),
+             "def describe_db_error" in cli_src))
 
 # 运行时取证：把 cli 及其依赖全 import 之后，进程里不该有任何 Qt 模块。
 # 这条在冻结态照样成立，而且比 grep 源码硬——真被加载了才算数。
@@ -187,7 +197,8 @@ check("U8b cli 加载后进程里没有 Qt 模块（运行时取证，冻结态�
       not _qt_loaded, _qt_loaded or "无")
 check("U8c core + cli 全链路都在当前栈上 import 成功（旧栈能 import 就是 3.8 兼容的硬证据）",
       all(m is not None for m in (cli_mod, core.infer, core.mysql_io, core.sql_script,
-                                  core.naming, core.zip_import, core.merge_check)),
+                                  core.naming, core.zip_import, core.merge_check,
+                                  core.log_text)),
       "Python %s" % sys.version.split()[0])
 
 def installed_version(dist):
