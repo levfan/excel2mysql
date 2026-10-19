@@ -61,6 +61,10 @@ public final class GuiMain {
         if (children != null) {
             Arrays.sort(children);
             for (File f : children) {
+                // 夹具只收 .xlsx 是刻意的：自检里"添加 7 项文件 / 表数 7"这些契约
+                // 就是按 verify/fixtures 里那 7 张 xlsx 定的，放宽到 .xls/.zip 会让
+                // 整批断言同时对不上，红得看不出真问题。喂别的目录给不出夹具形状时，
+                // 由下面 tables==0 那一条给人话，而不是靠多收文件去"兼容"。
                 if (f.getName().toLowerCase().endsWith(".xlsx")) {
                     files.add(f.getPath());
                 }
@@ -82,6 +86,17 @@ public final class GuiMain {
                 int rows = frame.fileModel().rowTotal();
                 String ddl = frame.ddlText();
                 List<String> problems = new ArrayList<String>();
+                if (tables == 0) {
+                    // 后面几十处检查都按下标取表与取行，没夹具就别硬跑：
+                    // 给一句能看懂的话，别抛越界
+                    problems.add("这个目录里没有可加载的 .xlsx 夹具（自检只认 verify/fixtures 那 7 张），"
+                            + "本次 addFiles 返回：" + addSummary.replace((char) 10, ' '));
+                    for (String p : problems) {
+                        System.out.println("x [ERROR] GUI-SELFTEST | " + p);
+                    }
+                    result[0] = 1;
+                    return;
+                }
                 if (!addSummary.contains("添加 7 项文件")) {
                     problems.add("添加结果汇总没数清文件：" + addSummary.replace((char) 10, ' '));
                 }
@@ -123,7 +138,9 @@ public final class GuiMain {
                 if (rows == 0) {
                     problems.add("字段总数为 0，模型是空的");
                 }
-                if (!frame.fileModel().tooltipAt(0).endsWith(".xlsx")) {
+                // 表数是 0 时别再按下标取行：现场会把这个目录换成自己的数据目录来跑自检，
+                // 那时要看到的是"表数不符"这条人话，而不是一个越界异常
+                if (tables > 0 && !frame.fileModel().tooltipAt(0).endsWith(".xlsx")) {
                     problems.add("文件列没给完整路径：" + frame.fileModel().tooltipAt(0));
                 }
                 // 文件表是"一行一个文件"，不是"一行一个字段"，两者搞混说明改造没做完
