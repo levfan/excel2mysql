@@ -159,3 +159,46 @@ def split_sql_statements(text: str) -> list:
     if s:
         stmts.append(s)
     return stmts
+
+
+def has_executable_content(stmt: str) -> bool:
+    """这一句里除了注释和空白还剩东西吗。
+
+    `split_sql_statements` 会把 `-- 只有注释` 这种整段是注释的片段也切成一条（它只按分号切，
+    不管内容），而「SQL 执行器」要对用户说"只写注释也不算"——判据就得在这儿补上，
+    否则会出现"切出来一条、执行时又说没得执行"，或者把空注释当成正经一句报"已提交 1 条"。
+    走的是与切句同一套词法（引号 / 反引号 / -- 与 # 行注释 / 块注释）：
+    字符串里的 `--` 不算注释，所以 `SELECT '-- x'` 仍然是一句真要执行的语句。
+    """
+    i, n = 0, len(stmt)
+    while i < n:
+        ch = stmt[i]
+        nxt = stmt[i + 1] if i + 1 < n else ""
+        if ch.isspace():
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            i += 1
+            while i < n:
+                if stmt[i] == "\\" and quote != "`":
+                    i += 2
+                    continue
+                if stmt[i] == quote:
+                    if i + 1 < n and stmt[i + 1] == quote:
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            return True            # 引号里有任何内容都是一句真要执行的语句
+        if (ch == "-" and nxt == "-") or ch == "#":
+            j = stmt.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if ch == "/" and nxt == "*":
+            j = stmt.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        return True                # 既不是空白也不是注释 → 有可执行内容
+    return False

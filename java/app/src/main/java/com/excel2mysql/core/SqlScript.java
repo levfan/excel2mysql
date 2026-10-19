@@ -219,4 +219,70 @@ public final class SqlScript {
         }
         return stmts;
     }
+
+    /**
+     * 这一句里除了注释和空白还剩东西吗。
+     *
+     * `splitStatements` 会把 `-- 只有注释` 这种整段是注释的片段也切成一条（它只按分号切，
+     * 不管内容），而「SQL 执行器」要对用户说"只写注释也不算"——判据就得在这儿补上，
+     * 否则会出现"切出来一条、执行时又说没得执行"，或者把空注释当成正经一句报"已提交 1 条"。
+     * 走的是与切句同一套词法（引号 / 反引号 / -- 与 # 行注释 / 块注释）：
+     * 字符串里的 `--` 不算注释，所以 `SELECT '-- x'` 仍然是一句真要执行的语句。
+     */
+    public static boolean hasExecutableContent(String stmt) {
+        int i = 0;
+        int n = stmt.length();
+        while (i < n) {
+            char ch = stmt.charAt(i);
+            char nxt = i + 1 < n ? stmt.charAt(i + 1) : 0;
+            if (Character.isWhitespace(ch)) {
+                i++;
+                continue;
+            }
+            if (ch == '\'' || ch == '"' || ch == '`') {
+                char quote = ch;
+                i++;
+                while (i < n) {
+                    char c = stmt.charAt(i);
+                    if (c == '\\' && quote != '`') {
+                        i += 2;
+                        continue;
+                    }
+                    if (c == quote) {
+                        if (i + 1 < n && stmt.charAt(i + 1) == quote) {
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+                return true;        // 引号里有任何内容都是一句真要执行的语句
+            }
+            if ((ch == '-' && nxt == '-') || ch == '#') {
+                int j = stmt.indexOf('\n', i);
+                i = j < 0 ? n : j;
+                continue;
+            }
+            if (ch == '/' && nxt == '*') {
+                int j = stmt.indexOf("*/", i + 2);
+                i = j < 0 ? n : j + 2;
+                continue;
+            }
+            return true;            // 既不是空白也不是注释 → 有可执行内容
+        }
+        return false;
+    }
+
+    /** 切句再剔掉"整句只剩注释"的片段——执行器只认真正要执行的那几句。 */
+    public static List<String> executableStatements(String text) {
+        List<String> out = new ArrayList<String>();
+        for (String s : splitStatements(text)) {
+            if (hasExecutableContent(s)) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
 }

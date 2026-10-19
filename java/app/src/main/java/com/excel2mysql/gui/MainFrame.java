@@ -98,6 +98,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private boolean lastDialogIsError;
     private String lastDialogIcon = "information";
     private javax.swing.JTabbedPane tabs;
+    /** 第三个页签「SQL 执行器」：编辑区、结果区与那三颗按钮，示例对话框不算常驻控件。 */
+    private javax.swing.JTextArea sqlRunInput;
+    private LogPanel sqlRunLog;
+    private javax.swing.JButton sqlRunBtn;
+    private javax.swing.JButton sqlRunClearBtn;
+    private javax.swing.JButton sqlRunHelpBtn;
+    private javax.swing.JLabel sqlRunHint;
+    private javax.swing.JDialog sqlRunSamples;
+    private javax.swing.JList<String> sqlRunSamplesList;
+    private javax.swing.JTextArea sqlRunPreview;
+    private javax.swing.JButton sqlRunCopyBtn;
+    private javax.swing.JButton sqlRunInsertBtn;
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
     private HintTextField prefixField;
@@ -130,6 +142,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         impHint = new HintLabel();
         tabs.addTab("Excel 导入", buildCenter());
         tabs.addTab("SQL 脚本", sqlPage);
+        tabs.addTab("SQL 执行器", buildSqlRunPage());
         add(tabs, BorderLayout.CENTER);
         // 切页也要刷新：两页提示条同源，不刷就会停在"上一个页签当时看到的库"
         tabs.addChangeListener(e -> refreshDbLabels());
@@ -1532,6 +1545,242 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 双端界面枚举对撞器要按页归属分按钮（两页有重名按钮）。 */
+    /**
+     * 第三个页签「SQL 执行器」。与「SQL 脚本」页的分工要说清：那一页管"手上有一批 .sql
+     * 文件要入库"（挑文件、改表名、落盘副本），这一页管"临时问一句、顺手改点结构"，
+     * 所以它不挑文件也不落盘，只吃编辑区里那段文本。
+     */
+    private javax.swing.JPanel buildSqlRunPage() {
+        javax.swing.JPanel page = new javax.swing.JPanel(new java.awt.BorderLayout(8, 6));
+        // 提示单独占一行，三颗按钮另起一行。合成一行时这一行的最小宽度是"整句提示 + 三颗按钮"，
+        // 会把整窗最小宽度顶到 830 以上，1024x768 的现场机和 800 宽的离屏用例都放不下。
+        javax.swing.JPanel north = new javax.swing.JPanel(new java.awt.BorderLayout());
+        javax.swing.JPanel bar = new javax.swing.JPanel(
+                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        sqlRunHint = new javax.swing.JLabel(
+                "直接输入 SQL 执行：建库、建表、改结构、查元数据都行；一次可以写多条，用分号分隔");
+        north.add(sqlRunHint, java.awt.BorderLayout.NORTH);
+        sqlRunHelpBtn = new javax.swing.JButton("示例 (?)");
+        sqlRunHelpBtn.setToolTipText("打开示例清单：选中一条可复制到剪贴板或插到编辑区");
+        sqlRunHelpBtn.addActionListener(e -> openSqlSamples());
+        bar.add(sqlRunHelpBtn);
+        sqlRunBtn = new javax.swing.JButton("执行");
+        sqlRunBtn.setToolTipText("按分号切句逐条执行；全部成功才提交，中途出错整批回滚");
+        sqlRunBtn.addActionListener(e -> runSqlStatements());
+        bar.add(sqlRunBtn);
+        sqlRunClearBtn = new javax.swing.JButton("清空");
+        sqlRunClearBtn.addActionListener(e -> {
+            sqlRunInput.setText("");
+            sqlRunLog.clearLog();
+        });
+        bar.add(sqlRunClearBtn);
+        north.add(bar, java.awt.BorderLayout.SOUTH);
+        page.add(north, java.awt.BorderLayout.NORTH);
+
+        sqlRunInput = new javax.swing.JTextArea(8, 60);
+        sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
+        sqlRunInput.setLineWrap(false);
+        sqlRunInput.setText("SELECT 1 AS 连通检查;");
+        javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
+        left.add(new javax.swing.JLabel("SQL 文本"), java.awt.BorderLayout.NORTH);
+        left.add(new javax.swing.JScrollPane(sqlRunInput), java.awt.BorderLayout.CENTER);
+
+        sqlRunLog = new LogPanel();
+        javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
+        right.add(new javax.swing.JLabel("执行结果"), java.awt.BorderLayout.NORTH);
+        right.add(new javax.swing.JScrollPane(sqlRunLog), java.awt.BorderLayout.CENTER);
+
+        javax.swing.JSplitPane split = new javax.swing.JSplitPane(
+                javax.swing.JSplitPane.HORIZONTAL_SPLIT, left, right);
+        split.setResizeWeight(0.45D);
+        page.add(split, java.awt.BorderLayout.CENTER);
+        return page;
+    }
+
+    /** 执行编辑区里那段 SQL。事务与回滚语义走 SqlExecute，与「SQL 脚本」页同一套。 */
+    private void runSqlStatements() {
+        final String text = sqlRunInput.getText();
+        if (text == null || text.trim().isEmpty()) {
+            warn("没有可执行的 SQL：编辑区是空的（只写注释也不算）");
+            return;
+        }
+        final com.excel2mysql.core.Config cfg = currentConfig();
+        runTask("正在执行 SQL…", sink -> {
+            com.excel2mysql.core.DbClient db = null;
+            try {
+                db = new com.excel2mysql.core.DbClient(cfg);
+                final com.excel2mysql.core.DbClient fdb = db;
+                return com.excel2mysql.core.SqlExecute.run(fdb, text, sink::log);
+            } catch (java.sql.SQLException e) {
+                sink.logError("x [ERROR] 连不上库 | "
+                        + com.excel2mysql.core.LogText.describe(e));
+                return null;
+            } finally {
+                if (db != null) {
+                    db.close();
+                }
+            }
+        }, res -> {
+            // 结果与失败原因都已经写在右侧结果区里，这里不再弹窗打断：
+            // 这一页是给人来回试语句的，每试一次弹一次模态框会点不完
+        }, sqlRunLog);
+    }
+
+    /** 「示例 (?)」打开的那个对话框：左边挑，右边看全文，可复制也可插进编辑区。 */
+    private void openSqlSamples() {
+        if (sqlRunSamples != null && sqlRunSamples.isShowing()) {
+            sqlRunSamples.toFront();
+            return;
+        }
+        final javax.swing.JDialog dlg = new javax.swing.JDialog(this,
+                "SQL 示例（" + SqlSamples.ALL.length + " 条）", false);
+        dlg.setDefaultCloseOperation(javax.swing.JDialog.HIDE_ON_CLOSE);
+        final javax.swing.DefaultListModel<String> model =
+                new javax.swing.DefaultListModel<String>();
+        for (SqlSamples.Sample s : SqlSamples.ALL) {
+            model.addElement("【" + s.group + "】" + s.desc);
+        }
+        sqlRunSamplesList = new javax.swing.JList<String>(model);
+        sqlRunSamplesList.setSelectedIndex(0);
+        final javax.swing.JList<String> list = sqlRunSamplesList;
+        sqlRunPreview = new javax.swing.JTextArea(12, 60);
+        sqlRunPreview.setEditable(false);
+        sqlRunPreview.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
+        sqlRunPreview.setText(SqlSamples.ALL[0].sql);
+        final javax.swing.JTextArea preview = sqlRunPreview;
+        list.addListSelectionListener(e -> {
+            int i = list.getSelectedIndex();
+            if (i >= 0) {
+                preview.setText(SqlSamples.ALL[i].sql);
+            }
+        });
+
+        javax.swing.JPanel buttons = new javax.swing.JPanel(
+                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        sqlRunCopyBtn = new javax.swing.JButton("复制到剪贴板");
+        sqlRunCopyBtn.addActionListener(e -> {
+            String receipt;
+            try {
+                java.awt.datatransfer.StringSelection sel =
+                        new java.awt.datatransfer.StringSelection(preview.getText());
+                java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, null);
+                receipt = "· 已复制到剪贴板";
+            } catch (RuntimeException ex) {
+                // Windows 上剪贴板会被别的进程锁住，setContents 当场抛 IllegalStateException。
+                // 让它冒到事件分发线程上，这颗按钮就变成"点了没反应"，
+                // 所以失败也必须在标题上给一句回执。
+                receipt = "· 复制没成功（剪贴板正被占用，可再点一次）";
+            }
+            dlg.setTitle("SQL 示例（" + SqlSamples.ALL.length + " 条）" + receipt);
+        });
+        sqlRunInsertBtn = new javax.swing.JButton("插入到编辑区");
+        sqlRunInsertBtn.addActionListener(e -> {
+            String cur = sqlRunInput.getText();
+            String add = preview.getText();
+            sqlRunInput.setText((cur == null || cur.trim().isEmpty() || "SELECT 1 AS 连通检查;"
+                    .equals(cur.trim())) ? add : cur + (cur.endsWith(";") ? "" : ";")
+                    + com.excel2mysql.core.LogText.NL + add);
+            dlg.setVisible(false);
+        });
+        javax.swing.JButton closeBtn = new javax.swing.JButton("关闭");
+        closeBtn.addActionListener(e -> dlg.setVisible(false));
+        buttons.add(sqlRunCopyBtn);
+        buttons.add(sqlRunInsertBtn);
+        buttons.add(closeBtn);
+
+        javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(0, 4));
+        right.add(new javax.swing.JLabel("语句全文（可全选复制）"), java.awt.BorderLayout.NORTH);
+        right.add(new javax.swing.JScrollPane(preview), java.awt.BorderLayout.CENTER);
+        right.add(buttons, java.awt.BorderLayout.SOUTH);
+
+        javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
+        left.add(new javax.swing.JLabel("示例清单（按分组，选中看右半边的全文）"),
+                java.awt.BorderLayout.NORTH);
+        left.add(new javax.swing.JScrollPane(list), java.awt.BorderLayout.CENTER);
+
+        javax.swing.JSplitPane split = new javax.swing.JSplitPane(
+                javax.swing.JSplitPane.HORIZONTAL_SPLIT, left, right);
+        split.setResizeWeight(0.42D);
+        dlg.getContentPane().add(split, java.awt.BorderLayout.CENTER);
+        Windows.clientSize(dlg.getContentPane(), dlg, 900, 560);
+        dlg.setVisible(true);
+        sqlRunSamples = dlg;
+    }
+
+    /** 给自检与双端对撞用：这一页的可观察量都从这几个口子出去。 */
+    public String sqlRunInputText() {
+        return sqlRunInput == null ? "" : sqlRunInput.getText();
+    }
+
+    public void setSqlRunInputText(String text) {
+        sqlRunInput.setText(text);
+    }
+
+    public String sqlRunResultText() {
+        return sqlRunLog == null ? "" : sqlRunLog.text();
+    }
+
+    public javax.swing.JButton sqlRunButton() {
+        return sqlRunBtn;
+    }
+
+    public javax.swing.JButton sqlRunHelpButton() {
+        return sqlRunHelpBtn;
+    }
+
+    public int sqlSamplesCount() {
+        return SqlSamples.ALL.length;
+    }
+
+    public String sqlSampleSql(int index) {
+        return SqlSamples.ALL[index].sql;
+    }
+
+    public void showSqlSamples() {
+        openSqlSamples();
+    }
+
+    public boolean sqlSamplesShowing() {
+        return sqlRunSamples != null && sqlRunSamples.isShowing();
+    }
+
+    public String sqlSamplesTitle() {
+        return sqlRunSamples == null ? "" : sqlRunSamples.getTitle();
+    }
+
+    public void runSqlFromUi() {
+        runSqlStatements();
+    }
+
+    public String sqlRunHintText() {
+        return sqlRunHint == null ? "" : sqlRunHint.getText();
+    }
+
+    /** 编辑区是否折行：两条线都要求"一句 SQL 不折行"，否则分号位置得数着看。 */
+    public String sqlRunWrap() {
+        return sqlRunInput != null && sqlRunInput.getLineWrap() ? "wrap" : "nowrap";
+    }
+
+    public String sqlSamplesItemText(int index) {
+        return sqlRunSamplesList == null ? "" : sqlRunSamplesList.getModel().getElementAt(index);
+    }
+
+    public String sqlSamplesPreviewText() {
+        return sqlRunPreview == null ? "" : sqlRunPreview.getText();
+    }
+
+    public void setSqlSamplesRow(int index) {
+        sqlRunSamplesList.setSelectedIndex(index);
+    }
+
+    public void clickSqlSamplesCopy() {
+        sqlRunCopyBtn.doClick();
+    }
+
+    public void clickSqlSamplesInsert() {
+        sqlRunInsertBtn.doClick();
+    }
+
     public javax.swing.JTabbedPane tabs() {
         return tabs;
     }

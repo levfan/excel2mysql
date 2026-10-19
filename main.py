@@ -41,18 +41,21 @@ from PySide6.QtWidgets import (
     QLineEdit, QSpinBox, QPushButton, QComboBox, QFileDialog, QTableWidget,
     QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QGroupBox,
     QMessageBox, QHeaderView, QCheckBox, QAbstractItemView,
-    QDialog, QDialogButtonBox, QTabWidget, QSplitter,
+    QDialog, QDialogButtonBox, QTabWidget, QSplitter, QListWidget,
 )
 
+from core.log_text import describe_db_error
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
     replace_first_segment,
 )
+from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
     extract_create_tables, apply_table_prefix_sql, split_sql_statements,
     replace_first_segment_sql,
 )
 from core.naming import clean_prefix, is_valid_prefix
+from sql_samples import SAMPLES as SQL_SAMPLES
 from core.mysql_io import (
     build_ddl, connect, list_databases, create_table, insert_data,
 )
@@ -96,6 +99,10 @@ MAX_LOG_STATEMENT = 2000   # 出错语句全文最长展示，超出截断，避
 # 连接区在两个页签上方常驻，不属于任何一页，指引必须指向"上方"而不是某个页签
 NO_DB_HINT = "未选择目标数据库：请先在上方填写连接信息并点「连接并加载库」，再选择目标库"
 NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
+
+# 「SQL 执行器」编辑区的开场文本：既是"连不连得上库"的一键自检语句，
+# 也是「插入到编辑区」判断"这段还是默认值、可以直接覆盖掉"的比对基准
+SQL_RUN_DEFAULT = "SELECT 1 AS 连通检查;"
 
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
@@ -174,17 +181,6 @@ def append_log(view: QPlainTextEdit, text: str, error: bool = False) -> None:
     cur.mergeCharFormat(fmt)
 
 
-def describe_db_error(e: Exception) -> str:
-    """展开 pymysql 异常为「异常类型 + MySQL 错误码 + 完整报错文本」。
-
-    pymysql 的 MySQLError 子类 args 形如 (1064, 'You have an error ...')，
-    直接 str(e) 会把元组原样打出来，错误码和正文混在一起不便读。
-    """
-    args = getattr(e, "args", ())
-    if args and isinstance(args[0], int):
-        detail = args[1] if len(args) > 1 else ""
-        return f"{type(e).__name__}（MySQL 错误码 {args[0]}）：{detail}"
-    return f"{type(e).__name__}：{e}"
 
 
 def format_statement(st: str) -> str:
@@ -742,6 +738,26 @@ def sql_execute_task(items, cfg, sink):
             "cancelled": sink.cancelled, "conn_failed": False}
 
 
+def sql_run_task(text, cfg, sink):
+    """「SQL 执行器」页签：把编辑区里那段文本逐条打到目标库上。
+
+    连接配置在主线程取好再传进来（工作线程绝对不能碰控件）；连不上库时
+    与 Swing 那条线说同一句话，返回 None 表示这次没做成、不要回调汇总。
+    """
+    try:
+        conn = connect(cfg)
+    except Exception as e:
+        sink.log_error("x [ERROR] 连不上库 | " + describe_db_error(e))
+        return None
+    try:
+        return {"executed": run_sql_statements(conn, text, sink.log)}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # 后台工作线程：避免导入时界面卡死
 # ---------------------------------------------------------------------------
@@ -960,7 +976,7 @@ class MainWindow(QWidget):
         f.addRow("目标库：", h)
         root.addWidget(conn_box)
 
-        # 2. 功能页签：Excel 导入 / SQL 脚本（位于数据库信息下方）
+        # 2. 功能页签：Excel 导入 / SQL 脚本 / SQL 执行器（位于数据库信息下方）
         self.main_tabs = QTabWidget()
         excel_page = QWidget()
         excel_lay = QVBoxLayout(excel_page)
@@ -1096,6 +1112,7 @@ class MainWindow(QWidget):
 
         self.main_tabs.addTab(excel_page, "Excel 导入")
         self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本")
+        self.main_tabs.addTab(self._build_sql_run_page(), "SQL 执行器")
         root.addWidget(self.main_tabs, 1)
         # 切页签 / 切换目标库 / 改主机端口时，刷新两页顶部各自的当前数据库信息条
         #（信息条文案含 host:port，改了主机端口必须同步，否则显示的是旧地址）
@@ -1444,6 +1461,91 @@ class MainWindow(QWidget):
 
     def on_sql_clear_log(self):
         self.sql_log.clear()
+
+    # -------------------- SQL 执行器页 --------------------
+    def _build_sql_run_page(self):
+        """第三个页签。与「SQL 脚本」页的分工：那一页管"手上有一批 .sql 文件要入库"
+        （挑文件、改表名、落盘副本），这一页管"临时问一句、顺手改点结构"，
+        所以它不挑文件也不落盘，只吃编辑区里那段文本。
+        """
+        page = QWidget()
+        lay = QVBoxLayout(page)
+
+        # 提示单独占一行，三颗按钮另起一行：QLabel 不折行，它的最小宽度就是整句的宽度，
+        # 和按钮排在同一行会把整个窗口的最小宽度顶到 830 以上——小屏（1024x768 的现场机、
+        # 还有 800 宽的离屏用例）上窗口放不下，U7 那条"客户区落在可用区内"就是抓这个的。
+        self.sql_run_hint = QLabel("直接输入 SQL 执行：建库、建表、改结构、查元数据都行；"
+                                   "一次可以写多条，用分号分隔")
+        lay.addWidget(self.sql_run_hint)
+        bar = QHBoxLayout()
+        self.btn_sql_run_samples = QPushButton("示例 (?)")
+        self.btn_sql_run_samples.setToolTip("打开示例清单：选中一条可复制到剪贴板或插到编辑区")
+        self.btn_sql_run_samples.clicked.connect(self.on_sql_samples)
+        self.btn_sql_run_exec = QPushButton("执行")
+        self.btn_sql_run_exec.setToolTip("按分号切句逐条执行；全部成功才提交，中途出错整批回滚")
+        self.btn_sql_run_exec.clicked.connect(self.on_sql_run)
+        self.btn_sql_run_clear = QPushButton("清空")
+        self.btn_sql_run_clear.clicked.connect(self.on_sql_run_clear)
+        bar.addWidget(self.btn_sql_run_samples)
+        bar.addWidget(self.btn_sql_run_exec)
+        bar.addWidget(self.btn_sql_run_clear)
+        lay.addLayout(bar)
+
+        self.sql_run_input = QPlainTextEdit(SQL_RUN_DEFAULT)
+        self.sql_run_input.setFont(QFont("Consolas", 12))
+        # 不折行：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
+        self.sql_run_input.setLineWrapMode(QPlainTextEdit.NoWrap)
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(QLabel("SQL 文本"))
+        ll.addWidget(self.sql_run_input, 1)
+
+        self.sql_run_log = QPlainTextEdit()
+        self.sql_run_log.setReadOnly(True)
+        self.sql_run_log.setMaximumBlockCount(2000)
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(QLabel("执行结果"))
+        rl.addWidget(self.sql_run_log, 1)
+
+        self.sql_run_split = QSplitter(Qt.Horizontal)
+        self.sql_run_split.setChildrenCollapsible(False)     # 不允许把任一边拖到 0 宽
+        self.sql_run_split.setHandleWidth(6)
+        self.sql_run_split.addWidget(left)
+        self.sql_run_split.addWidget(right)
+        self.sql_run_split.setStretchFactor(0, 45)
+        self.sql_run_split.setStretchFactor(1, 55)
+        self.sql_run_split.setSizes([450, 550])
+        lay.addWidget(self.sql_run_split, 1)
+
+        self.sql_run_samples = None                          # 示例对话框只在打开时才有
+        return page
+
+    def on_sql_run_clear(self):
+        self.sql_run_input.clear()
+        self.sql_run_log.clear()
+
+    def on_sql_run(self):
+        text = self.sql_run_input.toPlainText()
+        if not text.strip():
+            self._warn("没有可执行的 SQL：编辑区是空的（只写注释也不算）")
+            return
+        cfg = self._conn_cfg()
+        # 结果、失败原因、回滚说明都已经逐行写在右侧结果区里，这里不再弹窗打断：
+        # 这一页是给人来回试语句的，每试一次弹一次模态框会点不完
+        self._run_modal("正在执行 SQL…", sql_run_task, (text, cfg),
+                        log_view=self.sql_run_log)
+
+    def on_sql_samples(self):
+        if self.sql_run_samples is not None and self.sql_run_samples.isVisible():
+            self.sql_run_samples.raise_()
+            self.sql_run_samples.activateWindow()
+            return
+        self.sql_run_samples = SqlSamplesDialog(self.sql_run_input, self)
+        self.sql_run_samples.show()
+
     def _conn_cfg(self) -> dict:
         return {
             "host": self.ed_host.text().strip(),
@@ -1894,6 +1996,88 @@ class DDLDialog(QDialog):
         lay.addWidget(btns)
 
 
+# ---------------------------------------------------------------------------
+class SqlSamplesDialog(QDialog):
+    """「示例 (?)」打开的那个对话框：左边挑，右边看全文，可复制也可插进编辑区。
+
+    非模态：这一页的用法是照着清单改语句、执行、再看结果，
+    模态框会把编辑区锁住，等于让人把 SQL 抄两遍。清单与语句正文都取自
+    sql_samples.py（Java 那条线导出同一份表），两边不会各说各话。
+    """
+
+    def __init__(self, editor, parent=None):
+        super().__init__(parent)
+        self._editor = editor
+        self.setModal(False)
+        self.setWindowTitle("SQL 示例（%d 条）" % len(SQL_SAMPLES))
+        fit_client(self, 900, 560)
+        lay = QVBoxLayout(self)
+
+        self.list = QListWidget()
+        for group, desc, _sql in SQL_SAMPLES:
+            self.list.addItem("【%s】%s" % (group, desc))
+        self.preview = QPlainTextEdit(SQL_SAMPLES[0][2])
+        self.preview.setReadOnly(True)
+        self.preview.setFont(QFont("Consolas", 12))
+        self.list.currentRowChanged.connect(self._on_pick)
+
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(QLabel("示例清单（按分组，选中看右半边的全文）"))
+        ll.addWidget(self.list, 1)
+
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addWidget(QLabel("语句全文（可全选复制）"))
+        rl.addWidget(self.preview, 1)
+        btns = QHBoxLayout()
+        self.btn_copy = QPushButton("复制到剪贴板")
+        self.btn_copy.clicked.connect(self.on_copy)
+        self.btn_insert = QPushButton("插入到编辑区")
+        self.btn_insert.clicked.connect(self.on_insert)
+        self.btn_close = QPushButton("关闭")
+        self.btn_close.clicked.connect(self.hide)
+        btns.addWidget(self.btn_copy)
+        btns.addWidget(self.btn_insert)
+        btns.addWidget(self.btn_close)
+        rl.addLayout(btns)
+
+        self.split = QSplitter(Qt.Horizontal)
+        self.split.setChildrenCollapsible(False)
+        self.split.setHandleWidth(6)
+        self.split.addWidget(left)
+        self.split.addWidget(right)
+        self.split.setStretchFactor(0, 42)
+        self.split.setStretchFactor(1, 58)
+        self.split.setSizes([380, 520])
+        lay.addWidget(self.split, 1)
+
+        self.list.setCurrentRow(0)          # 打开就有一条被选中，右边不是空白
+
+    def _on_pick(self, row):
+        if 0 <= row < len(SQL_SAMPLES):
+            self.preview.setPlainText(SQL_SAMPLES[row][2])
+
+    def on_copy(self):
+        QApplication.clipboard().setText(self.preview.toPlainText())
+        # 标题就是回执：复制这种操作没有别的反馈，不写一句"已复制"没人知道点没点上
+        self.setWindowTitle("SQL 示例（%d 条）· 已复制到剪贴板" % len(SQL_SAMPLES))
+
+    def on_insert(self):
+        cur = self._editor.toPlainText()
+        add = self.preview.toPlainText()
+        if not cur.strip() or cur.strip() == SQL_RUN_DEFAULT:
+            self._editor.setPlainText(add)      # 还停留在连通检查那句，直接换成正题
+        else:
+            sep = "" if cur.endswith(";") else ";"
+            self._editor.setPlainText(cur + sep + "\n" + add)
+        self.hide()
+
+
+# ---------------------------------------------------------------------------
+# 打包/开发态共用的应用级设置
 # ---------------------------------------------------------------------------
 def setup_app(app: QApplication) -> None:
     """应用级设置。
