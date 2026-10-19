@@ -47,30 +47,42 @@ public final class LogPanel extends javax.swing.JTextPane {
         append(text, true);
     }
 
-    /** 工作线程可以直接调：内部一律排到事件分发线程更新控件。 */
+    /**
+     * 工作线程可以直接调：条目在这一句里就收下，控件更新排到事件分发线程。
+     *
+     * `entries` 会被两类线程碰到——调用线程在这儿加行，事件分发线程在 render() 里遍历它。
+     * 没有同一把锁就会在生产里炸出 `ConcurrentModificationException`（遍历到一半被加了行），
+     * 那个异常会把当前这个事件连同日志刷新一起带走：界面看着就是"导入跑到一半日志不再动了"。
+     * 收行留在调用线程做、只有渲染排队，是为了让自检这类调用方能"写完立刻读到"，
+     * 这两件事靠同一把锁同时保住。
+     */
     public void append(final String text, final boolean isError) {
-        for (String one : text.split("\r?\n")) {
-            entries.addLast(new Entry(one, isError));
-        }
-        // 上限在这里裁，不放到 render() 里：render 是排队执行的，
-        // 调用方紧接着读 lineCount() 就会拿到还没收口的行数，自检会假红
-        while (entries.size() > MAX_LINES) {
-            entries.removeFirst();
+        synchronized (entries) {
+            for (String one : text.split("\r?\n")) {
+                entries.addLast(new Entry(one, isError));
+            }
+            // 上限在这里裁，不放到 render() 里：
+            // 调用方紧接着读 lineCount() 就会拿到还没收口的行数，自检会假红
+            while (entries.size() > MAX_LINES) {
+                entries.removeFirst();
+            }
         }
         SwingUtilities.invokeLater(this::render);
     }
 
     private void render() {
-        while (entries.size() > MAX_LINES) {
-            entries.removeFirst();
-        }
         StyledDocument doc = getStyledDocument();
         try {
             doc.remove(0, doc.getLength());
         } catch (BadLocationException ignored) {
             return;
         }
-        for (Entry e : entries) {
+        // 遍历期间不许任何人再动 entries，所以先按锁内快照取出来再往文档里写
+        List<Entry> snapshot;
+        synchronized (entries) {
+            snapshot = new ArrayList<Entry>(entries);
+        }
+        for (Entry e : snapshot) {
             SimpleAttributeSet attrs = new SimpleAttributeSet();
             if (e.error) {
                 StyleConstants.setForeground(attrs, ERROR_COLOR);
@@ -87,16 +99,24 @@ public final class LogPanel extends javax.swing.JTextPane {
 
     /** 超出上限后一次性折半裁，避免每加一行就重排一次。 */
     public void trimIfNeeded() {
-        if (entries.size() > MAX_LINES) {
-            while (entries.size() > TRIM_TO) {
-                entries.removeFirst();
+        boolean trimmed = false;
+        synchronized (entries) {
+            if (entries.size() > MAX_LINES) {
+                while (entries.size() > TRIM_TO) {
+                    entries.removeFirst();
+                }
+                trimmed = true;
             }
+        }
+        if (trimmed) {
             render();
         }
     }
 
     public void clearLog() {
-        entries.clear();
+        synchronized (entries) {
+            entries.clear();
+        }
         SwingUtilities.invokeLater(() -> {
             StyledDocument doc = getStyledDocument();
             try {
@@ -108,25 +128,31 @@ public final class LogPanel extends javax.swing.JTextPane {
     }
 
     public int lineCount() {
-        return entries.size();
+        synchronized (entries) {
+            return entries.size();
+        }
     }
 
     /** 已收到的日志全文。render() 是排队的，控件文档可能还没更新，所以自检读这一份。 */
     public String text() {
         StringBuilder sb = new StringBuilder();
-        for (Entry e : entries) {
-            if (sb.length() > 0) {
-                sb.append((char) 10);
+        synchronized (entries) {
+            for (Entry e : entries) {
+                if (sb.length() > 0) {
+                    sb.append((char) 10);
+                }
+                sb.append(e.text);
             }
-            sb.append(e.text);
         }
         return sb.toString();
     }
 
     public boolean contains(String needle) {
-        for (Entry e : entries) {
-            if (e.text.contains(needle)) {
-                return true;
+        synchronized (entries) {
+            for (Entry e : entries) {
+                if (e.text.contains(needle)) {
+                    return true;
+                }
             }
         }
         return false;
@@ -137,9 +163,11 @@ public final class LogPanel extends javax.swing.JTextPane {
      * 是可断言的事实；色值由 isError 决定，两者绑在一起就不会出现"报红没标红"。
      */
     public boolean isErrorLine(String needle) {
-        for (Entry e : entries) {
-            if (e.text.contains(needle)) {
-                return e.error;
+        synchronized (entries) {
+            for (Entry e : entries) {
+                if (e.text.contains(needle)) {
+                    return e.error;
+                }
             }
         }
         return false;
