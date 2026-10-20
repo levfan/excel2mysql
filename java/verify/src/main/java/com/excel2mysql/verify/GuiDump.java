@@ -110,6 +110,7 @@ public final class GuiDump {
 
                 // ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
                 put("hint.sqlrun", norm(frame.sqlRunHintText()));
+                put("hint.sqlrun.db", frame.runDbHintText());
                 // 页面上的静态标签按字典序连起来比：两边的控件遍历顺序本来就不同
                 // （Qt 按创建序、Swing 按加进容器的序），排序后比的是"这一页上有哪几句话"。
                 java.util.List<String> runLabels = new ArrayList<String>();
@@ -196,6 +197,28 @@ public final class GuiDump {
         exportSteps();
         sqlSteps();
         cleared();
+        dbHintSteps();
+    }
+
+    /**
+     * 三页顶部的目标库信息条必须同源：塞一个库进去，三句话和三种颜色要一起变。
+     * 各页各写一份刷新的话，迟早会在某个页签看到"上一个库"；host:port 只在有库时才进文案，
+     * 所以这里必须真选一个库，不能拿空态糊过去。放在最后一步做，免得把前面那些
+     * "没选库当场拦下"的探针带偏（它们断的就是空态那句话）。
+     */
+    private static void dbHintSteps() throws Exception {
+        ui(new Runnable() {
+            @Override
+            public void run() {
+                frame.setSelectedDatabase("alpha");
+                put("hint.db.linked", join(java.util.Arrays.asList(
+                        frame.excelHintText(), frame.sqlPage().hintText(),
+                        frame.runDbHintText()), "|"));
+                put("hint.db.tone", join(java.util.Arrays.asList(
+                        dbTone(frame.excelHint()), dbTone(frame.sqlPage().hintField()),
+                        dbTone(frame.runDbHint())), "|"));
+            }
+        });
     }
     private static void load(final List<String> files) throws Exception {
         ui(new Runnable() {
@@ -520,6 +543,15 @@ public final class GuiDump {
         return text == null ? "" : text.replace("\n", "");
     }
 
+    /** 目标库信息条是哪一档颜色：绿色=已选定、红色=没选库，别的写法算 none。 */
+    private static String dbTone(com.excel2mysql.gui.HintLabel h) {
+        int rgb = h == null ? 0 : h.getForeground().getRGB();
+        if (rgb == 0xff1a7f37) {
+            return "ok";
+        }
+        return rgb == 0xffc62828 ? "bad" : "none";
+    }
+
     /** 配置值：Windows.clientSize 把"客户区本应多大"记在内容面板上，两条线必须写同一个数。 */
     private static String want(java.awt.Window w) {
         javax.swing.JComponent c = content(w);
@@ -817,6 +849,14 @@ public final class GuiDump {
     private static void traverseLabels(java.awt.Component c, java.util.List<String> out) {
         if (c instanceof javax.swing.JLabel) {
             String t = norm(((javax.swing.JLabel) c).getText());
+            if (!t.isEmpty()) {
+                out.add(t);
+            }
+        }
+        // 目标库信息条在 Swing 这边是 HintLabel（为了能被拖选，用不可编辑的 JTextField 顶的
+        // QLabel），它不是 JLabel，但确实"是这一页上的一句话"，所以要一起收进来
+        if (c instanceof com.excel2mysql.gui.HintLabel) {
+            String t = norm(((com.excel2mysql.gui.HintLabel) c).hintText());
             if (!t.isEmpty()) {
                 out.add(t);
             }

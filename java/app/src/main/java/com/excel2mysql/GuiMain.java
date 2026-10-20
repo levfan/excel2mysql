@@ -614,8 +614,9 @@ public final class GuiMain {
         if (!frame.excelHintText().contains("未选择目标数据库") || frame.excelHintIsOk()) {
             problems.add("未选库时 Excel 页提示条没按红级说明：" + frame.excelHintText());
         }
-        if (!frame.sqlPage().hintText().equals(frame.excelHintText())) {
-            problems.add("两页的提示条说的话不一样，用户会以为连的不是同一个库");
+        if (!frame.sqlPage().hintText().equals(frame.excelHintText())
+                || !frame.runDbHintText().equals(frame.excelHintText())) {
+            problems.add("三页的提示条说的话不一样，用户会以为连的不是同一个库");
         }
         frame.setSelectedDatabase("testdb");
         if (!frame.excelHintText().contains("当前目标库：testdb（127.0.0.1:3306）")
@@ -627,14 +628,20 @@ public final class GuiMain {
                 || !frame.sqlPage().hintIsOk()) {
             problems.add("SQL 页提示条没跟着联动：" + frame.sqlPage().hintText());
         }
+        if (!frame.runDbHintText().contains("编辑区里的 SQL 将执行到这个库")
+                || !frame.runDbHintText().contains("testdb") || !frame.runDbHintIsOk()) {
+            problems.add("SQL 执行器页的当前库条不对：" + frame.runDbHintText());
+        }
         frame.hostField().setText("10.0.0.9");
-        if (!frame.excelHintText().contains("10.0.0.9:3306")) {
+        if (!frame.excelHintText().contains("10.0.0.9:3306")
+                || !frame.runDbHintText().contains("10.0.0.9:3306")) {
             problems.add("改了主机但提示条还是旧地址：" + frame.excelHintText());
         }
         frame.hostField().setText("127.0.0.1");
         // 提示条要能真的按住拖选再复制（Python 那边是开了 TextSelectableByMouse 的 QLabel）
         dragSelectable(frame.excelHint(), "Excel 页提示条", problems);
         dragSelectable(frame.sqlPage().hintField(), "SQL 页提示条", problems);
+        dragSelectable(frame.runDbHint(), "SQL 执行器页提示条", problems);
     }
 
     /**

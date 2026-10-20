@@ -208,6 +208,16 @@ def popup_text():
     return "%s|%s|%s" % (_kind, title, text.replace("\n", ""))
 
 
+def _db_tone(w):
+    """目标库信息条现在是哪一档颜色：绿色=已选定、红色=没选库，别的写法算 none。"""
+    s = w.styleSheet()
+    if "#1a7f37" in s:
+        return "ok"
+    if "#c62828" in s:
+        return "bad"
+    return "none"
+
+
 def btn_on(win, text):
     """按文案取「Excel 导入」页上那颗按钮的当前可点状态（两页重名的按钮按页取）。"""
     for b in win.findChildren(QPushButton):
@@ -245,6 +255,7 @@ def main():
 
     # ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
     put("hint.sqlrun", norm(win.sql_run_hint.text()))
+    put("hint.sqlrun.db", win.lbl_run_db.text())
     # 页面上的静态标签按字典序连起来比：两边的控件遍历顺序本来就不同（Qt 按创建序、
     # Swing 按加进容器的序），排序后比的是"这一页上有哪几句话"。
     put("sqlrun.labels", "|".join(sorted(
@@ -630,6 +641,17 @@ def main():
     dump_table("file", win.file_table)
     for t in ("开始导入", "生成标准excel文件", "生成简易excel文件"):
         put("cleared.on.%s" % t, btn_on(win, t))
+
+    # ---- 三页顶部的目标库信息条必须同源：塞一个库进去，三句话和三种颜色要一起变 ----
+    # 各页各写一份刷新的话，迟早会在某个页签看到"上一个库"；host:port 只在有库时才进文案，
+    # 所以这里必须真选一个库，不能拿空态糊过去。放在最后一步做，免得把前面那些
+    # "没选库当场拦下"的探针带偏（它们断的就是空态那句话）。
+    win.cb_db.addItem(u"alpha", u"alpha")
+    app.processEvents()
+    put("hint.db.linked", u"|".join([win.lbl_imp_db.text(), win.lbl_sql_db.text(),
+                                     win.lbl_run_db.text()]))
+    put("hint.db.tone", u"|".join(_db_tone(w) for w in
+                                  (win.lbl_imp_db, win.lbl_sql_db, win.lbl_run_db)))
 
     out_dir = os.path.dirname(os.path.abspath(OUT))
     if not os.path.isdir(out_dir):

@@ -483,14 +483,28 @@ check("F3 目标库提示条：Excel 页显示导入措辞",
       w.lbl_imp_db.text())
 check("F4 目标库提示条：SQL 页显示执行措辞",
       "SQL 脚本将执行到这个库" in w.lbl_sql_db.text(), w.lbl_sql_db.text())
+check("F4b 目标库提示条：SQL 执行器页说的是编辑区那一段",
+      "编辑区里的 SQL 将执行到这个库" in w.lbl_run_db.text()
+      and "testdb" in w.lbl_run_db.text(), w.lbl_run_db.text())
 w.ed_port.setValue(3307)
 check("F5 改端口后提示条实时联动", "3307" in w.lbl_imp_db.text(), w.lbl_imp_db.text())
+check("F5b 改端口时三页一起联动（同一个 head 不是各页各拼一份）",
+      "3307" in w.lbl_sql_db.text() and "3307" in w.lbl_run_db.text(),
+      (w.lbl_sql_db.text(), w.lbl_run_db.text()))
 w.cb_db.setCurrentIndex(-1)
 check("F6 未选库时提示条回落为告警态", w.lbl_imp_db.text().startswith("⚠"))
-check("F6b 未选库提示在两页上完全一致", w.lbl_imp_db.text() == w.lbl_sql_db.text())
+check("F6b 未选库提示在三页上完全一致",
+      w.lbl_imp_db.text() == w.lbl_sql_db.text() == w.lbl_run_db.text(),
+      (w.lbl_imp_db.text(), w.lbl_sql_db.text(), w.lbl_run_db.text()))
 check("F6c 提示不再把公共连接区说成某个页签",
       "Excel 导入」页" not in w.lbl_imp_db.text() and "SQL 脚本」页" not in w.lbl_imp_db.text()
-      and "上方" in w.lbl_imp_db.text(), w.lbl_imp_db.text())
+      and "上方" in w.lbl_imp_db.text() and "上方" in w.lbl_run_db.text(),
+      (w.lbl_imp_db.text(), w.lbl_run_db.text()))
+check("F6e 三条提示条同色：绿在选定态、红在告警态",
+      "#c62828" in w.lbl_imp_db.styleSheet()
+      and "#c62828" in w.lbl_sql_db.styleSheet()
+      and "#c62828" in w.lbl_run_db.styleSheet(),
+      (w.lbl_imp_db.styleSheet(), w.lbl_run_db.styleSheet()))
 src = main_source()
 if src is not None:
     check("F6d main.py 里不存在指向页签的连接指引", "「Excel 导入」页" not in src)
