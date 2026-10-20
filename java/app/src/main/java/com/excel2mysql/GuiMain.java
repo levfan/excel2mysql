@@ -453,6 +453,28 @@ public final class GuiMain {
         } else if (!probe.equals(frame.tables().get(0).columns.get(0).comment)) {
             problems.add("弹窗确认后注释没写回表定义");
         }
+
+        // 空表（0 数据行）手工指定主键：非空与唯一在空集上天然成立，应放行；
+        // 类型门槛不能因此跳过。
+        java.util.List<com.excel2mysql.core.Infer.Column> emptyCols =
+                new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+        com.excel2mysql.core.Infer.Column emptyPk = new com.excel2mysql.core.Infer.Column();
+        emptyPk.field = "bian_hao";
+        emptyPk.comment = "编号";
+        emptyPk.type = "VARCHAR(64)";
+        emptyPk.primaryKey = true;
+        emptyCols.add(emptyPk);
+        String emptyOk = com.excel2mysql.core.TableBuilder.validatePrimaryKey(
+                java.util.Collections.<java.util.List<Object>>emptyList(), emptyCols);
+        if (!emptyOk.isEmpty()) {
+            problems.add("空表手工主键被拒：" + emptyOk);
+        }
+        emptyPk.type = "LONGTEXT";
+        String emptyBad = com.excel2mysql.core.TableBuilder.validatePrimaryKey(
+                java.util.Collections.<java.util.List<Object>>emptyList(), emptyCols);
+        if (emptyBad.isEmpty()) {
+            problems.add("空表主键类型校验被跳过，LONGTEXT 也被放行");
+        }
     }
 
     private static java.util.List<String> namesOf(MainFrame frame) {

@@ -569,6 +569,16 @@ okv5, msg5 = validate_primary_key(dfdup, [dict(c, primary_key=True) for c in cdu
 check("C7 组合主键（多列）校验通过", okv5, msg5)
 check("C8 未勾选任何主键时直接放行",
       validate_primary_key(dfdup, [dict(c, primary_key=False) for c in cdup])[0])
+df_empty = pd.DataFrame({"编号": pd.Series(dtype=object)})
+c_empty = [{"field": "bian_hao", "comment": "编号", "type": "VARCHAR(64)",
+            "primary_key": True}]
+okv6, msg6 = validate_primary_key(df_empty, c_empty)
+check("C9 空表（0 行）手工指定合法主键放行", okv6, msg6)
+okv7, msg7 = validate_primary_key(df_empty, [dict(c_empty[0], type="LONGTEXT")])
+check("C10 空表仍校验主键类型（TEXT 被拒绝）", not okv7, msg7)
+pk_empty, why_empty = select_primary_key(df_empty, c_empty)
+check("C11 空表不自动选主键（自动选键仍需数据）",
+      pk_empty is None and "没有数据行" in why_empty, f"{pk_empty} | {why_empty}")
 
 
 # ---------------------------------------------------------------------------
@@ -2726,6 +2736,22 @@ app_main.validate_primary_key = _real_validate
 vd._on_accept()
 check("Q41 校验放行后正常 accept 并写回", vd.result() == 1)
 vd.deleteLater()
+
+# ---- 空表（只有表头）手工勾主键：保存放行并写回 ----
+ew2 = app_main.MainWindow()
+ew2._add_files([make_xlsx("空表主键.xlsx", {"S": pd.DataFrame(
+    {"编号": pd.Series(dtype=object), "名称": pd.Series(dtype=object)})})])
+ed2 = _real_sd(ew2.tables, ew2)
+tw2 = ed2.tabs.widget(0)
+check("Q41a 空表结构弹窗里可以勾选主键", tw2.cellWidget(0, 0) is not None)
+tw2.cellWidget(0, 0).setChecked(True)
+POPUPS.clear()
+ed2._on_accept()
+check("Q41b 空表手工主键保存通过并写回",
+      ed2.result() == 1 and ed2.tables[0]["columns"][0]["primary_key"] is True,
+      (ed2.result(), [c.get("primary_key") for c in ed2.tables[0]["columns"]]))
+check("Q41c 空表保存不再弹「没有数据行」", not POPUPS, POPUPS)
+ed2.deleteLater()
 
 # ---- 结构性守卫：不能有"点了没反应"的死按钮 ----
 _probe_win = app_main.MainWindow()      # 必须持有引用：临时对象被回收会让子按钮先析构
