@@ -808,6 +808,8 @@ def _build_structured(filepath: str, sheets: dict) -> dict:
         "data_sheet": None if data_name is None else str(data_name),
         "extra_data_columns": extra_cols,
         "empty_columns": _named_blank_columns(df),
+        # 结构定义模式的字段名是使用者写死的，不存在"表头没写字要兜底"这回事
+        "blank_headers": [],
         "no_data_rows": len(df) == 0,
     }
 
@@ -846,6 +848,42 @@ def _drop_unnamed_blank_columns(df: pd.DataFrame) -> tuple:
     if drop:
         df = df.drop(columns=drop)
     return df, _named_blank_columns(df)
+
+
+def _first_row_width(filepath: str) -> int:
+    """第一个 Sheet 第一行有几个格（连表头文字都没写的模板也要拿到列宽）。
+
+    pandas 读到"整行都是空格子"的表头会把列丢掉（实测表头三格全空 → columns 只剩 0 个），
+    所以判"一列都没有"之前得回原始工作簿问一次宽度；问不到就当真的是空表。
+    只在这条少见的回退路径上调用，读的是空模板，代价可以忽略。
+    """
+    ext = os.path.splitext(filepath)[1].lower()
+    try:
+        if ext in (".xlsx", ".xlsm"):
+            from openpyxl import load_workbook
+            wb = load_workbook(filepath, read_only=True)
+            try:
+                ws = wb.worksheets[0] if wb.worksheets else None
+                if ws is None:
+                    return 0
+                for row in ws.iter_rows(values_only=True):
+                    return len(row)
+            finally:
+                wb.close()
+            return 0
+        import xlrd
+        book = xlrd.open_workbook(filepath)
+        if book.nsheets == 0 or book.sheet_by_index(0).nrows == 0:
+            return 0
+        return book.sheet_by_index(0).ncols
+    except Exception:
+        # 回退探测本身失败就别改判：照旧按"没解析到字段"报，别把原因盖成读文件失败
+        return 0
+
+
+def _blank_header_frame(width: int) -> pd.DataFrame:
+    """造一个只有 `width` 个空表头、零行数据的网格：字段名走 col / col_2 兜底。"""
+    return pd.DataFrame(columns=pd.Index([""] * width))
 
 
 def build_table_def(filepath: str, progress_cb=None) -> dict:
@@ -888,6 +926,17 @@ def build_table_def(filepath: str, progress_cb=None) -> dict:
     table_name, table_comment = parse_table_name_and_comment(filepath)
     _note("推断字段类型")
     columns = infer_columns(df)
+    # 一列都没有时先回原始工作簿问一次列宽：表头整行没写字的模板，pandas 把宽度一起丢了，
+    # 但"几列"这件事文件里还记着 —— 用户要的是这种照样建表（只是不插数据），不是报错。
+    blank_headers = []
+    if not columns:
+        width = _first_row_width(filepath)
+        if width:
+            df = _blank_header_frame(width)
+            columns = infer_columns(df)
+            keep_empty = []
+            blank_headers = [c["field"] for c in columns]
+            _note("表头整行没写字：按列宽 %d 兜底成 col 起的字段名" % width)
     # 一列都没有就别往下走了：这种表建出来是 `CREATE TABLE x ( )`，
     # MySQL 会回一条语法错误，现场看到"导入失败"却猜不到是自己拖了张空表
     if not columns:
@@ -915,6 +964,8 @@ def build_table_def(filepath: str, progress_cb=None) -> dict:
         "source": "normal",
         # 表头写了字、整列却没值的字段：保留下来了，但要在日志里点名（见 main/cli 的[已解析]行）
         "empty_columns": keep_empty,
+        # 表头整行没写字时按列宽兜底出来的字段名（col、col_2…）；正常表为空列表
+        "blank_headers": blank_headers,
         "no_data_rows": len(df) == 0,
     }
 

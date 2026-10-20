@@ -421,6 +421,11 @@ def parse_one(path, origin, log):
         msg += " | 整列为空的字段照旧保留：%s%s" % (head, more)
     if td.get("no_data_rows"):
         msg += " | 没有数据行，建出来是空表"
+    blank_h = td.get("blank_headers") or []
+    if blank_h:
+        head = "、".join(blank_h[:6])
+        more = " 等 %d 个" % len(blank_h) if len(blank_h) > 6 else ""
+        msg += " | 表头整行没写字，按列宽兜底成：%s%s" % (head, more)
     log.ok(msg)
     notes = [c["type_note"] for c in td["columns"] if c.get("type_note")]
     if notes:

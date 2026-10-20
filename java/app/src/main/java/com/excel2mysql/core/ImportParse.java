@@ -268,9 +268,14 @@ public final class ImportParse {
                 + String.join("、", td.emptyColumns.subList(0, Math.min(6, td.emptyColumns.size())))
                 + (td.emptyColumns.size() > 6 ? " 等 " + td.emptyColumns.size() + " 个" : "");
         String zeroMsg = td.noDataRows ? "；没有数据行，建出来是空表" : "";
+        // 表头整行没写字的模板：兜底出来的字段名要点名，否则现场看到 col、col_2 不知道从哪来
+        String blankMsg = td.blankHeaders.isEmpty() ? ""
+                : "；表头整行没写字，按列宽兜底成："
+                + String.join("、", td.blankHeaders.subList(0, Math.min(6, td.blankHeaders.size())))
+                + (td.blankHeaders.size() > 6 ? " 等 " + td.blankHeaders.size() + " 个" : "");
         return "[已解析] " + fname + " → 表名预置 " + td.table.tableName
                 + "，字段 " + td.table.columns.size() + " 列，数据 " + td.rows.size()
-                + " 行" + srcMsg + pkMsg + extraMsg + emptyMsg + zeroMsg;
+                + " 行" + srcMsg + pkMsg + extraMsg + emptyMsg + zeroMsg + blankMsg;
     }
 
     /** 弹窗正文：只说实际用到的行，同一句话还会写进日志。 */

@@ -58,6 +58,8 @@ public final class TableBuilder {
         public final List<String> emptyColumns = new ArrayList<String>();
         /** 一行数据都没有（只有表头的采集模板就是这种形状），建出来是空表。 */
         public boolean noDataRows;
+        /** 表头整行没写字时按列宽兜底出来的字段名（col、col_2…）；正常表为空列表。 */
+        public final List<String> blankHeaders = new ArrayList<String>();
     }
 
     private static final class Grid {
@@ -86,7 +88,15 @@ public final class TableBuilder {
             cb.stage("读取工作簿");
         }
         List<Frame> frames = new ArrayList<Frame>();
-        for (WorkbookReader.Sheet s : WorkbookReader.read(filepath)) {
+        List<WorkbookReader.Sheet> raw = WorkbookReader.read(filepath);
+        // 表头整行都是空格子时，pandas 那套形状（trimAndPad 裁行尾空格、去尾部空行）会把
+        // 列宽一起裁没——和 Python 侧丢列是同一个结果。兜底要用的是"裁之前第一行有几个格"，
+        // 所以这里在裁剪前先把第一个 Sheet 的首行宽度记下来。
+        int rawHeadWidth = 0;
+        if (!raw.isEmpty() && !raw.get(0).rows.isEmpty()) {
+            rawHeadWidth = raw.get(0).rows.get(0).size();
+        }
+        for (WorkbookReader.Sheet s : raw) {
             frames.add(new Frame(s.name, trimAndPad(s.rows)));
         }
         if (cb != null) {
@@ -125,6 +135,27 @@ public final class TableBuilder {
             cb.stage("推断字段类型");
         }
         r.table.columns = infer.inferColumns(grid.headers, grid.rows);
+        // 表头整行都没写字时也要能导入：两侧的形状处理都会把这行的宽度丢掉（Python 是 pandas，
+        // Java 是 trimAndPad），所以要拿"裁之前第一行有几个格"兜底出同样数量的空表头列，
+        // 字段名走空表头那条兜底（col、col_2…）。两侧要的一致是"列数与名字一致"，不是实现一致。
+        if (r.table.columns.isEmpty() && rawHeadWidth > 0) {
+            Grid blank = new Grid();
+            for (int i = 0; i < rawHeadWidth; i++) {
+                blank.headers.add("");            // 表头没写字：交给空表头兜底，产出 col、col_2…
+            }
+            grid = blank;
+            r.headers = grid.headers;
+            r.rows = grid.rows;
+            r.noDataRows = true;
+            r.emptyColumns.clear();
+            if (cb != null) {
+                cb.stage("表头整行没写字：按列宽 " + rawHeadWidth + " 兜底");
+            }
+            r.table.columns = infer.inferColumns(grid.headers, grid.rows);
+            for (Infer.Column c : r.table.columns) {
+                r.blankHeaders.add(c.field);
+            }
+        }
         // 与 Python 侧同一道闸：一列都没有就别往下走，
         // 否则建出来是 `CREATE TABLE x ( )`，现场只看到"导入失败"，猜不到是拖了张空表
         if (r.table.columns.isEmpty()) {
