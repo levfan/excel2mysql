@@ -93,14 +93,15 @@ Excel 页说"数据将导入到这个库"，「SQL 脚本改名入库」页说"�
 <li>Python 命令行版：<code>.sql</code> 默认只登记不执行，要加
 <code>--run-sql</code> 才真的写到库里。连接信息可以逐个给
 （<code>--host --port --user --password -d</code>），另有
-<code>--swap-prefix</code>（替换首个前缀）、<code>--drop-if-exists</code>、
-<code>--batch</code>、<code>--log</code>、<code>--quiet</code>、
-<code>--no-recursive</code>、<code>--keep-temp</code>。</li>
+<code>--initials</code>（表名与字段名取拼音首字母）、<code>--upper</code>
+（表名与字段名转大写）、<code>--swap-prefix</code>（替换首个前缀）、
+<code>--drop-if-exists</code>、<code>--batch</code>、<code>--log</code>、
+<code>--quiet</code>、<code>--no-recursive</code>、<code>--keep-temp</code>。</li>
 <li>Java 版：动作由路径类型决定——给 <code>.sql</code> 就执行脚本，
 给目录两类都干，用 <code>--no-sql</code> / <code>--no-excel</code> 各自排除，
 没有 <code>--run-sql</code> 这个开关。连接信息走同级 <code>conn.ini</code>
 或环境变量 <code>E2M_HOST / E2M_PORT / E2M_USER / E2M_PASS / E2M_DB</code>，
-选项只有 <code>--dry-run --check --prefix -c --debug --gui --version</code>。</li>
+选项有 <code>--dry-run --check --prefix --initials --upper -c --debug --gui --version</code>。</li>
 <li>「生成标准excel文件」与「生成简易excel文件」这两件只在界面上有，
 两条命令行线都没有对应的动作。</li>
 </ul>
@@ -308,6 +309,12 @@ MySQL 直接报语法错误</li>
 会全塌成同一个名字，而这些数字恰恰是列名的区分点</li>
 <li>重名字段自动加 <code>_2</code>、<code>_3</code></li>
 <li>实测本数据包 310 条真实中文列注释，<b>碰撞 0 组</b></li>
+<li><b>命名开关（图形版两颗勾选框，命令行 <code>--initials</code> / <code>--upper</code>）</b>：
+「表名与字段名取拼音首字母」勾上后整名取各音节首字母（订单金额 → <code>ddje</code>、
+水库基础信息 → <code>skjcxx</code>）；「表名与字段名转大写」勾上后输出全大写
+（<code>DING_DAN_JIN_E</code>、<code>T_IMPORT_DATA</code>）。默认全拼、小写。
+大小写开关也作用于文件名括号里显式写下的英文表名，但不改结构定义 Sheet 里
+人工写的字段名，也不改手动输入的表名前缀；两颗开关都对之后添加的文件生效，切换时日志留一行提示</li>
 </ul>
 <p class="warn">字段命名规则变更后，同一张表生成的列名与旧版不同。若目标库里表已存在，
 默认行为是跳过建表，随后 INSERT 会报 <b>1054 Unknown column</b>。
@@ -323,6 +330,9 @@ MySQL 直接报语法错误</li>
 <tr><td>日期对象或带分隔符的日期串</td><td><code>DATE</code></td></tr>
 <tr><td>含小数</td><td><code>DECIMAL(p,s)</code> 按实测位数定宽</td></tr>
 <tr><td>文本</td><td><code>VARCHAR(n)</code>，按全量最大 UTF-8 字节 + 20% 余量取档位</td></tr>
+<tr><td><b>整列没有值</b>（采集模板还没填数）</td><td>按字段名关键字定：日期→<code>DATE</code>、
+时间→<code>DATETIME</code>、金额类→<code>DECIMAL(16,2)</code>、数量类→<code>INT</code>，
+其余 <code>VARCHAR(64)</code></td></tr>
 <tr><td>超长文本</td><td>超 16383 字节 → <code>TEXT</code>，超 65535 字节 → <code>MEDIUMTEXT</code></td></tr>
 </table>
 <h3>几个容易踩的点已经处理掉了</h3>
@@ -332,6 +342,13 @@ MySQL 直接报语法错误</li>
 命中金额关键词（金额/单价/价格/费用/成本/余额/工资/收入/支出/税额/利息/销售额/
 保证金…，英文 amount/price/cost/fee/salary/balance…）的数值列一律
 <code>DECIMAL(16,2)</code></li>
+<li><b>空列按字段名定类型，且每条都留痕</b>：整列一个值都没有时，先看字段名——
+发布日期 → <code>DATE</code>、更新时间 → <code>DATETIME</code>、
+订单金额 → <code>DECIMAL(16,2)</code>、数量 → <code>INT</code>，其余仍
+<code>VARCHAR(64)</code>；英文按成词匹配（<code>create_date</code>、<code>qty</code> 命中，
+<code>update</code>、<code>birthday</code> 不误中）。有值的列照旧按数据判定；
+结构定义表里人工写的类型优先。每次按名定类型都写进
+<code>[类型修正] … 按表头语义调整</code> 日志行，现场能对上是哪一列、为什么</li>
 <li><b>只收成词的关键词，不认裸「费」「价」</b>：<code>费县</code>（地名）、
 <code>评价</code> 不会被误判成金额</li>
 <li><b>比率类一律否决金额语义</b>：含 率/比例/百分比/占比，或名字含

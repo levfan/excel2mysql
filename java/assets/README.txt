@@ -24,6 +24,8 @@ Excel → MySQL 批量导入工具（Java 线）v{version}
 命令行模式的四条常用写法（不给 --gui 就是命令行模式）
   jre\bin\java.exe -jar {jar} --check            只测连接并列出数据库
   jre\bin\java.exe -jar {jar} C:\数据 --prefix ods_   建表并导入目录下全部 Excel
+  jre\bin\java.exe -jar {jar} C:\数据 --initials     表名与字段名取拼音首字母（订单金额 → ddje）
+  jre\bin\java.exe -jar {jar} C:\数据 --upper        表名与字段名转大写（DING_DAN_JIN_E）
   jre\bin\java.exe -jar {jar} C:\数据 --dry-run      只看建表语句与脚本预览，完全不碰库
   jre\bin\java.exe -jar {jar} 脚本目录 --no-excel    只把目录里的 .sql 执行到目标库
   动作由路径类型决定：给 .sql 就执行脚本，给 Excel/zip 就建表导入，给目录两件都干，
@@ -40,7 +42,8 @@ Excel → MySQL 批量导入工具（Java 线）v{version}
     上，前提是那台机器的 UCRT 补丁（KB2999226）和系统文件完整——不满足就起不来，
     连日志都看不到。它的命令行选项与本包不同：它有 --run-sql、--swap-prefix、
     --drop-if-exists、--batch、--log、--quiet、--no-recursive、--keep-temp，本包没有；
-    本包有 --gui、--no-sql、--no-excel、--debug，它没有。
+    本包有 --gui、--no-sql、--no-excel、--debug，它没有。--initials 与 --upper
+    两条命令行线都有。
   本包（Java）：目标机器什么都不用装（Java 运行时随包带着），64 位 Windows 7 起就能跑，
     界面和命令行是同一个 jar。
   只有界面能做、命令行做不了的几件：生成表结构预览（改字段名、类型、主键）、

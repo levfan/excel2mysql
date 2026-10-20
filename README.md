@@ -84,11 +84,11 @@ Python 3.8 那条**只有命令行**（`.venv38` 里没装 PySide6，实测确�
 | 连接信息怎么给 | 界面上填 | `--host/--port/--user/--password/-d` 或 `E2M_*` 或配置文件 | 同级 `conn.ini` 或 `E2M_*`（命令行只认 `-c` 指定配置文件） |
 | 口令里能有中文吗 | **不能**（pymysql 按 latin-1 编码口令） | **不能**（同一个驱动） | 能（JDBC 支持 Unicode 口令） |
 | 随包使用说明 | 内置《使用说明》（右上角「?」/ F1） | 包内 `README.txt` | 界面内置同一份《使用说明》 + 包内 `README.txt` |
-| 其余命令行开关 | — | `--drop-if-exists` `--batch` `--no-recursive` `--keep-temp` `--log` `--quiet` `--check` `--dry-run` | `--check` `--dry-run` `--prefix` `-c/--conn` `--debug` `--version` `--gui` |
+| 其余命令行开关 | — | `--initials` `--upper` `--drop-if-exists` `--batch` `--no-recursive` `--keep-temp` `--log` `--quiet` `--check` `--dry-run` | `--initials` `--upper` `--check` `--dry-run` `--prefix` `-c/--conn` `--debug` `--version` `--gui` |
 
 **图形版与 Java 版的界面是等价的**，而且这条等价是机器判定的：`java/界面双端对撞.bat`
 把两条线的控件文案、按钮启用条件、弹窗文字、日志、写出的文件内容各自枚举成一份清单，
-逐键比对（当前 223 项，另有 6 项"现场实测尺寸"只留档不比），任何一项不一致就红。所以"Java 版界面少个按钮"这类事瞒不住。
+逐键比对（当前 235 项，另有 6 项"现场实测尺寸"只留档不比），任何一项不一致就红。所以"Java 版界面少个按钮"这类事瞒不住。
 
 两条命令行线的**选项集并不相同**，别把一边的命令照抄到另一边：
 `--run-sql`、`--swap-prefix`、`--drop-if-exists`、`--log` 这些只在 Python 命令行版有；
@@ -1082,6 +1082,15 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
     而这类数字恰恰是列名的区分点。保留后是 `lnyrjsl10mmpjrs` / `...100mm...` / `...1000mm...`
     （同一串里的 `(d)` 是括号注释，按上一条先剥掉，不参与降级）
   - 万一仍然撞名，靠 `_2`、`_3` 保证建表合法，含义可在「生成表结构预览」里改
+- **命名开关：全拼/首字母、小写/大写**（图形版「Excel 导入」页前缀输入框右侧两颗勾选框，
+  命令行 `--initials` / `--upper`，两条 Python 线与 Java 线都有）：
+  - 「表名与字段名取拼音首字母」勾上后整名取各音节首字母（`订单金额` → `ddje`、
+    `水库基础信息` → `skjcxx`），默认全拼（现逻辑）
+  - 「表名与字段名转大写」勾上后输出全大写（`ding_dan_jin_e` → `DING_DAN_JIN_E`、
+    空表兜底 `T_IMPORT_DATA` / `COL`），默认小写
+  - 大小写也作用于文件名括号里显式写下的英文表名（`（dim_reservoir_info）` → `DIM_RESERVOIR_INFO`），
+    但不改结构定义 Sheet 里人工写的字段名，也不改手动输入的表名前缀
+  - 两颗开关都对**之后添加的文件**生效，切换时日志各留一行提示；重复跑同一开关结果不变
   - ⚠️ **对已有库重新导入的影响**：字段命名规则变更后，同一张表生成的列名与旧版不同
     （旧 `dingdanjine` → 新 `ding_dan_jin_e`）。若目标库里表已存在，默认行为是跳过建表，
     随后 `INSERT` 会报 **1054 Unknown column**。要么勾「覆盖已存在表（先 DROP 再建）」重建，
@@ -1099,6 +1108,12 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
     超过 16383 字节 → TEXT，超过 65535 字节 → MEDIUMTEXT；全表 VARCHAR 共享 60000 字节
     行内预算，预算不足的大文本自动退为 TEXT，保证建表不报 Row size too large；
     带前导零的整数字符串（如 `007`）保持文本，不丢前导零
+  - **整列一个值都没有时，按字段名关键字定类型**：发布日期/date/dt → DATE，
+    更新时间/时间/time/timestamp/datetime → DATETIME，金额/单价/价格/费用等 →
+    DECIMAL(16,2)，数量/个数/人数/次数/库存/qty/quantity/count/cnt/stock → INT，
+    其余 VARCHAR(64)。英文按成词匹配（`create_date`、`qty` 命中，`update`、`birthday`
+    不误中）；有值的列照旧按数据判定，结构定义 Sheet 里人工写的类型优先；
+    每条按名定类型都写进 `[类型修正] … 按表头语义调整` 日志行
 - **金额语义识别**：纯值判定会把"订单金额"这类列在样本恰好为整数时判成 INT，金额被砍掉小数位
   （Excel 里 `100` 常以 `100.0` 存储，整数值浮点也会被认成整数）。因此在值判定之上加一层
   **表头语义修正**：中文表头或英文字段名命中金额关键词的数值列，一律用 `DECIMAL(16,2)`。
