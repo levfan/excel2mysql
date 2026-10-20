@@ -22,6 +22,9 @@ public final class Names {
     private static final Pattern PAREN_TABLE =
             Pattern.compile("[\\uff08(]\\s*([^\\uff08\\uff09()]*)\\s*[\\uff09)]\\s*$");
     private static final Pattern TABLE_EN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+    // 括号里的版本号不是表名：V2 / v2 / V2_1 都回退成完整文件名转拼音。
+    // 只认「单个 V + 数字（可带下划线数字段）」，order2、A1 这类仍是正常英文名
+    private static final Pattern TABLE_VER = Pattern.compile("[Vv][0-9]+(?:_[0-9]+)*");
 
     // 表头里的成对括号注释（发布日期（yyyy-MM-dd）、金额（元）、是否已婚【是/否】）。
     // 括号一律写成码位转义：全角（）与半角() 在源码里看着一模一样，
@@ -91,7 +94,7 @@ public final class Names {
         return WS_EDGE.matcher(s).replaceAll("");
     }
 
-    /** 文件名 -> (表名, 表注释)。括号里是合法英文标识符才采用，否则整名转拼音。 */
+    /** 文件名 -> (表名, 表注释)。括号里是合法英文标识符（版本号除外）才采用，否则整名转拼音。 */
     public String[] parseTableNameAndComment(String filename) {
         String stem = stripExtension(baseName(filename));
         Matcher m = PAREN_TABLE.matcher(stem);
@@ -99,7 +102,10 @@ public final class Names {
             String raw = pyStrip(m.group(1));
             String head = pyStrip(stem.substring(0, m.start()));
             String base = head.isEmpty() ? stem : head;
-            if (TABLE_EN.matcher(raw).matches() && hasAsciiAlpha(raw)) {
+            // (V2) 这类版本号不是表名，与纯数字序号一样回退；
+            // 回退后版本段仍留在拼音名末尾，不同版本不会塌成同名加 _2
+            if (TABLE_EN.matcher(raw).matches() && hasAsciiAlpha(raw)
+                    && !TABLE_VER.matcher(raw).matches()) {
                 // 括号里是使用者显式写下的英文名，首字母开关不管它，大小写开关要管
                 String cased = upperOnly ? raw.toUpperCase(Locale.ROOT)
                         : raw.toLowerCase(Locale.ROOT);

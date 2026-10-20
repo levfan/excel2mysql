@@ -20,6 +20,10 @@ _PAREN_TABLE_RE = re.compile(r"[（(]\s*([^（）()]*)\s*[）)]\s*$")
 # 另外还要求至少含一个字母 —— 纯数字括号是序号不是表名，见 parse_table_name_and_comment
 _TABLE_EN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
+# 括号里的版本号不是表名：V2 / v2 / V2_1 都回退成完整文件名转拼音。
+# 只认「单个 V + 数字（可带下划线数字段）」，order2、A1 这类仍是正常英文名
+_TABLE_VER_RE = re.compile(r"[Vv][0-9]+(?:_[0-9]+)*")
+
 # 表头里的成对括号注释：左括号到右括号整段（含中英文各类括号），见 _strip_header_annotations
 # 括号一律按码位写，不靠字形——全角（） 与半角() 在源码里看着一模一样，漏一个就是静默漏剥
 _ANNOT_OPEN = u"(\\[\uFF08\uFF3B\uFF5B{}\u3010\u3016\u3014\u3008\u300A\u300C\u300E"
@@ -201,8 +205,8 @@ def parse_table_name_and_comment(filename: str, initials: bool = False,
     只含字母/数字/下划线、至少含一个字母）才采用，并统一转小写（upper=True 转大写）。
     括号里是使用者显式写下的英文名，首字母开关不影响它，但大小写开关要管到它。
     以下情况一律回退到"由完整文件名汉字转拼音"：括号内是中文（人事处人员）、
-    纯数字序号（7）（2026）、空或纯符号 —— 因此不会产生汉字表名，
-    也不会产生只含数字的表名。
+    纯数字序号（7）（2026）、版本号（V2）（v2）（V2_1）、空或纯符号 —— 因此不会产生
+    汉字表名，也不会产生只含数字或只剩版本号的表名。
     回退时表注释保留完整文件名（含括号内容），表名取括号部分转拼音后保留，
     这样 人员信息表（人事处）与 人员信息表（财务部） 得到两个不同且可辨识的表名。
     文本无有效字符时用兜底表名 t_import_data。
@@ -213,8 +217,11 @@ def parse_table_name_and_comment(filename: str, initials: bool = False,
         raw = m.group(1).strip()
         base = stem[:m.start()].strip() or stem
         # 只有"能直接当表名用的英文标识符"才取括号内容：必须以字母或下划线开头
-        # 且含字母。（7）（2026）这种纯序号不是表名，中文更不是
-        if _TABLE_EN_RE.fullmatch(raw) and any(c.isascii() and c.isalpha() for c in raw):
+        # 且含字母。（7）（2026）这种纯序号不是表名，中文更不是；
+        # （V2）这类版本号同样不是，回退后版本段还会留在拼音名末尾做区分
+        if (_TABLE_EN_RE.fullmatch(raw)
+                and any(c.isascii() and c.isalpha() for c in raw)
+                and not _TABLE_VER_RE.fullmatch(raw)):
             name = raw.upper() if upper else raw.lower()
             return name[:64], base
         # 回退时表名与注释都用**完整文件名**（含括号内容）：
