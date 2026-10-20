@@ -261,9 +261,16 @@ public final class ImportParse {
         String srcMsg = "structured".equals(td.table.source) ? "，结构定义模式" : "";
         String extraMsg = td.extraDataColumns.isEmpty() ? ""
                 : "；数据 Sheet 多余列已忽略：" + String.join("、", td.extraDataColumns);
+        // 具名但整列没值的字段：保留下来了，但要在同一行里点名，别让"空模板导进去 0 行"
+        // 变成一笔糊涂账（与 Python 侧 main/cli 的 [已解析] 行逐字一致）
+        String emptyMsg = td.emptyColumns.isEmpty() ? ""
+                : "；整列为空的字段照旧保留："
+                + String.join("、", td.emptyColumns.subList(0, Math.min(6, td.emptyColumns.size())))
+                + (td.emptyColumns.size() > 6 ? " 等 " + td.emptyColumns.size() + " 个" : "");
+        String zeroMsg = td.noDataRows ? "；没有数据行，建出来是空表" : "";
         return "[已解析] " + fname + " → 表名预置 " + td.table.tableName
                 + "，字段 " + td.table.columns.size() + " 列，数据 " + td.rows.size()
-                + " 行" + srcMsg + pkMsg + extraMsg;
+                + " 行" + srcMsg + pkMsg + extraMsg + emptyMsg + zeroMsg;
     }
 
     /** 弹窗正文：只说实际用到的行，同一句话还会写进日志。 */

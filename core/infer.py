@@ -764,7 +764,45 @@ def _build_structured(filepath: str, sheets: dict) -> dict:
         "meta_sheet": str(meta_name),
         "data_sheet": None if data_name is None else str(data_name),
         "extra_data_columns": extra_cols,
+        "empty_columns": _named_blank_columns(df),
+        "no_data_rows": len(df) == 0,
     }
+
+
+def _blank_header(col) -> bool:
+    """这一列的表头是不是"没写字"。
+
+    Excel 尾部格式化拖出来的空列，pandas 会给它起名 `Unnamed: 5`；真的空表头是空串。
+    这两种都不是使用者声明过的字段。
+    """
+    label = "" if col is None else str(col).strip()
+    return label == "" or label.lower().startswith("unnamed:")
+
+
+def _named_blank_columns(df: pd.DataFrame) -> list:
+    """表头写了字、但整列一个值都没有的列名（按位置判，重名表头不会踩到 DataFrame）。"""
+    out = []
+    for i, col in enumerate(list(df.columns)):
+        if _blank_header(col):
+            continue
+        if df.iloc[:, i].isna().all():
+            out.append(str(col).strip())
+    return out
+
+
+def _drop_unnamed_blank_columns(df: pd.DataFrame) -> tuple:
+    """丢掉"表头没写字且整列没值"的格式化垃圾列，返回 (df, 留下的具名空列表头)。
+
+    表头写了字的列，整列空着也必须保留：采集模板里 `*标准名称` 这类必填项还没填数据，
+    字段是用方自己声明过的表结构。按"整列没值就删"处理，空模板一进来看不到任何字段
+    （要么少列、要么直接被判成解析失败），现场看到的就是"表头解析不到"。
+    判定只看 isna，和原来 dropna(how="all") 同一口径，全空格字符串的列照旧不算空列。
+    """
+    drop = [col for i, col in enumerate(list(df.columns))
+            if _blank_header(col) and df.iloc[:, i].isna().all()]
+    if drop:
+        df = df.drop(columns=drop)
+    return df, _named_blank_columns(df)
 
 
 def build_table_def(filepath: str, progress_cb=None) -> dict:
@@ -800,8 +838,9 @@ def build_table_def(filepath: str, progress_cb=None) -> dict:
         _note("按字段定义组装")
         return _build_structured(filepath, sheets)
     df = next(iter(sheets.values()))
-    # 去掉全空列与全空行（Excel 尾部格式化产生的空行避免整行 NULL 导入）
-    df = df.dropna(axis=1, how="all")
+    # 具名但整列没值的字段要保留（采集模板里必填项还没填），只丢"表头没写字"的格式化空列；
+    # 全空行照旧丢掉，免得 Excel 尾部格式化出来的空行整行 NULL 入库
+    df, keep_empty = _drop_unnamed_blank_columns(df)
     df = df.dropna(axis=0, how="all")
     table_name, table_comment = parse_table_name_and_comment(filepath)
     _note("推断字段类型")
@@ -810,6 +849,10 @@ def build_table_def(filepath: str, progress_cb=None) -> dict:
     # MySQL 会回一条语法错误，现场看到"导入失败"却猜不到是自己拖了张空表
     if not columns:
         raise ValueError("没有解析到任何字段：表里没有可用的表头行（空表，或整列都是空值）")
+    if len(df) == 0:
+        # 只有表头的采集模板：一行数据都没有，建出来的就是一张空表。
+        # 这不是错误，但要让调用方看得见，别让它悄悄变成"导入了 0 行"的糊涂账
+        _note("只有表头没有数据行")
     # 主键自动选择：至多一个，详见 select_primary_key
     _note("选择主键")
     pk_field, pk_reason = select_primary_key(df, columns)
@@ -827,6 +870,9 @@ def build_table_def(filepath: str, progress_cb=None) -> dict:
         "primary_key": pk_field,
         "pk_reason": pk_reason,
         "source": "normal",
+        # 表头写了字、整列却没值的字段：保留下来了，但要在日志里点名（见 main/cli 的[已解析]行）
+        "empty_columns": keep_empty,
+        "no_data_rows": len(df) == 0,
     }
 
 

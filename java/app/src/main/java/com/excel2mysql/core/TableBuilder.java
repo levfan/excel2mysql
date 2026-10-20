@@ -54,6 +54,10 @@ public final class TableBuilder {
         public String metaSheet;
         public String dataSheet;
         public final List<String> extraDataColumns = new ArrayList<String>();
+        /** 表头写了字、整列却没有一个值的字段：照旧保留，但要让日志点名（与 Python 同口径）。 */
+        public final List<String> emptyColumns = new ArrayList<String>();
+        /** 一行数据都没有（只有表头的采集模板就是这种形状），建出来是空表。 */
+        public boolean noDataRows;
     }
 
     private static final class Grid {
@@ -105,9 +109,10 @@ public final class TableBuilder {
             throw new IllegalArgumentException("工作簿里没有可读的 Sheet");
         }
         Frame first = frames.get(0);
-        Grid grid = dropEmptyColumnsAndRows(first);
         String[] tc = names.parseTableNameAndComment(filepath);
         Result r = new Result();
+        Grid grid = dropEmptyColumnsAndRows(first, r.emptyColumns);
+        r.noDataRows = grid.rows.isEmpty();
         r.table = new TableOps.Table();
         r.table.filepath = filepath;
         r.table.tableName = tc[0];
@@ -207,7 +212,7 @@ public final class TableBuilder {
         }
         if (dataIndex >= 0) {
             Frame data = frames.get(dataIndex);
-            Grid grid = dropEmptyColumnsAndRows(data);
+            Grid grid = dropEmptyColumnsAndRows(data, new ArrayList<String>());
             r.dataSheet = data.name;
             Map<String, Integer> byLower = new LinkedHashMap<String, Integer>();
             for (int i = 0; i < grid.headers.size(); i++) {
@@ -236,6 +241,21 @@ public final class TableBuilder {
         }
         r.headers = headers;
         r.rows = rows;
+        r.noDataRows = rows.isEmpty();
+        // 结构定义模式的字段来自元数据 Sheet，列名就是声明过的字段名；
+        // 整列没值（含一行数据都没有）的照样要点名，与 Python 侧 _named_blank_columns 同一口径
+        for (int i = 0; i < headers.size(); i++) {
+            boolean anyValue = false;
+            for (List<Object> row : rows) {
+                if (!isNullish(i < row.size() ? row.get(i) : null)) {
+                    anyValue = true;
+                    break;
+                }
+            }
+            if (!anyValue) {
+                r.emptyColumns.add(Infer.pyStr(headers.get(i)).trim());
+            }
+        }
 
         List<String> pkFields = new ArrayList<String>();
         for (Infer.Column c : r.table.columns) {
@@ -484,18 +504,59 @@ public final class TableBuilder {
                 ? roles : null;
     }
 
-    /** 去掉全空列与全空行：Excel 尾部格式化留下的空行会整行 NULL 导入。 */
-    private static Grid dropEmptyColumnsAndRows(Frame frame) {
-        Grid g = new Grid();
-        List<Integer> keep = new ArrayList<Integer>();
-        for (int i = 0; i < frame.headers.size(); i++) {
-            for (List<Object> row : frame.rows) {
+    /** 列取舍的结果：留下的列下标，以及"表头有字但整列没值"因而需要点名的列名。 */
+    public static final class ColumnFilter {
+        public final List<Integer> keep = new ArrayList<Integer>();
+        public final List<String> emptyColumns = new ArrayList<String>();
+    }
+
+    /**
+     * 列取舍，pandas 那两步（dropna(axis=1, how=all) + 具名空列保留）的唯一实现：
+     * 整列没值 **且** 表头也没写字的列才是 Excel 尾部格式化拖出来的垃圾列，丢掉；
+     * 表头写了字的列一律保留，名字进 emptyColumns 由日志点名。
+     *
+     * TypeDiffer 与读取层都调这一个方法——这条规则要是在两处各写一遍，
+     * 改一处就静默分叉，差分会告诉我们"两边不等价"，但谁对谁错得再查一轮。
+     */
+    public static ColumnFilter filterColumns(List<Object> headers, List<List<Object>> rows) {
+        ColumnFilter f = new ColumnFilter();
+        for (int i = 0; i < headers.size(); i++) {
+            boolean anyValue = false;
+            for (List<Object> row : rows) {
                 if (!isNullish(i < row.size() ? row.get(i) : null)) {
-                    keep.add(Integer.valueOf(i));
+                    anyValue = true;
                     break;
                 }
             }
+            if (anyValue) {
+                f.keep.add(Integer.valueOf(i));
+            } else if (!blankHeader(headers.get(i))) {
+                f.keep.add(Integer.valueOf(i));
+                f.emptyColumns.add(Infer.pyStr(headers.get(i)).trim());
+            }
         }
+        return f;
+    }
+
+    /** 表头本身没写字：Excel 尾部格式化拖出来的空列，在 pandas 里叫 "Unnamed: 5"，真表头则是空串。 */
+    public static boolean blankHeader(Object h) {
+        String s = h == null ? "" : Infer.pyStr(h).trim();
+        return s.isEmpty() || s.toLowerCase().startsWith("unnamed:");
+    }
+
+    /**
+     * 去掉"表头没写字且整列没值"的格式化垃圾列与全空行；具名但整列没值的字段一律保留。
+     *
+     * 采集模板里 <code>*标准名称</code> 这类必填项还没填数据，字段是使用方自己声明过的表结构。
+     * 照"整列没值就删"处理，空模板一进来看不到任何字段（要么少列、要么被判成解析失败），
+     * 现场看到的就是"表头解析不到"。判空只看 null/NaN，与 pandas 的 isna 同口径：
+     * 整列空字符串的列照旧不算空列。
+     */
+    private static Grid dropEmptyColumnsAndRows(Frame frame, List<String> emptyColumns) {
+        Grid g = new Grid();
+        ColumnFilter cf = filterColumns(frame.headers, frame.rows);
+        List<Integer> keep = cf.keep;
+        emptyColumns.addAll(cf.emptyColumns);
         for (Integer i : keep) {
             g.headers.add(frame.headers.get(i.intValue()));
         }

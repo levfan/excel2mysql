@@ -464,10 +464,17 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink):
             extra_cols = td.get("extra_data_columns") or []
             extra_msg = (f"；数据 Sheet 多余列已忽略：{'、'.join(extra_cols)}"
                          if extra_cols else "")
+            empty_cols = td.get("empty_columns") or []
+            empty_msg = ""
+            if empty_cols:
+                head = "、".join(empty_cols[:6])
+                more = f" 等 {len(empty_cols)} 个" if len(empty_cols) > 6 else ""
+                empty_msg = f"；整列为空的字段照旧保留：{head}{more}"
+            zero_msg = "；没有数据行，建出来是空表" if td.get("no_data_rows") else ""
             sink.log(
                 f"[已解析] {fname} → 表名预置 {td['table_name']}，"
                 f"字段 {len(td['columns'])} 列，数据 {len(td['df'])} 行{src_msg}"
-                f"{pk_msg}{extra_msg}")
+                f"{pk_msg}{extra_msg}{empty_msg}{zero_msg}")
             notes = [c["type_note"] for c in td["columns"] if c.get("type_note")]
             if notes:
                 sink.log(

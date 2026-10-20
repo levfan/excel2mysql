@@ -414,6 +414,13 @@ def parse_one(path, origin, log):
     extra = td.get("extra_data_columns") or []
     if extra:
         msg += " | 数据 Sheet 多余列已忽略：%s" % "、".join(extra)
+    empty_cols = td.get("empty_columns") or []
+    if empty_cols:
+        head = "、".join(empty_cols[:6])
+        more = " 等 %d 个" % len(empty_cols) if len(empty_cols) > 6 else ""
+        msg += " | 整列为空的字段照旧保留：%s%s" % (head, more)
+    if td.get("no_data_rows"):
+        msg += " | 没有数据行，建出来是空表"
     log.ok(msg)
     notes = [c["type_note"] for c in td["columns"] if c.get("type_note")]
     if notes:
