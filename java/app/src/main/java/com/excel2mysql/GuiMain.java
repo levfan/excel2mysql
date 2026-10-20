@@ -1546,6 +1546,13 @@ public final class GuiMain {
             if (hd.bodyLength() < 2000) {
                 problems.add("说明正文没渲染出来，长度只有 " + hd.bodyLength());
             }
+            // Swing 按 72dpi 折 pt（10.5pt → 7.9px），Qt 按 96dpi（→14px）；不折成 px 字号会明显偏小
+            String helpHtml = hd.html();
+            if (!helpHtml.contains("font-size: 14px")
+                    || java.util.regex.Pattern.compile("font-size:\\s*[0-9.]+pt")
+                    .matcher(helpHtml).find()) {
+                problems.add("说明正文字号没折成 px：Swing 会把 10.5pt 渲染成约 7.9px");
+            }
             // 按标题找而不是按序号：说明里插一章就会把序号挪位，写死序号的守卫会假红
             int excelChapter = -1;
             for (int i = 0; i < hd.tocCount(); i++) {
