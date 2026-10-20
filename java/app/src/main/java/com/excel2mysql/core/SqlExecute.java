@@ -18,6 +18,10 @@ public final class SqlExecute {
 
     /** 查询结果最多打这么多行：再多就不是给人看的了，也让"截断"显式可见。 */
     public static final int PREVIEW_ROWS = 200;
+    /** 单个格子最多占这么多显示列（与 Python 侧 CELL_MAX 同一个数）。 */
+    public static final int CELL_MAX = 40;
+    /** 表格整体缩在语句行下面，与 Python 侧 TABLE_INDENT 一致。 */
+    static final String TABLE_INDENT = "      ";
 
     public interface Out {
         void line(String text);
@@ -94,14 +98,11 @@ public final class SqlExecute {
     private static void printResultSet(ResultSet rs, Out out) throws SQLException {
         ResultSetMetaData md = rs.getMetaData();
         int cols = md.getColumnCount();
-        StringBuilder head = new StringBuilder();
+        java.util.List<String> head = new java.util.ArrayList<String>();
         for (int i = 1; i <= cols; i++) {
-            if (i > 1) {
-                head.append(" | ");
-            }
-            head.append(md.getColumnLabel(i));
+            head.add(md.getColumnLabel(i));
         }
-        out.line("      " + head);
+        java.util.List<List<String>> rows = new java.util.ArrayList<List<String>>();
         int printed = 0;
         int total = 0;
         while (rs.next()) {
@@ -109,19 +110,103 @@ public final class SqlExecute {
             if (printed >= PREVIEW_ROWS) {
                 continue;
             }
-            StringBuilder row = new StringBuilder();
+            java.util.List<String> r = new java.util.ArrayList<String>(cols);
             for (int i = 1; i <= cols; i++) {
-                if (i > 1) {
-                    row.append(" | ");
-                }
-                String v = rs.getString(i);
-                row.append(v == null ? "NULL" : v);
+                r.add(rs.getString(i));
             }
-            out.line("      " + row);
+            rows.add(r);
             printed++;
+        }
+        for (String line : renderTable(head, rows)) {
+            out.line(TABLE_INDENT + line);
         }
         out.line("      共 " + total + " 行"
                 + (total > printed ? "（只打印前 " + printed + " 行，其余没显示）" : ""));
+    }
+
+    /**
+     * 一个取值 -> 格子里那段文字：NULL 显式写出来（空着分不清是 NULL 还是空串），
+     * 换行与制表符换成可见转义，否则一条带换行的备注会把整张表顶散。
+     */
+    static String cell(Object v) {
+        if (v == null) {
+            return "NULL";
+        }
+        String s = String.valueOf(v);
+        s = s.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n");
+        return TextWidth.clip(s.replace("\t", "\\t"), CELL_MAX);
+    }
+
+    /**
+     * 列名 + 若干行 -> 等宽表格的各行文本（不带缩进，由调用方补）。
+     *
+     * 结果区是个纯文本框，能靠的只有对齐：按**显示宽度**（汉字占两列）把每列补到同宽，
+     * 上下与表头下面各画一条分隔线。原来那种 {@code " | "} 直接拼一行，列宽一不一样就错行，
+     * 混进中文之后连列名都对不上是哪一列。与 Python 侧 render_table 逐字符一致，
+     * 由金标准差分的 table-render 分支对撞。
+     */
+    public static java.util.List<String> renderTable(java.util.List<String> columns,
+                                                     java.util.List<java.util.List<String>> rows) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        if (columns == null || columns.isEmpty()) {
+            return out;
+        }
+        final int n = columns.size();
+        java.util.List<String> head = new java.util.ArrayList<String>(n);
+        for (String c : columns) {
+            head.add(cell(c));
+        }
+        java.util.List<java.util.List<String>> body =
+                new java.util.ArrayList<java.util.List<String>>();
+        if (rows != null) {
+            for (java.util.List<String> r : rows) {
+                java.util.List<String> cells = new java.util.ArrayList<String>(n);
+                int have = r == null ? 0 : r.size();
+                for (int i = 0; i < n; i++) {
+                    // 行比列少时补空格，不写 NULL：真实的游标不会少给值，
+                    // 少给是夹具形状，写成 NULL 会把"没有这一列的值"说成"值是 NULL"
+                    cells.add(i < have ? cell(r.get(i)) : "");
+                }
+                body.add(cells);
+            }
+        }
+        int[] w = new int[n];
+        for (int i = 0; i < n; i++) {
+            w[i] = TextWidth.width(head.get(i));
+        }
+        for (java.util.List<String> r : body) {
+            for (int i = 0; i < n; i++) {
+                w[i] = Math.max(w[i], TextWidth.width(r.get(i)));
+            }
+        }
+        StringBuilder ruleSb = new StringBuilder("+");
+        for (int i = 0; i < n; i++) {
+            int span = (w[i] > 0 ? w[i] : 1) + 2;
+            for (int k = 0; k < span; k++) {
+                ruleSb.append('-');
+            }
+            ruleSb.append('+');
+        }
+        final String rule = ruleSb.toString();
+        out.add(rule);
+        out.add(rowLine(head, w));
+        out.add(rule);
+        for (java.util.List<String> r : body) {
+            out.add(rowLine(r, w));
+        }
+        if (!body.isEmpty()) {
+            out.add(rule);   // 零行的时候表头下面那条线就是收口，不重复画
+        }
+        return out;
+    }
+
+    private static String rowLine(java.util.List<String> cells, int[] widths) {
+        StringBuilder sb = new StringBuilder("|");
+        for (int i = 0; i < widths.length; i++) {
+            int target = widths[i] > 0 ? widths[i] : 1;
+            sb.append(' ').append(TextWidth.pad(cells.get(i), target)).append(" |");
+        }
+        return sb.toString();
     }
 
     private static String oneLine(String sql) {

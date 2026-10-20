@@ -8,8 +8,13 @@ import re
 
 from core.log_text import DDL_NO_ROLLBACK_NOTE, describe_db_error
 from core.sql_script import has_executable_content, split_sql_statements
+from core.text_width import clip, pad, width
 
 PREVIEW_ROWS = 200
+# 单个格子最多占这么多显示列。取 40 是因为治理体检一类查询里最宽的通常是
+# 表名/列名/注释，40 列足够看清，又不至于让三十列的结果横向看不到边。
+CELL_MAX = 40
+TABLE_INDENT = "      "
 
 
 def executable_statements(text):
@@ -22,19 +27,67 @@ def _one_line(sql):
     return s if len(s) <= 160 else s[:160] + "…（共 %d 字符）" % len(s)
 
 
+def _cell(v):
+    """一个取值 -> 格子里那段文字。
+
+    NULL 要显式写出来（空着分不清是 NULL 还是空串），换行与制表符换成可见的转义，
+    否则一条带换行的备注会把整张表顶散。
+    """
+    if v is None:
+        return "NULL"
+    s = v if isinstance(v, str) else str(v)
+    s = s.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+    return clip(s.replace("\t", "\\t"), CELL_MAX)
+
+
+def render_table(columns, rows):
+    """列名 + 若干行 -> 等宽表格的各行文本（不带缩进，由调用方补）。
+
+    结果区是个纯文本框，能靠的只有对齐：按**显示宽度**（汉字占两列）把每列补到同宽，
+    上下与表头下面各画一条分隔线。原来那种 `" | "` 直接拼一行，列宽一不一样就错行，
+    混进中文之后连列名都对不上是哪一列。
+    """
+    if not columns:
+        return []
+    head = [_cell(c) for c in columns]
+    body = [[_cell(v) for v in r] for r in rows]
+    widths = []
+    for i in range(len(head)):
+        w = width(head[i])
+        for r in body:
+            if i < len(r):
+                w = max(w, width(r[i]))
+        widths.append(w if w > 0 else 1)
+    rule = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+
+    def row_line(vals):
+        # 行比列少时补空格而不是 NULL：少给值不代表值是 NULL
+        return "|" + "|".join(
+            " " + pad(vals[i] if i < len(vals) else "", widths[i]) + " "
+            for i in range(len(widths))) + "|"
+
+    out = [rule, row_line(head), rule]
+    for r in body:
+        out.append(row_line(r))
+    if body:
+        out.append(rule)      # 零行的时候表头下面那条线就是收口，不重复画
+    return out
+
+
 def _print_result(cur, emit):
     cols = [d[0] for d in (cur.description or [])]
-    emit("      " + " | ".join(cols))
     printed = total = 0
+    rows = []
     while True:
         row = cur.fetchone()
         if row is None:
             break
         total += 1
-        if printed >= PREVIEW_ROWS:
-            continue
-        emit("      " + " | ".join("NULL" if v is None else str(v) for v in row))
-        printed += 1
+        if printed < PREVIEW_ROWS:
+            rows.append(list(row))
+            printed += 1
+    for line in render_table(cols, rows):
+        emit(TABLE_INDENT + line)
     emit("      共 %d 行%s" % (total,
                                "（只打印前 %d 行，其余没显示）" % printed
                                if total > printed else ""))

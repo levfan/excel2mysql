@@ -1603,6 +1603,8 @@ class MainWindow(QWidget):
 
         self.sql_run_log = QPlainTextEdit()
         self.sql_run_log.setReadOnly(True)
+        # 结果集是按显示宽度排出来的表格，字体不是等宽就会错行：与编辑区同一支字体
+        self.sql_run_log.setFont(QFont("Consolas", 12))
         self.sql_run_log.setMaximumBlockCount(2000)
         right = QWidget()
         rl = QVBoxLayout(right)
