@@ -47,6 +47,18 @@
        dir C:\Windows\System32\ucrtbase.dll
        dism /online /get-packages | findstr 2999226
    任一报"找不到"就去装 KB2999226（Windows Update 一般已自动装好）。
+   本包已经带了补丁和脚本，在 win7_sp1_patch\win7_prereq_files\ 目录里：
+       3.check_win7.bat        先自检：系统版本、四个补丁装没装、C 盘剩余空间
+       4.install_minimal.bat   最小修复三件（KB3063858 + KB2999226 + vc_redist），
+                               够本包跑起来，推荐先跑这个
+       5.install_win7_prereq.bat  一次装全（再加 KB3020369 与 KB3125574 汇总）
+       1.download_win7_prereq.ps1 包内文件缺失时按官方目录重新下载
+       2.install_win7_prereq.ps1  与上面等价的 PowerShell 版本
+   两个 .bat 都要右键"以管理员身份运行"，装完重启，再执行
+       excel2mysql-cli.exe --version
+   能打印版本号就说明这层通了。这几个 .msu 与 vc_redist 是微软按内部使用授权
+   分发的，不随源码入库：如果包里没有 win7_sp1_patch 这个目录，就是本次没带，
+   得自己备补丁包（打包时会把"带没带"明写在日志里）。
 3) 要能通过网络连到目标 MySQL（默认 127.0.0.1:3306，可在 conn.ini 里改）。
 
 

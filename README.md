@@ -35,7 +35,7 @@ Python 侧同源靠同一个 `core/` 包，Java 侧是把 `core/` 重写一遍�
 | 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 | 两种都有：同一个 jar，`--gui` 起界面，不给 `--gui` 就是命令行 |
 
 三条线各自的环境与产物互不影响：GUI 包该多大还多大（162 MB）、该要 Win10 还 Win10；
-命令行包不含任何 Qt，产物 89 MB，能在 Windows 7 SP1 上跑；
+命令行包不含任何 Qt，产物 131 MB（其中 42 MB 是随包的 Win7 前置补丁），能在 Windows 7 SP1 上跑；
 Java 包 232 MB，绝大部分是随包的运行时。
 
 ### 四条运行形态、三个构建产物
@@ -297,16 +297,27 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 闸门顺序与 GUI 那条一样是"任一步失败就非 0 退出"：
 检查环境（**必须** 3.8 + PyInstaller 5.x，版本不对直接拦住）→ 确认 `excel2mysql-cli.exe`
 没在运行 → 旧栈开发态用例集 → **新栈跑同一份用例集做跨栈比对** → 构建 →
-产物体检（没有 Qt 文件 / 带 `python38.dll` / PE 头要求的系统版本 ≤ 6.1）→
+产物体检（没有 Qt 文件 / 带 `python38.dll` / PE 头要求的系统版本 ≤ 6.1 /
+带前置补丁时逐文件 md5 与仓库那份一致）→
 构建并运行冻结态用例集 → 真跑产品 exe（`--version` / `--help` / `--dry-run`，
 断退出码和落盘日志里的 DDL）→ 脱离项目目录再跑一次（证明自包含）→ 汇总打勾表。
 
 辅助开关：`--fast`（只打产品包）、`--no-parity`（跳过 3.12 那轮跨栈）、`--keep-cache`。
 
-**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **89 MB / 1395 个文件**（GUI 线那个包是 162 MB / 920 个文件）。
+**产物形态与分发**：`dist\excel2mysql-cli\`，实测 **131 MB / 1405 个文件**（比不带补丁时多 10 个文件 / 42 MB；GUI 线那个包是 162 MB / 921 个文件）。
 这条线用的是 PyInstaller **5.x**，onedir 是**平铺布局**——`excel2mysql-cli.exe`、`python38.dll`、
 `*.pyd`、`base_library.zip`、默认配置 `conn.ini`、使用说明 `README.txt` 全在同一层，
 **没有 GUI 线的 `_internal` 目录**（那是 6.x 才改的布局）。整个目录一起拷走或压成 zip，只拷 exe 跑不起来。
+
+**Win7 前置补丁随包走**：仓库根目录如果有 `win7_sp1_patch\win7_prereq_files\`（四个 `.msu`
+加 `vc_redist.x64.exe`，另有自检与安装脚本），打包闸门会把它原样拷进
+`dist\excel2mysql-cli\win7_sp1_patch\` 并逐文件复核 md5。这就是专业版那类机器
+`ImportError: DLL load failed while importing _socket` 的现场修法：
+先 `3.check_win7.bat` 自检，再管理员运行 `4.install_minimal.bat`（KB3063858 + KB2999226 +
+vc_redist 三件就够本包跑起来），或 `5.install_win7_prereq.bat` 一次装全，装完重启再验
+`excel2mysql-cli.exe --version`。这批文件是微软按内部使用授权分发的，也是几十 MB 二进制，
+**不入库**（`.gitignore` 里明确排除）；目录不在时构建照常通过，但日志与产物说明都会明写
+"本次没带补丁"，不会让使用方以为包里有。
 
 产物同级那份 **`README.txt`**（源文件 `assets/README.txt`）是写给现场使用方的纯文本说明：
 Win7 前置条件（SP1 + UCRT/KB2999226 与缺它时的症状）、四条最省事命令、`conn.ini` 怎么改、
@@ -366,7 +377,7 @@ java\dist\excel2mysql-java-1.0.1-win64\jre\bin\java.exe -jar ^
 | 产物 | 双击入口 | 实际执行 | 用什么环境 |
 | --- | --- | --- | --- |
 | 图形版 `dist\excel2mysql\`（162 MB，带 `_internal`） | `一键打包.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
-| 命令行版 `dist\excel2mysql-cli\`（89 MB，平铺无 `_internal`） | `一键打包38.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
+| 命令行版 `dist\excel2mysql-cli\`（131 MB，平铺无 `_internal`；内含 `win7_sp1_patch\`） | `一键打包38.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
 | Java 版 `java\dist\excel2mysql-java-<版本>-win64\`（约 232 MB，含随包 JRE） | `java\一键打包.bat` | `java/tools/build_java_dist.py`（剔桩 + 逐 jar class 版本 + 冒烟 + README/启动.bat 内容校验） | 本机 `jdk1.8.0_202` + Maven |
 
 下面「一键打包」到「已知限制」讲的是**图形版**那条闸门；
@@ -434,7 +445,7 @@ dist\excel2mysql\
 └── _internal\          145 MB  Qt / pandas / numpy / pypinyin 词典等运行时
 ```
 
-合计 **162 MB / 920 个文件**。`excel2mysql.exe` 与 `_internal` 必须同级放在一起，不能只拷 exe。
+合计 **162 MB / 921 个文件**。`excel2mysql.exe` 与 `_internal` 必须同级放在一起，不能只拷 exe。
 
 ### 分发方式
 

@@ -810,7 +810,10 @@ else:
     check(W_DOC_LABELS[4], not _leak and "Root@" not in doc and "172.18." not in doc, _leak)
     check(W_DOC_LABELS[5], "下划线要自己写上" in doc, doc.count("--prefix"))
     check(W_DOC_LABELS[6],
-          "KB2999226" in doc and "api-ms-win-crt" in doc and "只拷 exe 跑不起来" in doc)
+          "KB2999226" in doc and "api-ms-win-crt" in doc and "只拷 exe 跑不起来" in doc
+          and "win7_sp1_patch" in doc and "3.check_win7.bat" in doc
+          and "4.install_minimal.bat" in doc,
+          "随包说明要点到 win7_sp1_patch 里那几支脚本，现场才知道修复工具就在包里")
     check(W_DOC_LABELS[7],
           "Java 版" in doc and "Windows 10 1809" in doc and "表结构是一样的" in doc)
 

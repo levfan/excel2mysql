@@ -255,3 +255,8 @@ build_stamp.py
 
 # Java 线（P1 阶段用 javac 直编的产物目录；接进 Maven 后改由 target/ 覆盖）
 java/out/
+
+# Win7 前置补丁包：43 MB 的微软 .msu 与 vc_redist，按"内部使用"授权分发，不进公开仓库。
+# 打包时由 build_exe38.py 原样拷进 dist\excel2mysql-cli\win7_sp1_patch\ 并逐文件核 md5；
+# 目录不在就照常出包，但日志与产物说明都会明写"本次没带补丁"。
+win7_sp1_patch/

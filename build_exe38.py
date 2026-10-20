@@ -22,6 +22,7 @@
 把骨架抽成公共模块会让 GUI 那 388 项用例跟着冒风险，不值。
 """
 import ctypes
+import hashlib
 import os
 import shutil
 import subprocess
@@ -38,6 +39,9 @@ PARITY_PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
 
 APP_DIST = os.path.join(ROOT, "dist", "excel2mysql-cli")
 APP_EXE = os.path.join(APP_DIST, "excel2mysql-cli.exe")
+# Win7 专业版那类机器缺 UCRT/补丁时 `_socket` 起不来，补丁包与自检脚本随包一起给现场
+PREREQ_SRC = os.path.join(ROOT, "win7_sp1_patch")
+PREREQ_DST = os.path.join(APP_DIST, "win7_sp1_patch")
 TEST_DIST = os.path.join(ROOT, "dist_packtest38", "packtest38")
 TEST_EXE = os.path.join(TEST_DIST, "packtest38.exe")
 BUILD_DIRS = [os.path.join(ROOT, "build"), os.path.join(ROOT, "build_packtest38")]
@@ -195,13 +199,63 @@ def run_parity_tests():
     return run_tests(PARITY_PY, "新栈 3.12 同口径用例集")
 
 
+def _md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _tree(root):
+    """{相对路径: md5}，相对路径统一成正斜杠，两边比的是"目录形状 + 内容"。"""
+    out = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            full = os.path.join(dirpath, name)
+            out[os.path.relpath(full, root).replace("\\", "/")] = _md5(full)
+    return out
+
+
+def copy_prereq():
+    """把仓库里的 win7_sp1_patch 原样搬进产物，并逐文件复核 md5。
+
+    原样搬有两个讲究：一是那几个 .bat 与 .ps1 是 ANSI/GBK 存的，转一次码现场就是乱码；
+    二是产物里这份必须和仓库里那份一模一样，不然"随包带了修复工具"就成了假话。
+
+    仓库里没有这个目录时**不拦构建**，但要把"这次没带"写进汇总——那 43 MB 是微软的
+    .msu 与 vc_redist，公开仓库再分发不合适，所以它不入库；不入库就得让人看得见带没带，
+    不能默认对方手上也有。
+    """
+    if not os.path.isdir(PREREQ_SRC):
+        say("  前置补丁：仓库里没有 win7_sp1_patch/，本次产物**没带** Win7 修复工具包")
+        return "没带 Win7 前置补丁"
+    if os.path.isdir(PREREQ_DST):
+        shutil.rmtree(PREREQ_DST)
+    shutil.copytree(PREREQ_SRC, PREREQ_DST, symlinks=False)
+    src, dst = _tree(PREREQ_SRC), _tree(PREREQ_DST)
+    if src != dst:
+        only_src = sorted(set(src) - set(dst))[:5]
+        only_dst = sorted(set(dst) - set(src))[:5]
+        differ = [r for r in sorted(set(src) & set(dst)) if src[r] != dst[r]][:5]
+        raise RuntimeError(
+            "win7_sp1_patch 拷进产物后逐文件 md5 不一致：只在源 %s / 只在产物 %s / 内容不同 %s"
+            % (only_src, only_dst, differ))
+    size = sum(os.path.getsize(os.path.join(dp, f))
+               for dp, _d, fs in os.walk(PREREQ_DST) for f in fs) / 1048576.0
+    say("  前置补丁：win7_sp1_patch/ %d 个文件 / %.1f MB 已进产物并逐文件 md5 复核"
+        % (len(src), size))
+    return "带 Win7 前置补丁 %d 个文件" % len(src)
+
+
 def build_app():
     rmtree_retry(APP_DIST)
     run([PYINSTALLER, "--noconfirm", "excel2mysql_cli38.spec"])
     if not os.path.isfile(APP_EXE):
         raise RuntimeError(f"构建结束但未产出 {APP_EXE}")
+    prereq = copy_prereq()
     n, size = dir_stats(APP_DIST)
-    return f"{size:.0f} MB / {n} 个文件"
+    return f"{size:.0f} MB / {n} 个文件 · {prereq}"
 
 
 def inspect_package():
@@ -223,6 +277,15 @@ def inspect_package():
             raise RuntimeError(
                 "产物同级没有 %s（spec 的 datas 漏了 assets/ 里那份）——"
                 "对方要么找不到默认配置，要么手上没有使用说明" % want)
+    # 仓库里有前置补丁目录，产物里就必须有同样数量的文件（内容已在 copy_prereq 逐文件核过 md5）
+    if os.path.isdir(PREREQ_SRC):
+        want_n = sum(len(fs) for _d, _dd, fs in os.walk(PREREQ_SRC))
+        got_n = sum(len(fs) for _d, _dd, fs in os.walk(PREREQ_DST)) \
+            if os.path.isdir(PREREQ_DST) else 0
+        if got_n != want_n:
+            raise RuntimeError(
+                "产物里的 win7_sp1_patch 只有 %d 个文件，仓库那份是 %d 个——"
+                "现场按说明去装补丁却发现文件不全，比根本不带还难查" % (got_n, want_n))
     if any(n.endswith((".pyc", ".py")) and os.path.basename(n) == "main.py" for n in names):
         raise RuntimeError("产物里出现了 main.py")
 
@@ -376,6 +439,13 @@ def summary():
         f"口令与目标库留空），不带 -c 会自动读它；改这个文件就行")
     say(f"  说明：产物同级的 README.txt 是写给使用方的（前置条件、四条命令、退出码、排错），"
         f"发机器时一起拷过去即可")
+    if os.path.isdir(PREREQ_DST):
+        say(f"  补丁：产物内 {os.path.join('win7_sp1_patch', 'win7_prereq_files')} 是 Win7 专业版"
+            f"那类缺 UCRT/补丁的机器的现场修法（自检 3.check_win7.bat、最小安装 4.install_minimal.bat），"
+            f"装完重启再跑 --version")
+    else:
+        say(f"{YELLOW}  补丁：本次产物**没带** win7_sp1_patch（仓库里没有那个目录）——"
+            f"目标机器缺 KB2999226 时 CLI 起不来，得自己备补丁包。{RESET}")
     say(f"{YELLOW}注意：这条线用的是 PyInstaller 5.x，onedir 是平铺布局——"
         f"python38.dll / *.pyd / base_library.zip 全在 exe 同级目录，没有 GUI 线那个 "
         f"_internal 文件夹。整个目录一起拷，只拷 exe 跑不起来。{RESET}")
