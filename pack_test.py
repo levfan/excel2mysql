@@ -591,9 +591,11 @@ check("F20 编辑区开场就是那句连通检查且不折行",
       w.sql_run_input.toPlainText())
 _run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
              w.btn_sql_run_exec.text(): w.btn_sql_run_exec,
-             w.btn_sql_run_clear.text(): w.btn_sql_run_clear}
-check("F21 三颗按钮齐备且可点",
-      len(_run_btns) == 3 and set(_run_btns) == {u"示例 (?)", u"执行", u"清空"}
+             w.btn_sql_run_clear_input.text(): w.btn_sql_run_clear_input,
+             w.btn_sql_run_clear_log.text(): w.btn_sql_run_clear_log}
+check("F21 四颗按钮齐备且可点（顶部两颗 + 两个 pane 各一颗清空）",
+      len(_run_btns) == 4 and set(_run_btns) == {u"示例 (?)", u"执行",
+                                                 u"清空编辑区", u"清空结果区"}
       and all(b.isEnabled() for b in _run_btns.values()), sorted(_run_btns))
 check("F22 执行按钮的 tooltip 把事务语义写全",
       "全部成功才提交，中途出错整批回滚" in w.btn_sql_run_exec.toolTip(),
@@ -636,9 +638,23 @@ _real_connect = app_main.connect
 w.main_tabs.setCurrentIndex(2)
 POPUPS.clear()
 w.sql_run_input.setPlainText("SELECT 1 AS 连通检查;")
-w.on_sql_run_clear()
-check("F23 清空同时清掉编辑区和结果区",
-      w.sql_run_input.toPlainText() == "" and w.sql_run_log.toPlainText() == "")
+w.sql_run_log.appendPlainText("上一次留下的结果")
+w.btn_sql_run_clear_input.click()
+check("F23 清空编辑区只清左边，结果区那行旧结果不动",
+      w.sql_run_input.toPlainText() == ""
+      and w.sql_run_log.toPlainText() == "上一次留下的结果",
+      (w.sql_run_input.toPlainText(), w.sql_run_log.toPlainText()))
+w.sql_run_input.setPlainText("SELECT 1 AS 连通检查;")
+w.btn_sql_run_clear_log.click()
+check("F23b 清空结果区只清右边，编辑区那段不动",
+      w.sql_run_log.toPlainText() == ""
+      and w.sql_run_input.toPlainText() == "SELECT 1 AS 连通检查;",
+      (w.sql_run_log.toPlainText(), w.sql_run_input.toPlainText()))
+check("F23c 两颗清空的 tooltip 各说清自己管哪一边",
+      "右侧结果区不动" in w.btn_sql_run_clear_input.toolTip()
+      and "左边编辑区不动" in w.btn_sql_run_clear_log.toolTip(),
+      (w.btn_sql_run_clear_input.toolTip(), w.btn_sql_run_clear_log.toolTip()))
+w.on_sql_run_clear_input()
 w.on_sql_run()
 check("F24 空编辑区被拦下：弹窗与「已拦下」日志双写同一句",
       any(t == "提示" and "编辑区是空的" in x for t, x in POPUPS)
@@ -1866,7 +1882,8 @@ app_main.HelpDialog = _real_help
 from PySide6.QtWidgets import QPushButton
 _labels = ["添加文件", "批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "开始导入", "添加 SQL 文件", "保存修改后脚本", "执行脚本到当前库",
-           "连接并加载库", "生成标准excel文件", "生成简易excel文件"]
+           "连接并加载库", "生成标准excel文件", "生成简易excel文件",
+           "示例 (?)", "清空编辑区", "清空结果区"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
 _absent = [t for t in _labels if t not in _btns]
 check("P15 说明里点名的按钮在界面上确实存在", not _absent, _absent)

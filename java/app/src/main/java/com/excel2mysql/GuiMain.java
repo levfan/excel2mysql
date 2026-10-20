@@ -798,16 +798,14 @@ public final class GuiMain {
         if (!"SELECT 1 AS 连通检查;".equals(frame.sqlRunInputText())) {
             problems.add("编辑区开场不是那句连通检查：" + frame.sqlRunInputText());
         }
-        javax.swing.AbstractButton clearBtn = null, execBtn = frame.sqlRunButton(),
-                helpBtn = frame.sqlRunHelpButton();
-        for (javax.swing.AbstractButton b : frame.buttons()) {
-            if ("清空".equals(b.getText())) {
-                clearBtn = b;
-            }
-        }
-        if (clearBtn == null || execBtn == null || helpBtn == null
-                || !"示例 (?)".equals(helpBtn.getText()) || !"执行".equals(execBtn.getText())) {
-            problems.add("「SQL 执行器」的三颗按钮不齐（示例 (?) / 执行 / 清空）");
+        javax.swing.JButton clearInputBtn = frame.sqlRunClearInputButton(),
+                clearLogBtn = frame.sqlRunClearLogButton(),
+                execBtn = frame.sqlRunButton(), helpBtn = frame.sqlRunHelpButton();
+        if (clearInputBtn == null || clearLogBtn == null || execBtn == null || helpBtn == null
+                || !"示例 (?)".equals(helpBtn.getText()) || !"执行".equals(execBtn.getText())
+                || !"清空编辑区".equals(clearInputBtn.getText())
+                || !"清空结果区".equals(clearLogBtn.getText())) {
+            problems.add("「SQL 执行器」的四颗按钮不齐（示例 (?) / 执行 / 清空编辑区 / 清空结果区）");
         }
         if (execBtn != null && !execBtn.getToolTipText().contains("中途出错整批回滚")) {
             problems.add("「执行」按钮没把事务语义写在 tooltip 上：" + execBtn.getToolTipText());
@@ -872,13 +870,30 @@ public final class GuiMain {
                 || !frame.sqlRunInputText().endsWith(frame.sqlSampleSql(1))) {
             problems.add("已有内容时插入没补分号或覆盖了原句：" + frame.sqlRunInputText());
         }
-        // 清空：编辑区与结果区一起清，留着半截最容易拿旧结果当这次看的
+        // 两颗清空各管一边：清结果区不该带走敲了一半的语句，清编辑区不该抹掉上次的结果
+        frame.sqlRunLogPanel().log("上一次留下的结果");
+        int seeded = frame.sqlRunLogPanel().lineCount();
         frame.setSqlRunInputText("SELECT 2;");
-        if (clearBtn != null) {
-            clearBtn.doClick();
+        if (clearInputBtn != null) {
+            clearInputBtn.doClick();
         }
-        if (!frame.sqlRunInputText().isEmpty()) {
-            problems.add("「清空」没清掉编辑区：" + frame.sqlRunInputText());
+        if (!frame.sqlRunInputText().isEmpty()
+                || frame.sqlRunLogPanel().lineCount() != seeded) {
+            problems.add("「清空编辑区」没只清编辑区：编辑区=" + frame.sqlRunInputText()
+                    + " 结果区行数=" + frame.sqlRunLogPanel().lineCount() + " / " + seeded);
+        }
+        frame.setSqlRunInputText("SELECT 3;");
+        if (clearLogBtn != null) {
+            clearLogBtn.doClick();
+        }
+        if (!"SELECT 3;".equals(frame.sqlRunInputText())
+                || frame.sqlRunLogPanel().lineCount() != 0) {
+            problems.add("「清空结果区」没只清结果区：编辑区=" + frame.sqlRunInputText()
+                    + " 结果区行数=" + frame.sqlRunLogPanel().lineCount());
+        }
+        if (clearInputBtn != null && !clearInputBtn.getToolTipText().contains("右侧结果区不动")
+                || clearLogBtn != null && !clearLogBtn.getToolTipText().contains("左边编辑区不动")) {
+            problems.add("两颗清空的 tooltip 没说清各自管哪一边");
         }
         frame.showSqlSamples();
         frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
@@ -1267,7 +1282,8 @@ public final class GuiMain {
             String[] named = {"添加文件", "批量应用前缀", "替换首个前缀", "生成表结构预览",
                     "预览 DDL", "开始导入", "添加 SQL 文件", "保存修改后脚本",
                     "执行脚本到当前库", "连接并加载库",
-                    "生成标准excel文件", "生成简易excel文件", "示例 (?)", "清空"};
+                    "生成标准excel文件", "生成简易excel文件", "示例 (?)",
+                    "清空编辑区", "清空结果区"};
             for (String n : named) {
                 if (!onUi.contains(n)) {
                     problems.add("说明里点名的按钮界面上不存在：" + n);
