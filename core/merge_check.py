@@ -4,9 +4,10 @@
 pandas 读进来是 NaN，字段名和数据列都会错位。所以默认直接拒绝导入，
 而不是默默导出一份错数据。
 
-唯一的例外是**首表顶部的多行表头块**：整块合并区都落在表头里时，
-按「父-子」把多行表头压成一行（技术公司 + 小计 → 技术公司-小计），
-这正是工作簿 2 那种扁平表头；数据区里还有合并区则照旧拒绝——
+唯一的例外是**首表顶部的标准两行合并表头**：所有合并区都从第 1 行起、
+只跨两行的单列父标签或只横跨第 1 行的一组子列时，按「父-子」压成一行
+（技术公司 + 小计 → 技术公司-小计），这正是工作簿 2 那种扁平表头。
+三行表头、第 2 行里的子合并、2x2 块以及数据区里的合并区都照旧拒绝——
 那里每格都该是一个值，合并只可能意味着错位。
 
 .xlsx 用流式扫描 sheet XML 实现：openpyxl 要全量加载整个工作簿（20 万行实测
@@ -199,13 +200,16 @@ def parse_range(ref: str):
 
 
 def header_merge_plan(merged: dict, first_sheet: str):
-    """首表合并区若全在顶部表头块里，返回展开计划；否则返回 None（照旧拒绝）。
+    """只认首表的“标准两行合并表头”，返回展开计划；其余合并返回 None（照旧拒绝）。
 
-    表头深度由**顶到第 1 行的合并区**决定：纵向合并 A1:A2 说明表头有两行，
-    J1:M1 这类横向分组说明这几列共用第一行标签。允许表头块内部再嵌套合并
-    （B2:C2 这种子分组），但只要有合并区越出表头深度，就说明数据区也被合并了，
-    解析出来仍会错位，不能放行。
+    标准形态就是工作簿 1 那种：
+      - 所有合并区都从第 1 行开始；
+      - 要么跨两行的单列纵向合并（A1:A2，父标签管一整列），
+        要么只有第 1 行的多列横向合并（J1:M1，父标签管一组子列）；
+      - 至少有一处跨两行的合并，表头深度固定为 2。
 
+    三行表头、第 2 行里的子合并（B2:C2）、2x2 块（B1:C2）都不属于这一种：
+    它们是另一种布局，展开规则没有把握，仍按原来的合并单元格逻辑拒绝。
     只有首表可以带合并区：其余 Sheet 要么是忽略的参考页，要么是结构定义页，
     它们带合并区说明格式不是这个约定，不去猜。
     """
@@ -218,14 +222,17 @@ def header_merge_plan(merged: dict, first_sheet: str):
         if box is None:
             return None
         parsed.append(box)
-    top = [b for b in parsed if b[0] == 0]
-    # 没有顶到第 1 行的合并区，就无从判断表头有几行；单行表头带合并仍然是错位
-    if not top:
+    for r1, c1, r2, c2 in parsed:
+        if r1 != 0:
+            return None
+        if r2 == 0:
+            continue
+        if r2 == 1 and c1 == c2:
+            continue
         return None
-    depth = max(b[2] for b in top) + 1
-    if depth < 2 or any(b[2] >= depth for b in parsed):
+    if not any(b[2] == 1 for b in parsed):
         return None
-    return {"depth": depth, "merges": parsed}
+    return {"depth": 2, "merges": parsed}
 
 
 def ensure_no_merged_cells(filepath: str) -> None:

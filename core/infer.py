@@ -1008,7 +1008,7 @@ def _pandas_style_headers(labels) -> list:
 
 
 def _flatten_merged_header(filepath: str, sheet_name: str, plan: dict) -> pd.DataFrame:
-    """把首表的多行合并表头压成一行，返回只含数据行的 DataFrame。
+    """把首表的标准两行合并表头压成一行，返回只含数据行的 DataFrame。
 
     合并区里的空格子按左上角的值补齐：纵向合并（序号 A1:A2）让每一行都拿到同一个
     标签，横向合并（技术公司 J1:M1）让组内每列都拿到组名。随后逐列自上而下取标签，
@@ -1069,8 +1069,8 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         raise ValueError(f"不支持的文件类型：{ext}")
     # 合并单元格要在读数据之前判掉：这类文件解析出来必然错位，
     # 提前拒绝既避免导错数据，也省掉几十万行的读取开销。
-    # 例外是首表顶部的多行合并表头：它正是工作簿 2 那种扁平表头的原始形态，
-    # 展开后照常导入；数据区（或别的 Sheet）里还有合并区则继续拒绝。
+    # 例外是首表顶部的标准两行合并表头：它正是工作簿 2 那种扁平表头的原始形态，
+    # 展开后照常导入；别的表头形态、数据区（或别的 Sheet）里有合并区则继续拒绝。
     _note("检查合并单元格")
     merged = detect_merged_cells(filepath)
     merge_plan = None
@@ -1151,7 +1151,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         # 表头整行没写字时按列宽兜底出来的字段名（col、col_2…）；正常表为空列表
         "blank_headers": blank_headers,
         "no_data_rows": len(df) == 0,
-        # 顶部多行合并表头展开信息（sheet/depth）；没展开时为 None，
+        # 顶部两行合并表头展开信息（sheet/depth）；没展开时为 None，
         # GUI/CLI 的 [已解析] 行据此说明"表头是几行压出来的"
         "merged_header": merged_info,
     }
