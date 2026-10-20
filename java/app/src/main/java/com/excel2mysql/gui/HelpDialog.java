@@ -55,7 +55,7 @@ public final class HelpDialog extends JDialog {
         browser = new JEditorPane();
         browser.setEditable(false);
         browser.setContentType("text/html");
-        browser.setText(HelpDoc.html());
+        browser.setText(swingHtml(HelpDoc.html()));
         browser.setBorder(null);
         JScrollPane bodyScroll = new JScrollPane(browser);
         bodyScroll.setBorder(null);
@@ -104,6 +104,25 @@ public final class HelpDialog extends JDialog {
                 dispose();
             }
         });
+    }
+
+    /**
+     * Swing 的 HTML 渲染器按 72dpi 把 pt 折成 px（14pt → 10.5px），Qt 按 96dpi
+     * （10.5pt → 14px），同一份 CSS 在 Java 里只有三分之二大。这里把 pt 换成等价 px，
+     * 让 Java 手册与 Python 端同一字号；其余样式原样保留。
+     */
+    public static String swingHtml(String html) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("font-size:\\s*([0-9]+(?:\\.[0-9]+)?)pt").matcher(html);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            double px = Double.parseDouble(m.group(1)) * 4.0 / 3.0;
+            String num = px == Math.rint(px) ? String.valueOf((int) px)
+                    : String.format(java.util.Locale.ROOT, "%.1f", px);
+            m.appendReplacement(sb, "font-size: " + num + "px");
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     private void pickSelected() {
@@ -199,5 +218,10 @@ public final class HelpDialog extends JDialog {
     /** 自检用：正文真的渲染出来了才有这个长度。 */
     public int bodyLength() {
         return browser.getDocument().getLength();
+    }
+
+    /** 自检用：窗口里实际渲染的那份 HTML（字号已折成 px）。 */
+    public String html() {
+        return browser.getText();
     }
 }
