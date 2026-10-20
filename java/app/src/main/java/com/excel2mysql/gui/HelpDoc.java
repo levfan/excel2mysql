@@ -339,7 +339,8 @@ public final class HelpDoc {
                     "<li><b>命名开关（图形版两颗勾选框，命令行 <code>--initials</code> / <code>--upper</code>）</b>：" + NL +
                     "「表名与字段名取拼音首字母」勾上后整名取各音节首字母（订单金额 → <code>ddje</code>、" + NL +
                     "水库基础信息 → <code>skjcxx</code>）；「表名与字段名转大写」勾上后输出全大写" + NL +
-                    "（<code>DING_DAN_JIN_E</code>、<code>T_IMPORT_DATA</code>）。默认全拼、小写。" + NL +
+                    "（<code>DING_DAN_JIN_E</code>、<code>T_IMPORT_DATA</code>）。图形版两颗默认都勾选" + NL +
+                    "（首字母 + 大写），取消后回到全拼 / 小写；命令行不加参数时仍是全拼、小写。" + NL +
                     "大小写开关也作用于文件名括号里显式写下的英文表名，但不改结构定义 Sheet 里" + NL +
                     "人工写的字段名，也不改手动输入的表名前缀；两颗开关都对之后添加的文件生效，切换时日志留一行提示</li>" + NL +
                     "</ul>" + NL +

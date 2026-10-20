@@ -1287,6 +1287,9 @@ Java 侧 `GuiMain` 的 `checkRejects` 里用 POI 现造一份三空格子表头�
 空表要按字段名关键字定类型、表名与字段名要能转大写。三件都由用户显式开关控制，
 默认值必须与旧版一个字不差——默认全拼、默认小写、有值的列仍按数据判定。
 
+> 2026-10-21 补记：用户随后要求"默认勾选这 2 个框"，图形版两颗开关的初始状态已改为
+> 首字母 + 大写；命令行不加 `--initials` / `--upper` 时仍是全拼、小写。见第 35 节。
+
 ### 27.1 两条开关怎么落到三条线
 
 | 开关 | Python 图形版 | Python 命令行版 | Java 图形版 | Java 命令行版 |
@@ -1644,3 +1647,55 @@ Qt 按 96dpi 把 pt 折成 px（10.5pt → 14px）；Swing 的 HTML 渲染器按
   工作区有未提交改动）」只分到 171x16，至少要 443x16”，退出码 1；
   逐字节还原后哈希
   `1b54a2429c800685dabb26d7cda06f1de2b9059c26b5c1cbb4534433a375e65c`
+
+## 35. 两颗命名开关改为默认勾选
+
+用户贴了两条切换日志，要求"默认勾选这 2 个框"：图形版启动即处于
+「表名与字段名取拼音首字母」+「表名与字段名转大写」，新加的文件直接按
+首字母、大写起名（订单金额 → `DDJE`，水库信息表 → `SKXXB`）。
+命令行口径不动：不加 `--initials` / `--upper` 仍是全拼、小写。
+
+### 35.1 两栈怎么改
+
+- Python：`MainWindow` 里两颗 `QCheckBox` 在 `toggled.connect(...)` 之前
+  `setChecked(True)`。先设状态再连信号，启动时不会凭空打一行"切换"日志。
+- Java：两颗 `JCheckBox` 在 `addActionListener(...)` 之前 `setSelected(true)`；
+  `setSelected` 本身不触发 `ActionListener`，同样没有启动日志。
+- 作用域沿用第 27 节的既有规则：大小写作用于中文转写名与文件名括号里的英文表名，
+  结构定义 Sheet 里人工写的字段名、手动输入的表名前缀原样保留；两颗开关都只对
+  之后添加的文件生效。工具提示里补了"默认已勾选，取消则回到全拼 / 小写"。
+- 同步更新 `README.md`、`help_doc.py`、`HelpDoc.java` 的开关说明。
+
+### 35.2 用例怎么跟
+
+- Java 自检：`new MainFrame()` 后先断言两颗默认勾选，随后显式取消勾选，
+  再喂旧的夹具——后面几十处期望值仍按全拼、小写写，不因新默认整片改期望。
+  `naming_switches` 用例重新 `doClick()` 勾上，验 `SKXXB` / `DDJE` 与两条
+  "切换为：拼音首字母 / 大写"日志；再点掉验 `n_lowercheck` / `ding_dan_jin_e`
+  与"全拼 / 小写"日志。
+- Python：新增 M23 组。M23 断言默认勾选，M23b 端到端验 `SKXXB` / `DDJE`，
+  M23c 验取消勾选各留一行切换日志，M23d 验取消后回到 `n_lowercheck` /
+  `ding_dan_jin_e`。R 组前缀改写用例改走 `_legacy_naming()`，先关两颗开关，
+  免得默认大写改写期望值。
+- 对撞器：`sqlgen.roundtrip` 原来借 `frame.names()` 读回产物，默认大写后标准件
+  里的 `t_gen` 被读成 `T_GEN`，与 Python 侧直接 `build_table_def(gen_file)`
+  的默认口径不一致。读回只验"产物能否原样读回"，与界面开关无关，改为新起一份
+  默认 `Names`（`GuiDump.readBackGen` 不再接收 `frame`）。
+
+### 35.3 验证
+
+- `.venv/Scripts/python.exe pack_test.py`：通过 529 / 失败 0 / 跳过 6，退出码 0；
+  M23 / M23b / M23c / M23d 全绿。
+- `java/构建验证.bat`：十步全过，退出码 0；第 10 步 GUI 自检通过
+  （文件表 11 行 / 字段合计 73 个）。
+- `界面双端对撞.bat`：235 键逐键一致，退出码 0。
+- 变异抽查：
+  - Python 把两处 `setChecked(True)` 改成 `False` → M23 / M23b / M23c 三条变红
+    （M23c 连带红是因为默认已关时再 `setChecked(False)` 不触发 `toggled`，
+    一行切换日志都没有），汇总 526 通过 / 3 失败、退出码 1；
+    逐字节还原后 `main.py` 哈希
+    `c5664affc8cbb2d1152702459a8c8986256ee831debdd74de9bd9ff71ea64223`
+  - Java 把两处 `setSelected(true)` 改成 `false` → 自检报
+    "两颗命名开关应默认勾选（取拼音首字母 / 转大写）"，退出码 1；
+    逐字节还原后 `MainFrame.java` 哈希
+    `120eebbe9f1763ea1d0cc23b19cccbcf047272d4d45fa2ae6d1fda55e289846a`
