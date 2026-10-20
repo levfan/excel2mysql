@@ -1453,3 +1453,76 @@ Java 侧 `GuiMain` 的 `checkRejects` 里用 POI 现造一份三空格子表头�
 - 未覆盖：本机没有 MySQL 客户端、没有 3306 监听，也没有 `PT_PASS`，
   `check_sql_samples.py` 未执行，100 条示例没有真库逐条取过证；静态检查只覆盖了
   切句非空、引号闭合与分组计数，不等同于“每条在 MySQL 8.0 上可执行”
+
+## 31. 空列按字段名定类型的词表扩展
+
+用户反馈原先只认日期、时间、金额、数量，大量中文口径没有判断出来（年龄应为整数、
+系数应为小数）。本轮只扩展“整列一个值都没有”时的按名规则；有值的列仍走数据判定，
+结构定义 Sheet 里人工写的类型仍然优先。
+
+### 31.1 新增分类与优先级
+
+判定顺序即优先级，命中即停：
+
+1. 金额（沿用原 `isMoney`，含比率否决）→ `DECIMAL(16,2)`
+2. 时间 → `DATETIME`；日期 → `DATE`
+3. 布尔：是否 / 有无 / 开关 / 布尔 / 标志；英文 `is_ / has_ / bool / flag / enabled /
+   valid / deleted / yn` → `TINYINT(1)`
+4. 显式比率/系数：比例 / 百分比 / 占比 / 增速 / 幅度 / 系数 / 因数 / 倍数 / 折扣 /
+   权重 / 比重 / 容积率；英文 `rate / ratio / percent / percentage / pct / coefficient /
+   factor / multiplier / discount` → `DECIMAL(18,6)`
+5. 评分：得分 / 评分 / 分数 / 成绩 / 总分 / 平均分 / 绩点；英文 `score / gpa` →
+   `DECIMAL(10,2)`
+6. 经纬度：经度 / 纬度 / 经纬度 / 坐标；英文 `longitude / latitude / lng / lat / lon /
+   coord / coordinate` → `DECIMAL(18,8)`
+7. 计量：长度 / 宽度 / 高度 / 厚度 / 深度 / 距离 / 里程 / 面积 / 体积 / 容积 / 重量 /
+   毛重 / 净重 / 体重 / 载重 / 容量 / 温度 / 湿度 / 浓度 / 密度 / 压力 / 速度 / 速率 /
+   流量 / 电量 / 水量 / 气量 / 热量 / 功率 / 电压 / 电流 / 频率 / 海拔 / 高程 / 水位 /
+   雨量 / 身高 / 含量 / 纯度 / 直径 / 半径 / 周长 / 角度；英文 `length / width / height /
+   thickness / depth / distance / mileage / area / volume / capacity / weight /
+   temperature / humidity / density / pressure / speed / flow / power / voltage /
+   frequency / elevation / altitude / diameter / radius / perimeter` → `DECIMAL(18,4)`
+8. 裸「率」→ `DECIMAL(18,6)`（放在计量之后，`频率`、`功率`、`速率` 才不会被抢走；
+   `容积率` 已在第 4 步显式命中）
+9. 计数：原有数量类 + 户数 / 笔数 / 车数 / 头数 / 只数 / 间数 / 亩数 / 套数 / 项数 /
+   总数 / 积分 → `INT`
+10. 年龄/年限：年龄 / 工龄 / 教龄 / 党龄 / 军龄 / 年限 / 岁数 / 周岁；英文 `age` → `INT`
+11. 序号/排名：序号 / 排序 / 排名 / 名次 / 页码 / 页数 / 层数 / 楼层 / 优先级；
+    英文 `rank / sort / seq / sequence / serial / page / pages / floor / priority` → `INT`
+12. 年份/月份：年份 / 年度 / 月份 / 季度 / 周次 / 周数 / 天数 / 小时数 / 分钟数 /
+    秒数 / 期数；英文 `year / month / quarter / week / hour / minute / second` → `INT`
+13. 其余仍 `VARCHAR(64)`
+
+英文全部按成词匹配（贴着下划线或首尾），`update`、`birthday`、`status`、`remark`
+不会被新词表误中；中文继续不收裸「费」「价」，`费县`、`评价` 不受影响。
+
+### 31.2 两条线实现
+
+- Python：`core/infer.py` 的 `_name_based_type` 与新增词表常量；`_name_hit` 统一
+  “中文包含 / 英文成词正则”的判断。
+- Java：`core/Infer.java` 的 `nameBasedType` 与同名常量、`nameHit`，逐条同序；
+  只在 `hasValue == false` 时调用。
+- 留痕文案按分类点名口径，例如“含比率/系数语义，按 DECIMAL(18,6) 建列”
+  “含计量语义，按 DECIMAL(18,4) 建列”，不再一律写“含数量语义”。
+
+### 31.3 验证
+
+- `pack_test.py`：519 通过 / 0 失败 / 6 跳过。B22f 覆盖中文分类，B22g 覆盖文案，
+  B22h 覆盖优先级（频率/功率/速率走计量、容积率/毛利率走比率、订单金额仍归金额），
+  B22i 覆盖英文成词与不误中，B22j 覆盖有值时让位数据判定。
+- `pack_test38.py`：3.8 栈 245 通过 / 0 失败 / 14 跳过；3.12 栈 236 通过 / 0 失败 /
+  17 跳过。新增 W42 走命令行 `--dry-run`，断言 8 个中文表头落到对应类型且日志含
+  “含比率/系数语义”。
+- `java/构建验证.bat`：十步全过；Swing 自检的 13 列空模板夹具与 5 列优先级夹具
+  逐列比对类型。
+- `界面双端对撞.bat`：235 键逐键一致（本轮不加控件）。
+- 变异抽查：
+  - Python `_NAME_RATIO_CN` 去掉“系数” → B22f、B22g 变红；`pack_test38` 的 W42
+    同时变红（3.12 栈 235 通过 / 1 失败）；逐字节还原后哈希
+    `b54e3cd6e3c253ba5fa78386e5efa4a0b6109a14fd3e6825f636070d532da314`
+  - Python `_NAME_MEASURE_CN` 去掉“频率” → B22h 变红（频率落成 `DECIMAL(18,6)`），
+    还原后同一哈希
+  - Java `NAME_AGE_CN` 去掉“年龄”、`NAME_MEASURE_CN` 去掉“频率” → Swing 自检报
+    “空模板按名定类型第 6 列期望 INT，实际 VARCHAR(64)”与“优先级夹具第 1 列期望
+    DECIMAL(18,4)，实际 DECIMAL(18,6)”，闸门退出码 1；逐字节还原后哈希
+    `3cc363f1ab8acffe33b8c1eb9eb00da2445e0194d5bf5c5a4eb3374eca776232`

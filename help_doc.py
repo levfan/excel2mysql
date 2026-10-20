@@ -344,8 +344,10 @@ MySQL 直接报语法错误</li>
 <tr><td>含小数</td><td><code>DECIMAL(p,s)</code> 按实测位数定宽</td></tr>
 <tr><td>文本</td><td><code>VARCHAR(n)</code>，按全量最大 UTF-8 字节 + 20% 余量取档位</td></tr>
 <tr><td><b>整列没有值</b>（采集模板还没填数）</td><td>按字段名关键字定：日期→<code>DATE</code>、
-时间→<code>DATETIME</code>、金额类→<code>DECIMAL(16,2)</code>、数量类→<code>INT</code>，
-其余 <code>VARCHAR(64)</code></td></tr>
+时间→<code>DATETIME</code>、金额→<code>DECIMAL(16,2)</code>、是否/标志→<code>TINYINT(1)</code>、
+比率/系数→<code>DECIMAL(18,6)</code>、评分→<code>DECIMAL(10,2)</code>、
+经纬度→<code>DECIMAL(18,8)</code>、长度/重量/温度等计量→<code>DECIMAL(18,4)</code>、
+数量/年龄/序号/年份→<code>INT</code>，其余 <code>VARCHAR(64)</code></td></tr>
 <tr><td>超长文本</td><td>超 16383 字节 → <code>TEXT</code>，超 65535 字节 → <code>MEDIUMTEXT</code></td></tr>
 </table>
 <h3>几个容易踩的点已经处理掉了</h3>
@@ -357,9 +359,16 @@ MySQL 直接报语法错误</li>
 <code>DECIMAL(16,2)</code></li>
 <li><b>空列按字段名定类型，且每条都留痕</b>：整列一个值都没有时，先看字段名——
 发布日期 → <code>DATE</code>、更新时间 → <code>DATETIME</code>、
-订单金额 → <code>DECIMAL(16,2)</code>、数量 → <code>INT</code>，其余仍
-<code>VARCHAR(64)</code>；英文按成词匹配（<code>create_date</code>、<code>qty</code> 命中，
-<code>update</code>、<code>birthday</code> 不误中）。有值的列照旧按数据判定；
+订单金额 → <code>DECIMAL(16,2)</code>、数量/年龄/序号/年份 → <code>INT</code>、
+是否/有无/开关/标志 → <code>TINYINT(1)</code>、
+率/比例/系数/权重 → <code>DECIMAL(18,6)</code>、
+得分/评分/成绩 → <code>DECIMAL(10,2)</code>、
+经度/纬度/坐标 → <code>DECIMAL(18,8)</code>、
+长度/面积/重量/温度/频率 → <code>DECIMAL(18,4)</code>，其余仍
+<code>VARCHAR(64)</code>；英文按成词匹配（<code>create_date</code>、<code>qty</code>、
+<code>is_deleted</code>、<code>longitude</code> 命中，<code>update</code>、<code>birthday</code>
+不误中）。金额优先于其他语义；显式比率词优先于计量词，裸「率」放在计量词之后，
+所以频率、功率按计量，容积率按比率。有值的列照旧按数据判定；
 结构定义表里人工写的类型优先。每次按名定类型都写进
 <code>[类型修正] … 按表头语义调整</code> 日志行，现场能对上是哪一列、为什么</li>
 <li><b>只收成词的关键词，不认裸「费」「价」</b>：<code>费县</code>（地名）、
