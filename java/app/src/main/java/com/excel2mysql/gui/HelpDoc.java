@@ -229,9 +229,16 @@ public final class HelpDoc {
                     "表头空着、整列又没值的（Excel 尾部格式化拖出来的 <code>Unnamed</code> 列）才剔除。全空行照旧剔除</li>" + NL +
                     "<li>只有表头、一行数据都没有的表照样解析成功：建出来是空表，日志末尾写" + NL +
                     "<code>没有数据行，建出来是空表</code>，并且<b>不自动选主键</b>（没数据无法判断唯一与非空）</li>" + NL +
-                    "<li>表头里的 <code>*</code> / <code>＊</code>、全角符号、<code>【】</code> 这类必填标记" + NL +
-                    "<b>不进字段名</b>，字段名只留转写后的拼音或英文；原文完整保留在<b>字段注释</b>里，" + NL +
-                    "想知道某一列原来是哪个表头看注释即可</li>" + NL +
+                    "<li>表头里的符号一律不进字段名：<code>*</code> / <code>＊</code> 这类必填标记、全角空格、" + NL +
+                    "<code>【】〈〉《》「」</code> 等括号符本身都会去掉；<b>成对括号包住的那一段整段也不进名字</b>——" + NL +
+                    "表单里 <code>发布日期（yyyy-MM-dd）</code>、<code>金额（元）</code>、<code>是否已婚【是/否】</code>、" + NL +
+                    "<code>★（必填）联系电话</code> 括号里是写给填表人看的口径，不是字段的一部分，" + NL +
+                    "于是分别取 <code>fa_bu_ri_qi</code>、<code>jin_e</code>、<code>shi_fou_yi_hun</code>、" + NL +
+                    "<code>lian_xi_dian_hua</code>。整格只有括号（<code>（备注说明）</code>）时不剥空，照旧用里面那串字。" + NL +
+                    "两条注意：① <b>原始表头完整保留在字段注释里</b>，括号里的口径一个不丢，看注释就知道这列原来是哪个表头；" + NL +
+                    "② 剥完之后同名会靠 <code>_2</code> / <code>_3</code> 去重，所以同一张表里" + NL +
+                    "<code>发布日期（yyyy-MM-dd）</code> 和 <code>发布日期</code> 是<b>两列</b>（<code>fa_bu_ri_qi</code> 与" + NL +
+                    "<code>fa_bu_ri_qi_2</code>），不会合成一列，但光看名字分不出谁是谁，要区分就改表头或在结构预览里改字段名</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
                     "<h3>第 2 类：结构定义表（元数据 Sheet + 数据 Sheet）</h3>" + NL +
