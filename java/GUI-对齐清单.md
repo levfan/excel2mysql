@@ -1339,3 +1339,39 @@ Java 侧 `GuiMain` 的 `checkRejects` 里用 POI 现造一份三空格子表头�
   - Python `_name_based_type` 停掉时间规则 → B22/B22b 变红，逐字节还原
   - Java `Infer` 摘掉 `nameBasedType` 调用 → `TYPE-DIFF` 报 1 处不一致、
     GUI 自检报四列类型不对，逐字节还原
+
+## 28. 添加文件弹窗：文件名框里输入文件夹路径回车要进目录
+
+用户在「添加文件」的文件名框里写入文件夹路径并回车，期望是打开该目录继续挑文件，
+而不是把目录当成选中文件交给程序。
+
+### 28.1 实测分界
+
+| 操作 | Python 图形版（Qt 原生弹窗） | Java 图形版（修改前） |
+| --- | --- | --- |
+| 输入文件夹路径（不带引号）后回车 / 点「打开」 | 进入该目录，弹窗不关 | 进入该目录，弹窗不关 |
+| 粘贴 `"D:\…\目录"`（资源管理器「复制文件地址」的格式）后回车 / 点「打开」 | 进入该目录，弹窗不关 | 把目录当成选中文件关闭弹窗 |
+| 选中真实 Excel | 返回文件路径 | 返回文件路径 |
+
+- Java 这一格出在 JDK 8 `BasicFileChooserUI.ApproveSelectionAction`：普通路径会走
+  「是目录就 `changeDirectory`」，但带引号的多选路径在更早的分支被 `createFileObject`
+  收进 `selectedFiles`，随后直接 `approveSelection()`，没再做目录判断。
+- Python 侧是 Windows 原生文件对话框。用 Win32 消息把带引号路径写进文件名框、再点「打开」
+  实测：弹窗保持打开、结果未返回；换成真实 `.xlsx` 才关闭并返回该文件。
+
+### 28.2 修法
+
+`FolderAwareChooser` 继承 `JFileChooser`，覆盖 `approveSelection()`：选中项里有目录时，
+清空选择、`setCurrentDirectory(目录)` 后直接返回，不调用 `super.approveSelection()`；
+只有真正选到文件才放行。「添加文件」改用这个类，多选与四档过滤器等设置不变。
+不带引号的路径仍由 JDK 自己进目录，覆盖层对它是透明的。
+
+### 28.3 守卫与验证
+
+- Swing 自检新增 `folder_path_entry`：走弹窗自己的 `ApproveSelectionAction`
+  （回车与「打开」是同一条路），依次验证带引号目录、不带引号目录都进目录且不产生确认事件，
+  最后验证真实 `.xlsx` 仍确认一次并原样交出路径。
+- 变异抽查：把 `approveSelection()` 改回无条件 `super`，自检两条变红
+  （带引号的文件夹路径回车后没进入该目录 / 被当成文件交出去了），
+  逐字节还原后哈希一致、自检转绿。
+- `构建验证.bat` 十步全过；`界面双端对撞.bat` 仍为 235 键逐键一致（本轮不加控件）。
