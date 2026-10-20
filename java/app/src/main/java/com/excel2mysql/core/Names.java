@@ -3,7 +3,9 @@ package com.excel2mysql.core;
 import com.excel2mysql.pinyin.PinyinConverter;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -19,6 +21,19 @@ public final class Names {
     private static final Pattern PAREN_TABLE =
             Pattern.compile("[\\uff08(]\\s*([^\\uff08\\uff09()]*)\\s*[\\uff09)]\\s*$");
     private static final Pattern TABLE_EN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+
+    // 表头里的成对括号注释（发布日期（yyyy-MM-dd）、金额（元）、是否已婚【是/否】）。
+    // 括号一律写成码位转义：全角（）与半角() 在源码里看着一模一样，
+    // 两边各数一遍必漏一个，Python 侧就是这么静默漏剥过一轮的。
+    private static final String ANNOT_OPEN =
+            "\\(\\[\uff08\uff3b\uff5b{}\u3010\u3014\u3008\u300a\u300c\u300e";
+    private static final String ANNOT_CLOSE =
+            "\\)\\]\uff09\uff3d\uff5d{}\u3011\u3015\u3009\u300b\u300d\u300f";
+    private static final Pattern ANNOT_SPAN = Pattern.compile(
+            "[" + ANNOT_OPEN + "][^" + ANNOT_CLOSE + "]*[" + ANNOT_CLOSE + "]");
+    // 嵌套剥完剩下的孤立括号符（只可能来自手写配不对的表头）
+    private static final Pattern ANNOT_CHAR =
+            Pattern.compile("[" + ANNOT_OPEN + ANNOT_CLOSE + "]");
     private static final Pattern NON_WORD =
             Pattern.compile("[^\\w]+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final Pattern RUN =
@@ -79,15 +94,56 @@ public final class Names {
         return colToField(cn, FIELD_MAX_LEN);
     }
 
+    /**
+     * 表头 -> 剥掉成对括号注释后的文本，口径与 Python _strip_header_annotations 逐字对齐：
+     * 左括号到右括号整段去掉，嵌套最多三轮，最后删掉配不对的孤立括号符。
+     */
+    public static String stripHeaderAnnotations(String text) {
+        String s = text == null ? "" : text;
+        for (int i = 0; i < 3; i++) {
+            String out = ANNOT_SPAN.matcher(s).replaceAll("");
+            if (out.equals(s)) {
+                break;
+            }
+            s = out;
+        }
+        return ANNOT_CHAR.matcher(s).replaceAll("");
+    }
+
     public String colToField(Object cn, int limit) {
         if (cn == null || pyStrip(String.valueOf(cn)).isEmpty()) {
             return "col";
         }
-        List<Syllable> syllables = syllables(String.valueOf(cn));
+        String cleaned = stripHeaderAnnotations(String.valueOf(cn));
+        if (pyStrip(cleaned).isEmpty()) {
+            cleaned = String.valueOf(cn);     // 整格就是括号（（备注说明））：全剥会退化成 col
+        }
+        List<Syllable> syllables = syllables(cleaned);
         if (syllables.isEmpty()) {
             return "col";
         }
         return fitName(syllables, limit, "f_");
+    }
+
+    /**
+     * 同名字段靠 _2/_3 去重；计数状态由调用方那份 Map 带着走（一张表一份）。
+     * 只留这一处实现：读取层与 verify 侧的命名差分都得走它，各写一遍就会一边去重一边不去
+     * （表头注释剥完之后，「发布日期（yyyy-MM-dd）」与「发布日期」就是同名）。
+     */
+    public static String dedupField(Map<String, Integer> seen, String field) {
+        Integer prev = seen.get(field);
+        if (prev == null) {
+            seen.put(field, Integer.valueOf(1));
+            return field;
+        }
+        int n = prev.intValue() + 1;
+        seen.put(field, Integer.valueOf(n));
+        return field + "_" + n;
+    }
+
+    /** 新建一份去重状态（一张表一份）。 */
+    public static Map<String, Integer> newDedupState() {
+        return new LinkedHashMap<String, Integer>();
     }
 
     /**

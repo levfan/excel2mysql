@@ -20,6 +20,16 @@ _PAREN_TABLE_RE = re.compile(r"[（(]\s*([^（）()]*)\s*[）)]\s*$")
 # 另外还要求至少含一个字母 —— 纯数字括号是序号不是表名，见 parse_table_name_and_comment
 _TABLE_EN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
+# 表头里的成对括号注释：左括号到右括号整段（含中英文各类括号），见 _strip_header_annotations
+# 括号一律按码位写，不靠字形——全角（） 与半角() 在源码里看着一模一样，漏一个就是静默漏剥
+_ANNOT_OPEN = u"(\\[\uFF08\uFF3B\uFF5B{}\u3010\u3014\u3008\u300A\u300C\u300E"
+_ANNOT_CLOSE = u")\\]\uFF09\uFF3D\uFF5D{}\u3011\u3015\u3009\u300B\u300D\u300F"
+_ANNOT_SPAN_RE = re.compile(
+    u"[" + _ANNOT_OPEN + u"][^" + _ANNOT_CLOSE + u"]*[" + _ANNOT_CLOSE + u"]"
+)
+# 嵌套剥完剩下的孤立括号符（只可能来自手写配不对的表头）
+_ANNOT_CHAR_RE = re.compile(u"[" + _ANNOT_OPEN + _ANNOT_CLOSE + u"]")
+
 # VARCHAR 长度算法：常用档位 + 全表字节预算
 # utf8mb4 下 VARCHAR(n) 计入 MySQL 65535 字节行上限按 4n 字节算（n 为字符数），
 # 全表 VARCHAR 总量不加控制会导致 CREATE TABLE 报 Row size too large
@@ -243,22 +253,60 @@ def _fit_name(syllables, limit, digit_prefix):
     return name[:limit]
 
 
+def _strip_header_annotations(text: str) -> str:
+    """剥掉表头里成对括号包住的注释段：发布日期（yyyy-MM-dd）→ 发布日期。
+
+    表单里括号包起来的那截是给填表人看的口径说明（单位、取值范围、日期格式、"必填"），
+    不是字段本身。让它进名字有两个实打实的害处：名字变长变脏
+    （fa_bu_ri_qi_yyyy_mm_dd），且同一口径带不带括号会裂成两个字段。
+    只作用于**字段名**，列注释仍用原始表头，口径信息一个不丢。
+    嵌套从外层剥，循环到不再有变化为止（最多三轮，防失控）；最后一律把剩下的孤立括号符删掉
+    ——`单价（含税（13%））` 第一轮吃掉 `（含税（13%）` 会留下一个右括号，
+    括号符本身对字段名没有任何意义，留着只会变成 `dan_jia_`。
+    """
+    s = str(text if text is not None else "")
+    for _ in range(3):
+        out = _ANNOT_SPAN_RE.sub("", s)
+        if out == s:
+            break
+        s = out
+    return _ANNOT_CHAR_RE.sub("", s)
+
+
 def _col_to_field(cn: str, limit: int = _FIELD_MAX_LEN) -> str:
     """中文表头 -> 蛇形拼音字段名。
 
     规则（确定性，只有 30 字符这一个阈值）：
-      1. 逐音节转拼音，音节间用下划线连接（蛇形），如 订单金额 -> ding_dan_jin_e；
-      2. 全拼不超过 limit 就用全拼；
-      3. 超过则整列强制降级为各音节首字母，如 北京市住房和城乡建设委员会 -> bjsszhjxwyh；
+      1. 先剥成对括号里的注释（见 _strip_header_annotations），剥空了就回退用原表头；
+      2. 逐音节转拼音，音节间用下划线连接（蛇形），如 订单金额 -> ding_dan_jin_e；
+      3. 全拼不超过 limit 就用全拼；
+      4. 超过则整列强制降级为各音节首字母，如 北京市住房和城乡建设委员会 -> bjsszhjxwyh；
          首字母仍超长时截断兜底；
-      4. 纯英文表头原样蛇形化，不做拼音转换；数字开头补 f_ 前缀。
+      5. 纯英文表头原样蛇形化，不做拼音转换；数字开头补 f_ 前缀。
     """
     if cn is None or str(cn).strip() == "":
         return "col"
-    syllables = _syllables(cn)
+    cleaned = _strip_header_annotations(str(cn))
+    if cleaned.strip() == "":
+        cleaned = str(cn)         # 整格就是括号（（备注说明））：全剥会退化成 col，宁可留着里面
+    syllables = _syllables(cleaned)
     if not syllables:
         return "col"
     return _fit_name(syllables, limit, "f_")
+
+
+def dedup_field(seen: dict, field: str) -> str:
+    """同名字段靠 _2/_3 去重；计数状态由调用方那份 dict 带着走（一张表一份）。
+
+    只留这一处实现：表头注释剥离之后「发布日期（yyyy-MM-dd）」与「发布日期」会同名，
+    读取层和 verify 侧的命名差分都得走这条规则，各写一遍就会一边去重一边不去。
+    """
+    prev = seen.get(field)
+    if prev is None:
+        seen[field] = 1
+        return field
+    seen[field] = prev + 1
+    return f"{field}_{prev + 1}"
 
 
 def _looks_int(v) -> bool:
@@ -361,12 +409,7 @@ def infer_columns(df: pd.DataFrame) -> list:
     cols = []
     seen = {}
     for i, h in enumerate(headers):
-        field = _col_to_field(h)
-        if field in seen:
-            seen[field] += 1
-            field = f"{field}_{seen[field]}"
-        else:
-            seen[field] = 1
+        field = dedup_field(seen, _col_to_field(h))
         coldata = df.iloc[:, i]
         max_len = 0
         has_value = False

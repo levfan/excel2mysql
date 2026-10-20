@@ -226,19 +226,12 @@ public final class Infer {
      */
     public List<Column> inferColumns(List<Object> headers, List<List<Object>> rows) {
         List<Column> cols = new ArrayList<Column>();
-        Map<String, Integer> seen = new LinkedHashMap<String, Integer>();
+        Map<String, Integer> seen = Names.newDedupState();
         for (int i = 0; i < headers.size(); i++) {
             String h = pyStr(headers.get(i));
             Column col = new Column();
             col.comment = h;
-            col.field = names.colToField(h);
-            Integer prev = seen.get(col.field);
-            if (prev != null) {
-                seen.put(col.field, Integer.valueOf(prev.intValue() + 1));
-                col.field = col.field + "_" + (prev.intValue() + 1);
-            } else {
-                seen.put(col.field, Integer.valueOf(1));
-            }
+            col.field = Names.dedupField(seen, names.colToField(h));
 
             long maxLen = 0;
             boolean hasValue = false;
