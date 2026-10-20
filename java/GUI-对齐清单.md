@@ -1388,9 +1388,9 @@ Java 侧 `GuiMain` 的 `checkRejects` 里用 POI 现造一份三空格子表头�
 | 条件 | 不满足时 |
 | --- | --- |
 | 合并区只在第一个 Sheet | 整份拒绝 |
-| 有合并区从第 1 行开始，表头深度至少 2 行 | 整份拒绝（单行表头上的合并不算多行表头） |
-| 所有合并区都在表头块内结束 | 整份拒绝（数据行合并、合并区伸进数据行都会挡） |
-| 表头块之外没有合并区 | 整份拒绝 |
+| 每一处合并区都从第 1 行开始 | 整份拒绝（第 2 行里的子合并属于另一种布局） |
+| 只能是跨两行的单列纵向合并（`A1:A2`）或只横跨第 1 行的多列合并（`J1:M1`） | 整份拒绝（三行表头、2x2 块都不猜） |
+| 至少一处跨两行（深度固定为 2） | 整份拒绝（单行表头上的合并仍拒绝） |
 
 压平方式：先把每个合并区左上角的值铺满矩形，再逐列按行收集非空且与上一行不同的标签，
 用 `-` 连接。纵向合并在铺值后两行文字相同，去重后只留一份，所以 `序号` 不会变成
@@ -1400,22 +1400,23 @@ Java 侧 `GuiMain` 的 `checkRejects` 里用 POI 现造一份三空格子表头�
 
 ### 29.2 两条线实现
 
-- Python：`core/merge_check.py` 的 `header_merge_plan` 只负责判定与算深度；
+- Python：`core/merge_check.py` 的 `header_merge_plan` 只负责判定放行与固定深度；
   `core/infer.py` 的 `_flatten_merged_header` 在 `pd.read_excel` 之后替换第一个 Sheet，
   其余 Sheet 与后续元数据识别不变。
 - Java：`MergeCheck.headerPlan` 与 `TableBuilder.flattenMergedHeader` 同规则；
   `ImportParse` 的解析日志补同一句话。Swing 自检在夹具存在时断言日志含展开说明、
-  DDL 里出现 `ji_shu_gong_si_xiao_ji` 与超长名降级后的 `jsgsptyg`。
+  DDL 里出现 `ji_shu_gong_si_xiao_ji` 与超长名降级后的 `jsgsptyg`；另外直接喂
+  `headerPlan` 合成断言：标准两行放行，三行表头、第 2 行子合并、2x2 块都必须拒绝。
 - 金标准夹具 `两行合并表头（ods_t_merged_header）.xlsx` 带「原始表」与「结构化参考」两页，
   两页数据逐值相同。`excel.jsonl.gz` 新增 `table_grid`（压平后的有效网格），
   类型推断差分改用它；读取层差分仍用原始 `grid`，保持"读取"与"推断"两层分开归因。
 
 ### 29.3 验证
 
-- `pack_test.py`：509 通过 / 0 失败 / 6 跳过（N 组新增两行表头展开、纵向去重、
+- `pack_test.py`：512 通过 / 0 失败 / 6 跳过（N 组新增两行表头展开、纵向去重、
   横向组名、数据与主键、日志说明、zip 内展开，以及数据区合并、表头外溢、其他页合并、
-  单行合并表头四种拒绝）
-- `pack_test38.py`：3.8 栈 240 通过 / 0 失败 / 14 跳过（V19b–V19d 与 Y10a 命令行留痕）
+  单行表头、三行表头、第 2 行子合并、2x2 块七种拒绝）
+- `pack_test38.py`：3.8 栈 243 通过 / 0 失败 / 14 跳过（V19b–V19d 与 Y10a 命令行留痕）
 - `java/构建验证.bat` 十步全过（NAME 68 字段 / TYPE 68 列 / META 32 条 2692 格不一致 0；
   GUI 自检 11 个夹具、字段合计 73）
 - `界面双端对撞.bat`：235 键逐键一致（本轮不加控件）
@@ -1424,3 +1425,4 @@ Java 侧 `GuiMain` 的 `checkRejects` 里用 POI 现造一份三空格子表头�
   - Python `header_merge_plan` 放开单行表头 → N5、N18 变红，逐字节还原
   - Java `flattenMergedHeader` 只留最后一段标签 → Swing 自检报
     `两行合并表头没有按「父-子」展开成字段名`，逐字节还原
+  - Python 放开 2x2 块的判定 → N18「2x2 合并块」变红，逐字节还原
