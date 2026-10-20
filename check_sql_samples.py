@@ -1,4 +1,4 @@
-"""逐条把 SQL 执行器的 30 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
+"""逐条把 SQL 执行器的 100 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
 
 每条之前重建一次临时环境。有几条天然依赖前一条的产物（加列之后才能改列名、
 建了索引才能删索引、建了快照表才能清它），这类依赖在 PREREQ 里显式声明并先跑一遍，
@@ -19,7 +19,7 @@ HOST, PORT, USER, DB = "127.0.0.1", 3306, "root", "e2m_sqlscratch"
 AUX = "ods_data"
 
 # 序号（从 1 开始）→ 需要先执行的序号
-PREREQ = {9: [7], 12: [10], 25: [7], 28: [7], 30: [6]}
+PREREQ = {9: [7], 12: [10], 93: [7], 96: [7], 98: [6]}
 
 
 def conn(db=None):
@@ -70,8 +70,8 @@ def cleanup():
 
 
 def main():
-    if len(SAMPLES) != 30:
-        print("条数不是 30：%d" % len(SAMPLES))
+    if len(SAMPLES) != 100:
+        print("条数不是 100：%d" % len(SAMPLES))
         return 1
     fails = []
     for i, (group, desc, sql) in enumerate(SAMPLES, 1):

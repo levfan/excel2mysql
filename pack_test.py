@@ -823,13 +823,21 @@ _groups = []
 for _s in app_main.SQL_SAMPLES:
     if not _groups or _groups[-1] != _s[0]:
         _groups.append(_s[0])
-check("F31 示例库 30 条、5 个分组，且每条都带分组/说明/语句",
-      len(app_main.SQL_SAMPLES) == 30 and len(_groups) == 5
+check("F31 示例库 100 条、12 个分组、说明不重样，且每条都带分组/说明/语句",
+      len(app_main.SQL_SAMPLES) == 100 and len(_groups) == 12
+      and len({s[1] for s in app_main.SQL_SAMPLES}) == 100
       and all(len(s) == 3 and s[0] and s[1] and s[2] for s in app_main.SQL_SAMPLES),
       (len(app_main.SQL_SAMPLES), _groups))
+check("F31b 分组按治理主题排布，治理类不少于 70 条",
+      _groups == ["建库与选库", "建表与改表", "元数据与治理体检", "数据质量检查",
+                  "数据标准化与清洗", "主数据与重复数据", "数据血缘与影响分析",
+                  "安全与权限治理", "生命周期与归档", "性能与容量治理",
+                  "查询与执行计划", "数据修正"]
+      and sum(1 for s in app_main.SQL_SAMPLES if s[0] in _groups[2:10]) >= 70,
+      _groups)
 _dlg = app_main.SqlSamplesDialog(w.sql_run_input)
 check("F32 示例对话框标题带条数、清单与示例表同条数",
-      _dlg.windowTitle() == "SQL 示例（30 条）" and _dlg.list.count() == 30,
+      _dlg.windowTitle() == "SQL 示例（100 条）" and _dlg.list.count() == 100,
       (_dlg.windowTitle(), _dlg.list.count()))
 check("F33 条目文案为「【分组】说明」，打开即选中第一条",
       _dlg.list.item(0).text() == "【建库与选库】%s" % app_main.SQL_SAMPLES[0][1]

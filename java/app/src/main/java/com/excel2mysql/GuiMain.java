@@ -1074,8 +1074,8 @@ public final class GuiMain {
         }
 
         // 示例清单：条数、条目文案、选中切换预览
-        if (frame.sqlSamplesCount() != 30) {
-            problems.add("SQL 示例不是 30 条：" + frame.sqlSamplesCount());
+        if (frame.sqlSamplesCount() != 100) {
+            problems.add("SQL 示例不是 100 条：" + frame.sqlSamplesCount());
         }
         for (int i = 0; i < frame.sqlSamplesCount(); i++) {
             String sql = frame.sqlSampleSql(i);
@@ -1088,7 +1088,7 @@ public final class GuiMain {
         if (!frame.sqlSamplesShowing()) {
             problems.add("「示例 (?)」点了没开出对话框");
         }
-        if (!"SQL 示例（30 条）".equals(frame.sqlSamplesTitle())) {
+        if (!"SQL 示例（100 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
         }
         if (!frame.sqlSamplesItemText(0).startsWith("【")
