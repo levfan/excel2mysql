@@ -1579,21 +1579,26 @@ class MainWindow(QWidget):
         self.btn_sql_run_exec = QPushButton("执行")
         self.btn_sql_run_exec.setToolTip("按分号切句逐条执行；全部成功才提交，中途出错整批回滚")
         self.btn_sql_run_exec.clicked.connect(self.on_sql_run)
-        self.btn_sql_run_clear = QPushButton("清空")
-        self.btn_sql_run_clear.clicked.connect(self.on_sql_run_clear)
         bar.addWidget(self.btn_sql_run_samples)
         bar.addWidget(self.btn_sql_run_exec)
-        bar.addWidget(self.btn_sql_run_clear)
         lay.addLayout(bar)
 
         self.sql_run_input = QPlainTextEdit(SQL_RUN_DEFAULT)
         self.sql_run_input.setFont(QFont("Consolas", 12))
         # 不折行：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
         self.sql_run_input.setLineWrapMode(QPlainTextEdit.NoWrap)
+        # 两颗清空各归各的pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(QLabel("SQL 文本"))
+        lh = QHBoxLayout()
+        lh.addWidget(QLabel("SQL 文本"))
+        lh.addStretch(1)
+        self.btn_sql_run_clear_input = QPushButton("清空编辑区")
+        self.btn_sql_run_clear_input.setToolTip("只清掉左边这段 SQL，右侧结果区不动")
+        self.btn_sql_run_clear_input.clicked.connect(self.on_sql_run_clear_input)
+        lh.addWidget(self.btn_sql_run_clear_input)
+        ll.addLayout(lh)
         ll.addWidget(self.sql_run_input, 1)
 
         self.sql_run_log = QPlainTextEdit()
@@ -1602,7 +1607,14 @@ class MainWindow(QWidget):
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
-        rl.addWidget(QLabel("执行结果"))
+        rh = QHBoxLayout()
+        rh.addWidget(QLabel("执行结果"))
+        rh.addStretch(1)
+        self.btn_sql_run_clear_log = QPushButton("清空结果区")
+        self.btn_sql_run_clear_log.setToolTip("只清掉右边的执行结果，左边编辑区不动")
+        self.btn_sql_run_clear_log.clicked.connect(self.on_sql_run_clear_result)
+        rh.addWidget(self.btn_sql_run_clear_log)
+        rl.addLayout(rh)
         rl.addWidget(self.sql_run_log, 1)
 
         self.sql_run_split = QSplitter(Qt.Horizontal)
@@ -1618,8 +1630,12 @@ class MainWindow(QWidget):
         self.sql_run_samples = None                          # 示例对话框只在打开时才有
         return page
 
-    def on_sql_run_clear(self):
+    def on_sql_run_clear_input(self):
+        """只清编辑区：结果区是上一次的执行记录，动它得由用户自己点头。"""
         self.sql_run_input.clear()
+
+    def on_sql_run_clear_result(self):
+        """只清结果区：编辑区里可能正敲到一半，不该被一次"看腻了结果"带走。"""
         self.sql_run_log.clear()
 
     def on_sql_run(self):

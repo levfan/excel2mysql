@@ -102,7 +102,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JTextArea sqlRunInput;
     private LogPanel sqlRunLog;
     private javax.swing.JButton sqlRunBtn;
-    private javax.swing.JButton sqlRunClearBtn;
+    private javax.swing.JButton sqlRunClearInputBtn;
+    private javax.swing.JButton sqlRunClearLogBtn;
     private javax.swing.JButton sqlRunHelpBtn;
     private javax.swing.JLabel sqlRunHint;
     /** 第三个页签顶部的当前目标库信息条：与前两页同一次刷新、同一个来源。 */
@@ -1596,12 +1597,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunBtn.setToolTipText("按分号切句逐条执行；全部成功才提交，中途出错整批回滚");
         sqlRunBtn.addActionListener(e -> runSqlStatements());
         bar.add(sqlRunBtn);
-        sqlRunClearBtn = new javax.swing.JButton("清空");
-        sqlRunClearBtn.addActionListener(e -> {
-            sqlRunInput.setText("");
-            sqlRunLog.clearLog();
-        });
-        bar.add(sqlRunClearBtn);
         north.add(bar, java.awt.BorderLayout.SOUTH);
         page.add(north, java.awt.BorderLayout.NORTH);
 
@@ -1609,13 +1604,20 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
         sqlRunInput.setLineWrap(false);
         sqlRunInput.setText("SELECT 1 AS 连通检查;");
+        // 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
+        sqlRunClearInputBtn = new javax.swing.JButton("清空编辑区");
+        sqlRunClearInputBtn.setToolTipText("只清掉左边这段 SQL，右侧结果区不动");
+        sqlRunClearInputBtn.addActionListener(e -> sqlRunInput.setText(""));
         javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
-        left.add(new javax.swing.JLabel("SQL 文本"), java.awt.BorderLayout.NORTH);
+        left.add(paneHeader("SQL 文本", sqlRunClearInputBtn), java.awt.BorderLayout.NORTH);
         left.add(new javax.swing.JScrollPane(sqlRunInput), java.awt.BorderLayout.CENTER);
 
         sqlRunLog = new LogPanel();
+        sqlRunClearLogBtn = new javax.swing.JButton("清空结果区");
+        sqlRunClearLogBtn.setToolTipText("只清掉右边的执行结果，左边编辑区不动");
+        sqlRunClearLogBtn.addActionListener(e -> sqlRunLog.clearLog());
         javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
-        right.add(new javax.swing.JLabel("执行结果"), java.awt.BorderLayout.NORTH);
+        right.add(paneHeader("执行结果", sqlRunClearLogBtn), java.awt.BorderLayout.NORTH);
         right.add(new javax.swing.JScrollPane(sqlRunLog), java.awt.BorderLayout.CENTER);
 
         javax.swing.JSplitPane split = new javax.swing.JSplitPane(
@@ -1623,6 +1625,31 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         split.setResizeWeight(0.45D);
         page.add(split, java.awt.BorderLayout.CENTER);
         return page;
+    }
+
+    /** pane 的头一行：左边是标题，右边那颗「清空…」只管这一边。 */
+    private static javax.swing.JComponent paneHeader(String title, javax.swing.JButton clearBtn) {
+        javax.swing.JPanel row = new javax.swing.JPanel(new java.awt.BorderLayout());
+        row.add(new javax.swing.JLabel(title), java.awt.BorderLayout.WEST);
+        javax.swing.JPanel east = new javax.swing.JPanel(
+                new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 0, 0));
+        east.add(clearBtn);
+        row.add(east, java.awt.BorderLayout.EAST);
+        return row;
+    }
+
+    /** 两颗清空按钮：自检与对撞器按这两个口取证，不自己去找控件。 */
+    public javax.swing.JButton sqlRunClearInputButton() {
+        return sqlRunClearInputBtn;
+    }
+
+    public javax.swing.JButton sqlRunClearLogButton() {
+        return sqlRunClearLogBtn;
+    }
+
+    /** 结果区本体：自检与对撞器要能数它有几行，"清没清掉"得看得见。 */
+    public LogPanel sqlRunLogPanel() {
+        return sqlRunLog;
     }
 
     /** 执行编辑区里那段 SQL。事务与回滚语义走 SqlExecute，与「SQL 脚本改名入库」页同一套。 */
