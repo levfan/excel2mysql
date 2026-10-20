@@ -116,6 +116,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private DropArea drop;
     private javax.swing.JProgressBar pageProgress;
     private HintTextField prefixField;
+    private javax.swing.JCheckBox initialsBox;
+    private javax.swing.JCheckBox upperBox;
     private javax.swing.JCheckBox dropExisting;
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
     private final Map<TableOps.Table, TableBuilder.Result> byTable =
@@ -359,10 +361,35 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JPanel prefixBtns = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0));
         prefixBtns.add(applyPrefix);
         prefixBtns.add(replacePrefix);
+        // 命名开关（全拼/首字母、小写/大写）跟表名前缀同属"名字怎么起"的治理项。
+        // 竖着摞两颗，横向只占一颗的宽度，不会把前缀输入框挤没
+        initialsBox = new javax.swing.JCheckBox("表名与字段名取拼音首字母");
+        initialsBox.setToolTipText("勾选后，由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、"
+                + "水库基础信息 → skjcxx）；默认全拼（ding_dan_jin_e）。"
+                + "文件名括号里显式写下的英文表名不受影响；对之后添加的文件生效。");
+        initialsBox.addActionListener(e -> log("[提示] 命名规则切换为："
+                + (initialsBox.isSelected() ? "拼音首字母" : "全拼")
+                + "（对之后添加的文件生效）"));
+        upperBox = new javax.swing.JCheckBox("表名与字段名转大写");
+        upperBox.setToolTipText("勾选后，由中文或文件名转写出来的表名与字段名全部大写"
+                + "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；"
+                + "默认小写。文件名括号里写下的英文表名同样转大写；"
+                + "结构定义 Sheet 里人工写的字段名与手动改过的表名前缀原样保留；"
+                + "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。");
+        upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："
+                + (upperBox.isSelected() ? "大写" : "小写")
+                + "（对之后添加的文件生效，结构定义 Sheet 里人工写的字段名不受影响）"));
+        JPanel nameSwitches = new JPanel();
+        nameSwitches.setLayout(new javax.swing.BoxLayout(nameSwitches, javax.swing.BoxLayout.Y_AXIS));
+        nameSwitches.add(initialsBox);
+        nameSwitches.add(upperBox);
+        JPanel prefixEast = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0));
+        prefixEast.add(prefixBtns);
+        prefixEast.add(nameSwitches);
         JPanel prefixRow = new JPanel(new BorderLayout(6, 0));
         prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
-        prefixRow.add(prefixBtns, BorderLayout.EAST);
+        prefixRow.add(prefixEast, BorderLayout.EAST);
 
         JButton add = new JButton("添加文件");
         add.addActionListener(e -> chooseFiles());
@@ -1089,6 +1116,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         if (!startTask()) {
             return;
         }
+        applyNamingSwitches();
         final ProgressDialog progress = new ProgressDialog(this, "正在解析文件…");
         final ImportParse.Sink sink = sinkFor(progress);
         lastTask = progress;
@@ -1148,8 +1176,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         };
     }
 
+    /** 开关状态在主线程取好再进解析线程：解析线程不碰控件，只读 Names 上的两个布尔。 */
+    private void applyNamingSwitches() {
+        names.setInitialsOnly(initialsBox != null && initialsBox.isSelected());
+        names.setUpperOnly(upperBox != null && upperBox.isSelected());
+    }
+
     /** 给测试和命令行用的同步入口：同一个解析函数，只是不挂进度框。 */
     public String addFiles(List<String> paths) {
+        applyNamingSwitches();
         ImportParse.Outcome outcome = ImportParse.parse(paths, currentPaths(),
                 zipDirFor(paths), zipDestSeq, builder, sinkForLogOnly());
         return finishAdd(outcome);
@@ -1426,6 +1461,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JCheckBox dropExistingBox() {
         return dropExisting;
+    }
+
+    public javax.swing.JCheckBox initialsBox() {
+        return initialsBox;
+    }
+
+    public javax.swing.JCheckBox upperBox() {
+        return upperBox;
     }
 
     @Override

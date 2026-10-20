@@ -5,6 +5,7 @@ import com.excel2mysql.pinyin.PinyinConverter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -54,9 +55,35 @@ public final class Names {
           + "|[\\s\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+$");
 
     private final PinyinConverter pinyin;
+    // 用户开关「表名与字段名取拼音首字母」：默认 false = 全拼（现有行为）。
+    // 放在实例上而不是方法参数上，GUI 复选框与 CLI 开关各设一次即可贯穿整轮解析
+    private boolean initialsOnly;
+    // 用户开关「表名与字段名转大写」：默认 false = 小写（现有行为）。
+    // 与 initialsOnly 一样跟着 Names 实例走，一轮解析共用一套命名口径
+    private boolean upperOnly;
 
     public Names(PinyinConverter pinyin) {
         this.pinyin = pinyin;
+    }
+
+    public void setInitialsOnly(boolean b) {
+        this.initialsOnly = b;
+    }
+
+    public boolean isInitialsOnly() {
+        return initialsOnly;
+    }
+
+    public void setUpperOnly(boolean b) {
+        this.upperOnly = b;
+    }
+
+    public boolean isUpperOnly() {
+        return upperOnly;
+    }
+
+    private String applyCase(String name) {
+        return upperOnly ? name.toUpperCase(Locale.ROOT) : name;
     }
 
     /** 对齐 Python str.strip()：Java 的 trim() 只裁 &lt;= U+0020，会把全角空格漏在名字里。 */
@@ -73,8 +100,10 @@ public final class Names {
             String head = pyStrip(stem.substring(0, m.start()));
             String base = head.isEmpty() ? stem : head;
             if (TABLE_EN.matcher(raw).matches() && hasAsciiAlpha(raw)) {
-                String lower = raw.toLowerCase();
-                return new String[]{cut(lower, TABLE_MAX_LEN), base};
+                // 括号里是使用者显式写下的英文名，首字母开关不管它，大小写开关要管
+                String cased = upperOnly ? raw.toUpperCase(Locale.ROOT)
+                        : raw.toLowerCase(Locale.ROOT);
+                return new String[]{cut(cased, TABLE_MAX_LEN), base};
             }
             return new String[]{sanitizeTableName(stem), stem};
         }
@@ -83,7 +112,7 @@ public final class Names {
 
     public String sanitizeTableName(String text) {
         String name = cnToTableName(text, TABLE_MAX_LEN);
-        return name.isEmpty() ? "t_import_data" : name;
+        return name.isEmpty() ? (upperOnly ? "T_IMPORT_DATA" : "t_import_data") : name;
     }
 
     public String cnToTableName(String text, int limit) {
@@ -95,7 +124,7 @@ public final class Names {
         if (syllables.isEmpty()) {
             return "";
         }
-        return fitName(syllables, limit, "t_");
+        return applyCase(fitName(syllables, limit, "t_", initialsOnly));
     }
 
     /** 表头 -> 蛇形字段名；空表头与无可识别字符的表头都退化成 col。 */
@@ -128,7 +157,7 @@ public final class Names {
 
     public String colToField(Object cn, int limit) {
         if (cn == null || pyStrip(String.valueOf(cn)).isEmpty()) {
-            return "col";
+            return upperOnly ? "COL" : "col";
         }
         String cleaned = stripHeaderAnnotations(String.valueOf(cn));
         if (pyStrip(cleaned).isEmpty()) {
@@ -136,9 +165,9 @@ public final class Names {
         }
         List<Syllable> syllables = syllables(cleaned);
         if (syllables.isEmpty()) {
-            return "col";
+            return upperOnly ? "COL" : "col";
         }
-        return fitName(syllables, limit, "f_");
+        return applyCase(fitName(syllables, limit, "f_", initialsOnly));
     }
 
     /**
@@ -201,6 +230,15 @@ public final class Names {
      * 数字/英文音节必须整段保留，否则 "1.0mm" 和 "100.0mm" 会压成同一个名字。
      */
     public static String fitName(List<Syllable> syllables, int limit, String digitPrefix) {
+        return fitName(syllables, limit, digitPrefix, false);
+    }
+
+    /**
+     * initials=true 是用户开关选的「取中文首字母」：汉字音节一律取首字母
+     * （与装不下时的降级形式同一套紧凑写法），英文/数字段照旧整段保留。
+     */
+    public static String fitName(List<Syllable> syllables, int limit, String digitPrefix,
+                                 boolean initials) {
         boolean hasCn = false;
         for (Syllable s : syllables) {
             if (s.fromHanzi) {
@@ -208,13 +246,22 @@ public final class Names {
                 break;
             }
         }
-        String name = fit(joinPieces(syllables), limit);
-        if (hasCn && join(syllables).length() > limit) {
-            StringBuilder initials = new StringBuilder();
+        String name;
+        if (initials && hasCn) {
+            StringBuilder b = new StringBuilder();
             for (Syllable s : syllables) {
-                initials.append(s.fromHanzi ? s.text.substring(0, 1) : s.text);
+                b.append(s.fromHanzi ? s.text.substring(0, 1) : s.text);
             }
-            name = cut(initials.toString(), limit);
+            name = b.toString();
+        } else {
+            name = fit(joinPieces(syllables), limit);
+            if (hasCn && join(syllables).length() > limit) {
+                StringBuilder initialsB = new StringBuilder();
+                for (Syllable s : syllables) {
+                    initialsB.append(s.fromHanzi ? s.text.substring(0, 1) : s.text);
+                }
+                name = cut(initialsB.toString(), limit);
+            }
         }
         if (!name.isEmpty() && Character.isDigit(name.charAt(0))) {
             name = digitPrefix + name;

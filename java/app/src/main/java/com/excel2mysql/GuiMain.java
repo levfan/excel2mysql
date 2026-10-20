@@ -250,6 +250,9 @@ public final class GuiMain {
                         problems.add("列表空着时「开始导入」还是可点");
                     }
                 }
+                // 命名开关（全拼/首字母、小写/大写）与空列按字段名定类型：勾了再添加就要当场生效。
+                // 放在最后跑：它会往列表里加临时表，前面的用例都按下标取夹具表，不能被插队
+                naming_switches(frame, problems);
                 // 日志的红色与行数上限：错误没标红、或日志无限涨，都只会在现场翻车时才发现
                 frame.logError("自检错误行");
                 frame.log("自检普通行");
@@ -491,6 +494,112 @@ public final class GuiMain {
         if (frame.ddlText().contains("DROP TABLE IF EXISTS")) {
             problems.add("没勾「覆盖已存在表」DDL 预览里却出现了 DROP");
         }
+    }
+
+    /**
+     * 命名开关两颗复选框 + 空列按字段名定类型，走的是界面添加文件那条真实入口。
+     * Python 侧对应 M21/M22 与 B22：名字规则写在开关上，不在代码里各写一份。
+     */
+    private static void naming_switches(MainFrame frame, List<String> problems) {
+        if (frame.initialsBox() == null || frame.upperBox() == null) {
+            problems.add("界面上缺少命名开关（取拼音首字母 / 转大写）");
+            return;
+        }
+        if (!"表名与字段名取拼音首字母".equals(frame.initialsBox().getText())
+                || !"表名与字段名转大写".equals(frame.upperBox().getText())) {
+            problems.add("命名开关文案不对：" + frame.initialsBox().getText() + " / "
+                    + frame.upperBox().getText());
+        }
+        File tmp = null;
+        try {
+            tmp = java.nio.file.Files.createTempDirectory("e2m-naming-selftest").toFile();
+            // 1) 首字母开关：勾上后添加的文件，表名与字段名都取首字母
+            File a = writeNamingFixture(tmp, "水库信息表.xlsx",
+                    new String[]{"订单金额"}, new Object[]{Double.valueOf(12.5)});
+            // 用 doClick 走用户真正的那条路：setSelected 不触发 ActionListener
+            frame.initialsBox().doClick();
+            frame.addFiles(java.util.Arrays.asList(a.getPath()));
+            com.excel2mysql.core.TableOps.Table ta = lastTable(frame);
+            if (ta == null || !"skxxb".equals(ta.tableName)) {
+                problems.add("勾了取首字母后表名不是 skxxb：" + (ta == null ? "(无表)" : ta.tableName));
+            } else if (ta.columns.isEmpty() || !"ddje".equals(ta.columns.get(0).field)) {
+                problems.add("勾了取首字母后字段名不是 ddje："
+                        + (ta.columns.isEmpty() ? "(无字段)" : ta.columns.get(0).field));
+            }
+            if (!frame.logPanel().contains("[提示] 命名规则切换为：拼音首字母")) {
+                problems.add("切换首字母开关没有留下日志");
+            }
+            // 2) 大小写开关与首字母叠加：括号里显式写的英文表名也转大写
+            File b = writeNamingFixture(tmp, "水库信息表（n_uppercheck）.xlsx",
+                    new String[]{"订单金额"}, new Object[]{Double.valueOf(12.5)});
+            frame.upperBox().doClick();
+            frame.addFiles(java.util.Arrays.asList(b.getPath()));
+            com.excel2mysql.core.TableOps.Table tb = lastTable(frame);
+            if (tb == null || !"N_UPPERCHECK".equals(tb.tableName)) {
+                problems.add("勾了转大写后表名不是 N_UPPERCHECK："
+                        + (tb == null ? "(无表)" : tb.tableName));
+            } else if (tb.columns.isEmpty() || !"DDJE".equals(tb.columns.get(0).field)) {
+                problems.add("勾了转大写后字段名不是 DDJE："
+                        + (tb.columns.isEmpty() ? "(无字段)" : tb.columns.get(0).field));
+            }
+            if (!frame.logPanel().contains("[提示] 表名与字段名大小写切换为：大写")) {
+                problems.add("切换大小写开关没有留下日志");
+            }
+            // 3) 空模板按字段名定类型：默认小写、全拼，类型各归各位
+            frame.initialsBox().doClick();
+            frame.upperBox().doClick();
+            File c = writeNamingFixture(tmp, "采集模板（t_empty_kinds）.xlsx",
+                    new String[]{"发布日期", "更新时间", "订单金额", "数量", "备注说明"}, null);
+            frame.addFiles(java.util.Arrays.asList(c.getPath()));
+            com.excel2mysql.core.TableOps.Table tc = lastTable(frame);
+            String[] wantTypes = {"DATE", "DATETIME", "DECIMAL(16,2)", "INT", "VARCHAR(64)"};
+            if (tc == null || tc.columns.size() != wantTypes.length) {
+                problems.add("空模板字段数不对：" + (tc == null ? "(无表)" : tc.columns.size()));
+            } else {
+                for (int i = 0; i < wantTypes.length; i++) {
+                    String got = tc.columns.get(i).type;
+                    if (!wantTypes[i].equals(got)) {
+                        problems.add("空模板按名定类型第 " + (i + 1) + " 列期望 "
+                                + wantTypes[i] + "，实际 " + got);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            problems.add("命名开关自检抛异常：" + e.getClass().getSimpleName() + " " + e.getMessage());
+        } finally {
+            if (tmp != null) {
+                deleteTree(tmp);
+            }
+        }
+    }
+
+    private static com.excel2mysql.core.TableOps.Table lastTable(MainFrame frame) {
+        List<com.excel2mysql.core.TableOps.Table> all = frame.tables();
+        return all.isEmpty() ? null : all.get(all.size() - 1);
+    }
+
+    private static File writeNamingFixture(File dir, String name, String[] headers,
+                                           Object[] values) throws Exception {
+        org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+        org.apache.poi.ss.usermodel.Sheet sh = wb.createSheet("数据");
+        org.apache.poi.ss.usermodel.Row head = sh.createRow(0);
+        for (int i = 0; i < headers.length; i++) {
+            head.createCell(i).setCellValue(headers[i]);
+        }
+        if (values != null) {
+            org.apache.poi.ss.usermodel.Row row = sh.createRow(1);
+            for (int i = 0; i < values.length; i++) {
+                if (values[i] instanceof Number) {
+                    row.createCell(i).setCellValue(((Number) values[i]).doubleValue());
+                } else {
+                    row.createCell(i).setCellValue(String.valueOf(values[i]));
+                }
+            }
+        }
+        File f = new File(dir, name);
+        writeWorkbook(wb, f);
+        return f;
     }
 
     private static void drop_and_progress(MainFrame frame, List<String> files,

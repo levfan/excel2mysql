@@ -100,6 +100,8 @@ public final class GuiDump {
                 dumpWidget("prefix", frame.prefixField());
                 dumpWidget("sql_prefix", frame.sqlPage().prefixField());
                 dumpWidget("drop_existing", frame.dropExistingBox());
+                dumpWidget("initials", frame.initialsBox());
+                dumpWidget("upper", frame.upperBox());
                 dumpWidget("progress", frame.pageProgressBar());
                 dumpButtons();
                 dumpTable("file", frame.fileTable());

@@ -245,6 +245,8 @@ def main():
     dump_widget("prefix", win.ed_prefix)
     dump_widget("sql_prefix", win.ed_sql_prefix)
     dump_widget("drop_existing", win.chk_drop)
+    dump_widget("initials", win.chk_initials)
+    dump_widget("upper", win.chk_upper)
     dump_widget("progress", win.progress)
     dump_buttons(win)
     dump_table("file", win.file_table)

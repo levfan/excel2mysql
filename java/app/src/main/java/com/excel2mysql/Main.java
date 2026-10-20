@@ -56,6 +56,8 @@ public final class Main {
         boolean noSql = false;
         boolean noExcel = false;
         boolean verbose = false;
+        boolean initials = false;
+        boolean upper = false;
 
         for (int i = 0; i < argv.length; i++) {
             String a = argv[i];
@@ -75,6 +77,10 @@ public final class Main {
                 noSql = true;
             } else if ("--no-excel".equals(a)) {
                 noExcel = true;
+            } else if ("--initials".equals(a)) {
+                initials = true;
+            } else if ("--upper".equals(a)) {
+                upper = true;
             } else if ("--prefix".equals(a)) {
                 if (i + 1 >= argv.length) {
                     System.out.println("x [ERROR] USAGE | --prefix 需要一个值");
@@ -120,15 +126,21 @@ public final class Main {
             }
         }
         String[] actions = describeActions(paths, noSql, noExcel, dryRun, checkOnly);
+        String naming = "";
+        if (initials || upper) {
+            naming = " | 命名 " + (initials ? "取拼音首字母" : "全拼")
+                    + (upper ? "，表名与字段名转大写" : "");
+        }
         System.out.println("- [INFO] 启动 | 版本 " + VERSION + " | 动作 " + actions[0]
-                + " | 配置来源 " + cfg.source);
+                + " | 配置来源 " + cfg.source + naming);
         System.out.println("- [INFO] 目标 | " + cfg);
 
         try {
             if (checkOnly) {
                 return check(cfg);
             }
-            return importPaths(cfg, paths, prefix, dryRun, noSql, noExcel, verbose);
+            return importPaths(cfg, paths, prefix, dryRun, noSql, noExcel, verbose,
+                    initials, upper);
         } catch (ConnectFailed e) {
             System.out.println("x [ERROR] CONNECT | " + e.getMessage());
             return EXIT_CONNECT;
@@ -230,7 +242,8 @@ public final class Main {
     }
 
     private static int importPaths(Config cfg, List<String> paths, String prefix, boolean dryRun,
-                                   boolean noSql, boolean noExcel, boolean verbose) {
+                                   boolean noSql, boolean noExcel, boolean verbose,
+                                   boolean initials, boolean upper) {
         Scan scan = collect(paths, noSql, noExcel);
         if (scan.excel.isEmpty() && scan.scripts.isEmpty()) {
             System.out.println("x [ERROR] PARSE | 没有找到可处理的文件"
@@ -242,6 +255,8 @@ public final class Main {
 
         List<TableBuilder.Result> built = new ArrayList<TableBuilder.Result>();
         Names names = new Names(PinyinLoader.get());
+        names.setInitialsOnly(initials);
+        names.setUpperOnly(upper);
         TableBuilder builder = new TableBuilder(new Infer(names), names);
         int parseFailed = 0;
         for (String path : scan.excel) {
@@ -617,6 +632,8 @@ public final class Main {
         System.out.println("  --dry-run          只打印建表语句与脚本预览，不连库");
         System.out.println("  --check            只测连接并列出数据库");
         System.out.println("  --prefix 文本      表名批量前缀");
+        System.out.println("  --initials         表名与字段名取拼音首字母（订单金额 -> ddje）；默认全拼");
+        System.out.println("  --upper            表名与字段名转大写（订单金额 -> DING_DAN_JIN_E）；默认小写");
         System.out.println("  -c, --conn 文件    指定 conn.ini；不给时自动读程序同级、再读当前目录");
         System.out.println("  --debug            解析失败时打印完整异常栈");
         System.out.println("  --version / --help 版本与用法");

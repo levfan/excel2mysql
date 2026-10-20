@@ -49,6 +49,19 @@ public final class Infer {
             "工程款", "材料费", "人工费", "运输费", "服务费", "咨询费", "管理费", "仓储费"};
     private static final String[] RATE_CN = {"率", "比例", "百分比", "占比", "增速", "幅度"};
 
+    // 空列按字段名关键字定类型（与 core/infer.py 的 _name_based_type 逐条对齐）：
+    // 只在"这列一个值都没有"时参与，有值照旧走数据判定；结构定义模式人工类型不受影响
+    private static final String NAME_TIME_CN = "时间";   // 含"日期时间"——先查时间才落 DATETIME
+    private static final String NAME_DATE_CN = "日期";
+    private static final String[] NAME_INT_CN = {
+            "数量", "个数", "人数", "次数", "库存", "张数", "件数", "台数", "点数", "条数"};
+    private static final Pattern NAME_TIME_EN = Pattern.compile(
+            "(?:^|_)(?:time|timestamp|datetime)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_DATE_EN = Pattern.compile(
+            "(?:^|_)(?:date|dt)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_INT_EN = Pattern.compile(
+            "(?:^|_)(?:qty|quantity|count|cnt|stock)(?:_|$)", Pattern.CASE_INSENSITIVE);
+
     private static final String[] PK_KEYWORDS = {
             "编号", "序号", "代码", "编码", "标识", "卡号", "单号", "主键", "唯一"};
     private static final Pattern PK_ID_FIELD = Pattern.compile(
@@ -111,6 +124,35 @@ public final class Infer {
             }
         }
         return MONEY_EN.matcher(fl).find();
+    }
+
+    /**
+     * 空列的名字定类型：命中返回 {类型, 留痕文案}，没命中返回 null（照旧 VARCHAR）。
+     * 金额复用 isMoney 的双侧匹配与比率否决；日期/时间的英文只认成词的
+     * date/time/timestamp（贴着下划线或首尾），所以 update、birthday 不会误中。
+     */
+    public static String[] nameBasedType(String comment, String field) {
+        String c = comment == null ? "" : Names.pyStrip(comment);
+        String fl = field == null ? "" : field;
+        if (isMoney(c, fl)) {
+            String typ = decimalType(0, 0, 4, true);
+            return new String[]{typ, "该列没有值，字段名「" + c + "」含金额语义，按 " + typ + " 建列"};
+        }
+        if (c.contains(NAME_TIME_CN) || NAME_TIME_EN.matcher(fl).find()) {
+            return new String[]{"DATETIME", "该列没有值，字段名「" + c + "」含时间语义，按 DATETIME 建列"};
+        }
+        if (c.contains(NAME_DATE_CN) || NAME_DATE_EN.matcher(fl).find()) {
+            return new String[]{"DATE", "该列没有值，字段名「" + c + "」含日期语义，按 DATE 建列"};
+        }
+        for (String k : NAME_INT_CN) {
+            if (c.contains(k)) {
+                return new String[]{"INT", "该列没有值，字段名「" + c + "」含数量语义，按 INT 建列"};
+            }
+        }
+        if (NAME_INT_EN.matcher(fl).find()) {
+            return new String[]{"INT", "该列没有值，字段名「" + c + "」含数量语义，按 INT 建列"};
+        }
+        return null;
     }
 
     public static String decimalType(int intDigits, int scale, int floorInt, boolean money) {
@@ -272,6 +314,9 @@ public final class Infer {
             }
 
             boolean money = isMoney(h, col.field);
+            // 这列一个值都没有时，值判定链全部落空；先按字段名关键字定一次类型，
+            // 命中就带着留痕文案走，没命中照旧落到底下的文本分支（VARCHAR(64)）
+            String[] named = hasValue ? null : nameBasedType(h, col.field);
             col.maxLen = maxLen;
             if (hasValue && allDt) {
                 col.type = "DATETIME";
@@ -287,6 +332,9 @@ public final class Infer {
                 col.type = "DATE";
             } else if (hasValue && allDec) {
                 col.type = decimalType(obsInt, obsScale, 4, money);
+            } else if (named != null) {
+                col.type = named[0];
+                col.typeNote = named[1];
             } else {
                 long headroom = Math.max(16, maxLen / 5);
                 long needed = maxLen + headroom;
