@@ -593,6 +593,21 @@ _run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
              w.btn_sql_run_exec.text(): w.btn_sql_run_exec,
              w.btn_sql_run_clear_input.text(): w.btn_sql_run_clear_input,
              w.btn_sql_run_clear_log.text(): w.btn_sql_run_clear_log}
+check("F20b 结果区与编辑区同一支等宽字体（表格靠对齐，字体不等宽就错行）",
+      w.sql_run_log.font().family() == w.sql_run_input.font().family()
+      and w.sql_run_log.font().pointSize() == w.sql_run_input.font().pointSize(),
+      (w.sql_run_log.font().family(), w.sql_run_log.font().pointSize()))
+from core.sql_execute import render_table as _rt
+_TABLE = _rt(["id", "名称"], [["1", "某公司"], [None, "x"]])
+check("F20c 结果集排成等宽表格：列宽按显示宽度补齐、NULL 显式写出",
+      _TABLE == ["+------+--------+",
+                 "| id   | 名称   |",
+                 "+------+--------+",
+                 "| 1    | 某公司 |",
+                 "| NULL | x      |",
+                 "+------+--------+"], _TABLE)
+check("F20d 零行的表格只有表头那一框，不重复画收口线",
+      _rt(["a"], []) == ["+---+", "| a |", "+---+"], _rt(["a"], []))
 check("F21 四颗按钮齐备且可点（顶部两颗 + 两个 pane 各一颗清空）",
       len(_run_btns) == 4 and set(_run_btns) == {u"示例 (?)", u"执行",
                                                  u"清空编辑区", u"清空结果区"}

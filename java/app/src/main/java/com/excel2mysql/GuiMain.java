@@ -795,6 +795,10 @@ public final class GuiMain {
         if (!"nowrap".equals(frame.sqlRunWrap())) {
             problems.add("SQL 编辑区应不折行（折行后分号要数着看），实际 " + frame.sqlRunWrap());
         }
+        // 结果集是按显示宽度排出来的表格，字体不等宽就错行
+        if (!"Monospaced".equals(frame.sqlRunLogPanel().getFont().getFamily())) {
+            problems.add("结果区不是等宽字体：" + frame.sqlRunLogPanel().getFont().getFamily());
+        }
         if (!"SELECT 1 AS 连通检查;".equals(frame.sqlRunInputText())) {
             problems.add("编辑区开场不是那句连通检查：" + frame.sqlRunInputText());
         }

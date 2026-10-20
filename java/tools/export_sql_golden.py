@@ -20,10 +20,12 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 from ddl_corpus import DDL_SCRIPTS  # noqa: E402
+from result_corpus import TABLE_CASES  # noqa: E402
 
 from core.infer import build_table_def, apply_table_prefix, replace_first_segment  # noqa: E402
 from core.mysql_io import build_ddl, build_insert_sql, _convert  # noqa: E402
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment  # noqa: E402
+from core.sql_execute import render_table  # noqa: E402
 from core.sql_script import (  # noqa: E402
     apply_table_prefix_sql, extract_create_tables, replace_first_segment_sql,
     parse_create_tables, split_sql_statements,
@@ -122,6 +124,11 @@ def sql_cases():
                "split": split_sql_statements(text)}
     for text in DDL_SCRIPTS:
         yield {"op": "ddl-parse", "in": text, "out": ddl_parse_lines(text)}
+    for cols, rows in TABLE_CASES:
+        # 结果集渲染成表格是两条线各写一份的渲染器：拍成一行一行逐字符对，
+        # 宽度算错、边框少画、截断位置不同、NULL 与空串混起来都会露出来
+        yield {"op": "table-render", "in": "列[%s] 行%d" % (" ".join(cols), len(rows)),
+               "columns": cols, "rows": rows, "out": render_table(cols, rows)}
     for text in SCRIPTS:
         yield {"in": text,
                "extract": extract_create_tables(text),

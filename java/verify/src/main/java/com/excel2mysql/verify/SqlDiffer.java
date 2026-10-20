@@ -65,6 +65,21 @@ public final class SqlDiffer {
                 List<String> got = renderParsed(SqlScript.parseCreateTables(in));
                 List<Object> want = (List<Object>) rec.get("out");
                 report("ddl-parse", in, got.equals(want), join(got), join(want));
+            } else if ("table-render".equals(op)) {
+                // 结果集表格：两条线各写一份渲染器，宽度、边框、截断、NULL
+                // 任一处对不上都会在某一行的某一格露出来
+                checked++;
+                List<String> cols = (List<String>) rec.get("columns");
+                List<Object> rawRows = (List<Object>) rec.get("rows");
+                List<List<String>> rows = new java.util.ArrayList<List<String>>();
+                if (rawRows != null) {
+                    for (Object o : rawRows) {
+                        rows.add((List<String>) o);
+                    }
+                }
+                List<String> got = com.excel2mysql.core.SqlExecute.renderTable(cols, rows);
+                List<Object> want = (List<Object>) rec.get("out");
+                report("table-render", in, got.equals(want), join(got), join(want));
             } else if ("prefix".equals(op) || "head".equals(op)) {
                 checked++;
                 String arg = (String) rec.get("arg");
