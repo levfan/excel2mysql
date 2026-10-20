@@ -480,7 +480,40 @@ _ws2.merge_cells("A1:B1")
 _wb2.save(merged_one_row)
 merged_other = os.path.join(_tmpdir, "其他页合并.xlsx")
 _mk_raw_header(merged_other, other_sheet=True)
-for _label, _path in (("单行合并表头", merged_one_row), ("其他页也合并", merged_other)):
+
+
+def _mk_raw_shape(path, top, second, merges, third=None, data=(1, 10, 20)):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "原始表"
+    ws.append(top)
+    ws.append(second)
+    if third is not None:
+        ws.append(third)
+    for box in merges:
+        ws.merge_cells(box)
+    ws.append(list(data))
+    wb.save(path)
+    return path
+
+
+merged_three = _mk_raw_shape(
+    os.path.join(_tmpdir, "三行合并表头.xlsx"),
+    ["序号", "技术公司", None], [None, "华北", None],
+    ("A1:A3", "B1:C1", "B2:C2"), third=[None, "小计", "高层"], data=[1, 10, 20])
+merged_child = _mk_raw_shape(
+    os.path.join(_tmpdir, "子行合并表头.xlsx"),
+    ["序号", "技术公司", None, "财务公司", None],
+    [None, "小计", "高层", "小计", "高层"],
+    ("A1:A2", "B1:C1", "D1:E1", "B2:C2"), data=[1, 10, 20, 30, 40])
+merged_block = _mk_raw_shape(
+    os.path.join(_tmpdir, "2x2合并表头.xlsx"),
+    ["序号", "技术公司", None, "财务公司"],
+    [None, "小计", "高层", "小计"],
+    ("A1:A2", "B1:C2", "D1:D2"), data=[1, 10, 20, 30])
+for _label, _path in (("单行合并表头", merged_one_row), ("其他页也合并", merged_other),
+                      ("三行合并表头", merged_three), ("第 2 行子合并", merged_child),
+                      ("2x2 合并块", merged_block)):
     try:
         build_table_def(_path)
         _ok = False

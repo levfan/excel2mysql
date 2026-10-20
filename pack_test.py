@@ -1600,7 +1600,7 @@ else:
     skip("M14 真实中文列名语料碰撞率", "未设 CORPUS_DDL=<数据包路径>，用合成用例 M13 代替")
 
 # ---------------------------------------------------------------------------
-section("N 合并单元格：顶部多行表头展开，其余照旧拒绝")
+section("N 合并单元格：标准两行表头展开，其余照旧拒绝")
 
 from openpyxl import Workbook as _WB
 from core.merge_check import (
@@ -1763,6 +1763,44 @@ p_raw_overrun = mk_raw_two_row("表头外溢合并.xlsx",
 p_raw_other = mk_raw_two_row("其他页也合并.xlsx", other_sheet_merge=True)
 p_raw_one_row = mk_raw_two_row("单行合并表头.xlsx", single_row=True)
 
+
+def mk_raw_alt_header(name, top, second, merges, third=None, data=(1, 10, 20)):
+    wb = _WB()
+    w = wb.active
+    w.title = "原始表"
+    w.append(top)
+    w.append(second)
+    if third is not None:
+        w.append(third)
+    for box in merges:
+        w.merge_cells(box)
+    w.append(list(data))
+    p = os.path.join(mdir, name)
+    wb.save(p)
+    return p
+
+
+# 只认标准两行：下面三种都是"表头里有合并，但不是工作簿 1 那一种"
+p_raw_three_row = mk_raw_alt_header(
+    "三行合并表头.xlsx",
+    ["序号", "技术公司", None],
+    [None, "华北", None],
+    ("A1:A3", "B1:C1", "B2:C2"),
+    third=[None, "小计", "高层"],
+    data=[1, 10, 20])
+p_raw_child_merge = mk_raw_alt_header(
+    "子行合并表头.xlsx",
+    ["序号", "技术公司", None, "财务公司", None],
+    [None, "小计", "高层", "小计", "高层"],
+    ("A1:A2", "B1:C1", "D1:E1", "B2:C2"),
+    data=[1, 10, 20, 30, 40])
+p_raw_block_merge = mk_raw_alt_header(
+    "2x2合并表头.xlsx",
+    ["序号", "技术公司", None, "财务公司"],
+    [None, "小计", "高层", "小计"],
+    ("A1:A2", "B1:C2", "D1:D2"),
+    data=[1, 10, 20, 30])
+
 t_raw = build_table_def(p_raw)
 check("N13 两行合并表头压成一行，列名与参考表逐字一致",
       [c["field"] for c in t_raw["columns"]]
@@ -1798,7 +1836,9 @@ check("N17 合并表头元数据如实回报 Sheet 与行数",
       t_raw["merged_header"] == {"sheet": "原始表", "depth": 2},
       t_raw["merged_header"])
 for label, bad_p in (("数据区合并", p_raw_data_merge), ("表头外溢合并", p_raw_overrun),
-                     ("其他页也合并", p_raw_other), ("单行合并表头", p_raw_one_row)):
+                     ("其他页也合并", p_raw_other), ("单行合并表头", p_raw_one_row),
+                     ("三行合并表头", p_raw_three_row), ("第 2 行子合并", p_raw_child_merge),
+                     ("2x2 合并块", p_raw_block_merge)):
     try:
         build_table_def(bad_p)
         ok = False
@@ -1806,7 +1846,7 @@ for label, bad_p in (("数据区合并", p_raw_data_merge), ("表头外溢合并
     except MergedCellsError:
         ok = True
         detail = ""
-    check("N18 只有第一个 Sheet 的顶部多行表头块才放行：" + label, ok, detail)
+    check("N18 只有标准两行合并表头才放行：" + label, ok, detail)
 
 w = app_main.MainWindow()
 POPUPS.clear()
