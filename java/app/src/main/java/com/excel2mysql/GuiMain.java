@@ -61,10 +61,11 @@ public final class GuiMain {
         if (children != null) {
             Arrays.sort(children);
             for (File f : children) {
-                // 夹具只收 .xlsx 是刻意的：自检里"添加 7 项文件 / 表数 7"这些契约
-                // 就是按 verify/fixtures 里那 7 张 xlsx 定的，放宽到 .xls/.zip 会让
-                // 整批断言同时对不上，红得看不出真问题。喂别的目录给不出夹具形状时，
-                // 由下面 tables==0 那一条给人话，而不是靠多收文件去"兼容"。
+                // 夹具只收 .xlsx 是刻意的：自检里"添加 N 项文件 / 表数 N"这些期望值取的是
+                // 目录里 .xlsx 的个数（不是手写常数，但也不放宽到 .xls/.zip——
+                // 那会让整批按下标取表的断言同时对不上，红得看不出真问题）。
+                // 喂别的目录给不出夹具形状时，由下面 tables==0 那一条给人话，
+                // 而不是靠多收文件去"兼容"。
                 if (f.getName().toLowerCase().endsWith(".xlsx")) {
                     files.add(f.getPath());
                 }
@@ -89,7 +90,7 @@ public final class GuiMain {
                 if (tables == 0) {
                     // 后面几十处检查都按下标取表与取行，没夹具就别硬跑：
                     // 给一句能看懂的话，别抛越界
-                    problems.add("这个目录里没有可加载的 .xlsx 夹具（自检只认 verify/fixtures 那 7 张），"
+                    problems.add("这个目录里没有可加载的 .xlsx 夹具（自检只认 verify/fixtures 那些 xlsx），"
                             + "本次 addFiles 返回：" + addSummary.replace((char) 10, ' '));
                     for (String p : problems) {
                         System.out.println("x [ERROR] GUI-SELFTEST | " + p);
@@ -97,16 +98,18 @@ public final class GuiMain {
                     result[0] = 1;
                     return;
                 }
-                if (!addSummary.contains("添加 7 项文件")) {
+                if (!addSummary.contains("添加 " + files.size() + " 项文件")) {
+                    // 期望值取"目录里真有几个夹具"，不是手写的常数：
+                    // 加一张夹具就要改一处常量的话，改的人多半会漏，红成"汇总没数清"
                     problems.add("添加结果汇总没数清文件：" + addSummary.replace((char) 10, ' '));
                 }
-                if (!frame.logPanel().contains("[添加结果] 添加 7 项文件")) {
+                if (!frame.logPanel().contains("[添加结果] 添加 " + files.size() + " 项文件")) {
                     problems.add("弹窗那句话没同时写进日志");
                 }
                 if (!"添加结果".equals(frame.lastDialogTitle())) {
                     problems.add("添加结果弹窗标题不对：" + frame.lastDialogTitle());
                 }
-                if (!frame.lastDialogText().contains("添加 7 项文件")) {
+                if (!frame.lastDialogText().contains("添加 " + files.size() + " 项文件")) {
                     problems.add("弹窗正文与日志不是同一句话：" + frame.lastDialogText());
                 }
                 // Python 的添加结果用 information，只有任务异常才换 critical 图标
@@ -132,8 +135,9 @@ public final class GuiMain {
                 if (!frame.logPanel().contains("[添加结果] 已取消，只完成了部分解析")) {
                     problems.add("取消后的汇总没同时写进日志");
                 }
-                if (tables != 7) {
-                    problems.add("表数期望 7，实际 " + tables + "（有文件解析失败，看日志）");
+                if (tables != files.size()) {
+                    problems.add("表数期望 " + files.size() + "，实际 " + tables
+                            + "（有文件解析失败，看日志）");
                 }
                 if (rows == 0) {
                     problems.add("字段总数为 0，模型是空的");
@@ -1521,7 +1525,21 @@ public final class GuiMain {
             com.excel2mysql.core.TableBuilder tb = new com.excel2mysql.core.TableBuilder(
                     new com.excel2mysql.core.Infer(frame.names()), frame.names());
             expectReject(tb, empty, "没有解析到任何字段", "空表", problems);
-            expectReject(tb, header, "没有解析到任何字段", "只有表头", problems);
+            // 只有表头的采集模板**不该**被拒：字段是使用方设计好的表结构，一行没填不是错误。
+            // 以前它和真空表一起被"一列不剩"挡掉，现场看到的就是"表头解析不到"
+            com.excel2mysql.core.TableBuilder.Result hr = tb.build(header.getPath());
+            boolean headNoPk = true;
+            for (com.excel2mysql.core.Infer.Column c : hr.table.columns) {
+                if (c.primaryKey) {
+                    headNoPk = false;
+                }
+            }
+            if (hr.table.columns.size() != 2 || !hr.rows.isEmpty() || !hr.noDataRows
+                    || hr.emptyColumns.size() != 2 || !headNoPk) {
+                problems.add("只有表头的采集模板应当建得出空表（2 列、0 行、两列都点名、不设主键），"
+                        + "实际 列=" + hr.table.columns.size() + " 行=" + hr.rows.size()
+                        + " 空列=" + hr.emptyColumns + " 主键=" + (headNoPk ? "无" : "有"));
+            }
             expectReject(tb, fake, "不是可识别的 Excel 文件", "假 Excel", problems);
         } catch (Exception e) {
             problems.add("拒绝检查本身出错：" + e);

@@ -820,6 +820,8 @@ else:
 
 # ---------------------------------------------------------------------------
 # --- W32-W36：建不出表的输入必须卡在解析阶段（生产实测抓出来的两类） ---
+# W33 是这一类的反例，特意放在一起：只有表头的采集模板**不该**被拒（字段是设计好的表结构，
+# 一行数据都还没填不是错误），它必须正常出表定义、并在日志里说清"整列空、建出来是空表"
 from openpyxl import Workbook as _WB
 
 _empty = os.path.join(_tmpdir, "空表（w_empty）.xlsx")
@@ -847,8 +849,11 @@ code, out, _con = run_cli(["--dry-run", _empty, "-d", "db1"])
 check("W32 一张格子都没有的表被判解析失败（不给库里发非法建表语句）",
       code == cli_mod.EXIT_PARSE and "没有解析到任何字段" in out, out.strip()[:90])
 code, out, _con = run_cli(["--dry-run", _header_only, "-d", "db1"])
-check("W33 只有表头、数据行全空的表同样被拒（dropna 之后确实一列不剩）",
-      code == cli_mod.EXIT_PARSE and "没有解析到任何字段" in out, out.strip()[:90])
+check("W33 只有表头的采集模板不再被拒：字段 2 列、数据 0 行、日志点名空列与空表",
+      code == cli_mod.EXIT_OK and "没有解析到任何字段" not in out
+      and "字段 2 列 | 数据 0 行" in out
+      and "整列为空的字段照旧保留：编号、名称" in out
+      and "没有数据行，建出来是空表" in out, out.strip()[-300:])
 code, out, _con = run_cli(["--dry-run", _fake, "-d", "db1"])
 check("W34 扩展名对但内容不是 Excel：拦在解析阶段而不是 SQL 语法错误",
       code == cli_mod.EXIT_PARSE and "解析失败" in out, out.strip()[:90])

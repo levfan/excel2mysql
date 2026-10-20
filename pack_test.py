@@ -284,9 +284,31 @@ check("B19 只有定义没有数据 → 建空表且保留列定义",
 p5 = make_xlsx("空行空列.xlsx", {"S": pd.DataFrame({
     "甲": [1, 2, None], "乙": ["a", "b", None], "丙": [None, None, None]})})
 t5 = build_table_def(p5)
-check("B20 全空列被剔除", "丙" not in [c["comment"] for c in t5["columns"]],
-      [c["comment"] for c in t5["columns"]])
+check("B20 表头写了字、整列没值的字段保留（采集模板里必填项还没填就是这个形状）",
+      "丙" in [c["comment"] for c in t5["columns"]] and t5["empty_columns"] == ["丙"],
+      ([c["comment"] for c in t5["columns"]], t5["empty_columns"]))
+p5b = make_xlsx("尾部空列.xlsx", {"S": pd.DataFrame({
+    "甲": [1, 2], "乙": ["a", "b"], None: [None, None]})})
+t5b = build_table_def(p5b)
+check("B20b 表头没写字且整列没值的格式化垃圾列照旧丢掉",
+      len(t5b["columns"]) == 2 and t5b["empty_columns"] == [],
+      ([c["comment"] for c in t5b["columns"]], t5b["empty_columns"]))
 check("B21 全空行被剔除", len(t5["df"]) == 2, len(t5["df"]))
+p5c = make_xlsx("采集模板（t_tpl）.xlsx", {"S": pd.DataFrame({
+    "*标准名称": [], "*标准级别": [], "发布日期": []})})
+t5c = build_table_def(p5c)
+check("B21b 只有表头的采集模板不再被拒：三个字段都在、0 行、不自动设主键",
+      [c["field"] for c in t5c["columns"]]
+      == ["biao_zhun_ming_cheng", "biao_zhun_ji_bie", "fa_bu_ri_qi"]
+      and [c["comment"] for c in t5c["columns"]] == [u"*标准名称", u"*标准级别", u"发布日期"]
+      and len(t5c["df"]) == 0 and t5c["no_data_rows"] and t5c["primary_key"] is None,
+      ([(c["field"], c["comment"]) for c in t5c["columns"]], t5c["primary_key"],
+       t5c["pk_reason"]))
+check("B21c 星号只是必填标记：不进字段名，但原样留在字段注释里",
+      all("*" not in c["field"] for c in t5c["columns"])
+      and t5c["columns"][0]["comment"].startswith("*")
+      and t5c["empty_columns"] == [u"*标准名称", u"*标准级别", u"发布日期"],
+      t5c["empty_columns"])
 
 df_big = pd.DataFrame({"超长文本": ["啊" * 5000]})           # 15000 字节 > 16383 档位上限
 check("B22 超 VARCHAR 档位上限的文本列 → TEXT", infer_columns(df_big)[0]["type"] == "TEXT",

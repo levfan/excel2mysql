@@ -155,10 +155,38 @@ def make_cn_name(path):
     wb.save(path)
 
 
+def make_star_form(path):
+    """采集表单：表头带必填星号，且有一列声明了但整列没填。
+
+    压四条规则：`*标准名称` 有值（星号只是标记，转写时去掉、注释里留原文）；
+    `*填报人` 整列没值但**表头写了字**，必须保留并进 empty_columns；
+    表头空着且整列没值的那列是 Excel 尾部格式化拖出来的，丢掉；
+    整列空字符串的列不算空列（照旧保留，但不进 empty_columns）。
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "数据"
+    ws.append([u"*标准名称", u"*填报人", u"备注", None, u"占位"])
+    ws.append([u"GB/T 1234", None, u"甲", None, u""])
+    ws.append([u"DB11/567", None, None, None, u""])
+    wb.save(path)
+
+
+def make_star_template(path):
+    """只有表头、一行数据都没有的空模板：以前会被判"没解析到字段"而整体拒收。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "数据"
+    ws.append([u"*标准名称", u"*标准级别", u"发布日期", u"＊填报单位"])
+    wb.save(path)
+
+
 FIXTURES = [
     (u"水库基础信息（dim_reservoir_info）.xlsx", make_basic),
     (u"大表压精度（ods_t_big）.xlsx", make_overflow),
     (u"结构定义订单（ods_t_order_meta）.xlsx", make_meta),
+    (u"必填表头（ods_t_star_form）.xlsx", make_star_form),
+    (u"空采集模板（ods_t_star_tpl）.xlsx", make_star_template),
     (u"超长拼音名统计（a_very_long_table_name_that_keeps_going_and_going_x）.xlsx",
      make_cn_name),
     (u"人员信息表（人事处）.xlsx", make_cn_name),
@@ -191,6 +219,10 @@ def dump_file(path):
             "primary_key": tdef["primary_key"],
             "pk_reason": tdef["pk_reason"],
             "source": tdef["source"],
+            # 具名空列清单与"一行数据都没有"这两件事也得跨线对：
+            # 它们决定日志里那句点名和"建出来是空表"的判定
+            "empty_columns": tdef.get("empty_columns") or [],
+            "no_data_rows": bool(tdef.get("no_data_rows")),
         },
     }
 
