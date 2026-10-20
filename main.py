@@ -2180,4 +2180,8 @@ if __name__ == "__main__":
     setup_app(app)
     win = MainWindow()
     win.show()
-    sys.exit(app.exec())
+    rc = app.exec()
+    # 关窗之后先把窗口交还给还活着的 QApplication：模块清理阶段 app 与 win 谁先析构不由人，
+    # Qt 对象排在 app 之后销毁会踩到已释放的窗口资源，用户看到的是"关掉就闪退"
+    del win
+    sys.exit(rc)
