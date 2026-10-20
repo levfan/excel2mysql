@@ -352,6 +352,44 @@ check("B21f 连一个格子都没有的真空表照旧拒绝（建出来是 CREA
 check("B21g 表头部分空着、那一列又整列没值：仍按垃圾列丢掉，其余照旧（不是全都空）",
       len(t5b["columns"]) == 2, len(t5b["columns"]))
 
+# 表里没有数据时字段名本身就写着口径：按关键字定类型，不再一律 VARCHAR(64)
+_empty_cols = infer_columns(pd.DataFrame({
+    "发布日期": [], "更新时间": [], "订单金额": [], "数量": [], "备注说明": []}))
+check("B22 空列按字段名关键字定类型：日期/时间/金额/数量各归各位",
+      [c["type"] for c in _empty_cols]
+      == ["DATE", "DATETIME", "DECIMAL(16,2)", "INT", "VARCHAR(64)"],
+      [c["type"] for c in _empty_cols])
+check("B22b 每个按名定的类型都带留痕文案，没命中的不带",
+      all(c.get("type_note") for c in _empty_cols[:4])
+      and not _empty_cols[4].get("type_note"),
+      [c.get("type_note") for c in _empty_cols])
+_mixed = infer_columns(pd.DataFrame({"数量": ["a", "b"], "发布日期": ["2020-01-01",
+                                                                     "2020-01-02"]}))
+check("B22c 有值时照旧数据判定，按名规则不参与",
+      _mixed[0]["type"].startswith("VARCHAR") and _mixed[1]["type"] == "DATE"
+      and not _mixed[0].get("type_note"),
+      [(c["type"], c.get("type_note")) for c in _mixed])
+_en = infer_columns(pd.DataFrame({"create_date": [], "update": [], "qty": [],
+                                  "birthday": []}))
+check("B22d 英文按成词匹配：create_date/qty 命中，update/birthday 不误中",
+      [c["type"] for c in _en] == ["DATE", "VARCHAR(64)", "INT", "VARCHAR(64)"],
+      [c["type"] for c in _en])
+_meta_empty = pd.DataFrame({
+    "序号": [1],
+    "字段名(英文)": ["publish_date"],
+    "字段注释(中文)": ["发布日期"],
+    "数据类型": ["VARCHAR（64）"],
+    "长度": [""],
+    "是否主键": [""],
+    "是否可为空": ["是"],
+})
+_pe = make_xlsx("空定义（t_meta_empty）.xlsx", {"字段定义": _meta_empty})
+_te = build_table_def(_pe)
+check("B22e 结构定义模式人工类型优先：叫发布日期也不改成 DATE",
+      len(_te["columns"]) == 1 and _te["columns"][0]["type"] == "VARCHAR(64)"
+      and not _te["columns"][0].get("type_note"),
+      [(c["field"], c["type"], c.get("type_note")) for c in _te["columns"]])
+
 df_big = pd.DataFrame({"超长文本": ["啊" * 5000]})           # 15000 字节 > 16383 档位上限
 check("B22 超 VARCHAR 档位上限的文本列 → TEXT", infer_columns(df_big)[0]["type"] == "TEXT",
       infer_columns(df_big)[0]["type"])
@@ -1350,7 +1388,8 @@ check("L14 结构定义模式以人工类型为准，语义层不插手",
 # ---------------------------------------------------------------------------
 section("M 字段命名规则（蛇形拼音 / 首字母降级 / 30 字符上限）")
 
-from core.infer import _col_to_field, _FIELD_MAX_LEN
+from core.infer import _col_to_field, _FIELD_MAX_LEN, parse_table_name_and_comment, \
+    sanitize_table_name
 
 check("M0 上限常量就是 30", _FIELD_MAX_LEN == 30, _FIELD_MAX_LEN)
 check("M1 中文表头→蛇形全拼", _col_to_field("订单金额") == "ding_dan_jin_e",
@@ -1471,6 +1510,76 @@ check("M19c 尾部拉丁词没配冒号分隔时不猜它是注释（数量 qty 
       _col_to_field("数量 qty") == "shu_liang_qty"
       and _col_to_field("身份证ID") == "shen_fen_zheng_id",
       [_col_to_field("数量 qty"), _col_to_field("身份证ID")])
+
+# 命名开关：表名与字段名取拼音首字母（用户 2026-10-20 点名要的开关，默认全拼照旧）
+check("M21 首字母开关：汉字音节一律取首字母，默认全拼不受影响",
+      _col_to_field("订单金额", initials=True) == "ddje"
+      and _col_to_field("订单金额") == "ding_dan_jin_e",
+      [_col_to_field("订单金额", initials=True), _col_to_field("订单金额")])
+check("M21b 开关下英文/数字段整段保留，数字开头照旧补 f_",
+      _col_to_field("订单order金额", initials=True) == "ddorderje"
+      and _col_to_field("7号线", initials=True) == "f_7hx",
+      [_col_to_field("订单order金额", initials=True),
+       _col_to_field("7号线", initials=True)])
+check("M21c 表名同用一套开关，且与超长降级形式一致",
+      sanitize_table_name("水库基础信息", initials=True) == "skjcxx"
+      and _col_to_field("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表",
+                        initials=True) == "bjshdqswjxsdxsksngcjcxxhzb",
+      [sanitize_table_name("水库基础信息", initials=True),
+       _col_to_field("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表",
+                     initials=True)])
+check("M21d 文件名括号里的英文名不受开关影响，无括号文件名受影响",
+      parse_table_name_and_comment("水库基础信息（dim_reservoir_info）.xlsx",
+                                   initials=True)[0] == "dim_reservoir_info"
+      and parse_table_name_and_comment("水库信息表.xlsx", initials=True)[0] == "skxxb",
+      [parse_table_name_and_comment("水库基础信息（dim_reservoir_info）.xlsx",
+                                    initials=True)[0],
+       parse_table_name_and_comment("水库信息表.xlsx", initials=True)[0]])
+_ini = build_table_def(make_xlsx("水库信息表.xlsx", {"S": pd.DataFrame({"订单金额": []})}),
+                       initials=True)
+check("M21e 端到端：开关从 build_table_def 一路传到表名与字段名",
+      _ini["table_name"] == "skxxb"
+      and [c["field"] for c in _ini["columns"]] == ["ddje"],
+      (_ini["table_name"], [c["field"] for c in _ini["columns"]]))
+
+# 大小写开关：默认小写照旧，勾上后表名与字段名整体转大写（用户 2026-10-21 点名）
+check("M22 大小写开关：字段名与表名转大写，默认小写不受影响",
+      _col_to_field("订单金额", upper=True) == "DING_DAN_JIN_E"
+      and _col_to_field("订单金额") == "ding_dan_jin_e"
+      and sanitize_table_name("水库基础信息", upper=True) == "SHUI_KU_JI_CHU_XIN_XI",
+      [_col_to_field("订单金额", upper=True), sanitize_table_name("水库基础信息", upper=True)])
+check("M22b 与首字母开关叠加：先定首字母再转大写，英文/数字段与降级口径不变",
+      _col_to_field("订单金额", initials=True, upper=True) == "DDJE"
+      and _col_to_field("订单order金额", initials=True, upper=True) == "DDORDERJE"
+      and _col_to_field("7号线", initials=True, upper=True) == "F_7HX",
+      [_col_to_field("订单金额", initials=True, upper=True),
+       _col_to_field("订单order金额", initials=True, upper=True)])
+check("M22c 括号里显式写下的英文表名同样跟大小写开关，无括号文件名也转",
+      parse_table_name_and_comment("水库基础信息（dim_reservoir_info）.xlsx", upper=True)[0]
+      == "DIM_RESERVOIR_INFO"
+      and parse_table_name_and_comment("水库信息表.xlsx", upper=True)[0] == "SHUI_KU_XIN_XI_BIAO",
+      [parse_table_name_and_comment("水库基础信息（dim_reservoir_info）.xlsx", upper=True)[0],
+       parse_table_name_and_comment("水库信息表.xlsx", upper=True)[0]])
+check("M22d 兜底标识符也跟着转：空名表名与空表头字段不留小写尾巴",
+      sanitize_table_name("", upper=True) == "T_IMPORT_DATA"
+      and _col_to_field("", upper=True) == "COL"
+      and _col_to_field("（备注说明）", upper=True) == "BEI_ZHU_SHUO_MING",
+      [sanitize_table_name("", upper=True), _col_to_field("", upper=True)])
+_up = build_table_def(make_xlsx("大写开关表（t_upper_switch）.xlsx",
+                                {"S": pd.DataFrame({"订单金额": [], "发布日期": []})}),
+                      upper=True)
+check("M22e 端到端：大小写开关传到表名、字段名与空列的按名定类型",
+      _up["table_name"] == "T_UPPER_SWITCH"
+      and [c["field"] for c in _up["columns"]] == ["DING_DAN_JIN_E", "FA_BU_RI_QI"]
+      and [c["type"] for c in _up["columns"]] == ["DECIMAL(16,2)", "DATE"]
+      and all(c.get("type_note") for c in _up["columns"]),
+      (_up["table_name"], [(c["field"], c["type"]) for c in _up["columns"]]))
+_te_up = build_table_def(
+    make_xlsx("空定义（t_meta_up）.xlsx", {"字段定义": _meta_empty}), upper=True)
+check("M22f 结构定义模式：人工写的字段名原样，表名跟开关转大写",
+      _te_up["table_name"] == "T_META_UP"
+      and [c["field"] for c in _te_up["columns"]] == ["publish_date"],
+      (_te_up["table_name"], [c["field"] for c in _te_up["columns"]]))
 
 # 真实语料：从内部数据包的 create_table*.sql 中文列注释里取，量化碰撞率。
 # 语料在仓库之外，不设环境变量时显式记为 SKIP，不影响用例集全绿。

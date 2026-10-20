@@ -983,6 +983,51 @@ with _ctx.redirect_stderr(_probe):
 check("W37d 只压那两类第三方警告，没有把警告整体静音",
       "别的警告照常打出来" in _probe.getvalue(), _probe.getvalue().strip()[:80])
 
+# 命名开关与"空列按字段名定类型"（用户 2026-10-20 第 4 件；默认行为必须一个字都不变）
+_naming = os.path.join(_tmpdir, "水库信息表.xlsx")     # 不带括号：表名才走中文转写
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append([u"订单金额", u"备注说明"])
+_ws.append([12.5, u"甲"])
+_wb.save(_naming)
+code, out, _con = run_cli(["--dry-run", _naming, "-d", "db1"])
+check("W38 默认全拼：不开开关时表名与字段名一个字都不变",
+      code == cli_mod.EXIT_OK and "`shui_ku_xin_xi_biao`" in out
+      and "`ding_dan_jin_e`" in out, out.strip()[-160:])
+code, out, _con = run_cli(["--initials", "--dry-run", _naming, "-d", "db1"])
+check("W39 --initials：表名与字段名取首字母，启动行写明命名规则",
+      code == cli_mod.EXIT_OK and "`skxxb`" in out and "`ddje`" in out
+      and "命名取拼音首字母" in out, out.strip()[:130])
+_types = os.path.join(_tmpdir, "采集模板（w_types）.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append([u"发布日期", u"更新时间", u"订单金额", u"数量", u"备注说明"])
+_wb.save(_types)
+code, out, _con = run_cli(["--dry-run", _types, "-d", "db1"])
+check("W40 空模板按字段名定类型：日期/时间/金额/数量各归各位且留痕",
+      code == cli_mod.EXIT_OK
+      and "`fa_bu_ri_qi` DATE" in out and "`geng_xin_shi_jian` DATETIME" in out
+      and "`ding_dan_jin_e` DECIMAL(16,2)" in out and "`shu_liang` INT" in out
+      and "该列没有值" in out, out.strip()[-320:])
+code, out, _con = run_cli(["--upper", "--dry-run", _naming, "-d", "db1"])
+check("W41 --upper：表名与字段名转大写，启动行写明大小写规则；默认小写留原样",
+      code == cli_mod.EXIT_OK and "`SHUI_KU_XIN_XI_BIAO`" in out
+      and "`DING_DAN_JIN_E`" in out and "表名与字段名转大写" in out
+      and "`shui_ku_xin_xi_biao`" not in out, out.strip()[:180])
+code, out, _con = run_cli(["--initials", "--upper", "--dry-run", _naming, "-d", "db1"])
+check("W41b --initials 与 --upper 叠加：先取首字母再转大写",
+      code == cli_mod.EXIT_OK and "`SKXXB`" in out and "`DDJE`" in out
+      and "命名取拼音首字母" in out and "表名与字段名转大写" in out,
+      out.strip()[:150])
+code, out, _con = run_cli(["--upper", "--dry-run", _types, "-d", "db1"])
+check("W41c 大写时空列按名定类型照旧，字段名整体大写",
+      code == cli_mod.EXIT_OK and "`FA_BU_RI_QI` DATE" in out
+      and "`GENG_XIN_SHI_JIAN` DATETIME" in out
+      and "`DING_DAN_JIN_E` DECIMAL(16,2)" in out
+      and "`SHU_LIANG` INT" in out, out.strip()[-320:])
+
 section("X CLI 端到端·假连接（断到真实落库调用序列，不只看退出码）")
 
 
