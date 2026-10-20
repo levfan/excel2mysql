@@ -401,6 +401,9 @@ public final class TableBuilder {
      * 主键可用性校验：空串表示可用，非空是问题说明。
      * 结构弹窗改完勾选也要过同一条，所以这里公开——两处各写一套校验，
      * 弹窗放行的主键到建表时才发现不能用，用户只能来回猜。
+     *
+     * <p>没有数据行时不因无数据拒绝：非空与唯一在空集上天然成立，仍可手工指定主键；
+     * 只有自动选键才需要数据来判断。
      */
     public static String validatePrimaryKey(List<List<Object>> rows,
                                             List<Infer.Column> columns) {
@@ -419,9 +422,6 @@ public final class TableBuilder {
                 return "字段 " + c.field + " 类型 " + c.type
                         + " 不能作为主键（可用 INT/BIGINT 或长度 ≤255 的 VARCHAR/CHAR）";
             }
-        }
-        if (rows.isEmpty()) {
-            return "没有数据行，无法校验主键";
         }
         Set<String> seen = new LinkedHashSet<String>();
         for (int r = 0; r < rows.size(); r++) {

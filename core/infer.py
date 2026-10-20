@@ -704,6 +704,9 @@ def validate_primary_key(df: pd.DataFrame, columns: list) -> tuple:
       - 字段类型须为 INT/BIGINT 或长度 ≤255 的 VARCHAR/CHAR（TEXT 等不能作主键）
       - 组合内每个字段全列非空（空白串也算空）
       - 组合值整体唯一
+
+    空表（0 行）不因无数据被拒绝：非空与唯一在空集上天然成立，
+    用户仍可手工指定主键；只有自动选键才需要数据来判断。
     """
     pk_idx = [i for i, c in enumerate(columns) if c.get("primary_key")]
     if not pk_idx:
@@ -713,8 +716,6 @@ def validate_primary_key(df: pd.DataFrame, columns: list) -> tuple:
         if not _pk_type_ok(str(c.get("type", ""))):
             return False, (f"字段 {c.get('field', i)} 类型 {c.get('type')} "
                            f"不能作为主键（可用 INT/BIGINT 或长度 ≤255 的 VARCHAR/CHAR）")
-    if len(df) == 0:
-        return False, "没有数据行，无法校验主键"
     sub = df.iloc[:, pk_idx]
     seen = set()
     for r_off, row in enumerate(sub.itertuples(index=False, name=None)):
