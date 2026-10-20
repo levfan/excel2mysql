@@ -1699,3 +1699,57 @@ Qt 按 96dpi 把 pt 折成 px（10.5pt → 14px）；Swing 的 HTML 渲染器按
     "两颗命名开关应默认勾选（取拼音首字母 / 转大写）"，退出码 1；
     逐字节还原后 `MainFrame.java` 哈希
     `120eebbe9f1763ea1d0cc23b19cccbcf047272d4d45fa2ae6d1fda55e289846a`
+
+## 36. 第二个页签的第二组命名开关（默认不勾选）
+
+用户要求「SQL 脚本改名入库」页也有「表名与字段名取拼音首字母」「表名与字段名转大写」
+两颗勾选框，但与第一页相反，默认不勾选。第二页的输入是现成 SQL 脚本，
+默认保持"脚本里写什么就生成什么"；开关只作用在该页生成的标准/简易 Excel 上。
+
+### 36.1 两栈怎么改
+
+- Python：`_build_sql_page` 新增 `chk_sql_initials` / `chk_sql_upper` 两颗
+  `QCheckBox`，不调用 `setChecked`，构造完就是未勾选；`toggled` 时在 SQL 页日志留一行
+  "对之后生成的 Excel 生效，脚本正文不改"。
+- Java：`SqlPage` 新增 `initialsBox` / `upperBox`，同样不调用 `setSelected`；
+  `addActionListener` 写同一句日志。布局上单独一行，位置与 Python 的 `name_row` 一致，
+  在表名前缀行与操作行之间，随上半区一起缩放。
+- 生成链路：Python 的 `on_sql_gen_excel` 把两颗开关当前值传给
+  `sql_meta_export_task`（`_run_modal` 把 sink 放在最后一个位置参数）；
+  Java 的 `generateExcel` 捕获后传给 `exportFromScripts`。
+- 转换规则与第一页共用：含中文的名字才走 `sanitize_table_name` /
+  `_col_to_field`（Java 为 `Names.sanitizeTableName` / `colToField`），
+  纯英文只在勾了大写时改大小写；转换后按 `_2`、`_3` 去重。
+  表名与字段名都转，列注释原样保留。
+- 作用域只到生成物：脚本正文、页面上的原表名/当前表名清单都不变；
+  勾了开关时生成日志先写一行 `[命名] 生成物表名与字段名：…`。
+
+### 36.2 用例怎么跟
+
+- Python R43–R47：默认状态对照（第一页勾、第二页不勾）、切换日志、
+  勾两颗后文件名 `命名开关检查表（T_CASE9）.xlsx`、回读字段
+  `ID/DDJE/DDJE_2/KHMC`、列注释不变、脚本正文逐字节不变、生成日志口径。
+  读回结构定义件时带 `build_table_def(..., upper=True)`：表名取自文件名，
+  默认会转小写，不带开关会把大写产物读成小写。
+- Java `sql_gen_excel`：同一组断言。文件名按目录清单逐字比，不用 `isFile()`——
+  Windows 文件系统不区分大小写，小写产物会被 `isFile()` 认成大写名，开关失效会漏检。
+  回读用 `Names.setUpperOnly(true)` 保留文件名里的大小写。
+- 对撞器新增 `sql_initials` / `sql_upper` 两组控件键，Python 与 Java 各 247 键。
+
+### 36.3 验证
+
+- `.venv/Scripts/python.exe pack_test.py`：通过 534 / 失败 0 / 跳过 6，退出码 0。
+- `java/构建验证.bat`：十步全过，退出码 0；第 10 步 GUI 自检通过。
+- `界面双端对撞.bat`：247 键逐键一致，退出码 0。
+- 变异抽查：
+  - Python 给 `chk_sql_initials` 补一句 `setChecked(True)` → R43 / R44 变红，
+    汇总 532 通过 / 2 失败、退出码 1；逐字节还原后 `main.py` 哈希
+    `931a4f08914b18b421e0a375d02616f5ed1d6b9ceb8fd822552ce7b7e3b1e787`
+  - Python 把 `_sql_naming` 换成原样返回 → R45 / R46 变红，汇总 532 通过 /
+    2 失败、退出码 1；逐字节还原后哈希同上
+  - Java 在构造器里补 `initialsBox.setSelected(true)` → 自检报
+    "SQL 页两颗命名开关默认应不勾选"等 4 条，退出码 1；逐字节还原后
+    `SqlPage.java` 哈希
+    `c41f75a1bcc14bd896f5bc2ef6638db4dcc6587cca073be05159b9ddcbc65c41`
+  - Java 把 `namingName` 换成原样返回 → 自检报文件名与回读字段两条，退出码 1；
+    逐字节还原后哈希同上
