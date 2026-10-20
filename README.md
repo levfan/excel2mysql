@@ -31,7 +31,7 @@ Python 侧同源靠同一个 `core/` 包，Java 侧是把 `core/` 重写一遍�
 | 能跑的系统 | **64 位 Windows 10 1809+ / Windows 11** | **Windows 7 SP1 及以上**，且系统 UCRT 补丁与系统文件完整 | **64 位 Windows 7 及以上**；包内自带 Java 8 运行时，目标机器不用装任何东西 |
 | 语言与依赖 | Python 3.10+（本机 `.venv` 用 3.12.8）+ PySide6 | Python 3.8.10（本机 `.venv38`），不含任何 Qt | Java 8（本机 `jdk1.8.0_202`），依赖见 `java/pom.xml` |
 | 打包闸门 | `一键打包.bat` → `build_exe.py` | `一键打包38.bat` → `build_exe38.py` | `java/一键打包.bat` → `tools/build_java_dist.py` |
-| 用例与守卫 | `pack_test.py`（474 项，含 GUI 各组；没设数据库凭据时 468 通过 / 6 跳过） | `pack_test38.py`（241 项，含真库读写与 `.sql` 执行；同一份在旧栈与新栈各跑一遍，旧栈 227 通过 / 14 跳过） | `java/构建验证.bat` 十步闸门 + `java/界面双端对撞.bat` + `--gui --selftest` |
+| 用例与守卫 | `pack_test.py`（479 项，含 GUI 各组；没设数据库凭据时 473 通过 / 6 跳过） | `pack_test38.py`（242 项，含真库读写与 `.sql` 执行；同一份在旧栈与新栈各跑一遍，旧栈 228 通过 / 14 跳过） | `java/构建验证.bat` 十步闸门 + `java/界面双端对撞.bat` + `--gui --selftest` |
 | 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 | 两种都有：同一个 jar，`--gui` 起界面，不给 `--gui` 就是命令行 |
 
 三条线各自的环境与产物互不影响：GUI 包该多大还多大（162 MB）、该要 Win10 还 Win10；
@@ -137,7 +137,7 @@ Python 3.8 那条**只有命令行**（`.venv38` 里没装 PySide6，实测确�
 - 详细用法、退出码、配置文件格式见下一节「Windows 7 命令行版」
 
 > **验收状态说清楚**：命令行版已经在 Python 3.8.10 + pandas 2.0.3 + numpy 1.24.4 这套旧栈上
-> 全绿（`pack_test38.py` 在旧栈跑通 227 项、失败 0，14 项显式记 SKIP：G 组 13 项要真连 MySQL、
+> 全绿（`pack_test38.py` 在旧栈跑通 228 项、失败 0，14 项显式记 SKIP：G 组 13 项要真连 MySQL、
 > 本轮没设凭据，V25 要 `PT_XLS` 指向真实 `.xls` 样本而本机没有该格式文件），
 > 并且**同一份用例在 3.12 新栈上逐条一致**——这是"旧栈行为没变"
 > 的实测证据，不是推测。打包闸门还会额外取证：产物里没有任何 Qt 文件、带的是 `python38.dll`、
@@ -497,7 +497,7 @@ dist_packtest\packtest\packtest.exe
 | 组 | 覆盖内容 |
 | --- | --- |
 | A 依赖与静态资源 | 全部三方库可导入、pypinyin 词典懒加载、pandas 时区（tzdata）、openpyxl 读写 xlsx、`app_icon.ico` 在包内且能被 Qt 解码、Qt 平台插件可建 QApplication |
-| B Excel 解析与类型推断 | 普通表 / 结构定义表 / `（英文表名）` 括号解析、元数据 Sheet 不在首位、INT/BIGINT 溢出/DECIMAL/DATE/DATETIME/VARCHAR/TEXT/MEDIUMTEXT 全分支、前导零保持文本、8 位数字不误判日期、VARCHAR 行内预算退化、全空行剔除、具名空列保留而 Unnamed 垃圾空列剔除、只有表头的空模板不再被拒、必填星号不进字段名、多余列忽略、缺失列补 NULL、只有定义建空表、表名 64 字符截断、重名字段与重名表去重、前缀应用/切换/移除、GBK 与 UTF-8 BOM 脚本读取 |
+| B Excel 解析与类型推断 | 普通表 / 结构定义表 / `（英文表名）` 括号解析、元数据 Sheet 不在首位、INT/BIGINT 溢出/DECIMAL/DATE/DATETIME/VARCHAR/TEXT/MEDIUMTEXT 全分支、前导零保持文本、8 位数字不误判日期、VARCHAR 行内预算退化、全空行剔除、具名空列保留而 Unnamed 垃圾空列剔除、只有表头的空模板不再被拒、表头整行没写字按列宽兜底成 `col`/`col_2`、必填星号不进字段名、多余列忽略、缺失列补 NULL、只有定义建空表、表名 64 字符截断、重名字段与重名表去重、前缀应用/切换/移除、GBK 与 UTF-8 BOM 脚本读取 |
 | C 主键 | 自动选唯一且语义明确的列、无合适字段不设主键、组合值重复拒绝、含空值拒绝、TEXT 不能作主键、组合主键通过、全不勾选放行 |
 | D DDL 生成 | DROP 开关、表/字段中文注释、主键与 NOT NULL 规则、InnoDB+utf8mb4+排序规则、组合主键单约束、注释内单引号转义、INSERT 模板列数与占位符数一致 |
 | E SQL 脚本处理 | `CREATE TABLE` 表名提取与计数、反引号与语句头裸名改写、schema 限定名不改写、字符串内分号不误伤、重复应用前缀不叠加、行注释/块注释/反引号内分号不切、空语句忽略 |
@@ -1113,5 +1113,15 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
 - Excel 全空行自动剔除，不会导入整行 NULL 的垃圾数据；**整列没值的字段看表头**：
   表头写了字（含 `*标准名称` 这类必填标记）就照旧保留并在日志点名，
   表头空着的 `Unnamed` 列才丢
+- **表头整行一个格都没写字**的模板也照样导入：pandas 遇到这种行会把**列宽一起丢掉**
+  （实测 `columns` 只剩 0 个），所以判"一列都没有"之前要回原始工作簿问一次第一行有几个格
+  （`_first_row_width`：xlsx 用 openpyxl `read_only` 取首行，`.xls` 用 xlrd 的 `ncols`）。
+  问得到宽度就按它兜底出同样数量的空表头列，字段名走 `col` / `col_2` / `col_3`，
+  列注释为空、没有数据可插，`[已解析]` 行末尾点名
+  `表头整行没写字，按列宽兜底成：col、col_2、col_3`（名单随表定义的 `blank_headers` 带出去，
+  Java 侧是 `TableBuilder.Result.blankHeaders`）。问不到就是真的空表，照旧按解析失败拒绝——
+  那种表建出来是 `CREATE TABLE x ( )`，MySQL 直接报语法错误。
+  Java 侧 `trimAndPad` 与 pandas 一样会把行尾空格裁掉，所以宽度必须**在裁剪前**记下来
+  （`rawHeadWidth`）；两侧对齐的是"列数与字段名一致"，不是实现一致
 - 表已存在时默认跳过建表，勾选「覆盖已存在表」会先 DROP 再建
 - 导入分批 500 行/批，单批失败会回滚该表并继续下一张
