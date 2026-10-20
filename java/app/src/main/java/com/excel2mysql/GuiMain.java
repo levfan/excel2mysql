@@ -157,6 +157,24 @@ public final class GuiMain {
                 if (!ddl.contains("PRIMARY KEY")) {
                     problems.add("DDL 预览里没有主键，自动选主键没生效");
                 }
+                // 两行合并表头是唯一"带合并区却放行"的形状：展开坏了要么直接解析失败
+                // （上面表数会红），要么字段名还是第一行的组名。夹具不在目录里时跳过，
+                // 让自检还能指向现场自己的数据目录跑
+                boolean hasMergedFixture = false;
+                for (String p : files) {
+                    if (p.endsWith("两行合并表头（ods_t_merged_header）.xlsx")) {
+                        hasMergedFixture = true;
+                        break;
+                    }
+                }
+                if (hasMergedFixture) {
+                    if (!frame.logPanel().contains("合并表头按 2 行展开")) {
+                        problems.add("两行合并表头没在[已解析]里说明按几行展开");
+                    }
+                    if (!ddl.contains("ji_shu_gong_si_xiao_ji") || !ddl.contains("jsgsptyg")) {
+                        problems.add("两行合并表头没有按「父-子」展开成字段名");
+                    }
+                }
                 // 表数的可见痕迹是文件表行数与日志里那句汇总（Python 没有状态栏），
                 // 两者已分别在上面断过，这里不再断自造的状态文字
                 // 文件表刻意不可就地编辑：字段级改动在双击打开的结构弹窗里做，

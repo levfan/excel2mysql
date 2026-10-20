@@ -110,6 +110,12 @@ public final class WorkbookReader {
         return sheets;
     }
 
+    /** 第一张 Sheet 的名字；只读工作簿元数据，不加载数据。 */
+    public static String firstSheetName(String path) {
+        List<String> names = sheetNames(new File(path));
+        return names.isEmpty() ? "" : names.get(0);
+    }
+
     /** 空 Sheet 也要占位：Sheet 的下标和数量参与"取第一张还是取某一张"的判断。 */
     private static String nameOf(File file, int index) {
         List<String> names = sheetNames(file);

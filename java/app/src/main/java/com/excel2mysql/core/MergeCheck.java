@@ -24,7 +24,10 @@ import java.util.zip.ZipFile;
  * core/merge_check.py：合并单元格探测。
  *
  * 含合并区的表映射成关系表必然错位（只有左上角有值，其余格读进来是空），
- * 所以拒绝导入而不是导出一份错数据。
+ * 所以默认拒绝导入而不是导出一份错数据。
+ *
+ * 唯一例外是首表顶部的多行合并表头：整块合并区都落在表头里时展开成
+ * 「父-子」单行表头（技术公司 + 小计 → 技术公司-小计）；数据区有合并区照旧拒绝。
  * xlsx 走流式扫 sheet XML 里的 &lt;mergeCell&gt;，不整表加载；xls 走 POI 的 HSSF。
  */
 public final class MergeCheck {
@@ -118,6 +121,70 @@ public final class MergeCheck {
         if (!merged.isEmpty()) {
             throw new MergedCellsException(filepath, merged);
         }
+    }
+
+    /** 首表顶部合并表头的展开计划：depth 是表头行数，merges 是 0 基闭区间。 */
+    public static final class HeaderPlan {
+        public final int depth;
+        public final List<int[]> merges;
+
+        HeaderPlan(int depth, List<int[]> merges) {
+            this.depth = depth;
+            this.merges = merges;
+        }
+    }
+
+    /** 'B2:C4' -> 0 基闭区间 {r1, c1, r2, c2}；格式不认识返回 null。 */
+    public static int[] parseRange(String ref) {
+        Matcher m = RANGE.matcher(ref == null ? "" : ref.trim().toUpperCase());
+        if (!m.matches()) {
+            return null;
+        }
+        return new int[]{Integer.parseInt(m.group(2)) - 1, colWidth(m.group(1)) - 1,
+                Integer.parseInt(m.group(4)) - 1, colWidth(m.group(3)) - 1};
+    }
+
+    /**
+     * 首表合并区若全在顶部表头块里，返回展开计划；否则返回 null（照旧拒绝）。
+     *
+     * 表头深度由顶到第 1 行的合并区决定（A1:A2 → 2 行，J1:M1 → 横向分组）；
+     * 表头块内部允许嵌套合并，但只要有合并区越出深度，就说明数据区也被合并了。
+     * 只有首表可以带合并区，其余 Sheet 带合并区说明格式不是这个约定，不去猜。
+     */
+    public static HeaderPlan headerPlan(Map<String, List<String>> merged, String firstSheet) {
+        if (merged == null || merged.isEmpty() || firstSheet == null
+                || merged.size() != 1) {
+            return null;
+        }
+        List<String> ranges = merged.get(firstSheet);
+        if (ranges == null || ranges.isEmpty()) {
+            return null;
+        }
+        List<int[]> parsed = new ArrayList<int[]>();
+        for (String ref : ranges) {
+            int[] box = parseRange(ref);
+            if (box == null) {
+                return null;
+            }
+            parsed.add(box);
+        }
+        boolean hasTop = false;
+        int depth = 0;
+        for (int[] b : parsed) {
+            if (b[0] == 0) {
+                hasTop = true;
+                depth = Math.max(depth, b[2] + 1);
+            }
+        }
+        if (!hasTop || depth < 2) {
+            return null;
+        }
+        for (int[] b : parsed) {
+            if (b[2] >= depth) {
+                return null;
+            }
+        }
+        return new HeaderPlan(depth, parsed);
     }
 
     private static Map<String, List<String>> scanXlsx(String path) throws Exception {

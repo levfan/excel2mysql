@@ -204,6 +204,47 @@ def make_head_note(path):
     wb.save(path)
 
 
+def make_merged_header(path):
+    """两行合并表头：原始表按「父-子」压成一行，与第二张参考表的扁平表头逐字一致。
+
+    压四条规则：纵向合并（A1:A2）只留一份标签，不能展开成「序号-序号」；
+    横向合并（J1:M1）先把组名铺到组内每列，再与第二行的子标签用「-」连接；
+    表头块之外的合并区一个都不许有，否则照旧按拒绝记账；
+    带数据行，保证展开后的列顺序、取值、类型、主键与参考表完全对得上。
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = u"原始表"
+    top = [u"序号", u"单位名称", u"坐落号", u"省/直辖市", u"市/直辖市区", u"区/县",
+           u"是否主城区", u"区位类型", u"总计", u"技术公司", None, None, None,
+           u"财务公司", None, None, None]
+    second = [None] * 9 + [u"小计", u"高层", u"中层", u"普通员工",
+                          u"小计", u"高层", u"中层", u"普通员工"]
+    ws.append(top)
+    ws.append(second)
+    for box in ("A1:A2", "B1:B2", "C1:C2", "D1:D2", "E1:E2", "F1:F2", "G1:G2",
+                "H1:H2", "I1:I2", "J1:M1", "N1:Q1"):
+        ws.merge_cells(box)
+    rows = [
+        [1, u"市水务局", u"001", u"北京市", u"北京市", u"海淀区", u"是", u"主城区",
+         100, 60, 20, 20, 20, 40, 10, 10, 20],
+        [2, u"区水务站", u"002", u"北京市", u"北京市", u"朝阳区", u"否", u"副中心",
+         80, 45, 15, 15, 15, 35, 10, 10, 15],
+        [3, u"水库管理处", u"003", u"河北省", u"石家庄市", u"长安区", u"是", u"一般",
+         50, 30, 10, 10, 10, 20, 5, 5, 10],
+    ]
+    for r in rows:
+        ws.append(r)
+    ref = wb.create_sheet(u"结构化参考")
+    ref.append([u"序号", u"单位名称", u"坐落号", u"省/直辖市", u"市/直辖市区", u"区/县",
+                u"是否主城区", u"区位类型", u"总计", u"技术公司-小计", u"技术公司-高层",
+                u"技术公司-中层", u"技术公司-普通员工", u"财务公司-小计",
+                u"财务公司-高层", u"财务公司-中层", u"财务公司-普通员工"])
+    for r in rows:
+        ref.append(r)
+    wb.save(path)
+
+
 FIXTURES = [
     (u"水库基础信息（dim_reservoir_info）.xlsx", make_basic),
     (u"大表压精度（ods_t_big）.xlsx", make_overflow),
@@ -211,6 +252,7 @@ FIXTURES = [
     (u"必填表头（ods_t_star_form）.xlsx", make_star_form),
     (u"空采集模板（ods_t_star_tpl）.xlsx", make_star_template),
     (u"表头带注释（ods_t_head_note）.xlsx", make_head_note),
+    (u"两行合并表头（ods_t_merged_header）.xlsx", make_merged_header),
     (u"超长拼音名统计（a_very_long_table_name_that_keeps_going_and_going_x）.xlsx",
      make_cn_name),
     (u"人员信息表（人事处）.xlsx", make_cn_name),
@@ -231,10 +273,22 @@ def dump_file(path):
     tdef = build_table_def(path)
     cols = [{k: v for k, v in c.items() if k != "max_len" or isinstance(v, (int, str, type(None)))}
             for c in tdef["columns"]]
+    # 推断层的输入不该是"pandas header=0 看到的第一行"：两行合并表头会被压成一行，
+    # 原始 grid 里第二行还是数据。TypeDiffer 只撞推断规则，所以另存这份展开后的有效网格；
+    # ReaderDiffer 仍用上面的原始 grid 撞读取层，两者分工不变。
+    table_grid = None
+    if tdef.get("source") == "normal" and tdef.get("df") is not None:
+        eff = tdef["df"]
+        table_grid = {
+            "headers": [encode(c) for c in eff.columns],
+            "rows": [[encode(v) for v in row]
+                     for row in eff.itertuples(index=False, name=None)],
+        }
     return {
         "file": os.path.basename(path),
         "sha256": sha256(path),
         "grid": grid,
+        "table_grid": table_grid,
         "def": {
             "table_name": tdef["table_name"],
             "base_table_name": tdef["base_table_name"],

@@ -45,7 +45,10 @@ public final class TypeDiffer {
             }
             files++;
             List<Object> grid = asList(rec.get("grid"));
-            Map<String, Object> sheet = asMap(grid.get(0));
+            // 合并表头在原始 grid 里还是"第一行当表头、第二行当数据"的形状，
+            // 推断层要的是展开后的有效网格（table_grid），没有这份时退回原始 grid
+            Object eff = rec.get("table_grid");
+            Map<String, Object> sheet = eff == null ? asMap(grid.get(0)) : asMap(eff);
             List<Object> rawHeaders = asList(sheet.get("headers"));
             List<Object> rawRows = asList(sheet.get("rows"));
 

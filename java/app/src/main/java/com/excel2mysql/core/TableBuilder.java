@@ -60,6 +60,8 @@ public final class TableBuilder {
         public boolean noDataRows;
         /** 表头整行没写字时按列宽兜底出来的字段名（col、col_2…）；正常表为空列表。 */
         public final List<String> blankHeaders = new ArrayList<String>();
+        /** 顶部多行合并表头展开的行数；0 表示没展开。 */
+        public int mergedHeaderDepth;
     }
 
     private static final class Grid {
@@ -79,16 +81,32 @@ public final class TableBuilder {
             throw new IllegalArgumentException("不支持的文件类型：" + ext);
         }
         // 合并单元格要在读数据之前判掉：这类文件解析出来必然错位，
-        // 提前拒绝既避免导错数据，也省掉几十万行的读取开销
+        // 提前拒绝既避免导错数据，也省掉几十万行的读取开销。
+        // 例外是首表顶部的多行合并表头：展开成「父-子」单行表头后照常导入；
+        // 数据区（或别的 Sheet）里还有合并区则继续拒绝。
         if (cb != null) {
             cb.stage("检查合并单元格");
         }
-        MergeCheck.ensureNoMergedCells(filepath);
+        Map<String, List<String>> merged = MergeCheck.detect(filepath);
+        MergeCheck.HeaderPlan mergePlan = null;
+        if (!merged.isEmpty()) {
+            String firstSheet = WorkbookReader.firstSheetName(filepath);
+            mergePlan = MergeCheck.headerPlan(merged, firstSheet);
+            if (mergePlan == null) {
+                throw new MergeCheck.MergedCellsException(filepath, merged);
+            }
+        }
         if (cb != null) {
             cb.stage("读取工作簿");
         }
         List<Frame> frames = new ArrayList<Frame>();
         List<WorkbookReader.Sheet> raw = WorkbookReader.read(filepath);
+        if (mergePlan != null) {
+            if (cb != null) {
+                cb.stage("展开合并表头");
+            }
+            raw.set(0, flattenMergedHeader(raw.get(0), mergePlan));
+        }
         // 表头整行都是空格子时，pandas 那套形状（trimAndPad 裁行尾空格、去尾部空行）会把
         // 列宽一起裁没——和 Python 侧丢列是同一个结果。兜底要用的是"裁之前第一行有几个格"，
         // 所以这里在裁剪前先把第一个 Sheet 的首行宽度记下来。
@@ -113,7 +131,9 @@ public final class TableBuilder {
             if (cb != null) {
                 cb.stage("按字段定义组装");
             }
-            return buildStructured(filepath, frames, metaIndex);
+            Result structured = buildStructured(filepath, frames, metaIndex);
+            structured.mergedHeaderDepth = mergePlan == null ? 0 : mergePlan.depth;
+            return structured;
         }
         if (frames.isEmpty()) {
             throw new IllegalArgumentException("工作簿里没有可读的 Sheet");
@@ -121,6 +141,7 @@ public final class TableBuilder {
         Frame first = frames.get(0);
         String[] tc = names.parseTableNameAndComment(filepath);
         Result r = new Result();
+        r.mergedHeaderDepth = mergePlan == null ? 0 : mergePlan.depth;
         Grid grid = dropEmptyColumnsAndRows(first, r.emptyColumns);
         r.noDataRows = grid.rows.isEmpty();
         r.table = new TableOps.Table();
@@ -173,6 +194,76 @@ public final class TableBuilder {
             }
         }
         return r;
+    }
+
+    /**
+     * 把首表的多行合并表头压成一行，返回只含数据行的网格（与 core/infer.py 同一规则）。
+     *
+     * 合并区里的空格子按左上角的值补齐：纵向合并（序号 A1:A2）让每行拿到同一标签，
+     * 横向合并（技术公司 J1:M1）让组内每列拿到组名。逐列自上而下取标签，
+     * 相邻重复只留一份，用「-」连接；空表头与重名交给后面的 Frame 按 pandas 规则处理。
+     */
+    private static WorkbookReader.Sheet flattenMergedHeader(WorkbookReader.Sheet sheet,
+                                                            MergeCheck.HeaderPlan plan) {
+        int width = 0;
+        for (List<Object> row : sheet.rows) {
+            width = Math.max(width, row.size());
+        }
+        List<List<Object>> head = new ArrayList<List<Object>>();
+        for (int r = 0; r < plan.depth; r++) {
+            List<Object> row = new ArrayList<Object>();
+            for (int c = 0; c < width; c++) {
+                Object v = null;
+                if (r < sheet.rows.size() && c < sheet.rows.get(r).size()) {
+                    v = sheet.rows.get(r).get(c);
+                }
+                row.add(v);
+            }
+            head.add(row);
+        }
+        for (int[] m : plan.merges) {
+            int r1 = m[0];
+            int c1 = m[1];
+            int r2 = m[2];
+            int c2 = m[3];
+            if (r1 >= plan.depth || c1 >= width) {
+                continue;
+            }
+            Object value = head.get(r1).get(c1);
+            for (int r = r1; r <= r2 && r < plan.depth; r++) {
+                for (int c = c1; c <= c2 && c < width; c++) {
+                    head.get(r).set(c, value);
+                }
+            }
+        }
+        List<Object> headerRow = new ArrayList<Object>();
+        for (int c = 0; c < width; c++) {
+            List<String> path = new ArrayList<String>();
+            for (int r = 0; r < plan.depth; r++) {
+                String text = headerText(head.get(r).get(c));
+                if (text.isEmpty()) {
+                    continue;
+                }
+                if (!path.isEmpty() && path.get(path.size() - 1).equals(text)) {
+                    continue;
+                }
+                path.add(text);
+            }
+            headerRow.add(String.join("-", path));
+        }
+        List<List<Object>> flat = new ArrayList<List<Object>>();
+        flat.add(headerRow);
+        for (int r = plan.depth; r < sheet.rows.size(); r++) {
+            flat.add(sheet.rows.get(r));
+        }
+        return new WorkbookReader.Sheet(sheet.name, flat);
+    }
+
+    private static String headerText(Object v) {
+        if (v == null || (v instanceof Double && Double.isNaN(((Double) v).doubleValue()))) {
+            return "";
+        }
+        return Names.pyStrip(Infer.pyStr(v));
     }
 
     /**

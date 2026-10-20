@@ -259,6 +259,8 @@ public final class ImportParse {
         String reason = td.pkReason == null ? "" : td.pkReason;
         String pkMsg = pk == null ? "，未设主键（" + reason + "）" : "，主键 `" + pk + "`（" + reason + "）";
         String srcMsg = "structured".equals(td.table.source) ? "，结构定义模式" : "";
+        String mergeMsg = td.mergedHeaderDepth > 0
+                ? "，合并表头按 " + td.mergedHeaderDepth + " 行展开" : "";
         String extraMsg = td.extraDataColumns.isEmpty() ? ""
                 : "；数据 Sheet 多余列已忽略：" + String.join("、", td.extraDataColumns);
         // 具名但整列没值的字段：保留下来了，但要在同一行里点名，别让"空模板导进去 0 行"
@@ -275,7 +277,7 @@ public final class ImportParse {
                 + (td.blankHeaders.size() > 6 ? " 等 " + td.blankHeaders.size() + " 个" : "");
         return "[已解析] " + fname + " → 表名预置 " + td.table.tableName
                 + "，字段 " + td.table.columns.size() + " 列，数据 " + td.rows.size()
-                + " 行" + srcMsg + pkMsg + extraMsg + emptyMsg + zeroMsg + blankMsg;
+                + " 行" + srcMsg + mergeMsg + pkMsg + extraMsg + emptyMsg + zeroMsg + blankMsg;
     }
 
     /** 弹窗正文：只说实际用到的行，同一句话还会写进日志。 */
