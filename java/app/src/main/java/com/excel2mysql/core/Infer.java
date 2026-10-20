@@ -53,14 +53,62 @@ public final class Infer {
     // 只在"这列一个值都没有"时参与，有值照旧走数据判定；结构定义模式人工类型不受影响
     private static final String NAME_TIME_CN = "时间";   // 含"日期时间"——先查时间才落 DATETIME
     private static final String NAME_DATE_CN = "日期";
+    private static final String[] NAME_BOOL_CN = {"是否", "有无", "开关", "布尔", "标志"};
+    // 显式比率/系数词先于计量词判定；裸「率」放到计量词之后再查，
+    // 否则「频率」「功率」会被当成比率，而「容积率」需要留在比率这一侧
+    private static final String[] NAME_RATIO_CN = {"比例", "百分比", "占比", "增速", "幅度",
+            "系数", "因数", "倍数", "折扣", "权重", "比重", "容积率"};
+    private static final String[] NAME_SCORE_CN = {
+            "得分", "评分", "分数", "成绩", "总分", "平均分", "绩点"};
+    private static final String[] NAME_COORD_CN = {"经度", "纬度", "经纬度", "坐标"};
+    private static final String[] NAME_MEASURE_CN = {
+            "长度", "宽度", "高度", "厚度", "深度", "距离", "里程",
+            "面积", "体积", "容积", "重量", "毛重", "净重", "体重", "载重",
+            "容量", "温度", "湿度", "浓度", "密度", "压力", "速度", "速率",
+            "流量", "电量", "水量", "气量", "热量", "功率", "电压", "电流",
+            "频率", "海拔", "高程", "水位", "雨量", "身高", "含量", "纯度",
+            "直径", "半径", "周长", "角度"};
     private static final String[] NAME_INT_CN = {
-            "数量", "个数", "人数", "次数", "库存", "张数", "件数", "台数", "点数", "条数"};
+            "数量", "个数", "人数", "次数", "库存", "张数", "件数", "台数", "点数", "条数",
+            "户数", "笔数", "车数", "头数", "只数", "间数", "亩数", "套数", "项数", "总数",
+            "积分"};
+    private static final String[] NAME_AGE_CN = {
+            "年龄", "工龄", "教龄", "党龄", "军龄", "年限", "岁数", "周岁"};
+    private static final String[] NAME_RANK_CN = {
+            "序号", "排序", "排名", "名次", "页码", "页数", "层数", "楼层", "优先级"};
+    private static final String[] NAME_CAL_CN = {
+            "年份", "年度", "月份", "季度", "周次", "周数", "天数",
+            "小时数", "分钟数", "秒数", "期数"};
     private static final Pattern NAME_TIME_EN = Pattern.compile(
             "(?:^|_)(?:time|timestamp|datetime)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_DATE_EN = Pattern.compile(
             "(?:^|_)(?:date|dt)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_BOOL_EN = Pattern.compile(
+            "(?:^|_)(?:is|has|bool|boolean|flag|enabled|active|valid|deleted|disabled|yn)"
+          + "(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_RATIO_EN = Pattern.compile(
+            "(?:^|_)(?:rate|ratio|percent|percentage|pct|coefficient|factor|multiplier|"
+          + "discount)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_SCORE_EN = Pattern.compile(
+            "(?:^|_)(?:score|gpa)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_COORD_EN = Pattern.compile(
+            "(?:^|_)(?:longitude|latitude|lng|lat|lon|coord|coords|coordinate)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_MEASURE_EN = Pattern.compile(
+            "(?:^|_)(?:length|width|height|thickness|depth|distance|mileage|area|volume|"
+          + "capacity|weight|temperature|humidity|density|pressure|speed|flow|power|"
+          + "voltage|frequency|elevation|altitude|diameter|radius|perimeter)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_INT_EN = Pattern.compile(
             "(?:^|_)(?:qty|quantity|count|cnt|stock)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_AGE_EN = Pattern.compile(
+            "(?:^|_)(?:age)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_RANK_EN = Pattern.compile(
+            "(?:^|_)(?:rank|sort|seq|sequence|serial|page|pages|floor|priority)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_CAL_EN = Pattern.compile(
+            "(?:^|_)(?:year|month|quarter|week|hour|minute|second)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
 
     private static final String[] PK_KEYWORDS = {
             "编号", "序号", "代码", "编码", "标识", "卡号", "单号", "主键", "唯一"};
@@ -128,8 +176,10 @@ public final class Infer {
 
     /**
      * 空列的名字定类型：命中返回 {类型, 留痕文案}，没命中返回 null（照旧 VARCHAR）。
-     * 金额复用 isMoney 的双侧匹配与比率否决；日期/时间的英文只认成词的
-     * date/time/timestamp（贴着下划线或首尾），所以 update、birthday 不会误中。
+     * 金额复用 isMoney 的双侧匹配与比率否决；英文一律按成词的词根匹配
+     * （贴着下划线或首尾），所以 update、birthday 不会误中。
+     * 判定顺序即优先级：金额 &gt; 时间 &gt; 日期 &gt; 布尔 &gt; 显式比率/系数 &gt;
+     * 评分 &gt; 经纬度 &gt; 计量 &gt; 裸「率」 &gt; 计数 &gt; 年龄 &gt; 序号 &gt; 年份。
      */
     public static String[] nameBasedType(String comment, String field) {
         String c = comment == null ? "" : Names.pyStrip(comment);
@@ -144,15 +194,55 @@ public final class Infer {
         if (c.contains(NAME_DATE_CN) || NAME_DATE_EN.matcher(fl).find()) {
             return new String[]{"DATE", "该列没有值，字段名「" + c + "」含日期语义，按 DATE 建列"};
         }
-        for (String k : NAME_INT_CN) {
-            if (c.contains(k)) {
-                return new String[]{"INT", "该列没有值，字段名「" + c + "」含数量语义，按 INT 建列"};
-            }
+        if (nameHit(c, fl, NAME_BOOL_CN, NAME_BOOL_EN)) {
+            return new String[]{"TINYINT(1)",
+                    "该列没有值，字段名「" + c + "」含布尔语义，按 TINYINT(1) 建列"};
         }
-        if (NAME_INT_EN.matcher(fl).find()) {
+        if (nameHit(c, fl, NAME_RATIO_CN, NAME_RATIO_EN)) {
+            return new String[]{"DECIMAL(18,6)",
+                    "该列没有值，字段名「" + c + "」含比率/系数语义，按 DECIMAL(18,6) 建列"};
+        }
+        if (nameHit(c, fl, NAME_SCORE_CN, NAME_SCORE_EN)) {
+            return new String[]{"DECIMAL(10,2)",
+                    "该列没有值，字段名「" + c + "」含评分语义，按 DECIMAL(10,2) 建列"};
+        }
+        if (nameHit(c, fl, NAME_COORD_CN, NAME_COORD_EN)) {
+            return new String[]{"DECIMAL(18,8)",
+                    "该列没有值，字段名「" + c + "」含经纬度/坐标语义，按 DECIMAL(18,8) 建列"};
+        }
+        if (nameHit(c, fl, NAME_MEASURE_CN, NAME_MEASURE_EN)) {
+            return new String[]{"DECIMAL(18,4)",
+                    "该列没有值，字段名「" + c + "」含计量语义，按 DECIMAL(18,4) 建列"};
+        }
+        if (c.contains("率")) {
+            return new String[]{"DECIMAL(18,6)",
+                    "该列没有值，字段名「" + c + "」含比率/系数语义，按 DECIMAL(18,6) 建列"};
+        }
+        if (nameHit(c, fl, NAME_INT_CN, NAME_INT_EN)) {
             return new String[]{"INT", "该列没有值，字段名「" + c + "」含数量语义，按 INT 建列"};
         }
+        if (nameHit(c, fl, NAME_AGE_CN, NAME_AGE_EN)) {
+            return new String[]{"INT",
+                    "该列没有值，字段名「" + c + "」含年龄/年限语义，按 INT 建列"};
+        }
+        if (nameHit(c, fl, NAME_RANK_CN, NAME_RANK_EN)) {
+            return new String[]{"INT",
+                    "该列没有值，字段名「" + c + "」含序号/排名语义，按 INT 建列"};
+        }
+        if (nameHit(c, fl, NAME_CAL_CN, NAME_CAL_EN)) {
+            return new String[]{"INT",
+                    "该列没有值，字段名「" + c + "」含年份/月份语义，按 INT 建列"};
+        }
         return null;
+    }
+
+    private static boolean nameHit(String c, String fl, String[] cn, Pattern en) {
+        for (String k : cn) {
+            if (c.contains(k)) {
+                return true;
+            }
+        }
+        return en.matcher(fl).find();
     }
 
     public static String decimalType(int intDigits, int scale, int floorInt, boolean money) {

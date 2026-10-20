@@ -103,19 +103,65 @@ def _is_money(comment: str, field: str) -> bool:
 # 只在"这列一个值都没有"时参与，有值照旧走数据判定；结构定义模式的人工类型不受影响。
 _NAME_TIME_CN = "时间"      # 含"日期时间"——先查时间，才会落 DATETIME 而不是 DATE
 _NAME_DATE_CN = "日期"
+_NAME_BOOL_CN = ("是否", "有无", "开关", "布尔", "标志")
+# 显式比率/系数词先于计量词判定；裸「率」放到计量词之后再查，
+# 否则「频率」「功率」会被当成比率，而「容积率」需要留在比率这一侧
+_NAME_RATIO_CN = ("比例", "百分比", "占比", "增速", "幅度",
+                  "系数", "因数", "倍数", "折扣", "权重", "比重", "容积率")
+_NAME_SCORE_CN = ("得分", "评分", "分数", "成绩", "总分", "平均分", "绩点")
+_NAME_COORD_CN = ("经度", "纬度", "经纬度", "坐标")
+_NAME_MEASURE_CN = ("长度", "宽度", "高度", "厚度", "深度", "距离", "里程",
+                    "面积", "体积", "容积", "重量", "毛重", "净重", "体重", "载重",
+                    "容量", "温度", "湿度", "浓度", "密度", "压力", "速度", "速率",
+                    "流量", "电量", "水量", "气量", "热量", "功率", "电压", "电流",
+                    "频率", "海拔", "高程", "水位", "雨量", "身高", "含量", "纯度",
+                    "直径", "半径", "周长", "角度")
 _NAME_INT_CN = ("数量", "个数", "人数", "次数", "库存", "张数", "件数", "台数",
-                "点数", "条数")
+                "点数", "条数", "户数", "笔数", "车数", "头数", "只数", "间数",
+                "亩数", "套数", "项数", "总数", "积分")
+_NAME_AGE_CN = ("年龄", "工龄", "教龄", "党龄", "军龄", "年限", "岁数", "周岁")
+_NAME_RANK_CN = ("序号", "排序", "排名", "名次", "页码", "页数", "层数", "楼层",
+                 "优先级")
+_NAME_CAL_CN = ("年份", "年度", "月份", "季度", "周次", "周数", "天数",
+                "小时数", "分钟数", "秒数", "期数")
 _NAME_TIME_EN = re.compile(r"(?:^|_)(?:time|timestamp|datetime)(?:_|$)", re.IGNORECASE)
 _NAME_DATE_EN = re.compile(r"(?:^|_)(?:date|dt)(?:_|$)", re.IGNORECASE)
+_NAME_BOOL_EN = re.compile(
+    r"(?:^|_)(?:is|has|bool|boolean|flag|enabled|active|valid|deleted|disabled|yn)"
+    r"(?:_|$)", re.IGNORECASE)
+_NAME_RATIO_EN = re.compile(
+    r"(?:^|_)(?:rate|ratio|percent|percentage|pct|coefficient|factor|multiplier|"
+    r"discount)(?:_|$)", re.IGNORECASE)
+_NAME_SCORE_EN = re.compile(r"(?:^|_)(?:score|gpa)(?:_|$)", re.IGNORECASE)
+_NAME_COORD_EN = re.compile(
+    r"(?:^|_)(?:longitude|latitude|lng|lat|lon|coord|coords|coordinate)(?:_|$)",
+    re.IGNORECASE)
+_NAME_MEASURE_EN = re.compile(
+    r"(?:^|_)(?:length|width|height|thickness|depth|distance|mileage|area|volume|"
+    r"capacity|weight|temperature|humidity|density|pressure|speed|flow|power|"
+    r"voltage|frequency|elevation|altitude|diameter|radius|perimeter)(?:_|$)",
+    re.IGNORECASE)
 _NAME_INT_EN = re.compile(r"(?:^|_)(?:qty|quantity|count|cnt|stock)(?:_|$)",
                           re.IGNORECASE)
+_NAME_AGE_EN = re.compile(r"(?:^|_)(?:age)(?:_|$)", re.IGNORECASE)
+_NAME_RANK_EN = re.compile(
+    r"(?:^|_)(?:rank|sort|seq|sequence|serial|page|pages|floor|priority)(?:_|$)",
+    re.IGNORECASE)
+_NAME_CAL_EN = re.compile(
+    r"(?:^|_)(?:year|month|quarter|week|hour|minute|second)(?:_|$)", re.IGNORECASE)
+
+
+def _name_hit(c: str, fl: str, cn, en) -> bool:
+    return any(k in c for k in cn) or bool(en.search(fl))
 
 
 def _name_based_type(comment: str, field: str):
     """空列的名字定类型：命中返回 (类型, 留痕文案)，没命中返回 None（照旧 VARCHAR）。
 
-    金额复用 _is_money 的双侧匹配与比率否决；日期/时间的英文只认成词的
-    date/time/timestamp（贴着下划线或首尾），所以 update、birthday 不会误中。
+    金额复用 _is_money 的双侧匹配与比率否决；英文一律按成词的词根匹配
+    （贴着下划线或首尾），所以 update、birthday 不会误中。
+    判定顺序即优先级：金额 > 时间 > 日期 > 布尔 > 显式比率/系数 > 评分 >
+    经纬度 > 计量 > 裸「率」 > 计数 > 年龄 > 序号 > 年份。
     """
     c = str(comment or "").strip()
     fl = str(field or "")
@@ -126,8 +172,31 @@ def _name_based_type(comment: str, field: str):
         return "DATETIME", f"该列没有值，字段名「{c}」含时间语义，按 DATETIME 建列"
     if _NAME_DATE_CN in c or _NAME_DATE_EN.search(fl):
         return "DATE", f"该列没有值，字段名「{c}」含日期语义，按 DATE 建列"
-    if any(k in c for k in _NAME_INT_CN) or _NAME_INT_EN.search(fl):
+    if _name_hit(c, fl, _NAME_BOOL_CN, _NAME_BOOL_EN):
+        return "TINYINT(1)", f"该列没有值，字段名「{c}」含布尔语义，按 TINYINT(1) 建列"
+    if _name_hit(c, fl, _NAME_RATIO_CN, _NAME_RATIO_EN):
+        return ("DECIMAL(18,6)",
+                f"该列没有值，字段名「{c}」含比率/系数语义，按 DECIMAL(18,6) 建列")
+    if _name_hit(c, fl, _NAME_SCORE_CN, _NAME_SCORE_EN):
+        return ("DECIMAL(10,2)",
+                f"该列没有值，字段名「{c}」含评分语义，按 DECIMAL(10,2) 建列")
+    if _name_hit(c, fl, _NAME_COORD_CN, _NAME_COORD_EN):
+        return ("DECIMAL(18,8)",
+                f"该列没有值，字段名「{c}」含经纬度/坐标语义，按 DECIMAL(18,8) 建列")
+    if _name_hit(c, fl, _NAME_MEASURE_CN, _NAME_MEASURE_EN):
+        return ("DECIMAL(18,4)",
+                f"该列没有值，字段名「{c}」含计量语义，按 DECIMAL(18,4) 建列")
+    if "率" in c:
+        return ("DECIMAL(18,6)",
+                f"该列没有值，字段名「{c}」含比率/系数语义，按 DECIMAL(18,6) 建列")
+    if _name_hit(c, fl, _NAME_INT_CN, _NAME_INT_EN):
         return "INT", f"该列没有值，字段名「{c}」含数量语义，按 INT 建列"
+    if _name_hit(c, fl, _NAME_AGE_CN, _NAME_AGE_EN):
+        return "INT", f"该列没有值，字段名「{c}」含年龄/年限语义，按 INT 建列"
+    if _name_hit(c, fl, _NAME_RANK_CN, _NAME_RANK_EN):
+        return "INT", f"该列没有值，字段名「{c}」含序号/排名语义，按 INT 建列"
+    if _name_hit(c, fl, _NAME_CAL_CN, _NAME_CAL_EN):
+        return "INT", f"该列没有值，字段名「{c}」含年份/月份语义，按 INT 建列"
     return None
 
 

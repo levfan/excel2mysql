@@ -598,10 +598,14 @@ public final class GuiMain {
             frame.initialsBox().doClick();
             frame.upperBox().doClick();
             File c = writeNamingFixture(tmp, "采集模板（t_empty_kinds）.xlsx",
-                    new String[]{"发布日期", "更新时间", "订单金额", "数量", "备注说明"}, null);
+                    new String[]{"发布日期", "更新时间", "订单金额", "数量", "备注说明",
+                            "年龄", "系数", "评分", "经度", "长度", "是否有效", "序号",
+                            "年份"}, null);
             frame.addFiles(java.util.Arrays.asList(c.getPath()));
             com.excel2mysql.core.TableOps.Table tc = lastTable(frame);
-            String[] wantTypes = {"DATE", "DATETIME", "DECIMAL(16,2)", "INT", "VARCHAR(64)"};
+            String[] wantTypes = {"DATE", "DATETIME", "DECIMAL(16,2)", "INT", "VARCHAR(64)",
+                    "INT", "DECIMAL(18,6)", "DECIMAL(10,2)", "DECIMAL(18,8)",
+                    "DECIMAL(18,4)", "TINYINT(1)", "INT", "INT"};
             if (tc == null || tc.columns.size() != wantTypes.length) {
                 problems.add("空模板字段数不对：" + (tc == null ? "(无表)" : tc.columns.size()));
             } else {
@@ -610,6 +614,24 @@ public final class GuiMain {
                     if (!wantTypes[i].equals(got)) {
                         problems.add("空模板按名定类型第 " + (i + 1) + " 列期望 "
                                 + wantTypes[i] + "，实际 " + got);
+                    }
+                }
+            }
+            File d = writeNamingFixture(tmp, "采集模板（t_empty_priority）.xlsx",
+                    new String[]{"频率", "功率", "速率", "容积率", "毛利率"}, null);
+            frame.addFiles(java.util.Arrays.asList(d.getPath()));
+            com.excel2mysql.core.TableOps.Table td = lastTable(frame);
+            String[] wantPriority = {"DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+                    "DECIMAL(18,6)", "DECIMAL(18,6)"};
+            if (td == null || td.columns.size() != wantPriority.length) {
+                problems.add("优先级夹具字段数不对："
+                        + (td == null ? "(无表)" : td.columns.size()));
+            } else {
+                for (int i = 0; i < wantPriority.length; i++) {
+                    String got = td.columns.get(i).type;
+                    if (!wantPriority[i].equals(got)) {
+                        problems.add("优先级夹具第 " + (i + 1) + " 列期望 "
+                                + wantPriority[i] + "，实际 " + got);
                     }
                 }
             }
