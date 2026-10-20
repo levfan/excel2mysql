@@ -860,6 +860,15 @@ _ws = _wb.active
 _ws.title = "数据"
 _ws.append(["", "", ""])
 _wb.save(_blank_head)
+# 口径串没写括号的写法：现场表头里 `发布日期：yyyy-MM-dd` 和 `发布日期 yyyy-MM-dd` 都很常见
+_mask = os.path.join(_tmpdir, "表头挂日期格式（w_mask）.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append([u"发布日期：yyyy-MM-dd", u"填表日期 yyyymmdd", u"发布日期(YYYYMMDD",
+            u"累年月日降水量≥1.0mm平均日数"])
+_ws.append([u"2008-05-19", u"20080520", u"20080521", u"5"])
+_wb.save(_mask)
 
 code, out, _con = run_cli(["--dry-run", _empty, "-d", "db1"])
 check("W32 一张格子都没有的表被判解析失败（不给库里发非法建表语句）",
@@ -883,6 +892,12 @@ check("W33c 表头整行没写字也出 DDL：按列宽兜底成 col、col_2、c
       and "没有解析到任何字段" not in out
       and "字段 3 列 | 数据 0 行" in out
       and "表头整行没写字，按列宽兜底成：col、col_2、col_3" in out, out.strip()[-300:])
+code, out, _con = run_cli(["--dry-run", _mask, "-d", "db1"])
+check("W33d 没括号的日期格式串也不进字段名，且不误吃单位字母 mm",
+      code == cli_mod.EXIT_OK
+      and "`fa_bu_ri_qi`" in out and "`tian_biao_ri_qi`" in out
+      and "`lnyrjsl10mmpjrs`" in out
+      and not re.search(r"`[a-z0-9_]*(yyyy|mmdd|mm_dd)", out), out.strip()[-300:])
 code, out, _con = run_cli(["--dry-run", _fake, "-d", "db1"])
 check("W34 扩展名对但内容不是 Excel：拦在解析阶段而不是 SQL 语法错误",
       code == cli_mod.EXIT_PARSE and "解析失败" in out, out.strip()[:90])

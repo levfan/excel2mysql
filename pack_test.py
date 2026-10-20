@@ -1438,6 +1438,40 @@ check("M17 列注释保留原始表头（括号里的口径不能丢）",
       [c["comment"] for c in head_note] == ["发布日期（yyyy-MM-dd）", "发布日期"],
       [c["comment"] for c in head_note])
 
+# 同一句口径，手写的人不一定会把括号配齐，也可能干脆用冒号/空格挂着
+check("M18 日期格式串没括号也照样剥（冒号、空格、连字符、斜杠都算分隔）",
+      [_col_to_field(h) for h in [
+          "发布日期：yyyy-MM-dd", "发布日期:yyyy-MM-dd", "发布日期 yyyy-MM-dd",
+          "发布日期-yyyy-MM-dd", "发布日期/yyyy/MM/dd", "发布日期 YYYYMMDD"]]
+      == ["fa_bu_ri_qi"] * 6
+      and _col_to_field("填表日期 yyyymmdd") == "tian_biao_ri_qi",
+      [_col_to_field(h) for h in ["发布日期：yyyy-MM-dd", "发布日期 yyyy-MM-dd",
+                                  "发布日期/yyyy/MM/dd", "填表日期 yyyymmdd"]])
+check("M18b 括号没配全也剥（漏右半边就从左括号起整段剥，漏左半边靠掩码识别）",
+      _col_to_field("发布日期（yyyy-MM-dd") == "fa_bu_ri_qi"
+      and _col_to_field("发布日期(YYYYMMDD") == "fa_bu_ri_qi"
+      and _col_to_field("发布日期 yyyy-MM-dd）") == "fa_bu_ri_qi",
+      [_col_to_field("发布日期（yyyy-MM-dd"), _col_to_field("发布日期 yyyy-MM-dd）")])
+check("M18c 方头括号〖〗同样是注释",
+      _col_to_field("发布日期〖yyyy-MM-dd〗") == "fa_bu_ri_qi",
+      _col_to_field("发布日期〖yyyy-MM-dd〗"))
+check("M18d 剥完一个字段都不剩时不剥（宁可留着原名，也不能变成 col）",
+      _col_to_field("yyyy-MM-dd") == "yyyy_mm_dd", _col_to_field("yyyy-MM-dd"))
+# 反向守卫：掩码判定很容易顺手吃掉真名字，这几条钉住"不许扩大"
+check("M19 掩码规则不误伤单位字母与英文列名",
+      _col_to_field("累年月日降水量≥1.0mm平均日数") == "lnyrjsl10mmpjrs"
+      and _col_to_field("station_code") == "station_code"
+      and _col_to_field("create_time") == "create_time"
+      and _col_to_field("ID") == "id",
+      [_col_to_field("累年月日降水量≥1.0mm平均日数"), _col_to_field("create_time")])
+check("M19b 不含汉字的表头整条不参与掩码剥离",
+      _col_to_field("MM-dd") == "mm_dd" and _col_to_field("qty") == "qty",
+      [_col_to_field("MM-dd"), _col_to_field("qty")])
+check("M19c 尾部拉丁词没配冒号分隔时不猜它是注释（数量 qty / 编号 No.照旧）",
+      _col_to_field("数量 qty") == "shu_liang_qty"
+      and _col_to_field("身份证ID") == "shen_fen_zheng_id",
+      [_col_to_field("数量 qty"), _col_to_field("身份证ID")])
+
 # 真实语料：从内部数据包的 create_table*.sql 中文列注释里取，量化碰撞率。
 # 语料在仓库之外，不设环境变量时显式记为 SKIP，不影响用例集全绿。
 corpus = []
