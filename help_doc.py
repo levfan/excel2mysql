@@ -223,13 +223,20 @@ UTF-8 标记，工具会正确还原，不会变成乱码表名</li>
 <b>连一个格子都没有</b>的表（真空表）仍然拒绝，那种表建出来是 <code>CREATE TABLE x ( )</code>，
 MySQL 直接报语法错误</li>
 <li>表头里的符号一律不进字段名：<code>*</code> / <code>＊</code> 这类必填标记、全角空格、
-<code>【】〈〉《》「」</code> 等括号符本身都会去掉；<b>成对括号包住的那一段整段也不进名字</b>——
+<code>【】〈〉《》「」〖〗</code> 等括号符本身都会去掉；<b>成对括号包住的那一段整段也不进名字</b>——
 表单里 <code>发布日期（yyyy-MM-dd）</code>、<code>金额（元）</code>、<code>是否已婚【是/否】</code>、
 <code>★（必填）联系电话</code> 括号里是写给填表人看的口径，不是字段的一部分，
 于是分别取 <code>fa_bu_ri_qi</code>、<code>jin_e</code>、<code>shi_fou_yi_hun</code>、
 <code>lian_xi_dian_hua</code>。整格只有括号（<code>（备注说明）</code>）时不剥空，照旧用里面那串字。
-两条注意：① <b>原始表头完整保留在字段注释里</b>，括号里的口径一个不丢，看注释就知道这列原来是哪个表头；
-② 剥完之后同名会靠 <code>_2</code> / <code>_3</code> 去重，所以同一张表里
+括号<b>没配右半边</b>也算注释：<code>发布日期（yyyy-MM-dd</code> 从左括号起整段丢。
+<b>原始表头完整保留在字段注释里</b>，口径一个不丢，看注释就知道这列原来是哪个表头</li>
+<li>日期时间<b>格式掩码串</b>即使没括号也不进名字：<code>发布日期：yyyy-MM-dd</code>、
+<code>发布日期 yyyy-MM-dd</code>、<code>发布日期/yyyy/MM/dd</code>、<code>填表日期 yyyymmdd</code>
+都取 <code>fa_bu_ri_qi</code> / <code>tian_biao_ri_qi</code>。判定只认"<code>y/m/d/h/s</code>
+连写两个以上、两头不贴字母数字"的串，所以 <code>1.0mm</code> 里的 <code>mm</code>、
+纯英文表头里的 <code>MM</code>、真日期 <code>2020-01-01</code> 都不会被吃掉；
+表头不含汉字时整条不参与这个判断。
+剥完之后同名会靠 <code>_2</code> / <code>_3</code> 去重，所以同一张表里
 <code>发布日期（yyyy-MM-dd）</code> 和 <code>发布日期</code> 是<b>两列</b>（<code>fa_bu_ri_qi</code> 与
 <code>fa_bu_ri_qi_2</code>），不会合成一列，但光看名字分不出谁是谁，要区分就改表头或在结构预览里改字段名</li>
 </ul>
