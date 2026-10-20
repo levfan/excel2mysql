@@ -9,7 +9,7 @@ from typing import Optional
 import pandas as pd
 from pypinyin import lazy_pinyin
 
-from .merge_check import MergedCellsError, ensure_no_merged_cells
+from .merge_check import (MergedCellsError, detect_merged_cells, header_merge_plan)
 from .naming import clean_prefix, swap_first_segment
 
 
@@ -964,6 +964,90 @@ def _blank_header_frame(width: int) -> pd.DataFrame:
     return pd.DataFrame(columns=pd.Index([""] * width))
 
 
+def _first_sheet_name(filepath: str):
+    """工作簿第一张 Sheet 的名字（只读元数据，不加载数据）。"""
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext in (".xlsx", ".xlsm"):
+        from openpyxl import load_workbook
+        wb = load_workbook(filepath, read_only=True)
+        try:
+            return wb.sheetnames[0] if wb.sheetnames else None
+        finally:
+            wb.close()
+    import xlrd
+    book = xlrd.open_workbook(filepath)
+    return book.sheet_names()[0] if book.nsheets else None
+
+
+def _header_text(v) -> str:
+    """表头格 -> 文本；空值（None/NaN/NA）返回空串。"""
+    if v is None or v is pd.NA or v is pd.NaT:
+        return ""
+    if isinstance(v, float) and v != v:
+        return ""
+    return str(v).strip()
+
+
+def _pandas_style_headers(labels) -> list:
+    """按 pandas 的表头规则补空名与去重：空表头叫 Unnamed: N，重名依次加 .1 .2。
+
+    Java 侧读原始表头时走 Frame 的同一套规则（core/Frame.java），
+    两边必须逐字一致，否则合并表头文件会在字段名这一层分叉。
+    """
+    seen = {}
+    out = []
+    for i, label in enumerate(labels):
+        text = f"Unnamed: {i}" if label == "" else str(label)
+        base = text
+        n = seen.get(base, 0)
+        if n:
+            text = f"{base}.{n}"
+        seen[base] = n + 1
+        out.append(text)
+    return out
+
+
+def _flatten_merged_header(filepath: str, sheet_name: str, plan: dict) -> pd.DataFrame:
+    """把首表的多行合并表头压成一行，返回只含数据行的 DataFrame。
+
+    合并区里的空格子按左上角的值补齐：纵向合并（序号 A1:A2）让每一行都拿到同一个
+    标签，横向合并（技术公司 J1:M1）让组内每列都拿到组名。随后逐列自上而下取标签，
+    相邻重复的只留一份，用「-」连接——序号 + 序号 → 序号，技术公司 + 小计 →
+    技术公司-小计，与工作簿 2 的扁平表头一致。
+
+    值仍走 pandas 读取，不在本函数里重新实现数字/日期语义；这里只重排表头。
+    """
+    depth = plan["depth"]
+    grid = pd.read_excel(filepath, sheet_name=sheet_name, header=None, dtype=object)
+    width = len(grid.columns)
+    head = []
+    for r in range(depth):
+        row = list(grid.iloc[r]) if r < len(grid) else []
+        if len(row) < width:
+            row.extend([None] * (width - len(row)))
+        head.append(row[:width])
+    for r1, c1, r2, c2 in plan["merges"]:
+        if r1 >= depth or c1 >= width:
+            continue
+        value = head[r1][c1]
+        for r in range(r1, min(r2, depth - 1) + 1):
+            for c in range(c1, min(c2, width - 1) + 1):
+                head[r][c] = value
+    labels = []
+    for c in range(width):
+        path = []
+        for r in range(depth):
+            text = _header_text(head[r][c])
+            if not text or (path and path[-1] == text):
+                continue
+            path.append(text)
+        labels.append("-".join(path))
+    labels = _pandas_style_headers(labels)
+    data = grid.iloc[depth:].reset_index(drop=True)
+    data.columns = labels
+    return data
+
+
 def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
                     upper: bool = False) -> dict:
     """
@@ -984,11 +1068,28 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     if ext not in (".xls", ".xlsx"):
         raise ValueError(f"不支持的文件类型：{ext}")
     # 合并单元格要在读数据之前判掉：这类文件解析出来必然错位，
-    # 提前拒绝既避免导错数据，也省掉几十万行的读取开销
+    # 提前拒绝既避免导错数据，也省掉几十万行的读取开销。
+    # 例外是首表顶部的多行合并表头：它正是工作簿 2 那种扁平表头的原始形态，
+    # 展开后照常导入；数据区（或别的 Sheet）里还有合并区则继续拒绝。
     _note("检查合并单元格")
-    ensure_no_merged_cells(filepath)
+    merged = detect_merged_cells(filepath)
+    merge_plan = None
+    merged_sheet = None
+    if merged:
+        try:
+            merged_sheet = _first_sheet_name(filepath)
+        except Exception:
+            merged_sheet = None
+        merge_plan = header_merge_plan(merged, merged_sheet) if merged_sheet else None
+        if merge_plan is None:
+            raise MergedCellsError(filepath, merged)
     _note("读取工作簿")
     sheets = pd.read_excel(filepath, sheet_name=None, dtype=object)
+    if merge_plan is not None:
+        _note("展开合并表头")
+        sheets[merged_sheet] = _flatten_merged_header(filepath, merged_sheet, merge_plan)
+    merged_info = ({"sheet": str(merged_sheet), "depth": merge_plan["depth"]}
+                   if merge_plan is not None else None)
     _note("识别表格格式")
     meta_name = None
     for n, sdf in sheets.items():
@@ -997,7 +1098,9 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
             break
     if meta_name is not None:
         _note("按字段定义组装")
-        return _build_structured(filepath, sheets, initials=initials, upper=upper)
+        td = _build_structured(filepath, sheets, initials=initials, upper=upper)
+        td["merged_header"] = merged_info
+        return td
     df = next(iter(sheets.values()))
     # 具名但整列没值的字段要保留（采集模板里必填项还没填），只丢"表头没写字"的格式化空列；
     # 全空行照旧丢掉，免得 Excel 尾部格式化出来的空行整行 NULL 入库
@@ -1048,6 +1151,9 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         # 表头整行没写字时按列宽兜底出来的字段名（col、col_2…）；正常表为空列表
         "blank_headers": blank_headers,
         "no_data_rows": len(df) == 0,
+        # 顶部多行合并表头展开信息（sheet/depth）；没展开时为 None，
+        # GUI/CLI 的 [已解析] 行据此说明"表头是几行压出来的"
+        "merged_header": merged_info,
     }
 
 

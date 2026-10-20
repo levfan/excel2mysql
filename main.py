@@ -465,6 +465,9 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
             pk_msg = (f"，主键 `{pk}`（{td.get('pk_reason', '')}）" if pk
                       else f"，未设主键（{td.get('pk_reason', '')}）")
             src_msg = "，结构定义模式" if td.get("source") == "structured" else ""
+            merged_header = td.get("merged_header")
+            merge_msg = (f"，合并表头按 {merged_header['depth']} 行展开"
+                         if merged_header else "")
             extra_cols = td.get("extra_data_columns") or []
             extra_msg = (f"；数据 Sheet 多余列已忽略：{'、'.join(extra_cols)}"
                          if extra_cols else "")
@@ -484,7 +487,7 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
             sink.log(
                 f"[已解析] {fname} → 表名预置 {td['table_name']}，"
                 f"字段 {len(td['columns'])} 列，数据 {len(td['df'])} 行{src_msg}"
-                f"{pk_msg}{extra_msg}{empty_msg}{zero_msg}{blank_msg}")
+                f"{merge_msg}{pk_msg}{extra_msg}{empty_msg}{zero_msg}{blank_msg}")
             notes = [c["type_note"] for c in td["columns"] if c.get("type_note")]
             if notes:
                 sink.log(

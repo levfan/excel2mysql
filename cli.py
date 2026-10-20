@@ -417,6 +417,9 @@ def parse_one(path, origin, log, initials=False, upper=False):
               else ("未设主键（%s）" % td.get("pk_reason", ""))))
     if td.get("source") == "structured":
         msg += " | 结构定义模式"
+    merged_header = td.get("merged_header")
+    if merged_header:
+        msg += " | 合并表头按 %d 行展开" % merged_header["depth"]
     extra = td.get("extra_data_columns") or []
     if extra:
         msg += " | 数据 Sheet 多余列已忽略：%s" % "、".join(extra)

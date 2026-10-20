@@ -1,8 +1,13 @@
 """合并单元格探测。
 
 含合并单元格的表无法可靠地映射成关系表：合并区只有左上角有值，其余格在
-pandas 读进来是 NaN，字段名和数据列都会错位。所以这类文件直接拒绝导入，
+pandas 读进来是 NaN，字段名和数据列都会错位。所以默认直接拒绝导入，
 而不是默默导出一份错数据。
+
+唯一的例外是**首表顶部的多行表头块**：整块合并区都落在表头里时，
+按「父-子」把多行表头压成一行（技术公司 + 小计 → 技术公司-小计），
+这正是工作簿 2 那种扁平表头；数据区里还有合并区则照旧拒绝——
+那里每格都该是一个值，合并只可能意味着错位。
 
 .xlsx 用流式扫描 sheet XML 实现：openpyxl 要全量加载整个工作簿（20 万行实测
 8.7 秒），而这里只需要知道"有没有合并区、在哪几处"，流式读到 <mergeCell
@@ -184,8 +189,51 @@ def detect_merged_cells(filepath: str) -> dict:
     return {}
 
 
+def parse_range(ref: str):
+    """'B2:C4' -> 0 基闭区间 (r1, c1, r2, c2)；格式不认识返回 None。"""
+    m = _RANGE_RE.match(str(ref).strip().upper())
+    if not m:
+        return None
+    return (int(m.group(2)) - 1, _col_width(m.group(1)) - 1,
+            int(m.group(4)) - 1, _col_width(m.group(3)) - 1)
+
+
+def header_merge_plan(merged: dict, first_sheet: str):
+    """首表合并区若全在顶部表头块里，返回展开计划；否则返回 None（照旧拒绝）。
+
+    表头深度由**顶到第 1 行的合并区**决定：纵向合并 A1:A2 说明表头有两行，
+    J1:M1 这类横向分组说明这几列共用第一行标签。允许表头块内部再嵌套合并
+    （B2:C2 这种子分组），但只要有合并区越出表头深度，就说明数据区也被合并了，
+    解析出来仍会错位，不能放行。
+
+    只有首表可以带合并区：其余 Sheet 要么是忽略的参考页，要么是结构定义页，
+    它们带合并区说明格式不是这个约定，不去猜。
+    """
+    ranges = merged.get(first_sheet) or []
+    if not ranges or len(merged) != 1:
+        return None
+    parsed = []
+    for ref in ranges:
+        box = parse_range(ref)
+        if box is None:
+            return None
+        parsed.append(box)
+    top = [b for b in parsed if b[0] == 0]
+    # 没有顶到第 1 行的合并区，就无从判断表头有几行；单行表头带合并仍然是错位
+    if not top:
+        return None
+    depth = max(b[2] for b in top) + 1
+    if depth < 2 or any(b[2] >= depth for b in parsed):
+        return None
+    return {"depth": depth, "merges": parsed}
+
+
 def ensure_no_merged_cells(filepath: str) -> None:
-    """含合并单元格则抛 MergedCellsError，供 build_table_def 在读数据前调用。"""
+    """含任何合并区都抛 MergedCellsError（不区分表头与数据区）。
+
+    导入流程本身已改为 build_table_def 里的“表头块例外”，这里保留给
+    需要严格拒绝的调用点与回归用例。
+    """
     merged = detect_merged_cells(filepath)
     if merged:
         raise MergedCellsError(filepath, merged)
