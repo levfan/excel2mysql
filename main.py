@@ -52,7 +52,7 @@ from core.infer import (
 from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
     extract_create_tables, apply_table_prefix_sql, split_sql_statements,
-    replace_first_segment_sql,
+    replace_first_segment_sql, parse_create_tables,
 )
 from core.naming import clean_prefix, is_valid_prefix
 from sql_samples import SAMPLES as SQL_SAMPLES
@@ -758,6 +758,44 @@ def sql_run_task(text, cfg, sink):
             pass
 
 
+def sql_meta_export_task(items, out_root, with_meta, sink):
+    """「SQL 脚本改名入库」页的生成标准/简易 Excel：先从脚本正文解析表定义，再走同一套导出。
+
+    items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
+    所以"先批量改前缀、再生成交付件"这条路是通的——产物里的表名就是新表名。
+    脚本里只有结构没有数据，所以「数据」Sheet 只有英文字段名那一行表头，
+    给下游当可填模板用，不假装里面有数据。
+    """
+    from core.meta_export import export_tables
+
+    tables, where = [], {}
+    for path, text in items:
+        if sink.cancelled:
+            break
+        base = os.path.basename(path)
+        sink.note("解析 %s 的表定义…" % base)
+        for t in parse_create_tables(text):
+            name = t["table_name"]
+            if name in where:
+                sink.log("! [WARN] 跳过 | `%s`：%s 里也定义了这张表，只按 %s 那一处导出"
+                         % (name, base, where[name]))
+                continue
+            where[name] = base
+            for note in t["notes"]:
+                sink.log("! [WARN] 说明 | `%s`：%s" % (name, note))
+            if not t["columns"]:
+                continue        # 为什么不可导出，上面那条说明已经讲了
+            tables.append(t)
+    if not tables:
+        sink.log("! [WARN] 没有可导出的表：这些脚本里解析不出带列定义的 CREATE TABLE")
+        return {"dir": None, "written": [], "total": 0, "cancelled": sink.cancelled}
+    if sink.cancelled:
+        return {"dir": None, "written": [], "total": len(tables), "cancelled": True}
+    target, written = export_tables(tables, out_root, with_meta, sink)
+    return {"dir": target, "written": written, "total": len(tables),
+            "cancelled": sink.cancelled}
+
+
 # ---------------------------------------------------------------------------
 # 后台工作线程：避免导入时界面卡死
 # ---------------------------------------------------------------------------
@@ -1227,6 +1265,11 @@ class MainWindow(QWidget):
         on = bool(self.tables) and self.task_dialog is None
         self.btn_gen_std.setEnabled(on)
         self.btn_gen_simple.setEnabled(on)
+        # 这一页的判据是"有没有脚本"，不是"有没有解析出表"：
+        # 解析在点下去之后才做，解析不出东西时日志会给话，按钮不该一直灰着让人以为坏了
+        sql_on = bool(self.sql_files) and self.task_dialog is None
+        self.btn_sql_gen_std.setEnabled(sql_on)
+        self.btn_sql_gen_simple.setEnabled(sql_on)
 
     def _finish_task(self):
         """exec() 退出后收尾：把结果交给回调（工作函数返回 None 视为没做成，不回调）。"""
@@ -1298,8 +1341,25 @@ class MainWindow(QWidget):
         self.btn_sql_save.clicked.connect(self.on_sql_save_modified)
         self.btn_sql_run = QPushButton("执行脚本到当前库")
         self.btn_sql_run.clicked.connect(self.on_sql_execute)
+        # 两颗生成按钮排在「执行脚本到当前库」右侧：与 Excel 导入页那两颗同一排同一口径，
+        # 数据源换成了脚本里的 CREATE TABLE，产物形状不变
+        self.btn_sql_gen_std = QPushButton("生成标准excel文件")
+        self.btn_sql_gen_std.setToolTip(
+            "在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+            "Sheet1「元数据」是脚本里解析出的字段定义，Sheet2「数据」只有表头\n"
+            "（脚本里不含数据行，这一张是给下游填数据的模板）")
+        self.btn_sql_gen_std.setEnabled(False)
+        self.btn_sql_gen_std.clicked.connect(lambda: self.on_sql_gen_excel("标准", True))
+        self.btn_sql_gen_simple = QPushButton("生成简易excel文件")
+        self.btn_sql_gen_simple.setToolTip(
+            "在程序同级建 simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+            "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头")
+        self.btn_sql_gen_simple.setEnabled(False)
+        self.btn_sql_gen_simple.clicked.connect(lambda: self.on_sql_gen_excel("简易", False))
         act_row.addWidget(self.btn_sql_save)
         act_row.addWidget(self.btn_sql_run)
+        act_row.addWidget(self.btn_sql_gen_std)
+        act_row.addWidget(self.btn_sql_gen_simple)
         act_row.addStretch(1)
         self.btn_sql_clear_log = QPushButton("清除日志")
         self.btn_sql_clear_log.clicked.connect(self.on_sql_clear_log)
@@ -1458,6 +1518,33 @@ class MainWindow(QWidget):
                    f"{note} =====", error=bool(res["fail"]))
         popup_box(self, "执行完成",
                   f"成功 {res['ok']} 个文件，失败 {res['fail']} 个文件{note}。\n详见日志。")
+
+    def on_sql_gen_excel(self, label, with_meta):
+        """从脚本正文解析表定义再生成交付件；写盘在子线程，输出落在程序同级。"""
+        if not self.sql_files:
+            self._warn("请先添加 SQL 脚本文件。")
+            return
+        out_root = program_dir()
+        append_log(self.sql_log,
+                   f"===== 开始生成{label}excel文件（脚本 %d 个，输出根目录 {out_root}）====="
+                   % len(self.sql_files))
+        items = [(s["path"], s["text"]) for s in self.sql_files]
+        self._run_modal("正在生成%sexcel文件…" % label, sql_meta_export_task,
+                        (items, out_root, with_meta),
+                        on_done=self._finish_sql_gen_excel, log_view=self.sql_log)
+
+    def _finish_sql_gen_excel(self, res):
+        if not res:
+            return
+        n = len(res["written"])
+        note = "（已取消，剩余文件未生成）" if res["cancelled"] else ""
+        target = res["dir"] or "（没建目录）"
+        text = (f"已生成 {n} 个文件（共 {res['total']} 张表）。\n目录：\n{target}{note}"
+                if n else f"没有生成任何文件，详见日志。{note}")
+        append_log(self.sql_log,
+                   f"===== 生成完成：{n}/{res['total']} 个文件，目录 {target} ====={note}",
+                   error=(n == 0))
+        popup_box(self, "生成结果", text)
 
     def on_sql_clear_log(self):
         self.sql_log.clear()

@@ -929,9 +929,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         endTask();
     }
 
+    @Override
+    public String exportRoot() {
+        return programDir();   // 交付件落点：界面里是程序同级，自检指临时目录
+    }
+
     /**
-     * SQL 页的四个耗时操作（读取 / 加前缀 / 换前缀 / 保存）共用 Excel 页那套任务位，
-     * 差别只在日志要去 SQL 页那块面板——否则切回 Excel 页才看得见刚才那步做了什么。
+     * SQL 页的五个耗时操作（读取 / 加前缀 / 换前缀 / 保存 / 生成交付件）共用 Excel 页那套
+     * 任务位，差别只在日志要去 SQL 页那块面板——否则切回 Excel 页才看得见刚才那步做了什么。
      */
     @Override
     public void runSqlTask(String title,

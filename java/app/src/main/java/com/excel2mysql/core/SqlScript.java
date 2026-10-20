@@ -285,4 +285,416 @@ public final class SqlScript {
         }
         return out;
     }
+
+    // ------------------------------------------------------------------
+    // CREATE TABLE 正文解析：给「SQL 脚本改名入库」页那两颗生成按钮当数据源
+    // 与 core/sql_script.py 的 parse_create_tables 逐格对撞（金标准第 8 步）
+    // ------------------------------------------------------------------
+
+    /** 表级约束行的开头，识别出来只为跳过，别把 KEY 的名字当字段名。 */
+    private static final Pattern CONSTRAINT_HEAD = Pattern.compile(
+            "^(PRIMARY\\s+KEY|UNIQUE\\s+(?:KEY|INDEX)?|FULLTEXT\\s+(?:KEY|INDEX)?"
+          + "|SPATIAL\\s+(?:KEY|INDEX)?|FOREIGN\\s+KEY|CONSTRAINT|CHECK|PERIOD|KEY|INDEX)\\b",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+
+    private static final Pattern TABLE_COMMENT_OPT = Pattern.compile(
+            "\\bCOMMENT\\b\\s*=?\\s*('(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+
+    private static final Pattern TYPE_HEAD = Pattern.compile("^([A-Za-z][A-Za-z0-9_]*)(\\()?");
+    private static final Pattern NUM_ONLY = Pattern.compile("^\\d+$");
+    private static final Pattern NUM_PAIR = Pattern.compile("^\\d+\\s*,\\s*\\d+$");
+    private static final Pattern COL_COMMENT_MARK = Pattern.compile(
+            "\\bCOMMENT\\b\\s*=?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern INLINE_PK = Pattern.compile(
+            "\\bPRIMARY\\s+KEY\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NOT_NULL = Pattern.compile(
+            "\\bNOT\\s+NULL\\b", Pattern.CASE_INSENSITIVE);
+
+    private static final String DUP_NOTE = "表名 %s 在本脚本里被定义了多次，只按第一处的列定义导出";
+
+    /** 一条 CREATE TABLE 解析出的表定义，列用 Infer.Column，MetaExport 直接就能吃。 */
+    public static final class ParsedTable {
+        public String tableName = "";
+        public String tableComment = "";
+        public final List<Infer.Column> columns = new ArrayList<Infer.Column>();
+        public final List<String> notes = new ArrayList<String>();
+    }
+
+    /**
+     * 把脚本里的 CREATE TABLE 解析成表定义，按首次出现顺序返回。
+     *
+     * 表名取的是**当前文本里的名字**，所以页面上先改前缀再生成，产物用的就是新表名。
+     * 只解析到能填进元数据 Sheet 的程度：列名、类型与长度、列注释、主键、可空。
+     * DEFAULT / AUTO_INCREMENT / 生成列规则不进交付件；表达不了的（UNSIGNED、ENUM 等）
+     * 近似成能装下的形状，并在该表的 notes 里逐列点名，不静默改语义。
+     */
+    public static List<ParsedTable> parseCreateTables(String text) {
+        String maskedAll = maskComments(text);
+        List<ParsedTable> tables = new ArrayList<ParsedTable>();
+        Map<String, ParsedTable> seen = new LinkedHashMap<String, ParsedTable>();
+        Matcher m = CREATE_TABLE.matcher(maskedAll);
+        while (m.find()) {
+            String name = m.group(1);
+            // 列定义的 '(' 必须落在本条语句里：往后找会把下一条 CREATE TABLE 的括号当成自己的，
+            // LIKE / AS SELECT 这种没有列定义的写法就会带着别人的列被导出
+            // （界限 = 顶层分号或下一条 CREATE TABLE，取更早的那个）
+            int semi = m.end() + firstTopLevel(maskedAll.substring(m.end()), ';');
+            Matcher nx = CREATE_TABLE.matcher(maskedAll);
+            int limit = nx.find(m.end()) ? Math.min(semi, nx.start()) : semi;
+            int openAt = maskedAll.indexOf('(', m.end());
+            if (openAt < 0 || openAt >= limit) {
+                if (seen.containsKey(name)) {
+                    continue;   // 本来就没有列可导，重复出现也不必再说明
+                }
+                ParsedTable t = new ParsedTable();
+                t.tableName = name;
+                t.notes.add("这条 CREATE TABLE 后面没有列定义（LIKE 或 AS SELECT 写法），"
+                        + "无法生成元数据");
+                seen.put(name, t);
+                tables.add(t);
+                continue;
+            }
+            int close = matchParen(maskedAll, openAt);
+            if (close < 0) {
+                continue;
+            }
+            String body = text.substring(openAt + 1, close);
+            String bodyMasked = maskedAll.substring(openAt + 1, close);
+            int stop = close + 1 + firstTopLevel(maskedAll.substring(close + 1), ';');
+            Matcher m2 = CREATE_TABLE.matcher(maskedAll);
+            if (m2.find(close + 1)) {
+                stop = Math.min(stop, m2.start());
+            }
+            String options = text.substring(close + 1, stop);
+            String optionsMasked = maskedAll.substring(close + 1, stop);
+            String tableComment = "";
+            Matcher cm = TABLE_COMMENT_OPT.matcher(optionsMasked);
+            if (cm.find()) {
+                String raw = options.substring(cm.start(1), cm.end(1));
+                tableComment = raw.substring(1, raw.length() - 1)
+                        .replace(raw.substring(0, 1) + raw.substring(0, 1), raw.substring(0, 1));
+            }
+
+            List<String> pkFromConstraint = new ArrayList<String>();
+            List<Infer.Column> cols = new ArrayList<Infer.Column>();
+            List<String> notes = new ArrayList<String>();
+            for (String piece : splitTopLevel(body, bodyMasked)) {
+                if (piece.trim().isEmpty()) {
+                    continue;
+                }
+                String pieceMasked = maskComments(piece);
+                String headMasked = lstrip(pieceMasked);
+                if (CONSTRAINT_HEAD.matcher(headMasked).find()) {
+                    if (headMasked.toUpperCase().startsWith("PRIMARY KEY")) {
+                        int o = headMasked.indexOf('(');
+                        int c = o < 0 ? -1 : matchParen(headMasked, o);
+                        if (c > o) {
+                            for (String token : headMasked.substring(o + 1, c).split(",")) {
+                                String col = leadingName(token).name;
+                                if (!col.isEmpty()) {
+                                    pkFromConstraint.add(col);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+                NameAt ln = leadingName(piece);
+                String field = ln.name;
+                if (field.isEmpty()) {
+                    continue;
+                }
+                String tail = piece.substring(ln.end);
+                String maskedTail = pieceMasked.substring(ln.end);
+                String[] cc = columnComment(tail, maskedTail);
+                String comment = cc[0];
+                tail = cc[1];
+                maskedTail = maskComments(tail);
+                String[] nt = normalizeType(tail);
+                Infer.Column col = new Infer.Column();
+                col.field = field;
+                col.comment = comment;
+                col.type = nt[1] == null ? nt[0] : nt[0] + "(" + nt[1] + ")";
+                col.primaryKey = INLINE_PK.matcher(maskedTail).find();
+                col.nullable = Boolean.valueOf(!NOT_NULL.matcher(maskedTail).find());
+                if (!nt[3].isEmpty()) {
+                    notes.add("列 " + field + " 的 " + nt[2] + " 装不进元数据 Sheet，按 "
+                            + col.type + " 导出（丢了 " + nt[3] + "）");
+                }
+                cols.add(col);
+            }
+            if (!pkFromConstraint.isEmpty()) {
+                for (Infer.Column col : cols) {
+                    for (String pk : pkFromConstraint) {
+                        if (col.field != null && col.field.equalsIgnoreCase(pk)) {
+                            col.primaryKey = true;
+                        }
+                    }
+                }
+            }
+            for (Infer.Column col : cols) {
+                if (col.primaryKey) {
+                    col.nullable = Boolean.FALSE;   // 主键建表时一定是 NOT NULL
+                }
+            }
+            ParsedTable t = new ParsedTable();
+            t.tableName = name;
+            t.tableComment = tableComment;
+            t.columns.addAll(cols);
+            t.notes.addAll(notes);
+            if (seen.containsKey(name)) {
+                // 第二处的定义不导出，但也不静默：说明挂在第一处那条上
+                seen.get(name).notes.add(DUP_NOTE.replace("%s", name));
+                continue;
+            }
+            seen.put(name, t);
+            tables.add(t);
+        }
+        return tables;
+    }
+
+    /** 返回与 text 等长、注释字符换成空格的副本；引号里的内容原样留着，索引一一对应。 */
+    static String maskComments(String text) {
+        char[] out = text.toCharArray();
+        int i = 0, n = text.length();
+        while (i < n) {
+            char ch = text.charAt(i);
+            char nxt = i + 1 < n ? text.charAt(i + 1) : 0;
+            if (ch == '\'' || ch == '"' || ch == '`') {
+                i = skipQuoted(text, i, ch);
+                continue;
+            }
+            if ((ch == '-' && nxt == '-') || ch == '#') {
+                int j = text.indexOf('\n', i);
+                j = j < 0 ? n : j;
+                for (int k = i; k < j; k++) {
+                    if (!Character.isWhitespace(out[k])) {
+                        out[k] = ' ';
+                    }
+                }
+                i = j;
+                continue;
+            }
+            if (ch == '/' && nxt == '*') {
+                int j = text.indexOf("*/", i + 2);
+                j = j < 0 ? n : j + 2;
+                for (int k = i; k < j; k++) {
+                    if (!Character.isWhitespace(out[k])) {
+                        out[k] = ' ';
+                    }
+                }
+                i = j;
+                continue;
+            }
+            i++;
+        }
+        return new String(out);
+    }
+
+    /** 从 start 的引号字符跳到引号结束之后的位置（双写与反斜杠转义都认）。 */
+    private static int skipQuoted(String text, int start, char quote) {
+        int i = start + 1, n = text.length();
+        while (i < n) {
+            char c = text.charAt(i);
+            if (c == '\\' && quote != '`' && i + 1 < n) {
+                i += 2;
+                continue;
+            }
+            if (c == quote) {
+                if (i + 1 < n && text.charAt(i + 1) == quote) {
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        return n;
+    }
+
+    /** masked[start] 是 '('，返回配对 ')' 的下标；配不上返回 -1。 */
+    static int matchParen(String masked, int start) {
+        int depth = 0;
+        for (int i = start; i < masked.length(); i++) {
+            char c = masked.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /** 按顶层逗号切开列定义与约束行；括号内的逗号不算。 */
+    static List<String> splitTopLevel(String body, String masked) {
+        List<String> out = new ArrayList<String>();
+        int depth = 0, last = 0;
+        for (int i = 0; i < masked.length(); i++) {
+            char c = masked.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+            } else if (c == ',' && depth == 0) {
+                out.add(body.substring(last, i));
+                last = i + 1;
+            }
+        }
+        String tail = body.substring(last);
+        if (!tail.trim().isEmpty()) {
+            out.add(tail);
+        }
+        return out;
+    }
+
+    /** masked 里第一个不在引号/括号/注释中的 ch 的下标；找不到返回 masked.length()。 */
+    static int firstTopLevel(String masked, char ch) {
+        int depth = 0, i = 0, n = masked.length();
+        while (i < n) {
+            char c = masked.charAt(i);
+            if (c == '\'' || c == '"' || c == '`') {
+                i = skipQuoted(masked, i, c);
+                continue;
+            }
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+            } else if (c == ch && depth == 0) {
+                return i;
+            }
+            i++;
+        }
+        return n;
+    }
+
+    /** 一行定义开头的名字与它在原文里的结束下标（尾巴要从这个下标往后切）。 */
+    static final class NameAt {
+        final String name;
+        final int end;
+
+        NameAt(String name, int end) {
+            this.name = name;
+            this.end = end;
+        }
+    }
+
+    /** 取一行定义开头的名字，返回 {名字, 名字在原文里的结束下标}。 */
+    static NameAt leadingName(String piece) {
+        String s = lstrip(piece);
+        int off = piece.length() - s.length();
+        if (s.startsWith("`")) {
+            int end = s.indexOf('`', 1);
+            while (end >= 0 && end + 1 < s.length() && s.charAt(end + 1) == '`') {
+                end = s.indexOf('`', end + 2);
+            }
+            if (end < 0) {
+                return new NameAt("", off);
+            }
+            return new NameAt(s.substring(1, end).replace("``", "`"), off + end + 1);
+        }
+        Matcher m = Pattern.compile("^([A-Za-z0-9_$]+)").matcher(s);
+        if (!m.find()) {
+            return new NameAt("", off);
+        }
+        return new NameAt(m.group(1), off + m.end());
+    }
+
+    /**
+     * DDL 里的类型串 -> {数据类型, 长度, 丢了什么}。
+     *
+     * 元数据 Sheet 的读回端只认「一个关键字 + 纯数字长度」，所以 `int unsigned` 只能落成
+     * INT + 修饰丢掉的说明；ENUM/SET 这类括号里不是数字的，装进去会产出非法 DDL
+     * （只有 ENUM 没有取值），按 TEXT 导出并点名原类型。
+     */
+    /** 返回值是 {数据类型, 长度, 原样类型, 丢了什么}，四项与 Python 侧同序同义。 */
+    static String[] normalizeType(String raw) {
+        String s = (raw == null ? "" : raw).trim();
+        Matcher m = TYPE_HEAD.matcher(s);
+        if (!m.find()) {
+            return new String[]{"TEXT", null, s, "无法识别的类型"};
+        }
+        String base = m.group(1).toUpperCase();
+        String length = null;
+        String src = base;
+        String rest = s;
+        if (m.group(2) != null && !m.group(2).isEmpty()) {
+            String masked = maskComments(s);
+            int openAt = masked.indexOf('(', m.start(2));
+            int close = matchParen(masked, openAt);
+            if (close < 0) {
+                return new String[]{"TEXT", null, s, "类型括号没配对"};
+            }
+            String args = s.substring(openAt + 1, close).trim();
+            rest = s.substring(close + 1).trim();
+            src = base + "(" + args + ")";
+            if (NUM_ONLY.matcher(args).find()) {
+                length = args;
+            } else if (NUM_PAIR.matcher(args).find()) {
+                String[] parts = args.split(",");
+                length = parts[0].trim() + "," + parts[1].trim();
+            } else {
+                return new String[]{"TEXT", null, src, "取值列表 " + args};
+            }
+        }
+        StringBuilder dropped = new StringBuilder();
+        String tail = rest.toUpperCase();
+        String[] kws = {"UNSIGNED", "SIGNED", "ZEROFILL"};
+        for (int i = 0; i < kws.length; i++) {
+            if (Pattern.compile("\\b" + kws[i] + "\\b").matcher(tail).find()) {
+                if (dropped.length() > 0) {
+                    dropped.append('、');
+                }
+                dropped.append(kws[i]);
+            }
+        }
+        if (Pattern.compile("\\bCHARACTER\\s+SET\\b").matcher(tail).find()
+                || Pattern.compile("\\bCOLLATE\\b").matcher(tail).find()) {
+            if (dropped.length() > 0) {
+                dropped.append('、');
+            }
+            dropped.append("字符集/排序规则");
+        }
+        return new String[]{base, length, src, dropped.toString()};
+    }
+
+    /** 取列注释，返回 {注释, 去掉注释后的原文尾巴}；maskedTail 与 tail 等长同索引。 */
+    static String[] columnComment(String tail, String maskedTail) {
+        Matcher m = COL_COMMENT_MARK.matcher(maskedTail);
+        if (!m.find()) {
+            return new String[]{"", tail};
+        }
+        String rest = lstrip(tail.substring(m.end()));
+        if (rest.isEmpty()) {
+            return new String[]{"", tail.substring(0, m.start())};
+        }
+        char quote = rest.charAt(0);
+        if (quote != '\'' && quote != '"') {
+            return new String[]{"", tail.substring(0, m.start())};
+        }
+        String maskedRest = maskComments(rest);
+        int end = maskedRest.indexOf(quote, 1);
+        while (end >= 0 && end + 1 < maskedRest.length() && maskedRest.charAt(end + 1) == quote) {
+            end = maskedRest.indexOf(quote, end + 2);
+        }
+        if (end < 0) {
+            return new String[]{"", tail.substring(0, m.start())};
+        }
+        String value = rest.substring(1, end).replace("" + quote + quote, "" + quote);
+        return new String[]{value, tail.substring(0, m.start())};
+    }
+
+    private static String lstrip(String s) {
+        int i = 0;
+        while (i < s.length() && Character.isWhitespace(s.charAt(i))) {
+            i++;
+        }
+        return s.substring(i);
+    }
+
 }

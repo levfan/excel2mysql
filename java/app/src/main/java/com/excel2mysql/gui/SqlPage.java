@@ -2,7 +2,10 @@ package com.excel2mysql.gui;
 
 import com.excel2mysql.core.Config;
 import com.excel2mysql.core.DbClient;
+import com.excel2mysql.core.ImportParse;
 import com.excel2mysql.core.LogText;
+import com.excel2mysql.core.MetaExport;
+import com.excel2mysql.core.TableOps;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.Prefix;
 import com.excel2mysql.core.SqlRunner;
@@ -57,6 +60,9 @@ public final class SqlPage extends JPanel {
         void runSqlTask(String title,
                         java.util.function.Function<com.excel2mysql.core.ImportParse.Sink, Object> work,
                         java.util.function.Consumer<Object> onUi);
+
+        /** 交付件落在哪儿：界面里是程序同级，自检指到临时目录。 */
+        String exportRoot();
 
         void warn(String text);
     }
@@ -131,6 +137,17 @@ public final class SqlPage extends JPanel {
 
     private final Host host;
     private final List<Entry> entries = new ArrayList<Entry>();
+
+    /** 两颗生成按钮的说明与「Excel 导入」页那两颗同一口径，只是数据源换成了脚本正文。 */
+    private static final String GEN_STD_TIP =
+            "在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+                    + "Sheet1「元数据」是脚本里解析出的字段定义，Sheet2「数据」只有表头\n"
+                    + "（脚本里不含数据行，这一张是给下游填数据的模板）";
+    private static final String GEN_SIMPLE_TIP =
+            "在程序同级建 simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+                    + "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头";
+    private JButton genStd;
+    private JButton genSimple;
     private final List<String> rowPath = new ArrayList<String>();
     private final DefaultTableModel model;
     private final JTable table;
@@ -205,6 +222,14 @@ public final class SqlPage extends JPanel {
                 host.warn(hint);
             }
         });
+        genStd = new JButton("生成标准excel文件");
+        genStd.setToolTipText(GEN_STD_TIP);
+        genStd.setEnabled(false);
+        genStd.addActionListener(e -> generateExcel(true));
+        genSimple = new JButton("生成简易excel文件");
+        genSimple.setToolTipText(GEN_SIMPLE_TIP);
+        genSimple.setEnabled(false);
+        genSimple.addActionListener(e -> generateExcel(false));
         JButton clearLog = new JButton("清除日志");
         clearLog.addActionListener(e -> logPanel.clearLog());
 
@@ -221,6 +246,8 @@ public final class SqlPage extends JPanel {
         JPanel runBtns = flow();
         runBtns.add(save);
         runBtns.add(runButton);
+        runBtns.add(genStd);
+        runBtns.add(genSimple);
         JPanel actRow = new JPanel(new BorderLayout());
         actRow.add(runBtns, BorderLayout.WEST);
         actRow.add(clearLog, BorderLayout.EAST);
@@ -851,6 +878,11 @@ public final class SqlPage extends JPanel {
                 rowPath.add(e.path);
             }
         }
+        // 判据是"有没有脚本"，不是"解析得出几张表"：解析在点下去之后才做，
+        // 解析不出东西时日志会给话，按钮不该一直灰着让人以为程序坏了
+        boolean hasScript = !entries.isEmpty();
+        genStd.setEnabled(hasScript);
+        genSimple.setEnabled(hasScript);
     }
 
     private void log(String text) {
@@ -866,4 +898,139 @@ public final class SqlPage extends JPanel {
         int at = s.lastIndexOf('/');
         return at < 0 ? s : s.substring(at + 1);
     }
+
+    /**
+     * 生成标准/简易 Excel：表定义来自脚本正文里的 CREATE TABLE，产物形状与
+     * 「Excel 导入」页那两颗按钮一致（同一份 meta_export 出口）。
+     *
+     * 输出根目录走 host.exportRoot()：自检要指到临时目录，不能往构建产物里拉一堆 xlsx。
+     */
+    public void generateExcel(final boolean withMeta) {
+        generateExcel(withMeta, host.exportRoot());
+    }
+
+    /** 输出根目录做成入参：自检要指到临时目录，不能往程序所在目录拉一堆 xlsx。 */
+    public void generateExcel(final boolean withMeta, final String outRoot) {
+        if (entries.isEmpty()) {
+            host.warn(LogText.NO_SQL_HINT);
+            return;
+        }
+        final List<Src> items = new ArrayList<Src>();
+        for (Entry e : entries) {
+            items.add(new Src(e.path, e.text, null));
+        }
+        log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（脚本 " + items.size()
+                + " 个，输出根目录 " + outRoot + "）=====");
+        host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
+                sink -> exportFromScripts(items, outRoot, withMeta, sink),
+                out -> finishGenerate((GenResult) out));
+    }
+
+    /** 生成结果：目录、写成数、应写数与取消标志。 */
+    public static final class GenResult {
+        public String dir;
+        public int written;
+        public int total;
+        public boolean cancelled;
+    }
+
+    /**
+     * 任务体：逐脚本解析 CREATE TABLE → 交给 meta_export 写盘。
+     *
+     * 解析取的是页面上**改过名之后**的当前文本，所以"先批量改前缀、再生成交付件"
+     * 这条路是通的，产物里的表名就是新表名。同名表只按第一处定义导出，
+     * 表达不了的类型（UNSIGNED、ENUM 等）逐列点名，脚本里没有数据行所以「数据」Sheet
+     * 只有表头——这些都是日志里要看得见的决定，不是静默近似。
+     */
+    static GenResult exportFromScripts(List<Src> items, String outRoot, boolean withMeta,
+                                       ImportParse.Sink sink) {
+        GenResult res = new GenResult();
+        List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
+        Map<String, String> where = new LinkedHashMap<String, String>();
+        for (Src s : items) {
+            if (sink.cancelled()) {
+                break;
+            }
+            String base = baseName(s.path);
+            // advance(0, …)：只换进度框上那行字、不推进进度（与 Python 的 sink.note 同义，
+            // 总数要等全部解析完才算得出来）
+            sink.advance(0, "解析 " + base + " 的表定义…");
+            for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(s.text)) {
+                String name = t.tableName;
+                if (where.containsKey(name)) {
+                    sink.log("! [WARN] 跳过 | `" + name + "`：" + base + " 里也定义了这张表，只按 "
+                            + where.get(name) + " 那一处导出");
+                    continue;
+                }
+                where.put(name, base);
+                for (String note : t.notes) {
+                    sink.log("! [WARN] 说明 | `" + name + "`：" + note);
+                }
+                if (t.columns.isEmpty()) {
+                    continue;      // 为什么不可导出，上面那条说明已经讲了
+                }
+                work.add(ofParsed(t));
+            }
+        }
+        res.total = work.size();
+        if (work.isEmpty()) {
+            sink.log("! [WARN] 没有可导出的表：这些脚本里解析不出带列定义的 CREATE TABLE");
+            res.cancelled = sink.cancelled();
+            return res;
+        }
+        if (sink.cancelled()) {
+            res.cancelled = true;
+            return res;
+        }
+        MetaExport.Outcome oc = MetaExport.exportTables(work, outRoot, withMeta, sink);
+        res.dir = oc.dir;
+        res.written = oc.written.size();
+        res.cancelled = oc.cancelled;
+        return res;
+    }
+
+    /** 解析结果 -> meta_export 的入参：脚本里没有数据行，rows 留空，数据 Sheet 只剩表头。 */
+    static MetaExport.Source ofParsed(SqlScript.ParsedTable t) {
+        TableOps.Table table = new TableOps.Table();
+        table.tableName = t.tableName;
+        table.baseTableName = t.tableName;
+        table.tableComment = t.tableComment;
+        table.columns = t.columns;
+        MetaExport.Source s = new MetaExport.Source();
+        s.table = table;
+        return s;
+    }
+
+    /** 生成收尾：日志与弹窗双写同一句话，目录名原样给出来。 */
+    private String finishGenerate(GenResult res) {
+        if (res == null) {
+            return "";
+        }
+        int n = res.written;
+        String note = res.cancelled ? "（已取消，剩余文件未生成）" : "";
+        String target = res.dir == null ? "（没建目录）" : res.dir;
+        String text = n > 0
+                ? "已生成 " + n + " 个文件（共 " + res.total + " 张表）。" + LogText.NL
+                        + "目录：" + LogText.NL + target + note
+                : "没有生成任何文件，详见日志。" + note;
+        String summary = "===== 生成完成：" + n + "/" + res.total + " 个文件，目录 "
+                + target + " =====" + note;
+        if (n == 0) {
+            error(summary);
+        } else {
+            log(summary);
+        }
+        host.inform2("生成结果", text);
+        return summary;
+    }
+
+    /** 自检与双端对撞用：这两颗按钮的状态与一次点击的落点。 */
+    public JButton genStdButton() {
+        return genStd;
+    }
+
+    public JButton genSimpleButton() {
+        return genSimple;
+    }
+
 }
