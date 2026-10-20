@@ -63,17 +63,12 @@ public final class TypeDiffer {
                 rows.add(row);
             }
 
-            // pandas 侧先 dropna(axis=1, how=all) 再 dropna(axis=0, how=all)
-            List<Integer> keep = new ArrayList<Integer>();
-            for (int i = 0; i < headers.size(); i++) {
-                for (List<Object> row : rows) {
-                    Object v = i < row.size() ? row.get(i) : null;
-                    if (!isNullish(v)) {
-                        keep.add(Integer.valueOf(i));
-                        break;
-                    }
-                }
-            }
+            // 列取舍只允许有一份实现：整列没值且表头也没写字才丢，表头写了字的空列保留。
+            // 这条规则在 TableBuilder.filterColumns 里，这里调它而不是再抄一遍——
+            // 两处各写一遍的话改一边就静默分叉，报出来的差异还得再查一轮才知道是谁错了
+            com.excel2mysql.core.TableBuilder.ColumnFilter cf =
+                    com.excel2mysql.core.TableBuilder.filterColumns(headers, rows);
+            List<Integer> keep = cf.keep;
             List<Object> keptHeaders = new ArrayList<Object>();
             for (Integer i : keep) {
                 keptHeaders.add(headers.get(i.intValue()));
@@ -134,6 +129,24 @@ public final class TypeDiffer {
                     shown.add("     主键[" + file + "] 期望 " + ascii(wPk) + " 实际 " + ascii(pk[0]));
                 }
             }
+            // 具名空列与"只有表头没有数据行"：这两件事决定日志里那句点名与
+            // "建出来是空表"的判定，两边必须给同一份清单
+            List<Object> wEmpty = asList(def.get("empty_columns"));
+            if (!joinCn(wEmpty).equals(joinCn(cf.emptyColumns))) {
+                bad++;
+                if (shown.size() < 15) {
+                    shown.add("     空列[" + file + "] 期望 " + ascii(joinCn(wEmpty))
+                            + " 实际 " + ascii(joinCn(cf.emptyColumns)));
+                }
+            }
+            boolean wNoRows = Boolean.TRUE.equals(def.get("no_data_rows"));
+            if (wNoRows != keptRows.isEmpty()) {
+                bad++;
+                if (shown.size() < 15) {
+                    shown.add("     数据行数[" + file + "] 期望 no_data_rows=" + wNoRows
+                            + " 实际 rows=" + keptRows.size());
+                }
+            }
         }
         reader.close();
 
@@ -192,6 +205,21 @@ public final class TypeDiffer {
             return ((Number) v).longValue();
         }
         return -1L;
+    }
+
+    /** 按"、"连起来；null 当空表（老金标准里没这个键时不误报成差异）。 */
+    private static String joinCn(List<?> xs) {
+        if (xs == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Object x : xs) {
+            if (sb.length() > 0) {
+                sb.append("、");
+            }
+            sb.append(x == null ? "" : String.valueOf(x));
+        }
+        return sb.toString();
     }
 
     @SuppressWarnings("unchecked")
