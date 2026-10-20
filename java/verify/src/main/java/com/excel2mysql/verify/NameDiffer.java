@@ -34,6 +34,9 @@ public final class NameDiffer {
         int nanFields = 0;
         int bad = 0;
         List<String> shown = new ArrayList<String>();
+        // 版本号括号没有单独放夹具（会带动整份金标准的二进制翻新），直接喂合成文件名：
+        // 这里跑的就是 TableBuilder 与界面共用的 parseTableNameAndComment
+        bad += checkVersionBracket(names, shown);
         try {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -119,7 +122,8 @@ public final class NameDiffer {
         }
         System.out.println("- [INFO] NAME-DIFF | 文件 " + files + " 个（结构定义 " + structured
                 + "，其中 nan 字段 " + nanFields + " 个）| 拼音字段 " + fields
-                + " 个 | 合并拒绝 " + rejected + " 个 | 不一致 " + bad + " 处");
+                + " 个 | 合并拒绝 " + rejected + " 个 | 版本号括号合成 5 例"
+                + " | 不一致 " + bad + " 处");
         for (String s : shown) {
             System.out.println(s);
         }
@@ -128,6 +132,48 @@ public final class NameDiffer {
             System.exit(1);
         }
         System.out.println("+ [OK] NAME-DIFF | 表名与字段名逐条一致");
+    }
+
+    /**
+     * 括号内版本号不是表名：V2/v2/V2_1 回退成完整文件名拼音并保留版本段；
+     * order2 这种真名字仍直接采用。最后一例验证首字母+大写叠加为 DDBV2。
+     */
+    private static int checkVersionBracket(Names names, List<String> shown) {
+        int bad = 0;
+        String[][] cases = {
+            {"订单表（V2）.xlsx", "ding_dan_biao_v2", "订单表（V2）"},
+            {"订单表（v2）.xlsx", "ding_dan_biao_v2", "订单表（v2）"},
+            {"订单表（V2_1）.xlsx", "ding_dan_biao_v2_1", "订单表（V2_1）"},
+            {"订单表（order2）.xlsx", "order2", "订单表"},
+        };
+        for (String[] c : cases) {
+            String[] got = names.parseTableNameAndComment(c[0]);
+            if (!c[1].equals(got[0]) || !c[2].equals(got[1])) {
+                bad++;
+                if (shown.size() < 12) {
+                    shown.add("     版本号括号[" + ascii(c[0]) + "]\n       期望=" + ascii(c[1])
+                            + " / " + ascii(c[2]) + "\n       实际=" + ascii(got[0])
+                            + " / " + ascii(got[1]));
+                }
+            }
+        }
+        try {
+            names.setInitialsOnly(true);
+            names.setUpperOnly(true);
+            String[] got = names.parseTableNameAndComment("订单表（V2）.xlsx");
+            if (!"DDBV2".equals(got[0]) || !"订单表（V2）".equals(got[1])) {
+                bad++;
+                if (shown.size() < 12) {
+                    shown.add("     版本号括号[首字母+大写]\n       期望=DDBV2 / "
+                            + ascii("订单表（V2）") + "\n       实际=" + ascii(got[0])
+                            + " / " + ascii(got[1]));
+                }
+            }
+        } finally {
+            names.setInitialsOnly(false);
+            names.setUpperOnly(false);
+        }
+        return bad;
     }
 
     /** 差异报表里的中文要转义，否则在 GBK 控制台上是豆腐块，取证时读不出内容。 */

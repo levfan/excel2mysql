@@ -3027,7 +3027,7 @@ check("R42 没有脚本时点生成按钮当场拦下：日志与弹窗同一句
       and "已拦下：请先添加 SQL 脚本文件。" in gw2.log.toPlainText(),
       [(t, b[:40]) for t, b in POPUPS])
 
-section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名）")
+section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 
 from core.infer import parse_table_name_and_comment as _PT, _col_to_field as _CF
 
@@ -3050,8 +3050,20 @@ check("S6 括号内是合法英文标识符：仍按老规则取括号内、注�
       _n6 == "dim_reservoir_info" and _c6 == "北京市水务局-水库基础信息", (_n6, _c6))
 check("S7 括号内大写英文统一转小写（Linux 下表名区分大小写）",
       _PT("人员信息表（DIM_7）.xlsx")[0] == "dim_7", _PT("人员信息表（DIM_7）.xlsx")[0])
-check("S8 括号内是 v2 这种字母开头的名字：合法标识符，直接采用",
-      _PT("人员信息表（v2）.xlsx")[0] == "v2")
+_v2n, _v2c = _PT("订单表（V2）.xlsx")
+check("S8 括号内是版本号：不当表名，回退成完整文件名拼音并保留版本段",
+      _v2n == "ding_dan_biao_v2" and _v2c == "订单表（V2）"
+      and _PT("订单表（v2）.xlsx")[0] == "ding_dan_biao_v2"
+      and _PT("订单表（V2_1）.xlsx")[0] == "ding_dan_biao_v2_1",
+      (_v2n, _v2c))
+check("S8b 版本号回退跟首字母/大小写开关（DDBV2），order2/A1 这类真名字仍直接采用",
+      _PT("订单表（V2）.xlsx", initials=True)[0] == "ddbv2"
+      and _PT("订单表（V2）.xlsx", initials=True, upper=True)[0] == "DDBV2"
+      and _PT("订单表（order2）.xlsx")[0] == "order2"
+      and _PT("订单表（A1）.xlsx")[0] == "a1",
+      [_PT("订单表（V2）.xlsx", initials=True)[0],
+       _PT("订单表（V2）.xlsx", initials=True, upper=True)[0],
+       _PT("订单表（order2）.xlsx")[0], _PT("订单表（A1）.xlsx")[0]])
 check("S9 空括号与纯符号括号都回退，不产出畸形名",
       _PT("水库（）.xlsx")[0] == "shui_ku" and _PT("水库（-）.xlsx")[0] == "shui_ku",
       (_PT("水库（）.xlsx")[0], _PT("水库（-）.xlsx")[0]))

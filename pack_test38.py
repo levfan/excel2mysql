@@ -382,6 +382,15 @@ check("V14 括号内汉字不作表名（避免汉字表名）",
       build_table_def(v_cn)["table_name"] == "shuo_ming_ren_shi_chu_ren_yuan",
       build_table_def(v_cn)["table_name"])
 
+v_ver = make_xlsx("订单表（V2）.xlsx", pd.DataFrame({"编号": [1, 2]}))
+tv = build_table_def(v_ver)
+check("V14b 括号内版本号不作表名：回退拼音保留版本段，首字母+大写为 DDBV2",
+      tv["table_name"] == "ding_dan_biao_v2"
+      and tv["table_comment"] == "订单表（V2）"
+      and build_table_def(v_ver, initials=True, upper=True)["table_name"] == "DDBV2",
+      (tv["table_name"], tv["table_comment"],
+       build_table_def(v_ver, initials=True, upper=True)["table_name"]))
+
 dup_a = make_xlsx("同名表.xlsx", pd.DataFrame({"编号": [1]}))
 dup_b = os.path.join(_tmpdir, "dup", "同名表.xlsx")
 os.makedirs(os.path.dirname(dup_b), exist_ok=True)
