@@ -117,7 +117,9 @@ public final class UiShot {
                 dir, "06_structure", 980, 640);
         snapDialog(new DDLDialog(frame, two, false), dir, "07_ddl", 900, 600);
         snapDialog(new HelpDialog(frame), dir, "08_help", 960, 700);
-        snapDialog(new AboutDialog(frame), dir, "09_about", 380, 168);
+        // 关于框按自己的内容定尺寸（见 AboutDialog）：这里若再写死 380x168，
+        // 换字号后的裁字就会在拍照环节被藏起来
+        snapDialog(new AboutDialog(frame), dir, "09_about", 0, 0);
 
         final ProgressDialog[] pdBox = new ProgressDialog[1];
         ui(() -> {
@@ -160,7 +162,9 @@ public final class UiShot {
                                    final int w, final int h) throws Exception {
         ui(() -> {
             dialog.setModal(false);
-            dialog.getContentPane().setPreferredSize(new Dimension(w, h));
+            if (w > 0 && h > 0) {
+                dialog.getContentPane().setPreferredSize(new Dimension(w, h));
+            }
             dialog.pack();
             dialog.setVisible(true);
             dialog.validate();

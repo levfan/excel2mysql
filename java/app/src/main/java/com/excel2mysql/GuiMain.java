@@ -1602,6 +1602,11 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.AboutDialog ad = new com.excel2mysql.gui.AboutDialog(null);
         try {
+            // 首屏不裁字：版本号/提交号/构建日期三行都按自己的首选宽度检查一遍
+            String fit = ad.fitProblems();
+            if (!fit.isEmpty()) {
+                problems.add("关于框首屏文字摆不下：" + fit);
+            }
             if (!ad.valueOf("version").startsWith("v")) {
                 problems.add("关于框的版本行不对：" + ad.valueOf("version"));
             }
@@ -1633,6 +1638,23 @@ public final class GuiMain {
             }
         } finally {
             ad.dispose();
+        }
+        // 长提交号也要一眼看全：开发态会带分支名与“工作区有未提交改动”，
+        // 比打包态的 7 位短号长得多；旧的两列等宽布局就是在这里把字裁掉的
+        com.excel2mysql.core.AppInfo longInfo = com.excel2mysql.core.AppInfo.load();
+        longInfo.version = "9.9.9";
+        longInfo.commit = "1234567";
+        longInfo.branch = "feature/excel2mysql-empty-table-primary-key";
+        longInfo.dirty = true;
+        com.excel2mysql.gui.AboutDialog wide =
+                new com.excel2mysql.gui.AboutDialog(null, longInfo);
+        try {
+            String longFit = wide.fitProblems();
+            if (!longFit.isEmpty()) {
+                problems.add("关于框遇到长提交号会裁字：" + longFit);
+            }
+        } finally {
+            wide.dispose();
         }
     }
 
