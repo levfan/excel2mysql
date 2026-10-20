@@ -197,7 +197,7 @@ ZIP 里只有某个文件有合并区时，只拒绝那一个，同包其他干�
 <b>表名 = 括号内英文</b> <code>dim_reservoir_info</code>，
 <b>表注释 = 括号前中文</b>。中英文括号都可以；括号内大写会统一转小写</li>
 <li>括号里必须是<b>能直接当表名用的英文标识符</b>（字母或下划线开头、含字母、
-只由字母数字下划线组成）才采用。以下情况一律回退到"整个文件名转拼音"：
+只由字母数字下划线组成）才采用，<b>版本号除外</b>。以下情况一律回退到"整个文件名转拼音"：
 <table class="t">
 <tr><th>文件名</th><th>表名</th><th>为什么</th></tr>
 <tr><td><code>人员信息表（人事处人员）</code></td>
@@ -209,8 +209,10 @@ ZIP 里只有某个文件有合并区时，只拒绝那一个，同包其他干�
 <td>同上</td></tr>
 <tr><td><code>人员信息表（7_dim）</code></td><td><code>ren_yuan_xin_xi_biao_7_dim</code></td>
 <td>以数字开头不是合法标识符开头 → 回退</td></tr>
-<tr><td><code>人员信息表（v2）</code></td><td><code>v2</code></td>
-<td>字母开头、含字母 → 合法，直接采用</td></tr>
+<tr><td><code>订单表（V2）</code></td><td><code>ding_dan_biao_v2</code></td>
+<td>括号内是版本号（V2 / v2 / V2_1）→ 版本号不是表名，
+<b>回退后版本段留在末尾</b>；勾「取拼音首字母」为 <code>ddbv2</code>，
+再勾「转大写」为 <code>DDBV2</code></td></tr>
 </table>
 回退时<b>表注释保留完整文件名</b>（含括号内容），所以
 <code>人员信息表（人事处）</code> 与 <code>人员信息表（财务部）</code>

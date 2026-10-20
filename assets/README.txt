@@ -118,6 +118,8 @@
   · 文件名形如「水库基础信息（dim_reservoir_info）.xlsx」
         -> 表名取括号内英文 dim_reservoir_info，表注释取括号前中文
   · 没有有效括号时，表名由文件名汉字转拼音：水库基础信息 -> shui_ku_ji_chu_xin_xi
+  · 括号里只有版本号（V2 / v2 / V2_1）时版本号不算表名：订单表（V2） ->
+    ding_dan_biao_v2（--initials 为 ddbv2，再加 --upper 为 DDBV2）
   · 字段名由中文表头逐音节转拼音、下划线分隔，超长自动降级为首字母
   · 整列一个值都没有时，按字段名关键字定类型：发布日期 -> DATE、
     更新时间 -> DATETIME、金额类 -> DECIMAL(16,2)、数量类 -> INT，
