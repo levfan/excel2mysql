@@ -87,7 +87,7 @@ public final class HelpDoc {
                     "「生成标准excel文件」与「生成简易excel文件」、" + NL +
                     "耗时任务的进度框，以及这份《使用说明》（右上角「?」或 F1）。</p>" + NL +
                     "<p>这份等价是逐项称出来的，不是估计：两条线的窗口控件、文案、按钮启用条件、" + NL +
-                    "弹窗文字、日志与写出的文件会被各自枚举成一份清单，再逐键比对，共 209 项。</p>" + NL +
+                    "弹窗文字、日志与写出的文件会被各自枚举成一份清单，再逐键比对，共 218 项。</p>" + NL +
                     "" + NL +
                     "<h3>两条 Python 线的一个硬限制：口令不能用中文</h3>" + NL +
                     "<p>pymysql 在发起握手前就把口令按 latin-1 编码，所以图形版与 Windows 7 命令行版" + NL +
@@ -263,7 +263,10 @@ public final class HelpDoc {
                     "避免同一份数据在两次读写之间被历元换算挪走一天。</p>" + NL +
                     "<p class=\"tip\">进度按文件计项（一张表 1 项），逐文件写日志，完成后弹窗把目录名原样报出来。" + NL +
                     "按「停止」会在当前这个文件写完后停下，剩下的不写，日志与弹窗都会写明" + NL +
-                    "「已取消，剩余文件未生成」。</p>"
+                    "「已取消，剩余文件未生成」。</p>" + NL +
+                    "<p>「SQL 脚本改名入库」页底部也有这两颗同名按钮，产物形状完全一致，" + NL +
+                    "只是表定义改成从脚本正文的 <code>CREATE TABLE</code> 里解析，见" + NL +
+                    "「SQL 脚本改名入库页」一节。</p>"
         ),
         new Section("naming", "字段命名与类型推断",
                 "<h2>字段命名规则</h2>" + NL +
@@ -411,8 +414,26 @@ public final class HelpDoc {
                     "<tr><td>执行脚本到当前库</td><td>按上方公共连接区选定的目标库执行；" + NL +
                     "<b>每个文件一个事务</b>：先开启事务，逐条执行，任一语句失败立即回滚整个事务" + NL +
                     "并在日志标红报错，后续语句不再执行，全部成功才提交</td></tr>" + NL +
+                    "<tr><td>生成标准excel文件</td><td>把脚本里解析出的字段定义写成" + NL +
+                    "<code>meta_data_file_年月日</code> 目录下的 xlsx，一张表一个文件，" + NL +
+                    "形状与「Excel 导入」页那两颗完全一样（元数据 + 数据 两个 Sheet）；" + NL +
+                    "区别在数据源：这里<b>只看 <code>CREATE TABLE</code> 的列定义，不看库、也不看文件里的" + NL +
+                    "<code>INSERT</code></b></td></tr>" + NL +
+                    "<tr><td>生成简易excel文件</td><td>同上，只留 <b>数据</b> 一个 Sheet</td></tr>" + NL +
                     "</table>" + NL +
                     "<ul>" + NL +
+                    "<li>两颗生成按钮取的是<b>改名之后的当前正文</b>，所以\"先批量改前缀、再生成交付件\"" + NL +
+                    "这条路是通的，产物里的表名就是新表名</li>" + NL +
+                    "<li>脚本里只有结构、没有数据，所以「数据」Sheet 只剩英文字段名那一行表头，" + NL +
+                    "给下游当可填模板用，不假装里面有数据行</li>" + NL +
+                    "<li>元数据 Sheet 只能装「一个类型关键字 + 纯数字长度」，所以" + NL +
+                    "<code>UNSIGNED</code> / <code>ZEROFILL</code> / <code>CHARACTER SET</code> /" + NL +
+                    "<code>COLLATE</code> 这些修饰会被丢掉，<code>ENUM('a','b')</code> 这类括号里不是数字的" + NL +
+                    "按 <code>TEXT</code> 导出；每一处都在日志里逐列点名（<code>! [WARN] 说明 | ...</code>），" + NL +
+                    "不静默改语义</li>" + NL +
+                    "<li>同名表被定义了多次时只按<b>第一处</b>的列定义导出，其余跳过并写明是哪一处</li>" + NL +
+                    "<li><code>CREATE TABLE x LIKE y</code> 与 <code>... AS SELECT</code> 这两种写法里没有列定义，" + NL +
+                    "生成不了元数据，日志点名后跳过</li>" + NL +
                     "<li>语句切分能正确跳过字符串 / 反引号 / 注释中的分号</li>" + NL +
                     "<li><b>不支持</b>含 <code>DELIMITER</code> 的存储过程脚本</li>" + NL +
                     "<li>文件编码自动尝试 UTF-8 / UTF-8-BOM / GBK</li>" + NL +
