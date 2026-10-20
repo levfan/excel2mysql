@@ -1084,7 +1084,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     private void chooseFiles() {
-        JFileChooser chooser = new JFileChooser();
+        // 文件名框里敲文件夹路径回车时进目录，而不是把目录当文件带回来
+        JFileChooser chooser = new FolderAwareChooser();
         chooser.setDialogTitle("选择 Excel 文件或 ZIP 压缩包");
         chooser.setMultiSelectionEnabled(true);
         // 四档过滤器与 Python 侧一致：只给一档的话，想单看 zip 或单看 xls 的人筛不出来

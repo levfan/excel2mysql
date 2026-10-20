@@ -253,6 +253,8 @@ public final class GuiMain {
                 // 命名开关（全拼/首字母、小写/大写）与空列按字段名定类型：勾了再添加就要当场生效。
                 // 放在最后跑：它会往列表里加临时表，前面的用例都按下标取夹具表，不能被插队
                 naming_switches(frame, problems);
+                // 添加文件弹窗：文件名框里敲文件夹路径回车必须进目录，不能把目录当文件带回来
+                folder_path_entry(problems);
                 // 日志的红色与行数上限：错误没标红、或日志无限涨，都只会在现场翻车时才发现
                 frame.logError("自检错误行");
                 frame.log("自检普通行");
@@ -571,6 +573,94 @@ public final class GuiMain {
                 deleteTree(tmp);
             }
         }
+    }
+
+    /**
+     * 添加文件弹窗：文件名框里敲或粘文件夹路径回车，只能进入该目录，不能把目录交给程序。
+     * 自检走弹窗自己的 ApproveSelectionAction（回车与「打开」都是这一条路）；
+     * 带引号那种是资源管理器「复制文件地址」的原样格式，JDK 8 会跳过目录判断直接确认，
+     * 必须由 FolderAwareChooser 拦下来。默认外观与 Windows 外观在这条路上行为一致。
+     */
+    private static void folder_path_entry(List<String> problems) {
+        File tmp = null;
+        try {
+            tmp = java.nio.file.Files.createTempDirectory("e2m-chooser-selftest").toFile();
+            File folder = new File(tmp, "数据目录");
+            if (!folder.mkdir()) {
+                problems.add("文件夹路径回车自检：建临时目录失败");
+                return;
+            }
+            File xlsx = new File(folder, "样本.xlsx");
+            if (!xlsx.createNewFile()) {
+                problems.add("文件夹路径回车自检：建临时文件失败");
+                return;
+            }
+            com.excel2mysql.gui.FolderAwareChooser chooser =
+                    new com.excel2mysql.gui.FolderAwareChooser();
+            chooser.setMultiSelectionEnabled(true);
+            final int[] approved = {0};
+            chooser.addActionListener(e -> {
+                if (javax.swing.JFileChooser.APPROVE_SELECTION.equals(e.getActionCommand())) {
+                    approved[0]++;
+                }
+            });
+            javax.swing.plaf.basic.BasicFileChooserUI ui =
+                    (javax.swing.plaf.basic.BasicFileChooserUI) chooser.getUI();
+
+            // 1) 带引号的绝对路径：不拦就会带着目录关闭弹窗
+            chooser.setCurrentDirectory(tmp);
+            ui.setFileName("\"" + folder.getAbsolutePath() + "\"");
+            if (ui.getFileName() == null || ui.getFileName().indexOf('"') < 0) {
+                problems.add("文件夹路径回车自检：当前外观没接住文件名输入，用例不成立");
+                return;
+            }
+            approveChooser(chooser, ui);
+            if (!folder.equals(chooser.getCurrentDirectory())) {
+                problems.add("带引号的文件夹路径回车后没进入该目录："
+                        + chooser.getCurrentDirectory());
+            }
+            if (approved[0] != 0) {
+                problems.add("带引号的文件夹路径被当成文件交出去了");
+            }
+
+            // 2) 不带引号：JDK 本来就会进目录，加了覆盖层后不能反而变成确认
+            approved[0] = 0;
+            chooser.setCurrentDirectory(tmp);
+            ui.setFileName(folder.getAbsolutePath());
+            approveChooser(chooser, ui);
+            if (!folder.equals(chooser.getCurrentDirectory())) {
+                problems.add("文件夹路径回车后没进入该目录：" + chooser.getCurrentDirectory());
+            }
+            if (approved[0] != 0) {
+                problems.add("文件夹路径被当成文件交出去了");
+            }
+
+            // 3) 真选文件不受影响：该确认就确认，路径原样交出去
+            approved[0] = 0;
+            chooser.setCurrentDirectory(folder);
+            ui.setFileName(xlsx.getAbsolutePath());
+            approveChooser(chooser, ui);
+            if (approved[0] != 1) {
+                problems.add("正常 Excel 文件没有放行：approved=" + approved[0]);
+            }
+            File[] picked = chooser.getSelectedFiles();
+            if (picked == null || picked.length != 1 || !xlsx.equals(picked[0])) {
+                problems.add("正常 Excel 文件交出去的路径不对");
+            }
+        } catch (Exception e) {
+            problems.add("文件夹路径回车自检抛异常：" + e);
+        } finally {
+            if (tmp != null) {
+                deleteTree(tmp);
+            }
+        }
+    }
+
+    private static void approveChooser(javax.swing.JFileChooser chooser,
+                                       javax.swing.plaf.basic.BasicFileChooserUI ui) {
+        ui.getApproveSelectionAction().actionPerformed(
+                new java.awt.event.ActionEvent(chooser,
+                        java.awt.event.ActionEvent.ACTION_PERFORMED, ""));
     }
 
     private static com.excel2mysql.core.TableOps.Table lastTable(MainFrame frame) {
