@@ -234,6 +234,8 @@ public final class GuiMain {
                 sql_page(frame, problems);
                 // 第三个页签「SQL 执行器」：编辑区、示例清单与空输入那道闸
                 sql_run_tab(frame, problems);
+                // 三处日志区的字号：现场反馈 12 号基本看不清，这里钉住共同的那一档
+                checkLogFonts(frame, problems);
                 // 第二个页签的两颗生成按钮：解析脚本 → 标准/简易件 → 回读
                 sql_gen_excel(frame, problems);
                 // 页面级「停止」与并发护栏
@@ -1203,6 +1205,35 @@ public final class GuiMain {
         }
         frame.showSqlSamples();
         frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+    }
+
+    /**
+     * 三处日志区（主页 / SQL 脚本页 / SQL 执行结果）共用 LogPanel：字号必须是同一档。
+     * 现场反馈 12 号"基本看不清"，这里钉 14；只改一处会立刻以"不一致"报出来。
+     */
+    private static void checkLogFonts(MainFrame frame, List<String> problems) {
+        com.excel2mysql.gui.LogPanel[] logs = {
+                frame.logPanel(), frame.sqlPage().logPanel(), frame.sqlRunLogPanel()};
+        String[] names = {"主页日志", "SQL 脚本页日志", "SQL 执行结果区"};
+        for (int i = 0; i < logs.length; i++) {
+            java.awt.Font f = logs[i].getFont();
+            if (f == null || !"Monospaced".equals(f.getFamily())) {
+                problems.add(names[i] + "不是等宽字体：" + (f == null ? "无字体" : f.getFamily()));
+            }
+            if (f == null || f.getSize() != 14) {
+                problems.add(names[i] + "字号不是 14：" + (f == null ? "无字体" : f.getSize()));
+            }
+        }
+        java.awt.Font base = logs[0].getFont();
+        for (int i = 1; i < logs.length; i++) {
+            java.awt.Font f = logs[i].getFont();
+            if (base != null && f != null
+                    && (!base.getFamily().equals(f.getFamily()) || base.getSize() != f.getSize())) {
+                problems.add("日志区字体不一致：" + names[0] + " " + base.getFamily() + "/"
+                        + base.getSize() + "，但 " + names[i] + " " + f.getFamily() + "/"
+                        + f.getSize());
+            }
+        }
     }
 
     /**
