@@ -26,8 +26,9 @@ import java.util.zip.ZipFile;
  * 含合并区的表映射成关系表必然错位（只有左上角有值，其余格读进来是空），
  * 所以默认拒绝导入而不是导出一份错数据。
  *
- * 唯一例外是首表顶部的多行合并表头：整块合并区都落在表头里时展开成
- * 「父-子」单行表头（技术公司 + 小计 → 技术公司-小计）；数据区有合并区照旧拒绝。
+ * 唯一例外是首表顶部的标准两行合并表头：合并区都从第 1 行起，只跨两行的
+ * 单列父标签或只横跨第 1 行的一组子列，展开成「父-子」单行表头
+ * （技术公司 + 小计 → 技术公司-小计）；三行表头、子行合并、2x2 块与数据区合并照旧拒绝。
  * xlsx 走流式扫 sheet XML 里的 &lt;mergeCell&gt;，不整表加载；xls 走 POI 的 HSSF。
  */
 public final class MergeCheck {
@@ -145,10 +146,11 @@ public final class MergeCheck {
     }
 
     /**
-     * 首表合并区若全在顶部表头块里，返回展开计划；否则返回 null（照旧拒绝）。
+     * 只认首表的标准两行合并表头，返回展开计划；其余合并返回 null（照旧拒绝）。
      *
-     * 表头深度由顶到第 1 行的合并区决定（A1:A2 → 2 行，J1:M1 → 横向分组）；
-     * 表头块内部允许嵌套合并，但只要有合并区越出深度，就说明数据区也被合并了。
+     * 所有合并区必须从第 1 行开始，且只能是跨两行的单列纵向合并（A1:A2）
+     * 或只有第 1 行的多列横向合并（J1:M1）；至少一处跨两行，深度固定为 2。
+     * 三行表头、第 2 行里的子合并（B2:C2）、2x2 块（B1:C2）都不放行。
      * 只有首表可以带合并区，其余 Sheet 带合并区说明格式不是这个约定，不去猜。
      */
     public static HeaderPlan headerPlan(Map<String, List<String>> merged, String firstSheet) {
@@ -168,23 +170,24 @@ public final class MergeCheck {
             }
             parsed.add(box);
         }
-        boolean hasTop = false;
-        int depth = 0;
+        boolean hasTwoRow = false;
         for (int[] b : parsed) {
-            if (b[0] == 0) {
-                hasTop = true;
-                depth = Math.max(depth, b[2] + 1);
-            }
-        }
-        if (!hasTop || depth < 2) {
-            return null;
-        }
-        for (int[] b : parsed) {
-            if (b[2] >= depth) {
+            if (b[0] != 0) {
                 return null;
             }
+            if (b[2] == 0) {
+                continue;
+            }
+            if (b[2] == 1 && b[1] == b[3]) {
+                hasTwoRow = true;
+                continue;
+            }
+            return null;
         }
-        return new HeaderPlan(depth, parsed);
+        if (!hasTwoRow) {
+            return null;
+        }
+        return new HeaderPlan(2, parsed);
     }
 
     private static Map<String, List<String>> scanXlsx(String path) throws Exception {

@@ -175,6 +175,35 @@ public final class GuiMain {
                         problems.add("两行合并表头没有按「父-子」展开成字段名");
                     }
                 }
+                // 合并表头只认标准两行：三行表头、第 2 行里的子合并、2x2 块都必须拒绝。
+                // 这些形状不能放进夹具目录（会被当成普通夹具要求建表），所以直接喂
+                // headerPlan，守住 Java 侧与 Python 同一条放行边界。
+                java.util.Map<String, List<String>> canonical =
+                        new java.util.LinkedHashMap<String, List<String>>();
+                canonical.put("原始表", Arrays.asList("A1:A2", "B1:C1"));
+                com.excel2mysql.core.MergeCheck.HeaderPlan plan =
+                        com.excel2mysql.core.MergeCheck.headerPlan(canonical, "原始表");
+                if (plan == null || plan.depth != 2) {
+                    problems.add("标准两行合并表头被误拒了");
+                }
+                java.util.Map<String, List<String>> threeRows =
+                        new java.util.LinkedHashMap<String, List<String>>();
+                threeRows.put("原始表", Arrays.asList("A1:A3"));
+                if (com.excel2mysql.core.MergeCheck.headerPlan(threeRows, "原始表") != null) {
+                    problems.add("三行合并表头不该被当成标准两行放行");
+                }
+                java.util.Map<String, List<String>> childMerge =
+                        new java.util.LinkedHashMap<String, List<String>>();
+                childMerge.put("原始表", Arrays.asList("A1:A2", "B1:C1", "B2:C2"));
+                if (com.excel2mysql.core.MergeCheck.headerPlan(childMerge, "原始表") != null) {
+                    problems.add("第 2 行里的子合并不该被放行");
+                }
+                java.util.Map<String, List<String>> block =
+                        new java.util.LinkedHashMap<String, List<String>>();
+                block.put("原始表", Arrays.asList("A1:A2", "B1:C2"));
+                if (com.excel2mysql.core.MergeCheck.headerPlan(block, "原始表") != null) {
+                    problems.add("2x2 合并块不该被放行");
+                }
                 // 表数的可见痕迹是文件表行数与日志里那句汇总（Python 没有状态栏），
                 // 两者已分别在上面断过，这里不再断自造的状态文字
                 // 文件表刻意不可就地编辑：字段级改动在双击打开的结构弹窗里做，

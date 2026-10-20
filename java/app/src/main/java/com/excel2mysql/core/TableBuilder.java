@@ -60,7 +60,7 @@ public final class TableBuilder {
         public boolean noDataRows;
         /** 表头整行没写字时按列宽兜底出来的字段名（col、col_2…）；正常表为空列表。 */
         public final List<String> blankHeaders = new ArrayList<String>();
-        /** 顶部多行合并表头展开的行数；0 表示没展开。 */
+        /** 顶部两行合并表头展开的行数；0 表示没展开。 */
         public int mergedHeaderDepth;
     }
 
@@ -82,8 +82,8 @@ public final class TableBuilder {
         }
         // 合并单元格要在读数据之前判掉：这类文件解析出来必然错位，
         // 提前拒绝既避免导错数据，也省掉几十万行的读取开销。
-        // 例外是首表顶部的多行合并表头：展开成「父-子」单行表头后照常导入；
-        // 数据区（或别的 Sheet）里还有合并区则继续拒绝。
+        // 例外是首表顶部的标准两行合并表头：展开成「父-子」单行表头后照常导入；
+        // 别的表头形态、数据区（或别的 Sheet）里还有合并区则继续拒绝。
         if (cb != null) {
             cb.stage("检查合并单元格");
         }
@@ -197,7 +197,7 @@ public final class TableBuilder {
     }
 
     /**
-     * 把首表的多行合并表头压成一行，返回只含数据行的网格（与 core/infer.py 同一规则）。
+     * 把首表的标准两行合并表头压成一行，返回只含数据行的网格（与 core/infer.py 同一规则）。
      *
      * 合并区里的空格子按左上角的值补齐：纵向合并（序号 A1:A2）让每行拿到同一标签，
      * 横向合并（技术公司 J1:M1）让组内每列拿到组名。逐列自上而下取标签，
