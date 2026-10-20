@@ -22,13 +22,24 @@ _TABLE_EN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # 表头里的成对括号注释：左括号到右括号整段（含中英文各类括号），见 _strip_header_annotations
 # 括号一律按码位写，不靠字形——全角（） 与半角() 在源码里看着一模一样，漏一个就是静默漏剥
-_ANNOT_OPEN = u"(\\[\uFF08\uFF3B\uFF5B{}\u3010\u3014\u3008\u300A\u300C\u300E"
-_ANNOT_CLOSE = u")\\]\uFF09\uFF3D\uFF5D{}\u3011\u3015\u3009\u300B\u300D\u300F"
+_ANNOT_OPEN = u"(\\[\uFF08\uFF3B\uFF5B{}\u3010\u3016\u3014\u3008\u300A\u300C\u300E"
+_ANNOT_CLOSE = u")\\]\uFF09\uFF3D\uFF5D{}\u3011\u3017\u3015\u3009\u300B\u300D\u300F"
 _ANNOT_SPAN_RE = re.compile(
     u"[" + _ANNOT_OPEN + u"][^" + _ANNOT_CLOSE + u"]*[" + _ANNOT_CLOSE + u"]"
 )
 # 嵌套剥完剩下的孤立括号符（只可能来自手写配不对的表头）
 _ANNOT_CHAR_RE = re.compile(u"[" + _ANNOT_OPEN + _ANNOT_CLOSE + u"]")
+# 剥到行尾：左括号写了、右括号忘了配（发布日期（yyyy-MM-dd），Excel 里手写极常见）。
+# 括号配不上的内容留着，就成了 fa_bu_ri_qi_yyyy_mm_dd
+_ANNOT_OPEN_TAIL_RE = re.compile(u"[" + _ANNOT_OPEN + u"].*$", re.DOTALL)
+_HANJI_RE = re.compile(u"[\u4e00-\u9fff]")
+# 日期/时间格式掩码串：yyyy-MM-dd、YYYYMMDD、yy/MM/dd、HH:mm:ss 这一类口径说明。
+# 两头都不许贴着字母数字，否则 1.0mm 里的 mm 会被当成掩码吃掉；
+# 段内允许出现纯数字（yyyy2020 这种写法不多，但 2020-01-01 绝不能当成掩码，
+# 所以首段必须是字母掩码符起头）
+_MASK_SEG_RE = re.compile(
+    u"(?<![0-9A-Za-z])[yYmMdDhHsS]{2,}(?:[-/\u2013_.:\uFF1A][0-9yYmMdDhHsS]+)*(?![0-9A-Za-z])"
+)
 
 # VARCHAR 长度算法：常用档位 + 全表字节预算
 # utf8mb4 下 VARCHAR(n) 计入 MySQL 65535 字节行上限按 4n 字节算（n 为字符数），
@@ -270,6 +281,11 @@ def _strip_header_annotations(text: str) -> str:
         if out == s:
             break
         s = out
+    if not _HANJI_RE.search(s):
+        # 纯英文表头里 MM / dd 可能就是名字本身（列号、月份列），不参与后面的猜测
+        return _ANNOT_CHAR_RE.sub("", s)
+    s = _ANNOT_OPEN_TAIL_RE.sub("", s)      # 左括号没配右半边：从它起整段当注释丢
+    s = _MASK_SEG_RE.sub("", s)             # yyyy-MM-dd / YYYYMMDD / HH:mm:ss 这类口径串
     return _ANNOT_CHAR_RE.sub("", s)
 
 

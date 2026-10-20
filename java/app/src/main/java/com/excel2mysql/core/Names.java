@@ -26,14 +26,23 @@ public final class Names {
     // 括号一律写成码位转义：全角（）与半角() 在源码里看着一模一样，
     // 两边各数一遍必漏一个，Python 侧就是这么静默漏剥过一轮的。
     private static final String ANNOT_OPEN =
-            "\\(\\[\uff08\uff3b\uff5b{}\u3010\u3014\u3008\u300a\u300c\u300e";
+            "\\(\\[\uff08\uff3b\uff5b{}\u3010\u3016\u3014\u3008\u300a\u300c\u300e";
     private static final String ANNOT_CLOSE =
-            "\\)\\]\uff09\uff3d\uff5d{}\u3011\u3015\u3009\u300b\u300d\u300f";
+            "\\)\\]\uff09\uff3d\uff5d{}\u3011\u3017\u3015\u3009\u300b\u300d\u300f";
     private static final Pattern ANNOT_SPAN = Pattern.compile(
             "[" + ANNOT_OPEN + "][^" + ANNOT_CLOSE + "]*[" + ANNOT_CLOSE + "]");
     // 嵌套剥完剩下的孤立括号符（只可能来自手写配不对的表头）
     private static final Pattern ANNOT_CHAR =
             Pattern.compile("[" + ANNOT_OPEN + ANNOT_CLOSE + "]");
+    // 左括号写了、右括号忘配（发布日期（yyyy-MM-dd））：从它起到行尾整段当注释丢
+    private static final Pattern ANNOT_OPEN_TAIL =
+            Pattern.compile("[" + ANNOT_OPEN + "].*$", Pattern.DOTALL);
+    private static final Pattern HANJI = Pattern.compile("[\u4e00-\u9fff]");
+    // 日期/时间格式掩码串（yyyy-MM-dd、YYYYMMDD、yy/MM/dd、HH:mm:ss）。
+    // 两头不许贴字母数字，否则 1.0mm 里的 mm 会被当掩码吃掉；首段必须字母掩码符起头，
+    // 所以 2020-01-01 这种真日期不会被误剥
+    private static final Pattern MASK_SEG = Pattern.compile(
+            "(?<![0-9A-Za-z])[yYmMdDhHsS]{2,}(?:[-/\u2013_.:\uff1a][0-9yYmMdDhHsS]+)*(?![0-9A-Za-z])");
     private static final Pattern NON_WORD =
             Pattern.compile("[^\\w]+", Pattern.UNICODE_CHARACTER_CLASS);
     private static final Pattern RUN =
@@ -95,8 +104,9 @@ public final class Names {
     }
 
     /**
-     * 表头 -> 剥掉成对括号注释后的文本，口径与 Python _strip_header_annotations 逐字对齐：
-     * 左括号到右括号整段去掉，嵌套最多三轮，最后删掉配不对的孤立括号符。
+     * 表头 -> 剥掉注释后的文本，口径与 Python _strip_header_annotations 逐字对齐：
+     * 成对括号整段去掉，嵌套最多三轮；表头含汉字时再剥"没配右半边的左括号起至行尾"
+     * 与日期时间格式掩码串；最后删掉配不对的孤立括号符。纯英文表头不参与掩码猜测。
      */
     public static String stripHeaderAnnotations(String text) {
         String s = text == null ? "" : text;
@@ -107,6 +117,12 @@ public final class Names {
             }
             s = out;
         }
+        if (!HANJI.matcher(s).find()) {
+            // 纯英文表头里 MM / dd 可能就是名字本身（列号、月份列），不跟着猜
+            return ANNOT_CHAR.matcher(s).replaceAll("");
+        }
+        s = ANNOT_OPEN_TAIL.matcher(s).replaceAll("");
+        s = MASK_SEG.matcher(s).replaceAll("");
         return ANNOT_CHAR.matcher(s).replaceAll("");
     }
 
