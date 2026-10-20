@@ -1093,18 +1093,22 @@ class MainWindow(QWidget):
         # 会被 U7 的"整窗落在可用区内"当场抓住（实测顶到 922）。
         # 两颗复选框竖着摞，横向只占一颗的宽度，免得把这一行也顶宽
         name_switches = QVBoxLayout()
+        # 两颗都默认勾上：新加的文件直接按「首字母 + 大写」起名。
+        # 在连信号之前设好，免得启动时凭空打一行"切换"日志
         self.chk_initials = QCheckBox("表名与字段名取拼音首字母")
+        self.chk_initials.setChecked(True)
         self.chk_initials.setToolTip(
-            "勾选后，由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、\n"
-            "水库基础信息 → skjcxx）；默认全拼（ding_dan_jin_e）。\n"
+            "由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、\n"
+            "水库基础信息 → skjcxx）；默认已勾选，取消则用全拼（ding_dan_jin_e）。\n"
             "文件名括号里显式写下的英文表名不受影响；对之后添加的文件生效。")
         self.chk_initials.toggled.connect(self.on_initials_toggled)
         name_switches.addWidget(self.chk_initials)
         self.chk_upper = QCheckBox("表名与字段名转大写")
+        self.chk_upper.setChecked(True)
         self.chk_upper.setToolTip(
-            "勾选后，由中文或文件名转写出来的表名与字段名全部大写\n"
+            "由中文或文件名转写出来的表名与字段名全部大写\n"
             "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；\n"
-            "默认小写。文件名括号里写下的英文表名同样转大写；\n"
+            "默认已勾选，取消则用小写。文件名括号里写下的英文表名同样转大写；\n"
             "结构定义 Sheet 里人工写的字段名与手动改过的表名前缀原样保留；\n"
             "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
         self.chk_upper.toggled.connect(self.on_upper_toggled)

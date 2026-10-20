@@ -363,17 +363,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         prefixBtns.add(replacePrefix);
         // 命名开关（全拼/首字母、小写/大写）跟表名前缀同属"名字怎么起"的治理项。
         // 竖着摞两颗，横向只占一颗的宽度，不会把前缀输入框挤没
+        // 两颗都默认勾上：新加的文件直接按「首字母 + 大写」起名。
+        // setSelected 不触发 ActionListener，启动时不会凭空打一行"切换"日志
         initialsBox = new javax.swing.JCheckBox("表名与字段名取拼音首字母");
-        initialsBox.setToolTipText("勾选后，由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、"
-                + "水库基础信息 → skjcxx）；默认全拼（ding_dan_jin_e）。"
+        initialsBox.setSelected(true);
+        initialsBox.setToolTipText("由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、"
+                + "水库基础信息 → skjcxx）；默认已勾选，取消则用全拼（ding_dan_jin_e）。"
                 + "文件名括号里显式写下的英文表名不受影响；对之后添加的文件生效。");
         initialsBox.addActionListener(e -> log("[提示] 命名规则切换为："
                 + (initialsBox.isSelected() ? "拼音首字母" : "全拼")
                 + "（对之后添加的文件生效）"));
         upperBox = new javax.swing.JCheckBox("表名与字段名转大写");
-        upperBox.setToolTipText("勾选后，由中文或文件名转写出来的表名与字段名全部大写"
+        upperBox.setSelected(true);
+        upperBox.setToolTipText("由中文或文件名转写出来的表名与字段名全部大写"
                 + "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；"
-                + "默认小写。文件名括号里写下的英文表名同样转大写；"
+                + "默认已勾选，取消则用小写。文件名括号里写下的英文表名同样转大写；"
                 + "结构定义 Sheet 里人工写的字段名与手动改过的表名前缀原样保留；"
                 + "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。");
         upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："
