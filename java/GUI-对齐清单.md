@@ -1569,3 +1569,33 @@ Java 侧 `GuiMain` 的 `checkRejects` 里用 POI 现造一份三空格子表头�
   - Java 把零行闸门加回去 → 第 10 步报“空表手工主键被拒：没有数据行，无法校验主键”，
     闸门退出码 1；逐字节还原后哈希
     `07eec97926b2bbc30270b0d4813ccc032475da8a16d894fa556c2071feff7dd9`
+
+## 33. Java 使用说明正文字号折算
+
+用户反馈：Java GUI 的「使用说明」正文太小，同一份说明在 Python 端显示正常。
+
+### 33.1 根因
+
+说明正文的样式来自 `ui_help.py` 的 `STYLE`，其中 `body { font-size: 10.5pt }`。
+Qt 按 96dpi 把 pt 折成 px（10.5pt → 14px）；Swing 的 HTML 渲染器按 72dpi 折
+（实测 `14pt` 与 `10.5px` 的离屏渲染逐像素完全相同），于是同一份 CSS 在 Java 里
+只剩约 7.9px，比左侧目录还小。问题在单位折算，不在字体族或窗口缩放。
+
+### 33.2 修法
+
+`HelpDialog.swingHtml()` 只把 `font-size: Npt` 按 96dpi 换成 `N×4/3 px`，
+其余样式与正文一字不动；Python 端继续用原 CSS。折算后两端实际像素字号一致：
+正文 14px、h2 18.7px、h3 15.3px、pre 12.7px。左侧目录仍用 Swing 默认字号，
+与 Python 的 `QListWidget` 默认字号持平，不跟着放大。
+
+### 33.3 验证
+
+- `java/构建验证.bat`：十步全过；第 10 步 Swing 自检新增守卫——窗口里实际渲染的
+  HTML 必须含 `font-size: 14px`，且不得残留 `font-size: Npt`。
+- `UiShot` 的 `08_help` 截图：改前正文约 8px、比目录小；改后正文 14px，
+  层级恢复为 h2 > 正文 > 目录/脚注。
+- `界面双端对撞.bat`：235 键逐键一致（字号不在枚举键里，本轮不新增控件）。
+- 变异抽查：把 `swingHtml(...)` 换回原始 `HelpDoc.html()` → 自检报
+  “说明正文字号没折成 px：Swing 会把 10.5pt 渲染成约 7.9px”，退出码 1；
+  逐字节还原后哈希
+  `7166ed802e2c364a5e09366c754843cb087100cfd9a70ce4b3b46164c43d45e0`
