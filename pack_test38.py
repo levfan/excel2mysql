@@ -433,6 +433,61 @@ except MergedCellsError as e:
 except Exception as e:
     check("V19 合并单元格文件被拒绝导入", False, "抛的是 %s: %s" % (type(e).__name__, e))
 
+merged_two = os.path.join(_tmpdir, "两行合并.xlsx")
+
+
+def _mk_raw_header(path, extra_merge=None, other_sheet=False):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "原始表"
+    ws.append(["序号", "技术公司", None, "财务公司", None])
+    ws.append([None, "小计", "高层", "小计", "高层"])
+    for box in ("A1:A2", "B1:C1", "D1:E1"):
+        ws.merge_cells(box)
+    ws.append([1, "甲", 10, 20, 30])
+    ws.append([2, "乙", 11, 21, 31])
+    if extra_merge:
+        ws.merge_cells(extra_merge)
+    if other_sheet:
+        d = wb.create_sheet("其他")
+        d.append(["a", "b"])
+        d.append([1, 2])
+        d.merge_cells("A1:B1")
+    wb.save(path)
+
+
+_mk_raw_header(merged_two)
+_t = build_table_def(merged_two)
+check("V19b 两行合并表头压成「父-子」一行",
+      [c["comment"] for c in _t["columns"]]
+      == ["序号", "技术公司-小计", "技术公司-高层", "财务公司-小计", "财务公司-高层"],
+      [c["comment"] for c in _t["columns"]])
+check("V19c 展开后字段名、数据行与主键照常产出",
+      [c["field"] for c in _t["columns"]]
+      == ["xu_hao", "ji_shu_gong_si_xiao_ji", "ji_shu_gong_si_gao_ceng",
+          "cai_wu_gong_si_xiao_ji", "cai_wu_gong_si_gao_ceng"]
+      and list(_t["df"].iloc[0]) == [1, "甲", 10, 20, 30]
+      and _t["primary_key"] == "xu_hao"
+      and _t["merged_header"] == {"sheet": "原始表", "depth": 2},
+      ([c["field"] for c in _t["columns"]], list(_t["df"].iloc[0]),
+       _t["primary_key"], _t["merged_header"]))
+merged_one_row = os.path.join(_tmpdir, "单行合并.xlsx")
+_wb2 = Workbook()
+_ws2 = _wb2.active
+_ws2.append(["组A", None, "姓名"])
+_ws2.append(["甲", "乙", "丙"])
+_ws2.merge_cells("A1:B1")
+_wb2.save(merged_one_row)
+merged_other = os.path.join(_tmpdir, "其他页合并.xlsx")
+_mk_raw_header(merged_other, other_sheet=True)
+for _label, _path in (("单行合并表头", merged_one_row), ("其他页也合并", merged_other)):
+    try:
+        build_table_def(_path)
+        _ok = False
+    except MergedCellsError:
+        _ok = True
+    check("V19d 仍拒绝：" + _label, _ok)
+
 from core.zip_import import ZipArchiveError, count_excel_entries, extract_excel_archive
 
 zip_src = os.path.join(_tmpdir, "inner", "人员.xlsx")
@@ -1321,6 +1376,10 @@ code, out, rec, _ = cli_import(merged_path)
 check("Y9 合并单元格文件不静默丢：退出码 2 且日志给原因",
       code == cli_mod.EXIT_PARSE and "合并单元格" in out, (code, out[:200]))
 check("Y10 合并单元格拒绝后没有建任何表", "execute" not in rec, rec.keys())
+
+code, out, _ = run_cli([merged_two, "-d", "demo", "--dry-run"])
+check("Y10a 两行合并表头在命令行照常导入，并说明按几行展开",
+      code == cli_mod.EXIT_OK and "合并表头按 2 行展开" in out, (code, out[:400]))
 
 # 日志形态：一行自带判读，行首符号 + 大写标签，分段 | ；错误档必须能单独 grep
 code, out, _ = run_cli([v_orders, "-d", "demo", "--dry-run"])

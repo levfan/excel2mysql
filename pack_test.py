@@ -9,7 +9,7 @@ excel2mysql.spec 完全相同的 excludes/hiddenimports 口径冻结成控制台
   D DDL 生成          E SQL 脚本处理            F GUI 构造与交互逻辑
   H ZIP 压缩包导入    I .xls 老格式（xlrd）     J 添加结果弹窗
   K 高度可拖拽(两页)  L 字段类型映射            M 字段命名规则
-  N 合并单元格拒绝    O 模态进度框与子线程执行
+  N 合并表头展开/其余拒绝  O 模态进度框与子线程执行
   P 使用说明          Q 全部按钮入口与事务副作用（假连接实测）
   R 替换首个前缀
   G MySQL 真实读写（无凭据时显式记为 SKIPPED）
@@ -1600,7 +1600,7 @@ else:
     skip("M14 真实中文列名语料碰撞率", "未设 CORPUS_DDL=<数据包路径>，用合成用例 M13 代替")
 
 # ---------------------------------------------------------------------------
-section("N 合并单元格检测与拒绝导入")
+section("N 合并单元格：顶部多行表头展开，其余照旧拒绝")
 
 from openpyxl import Workbook as _WB
 from core.merge_check import (
@@ -1705,6 +1705,132 @@ bad_zip = os.path.join(mdir, "假zip.xlsx")
 open(bad_zip, "wb").write(b"not a workbook")
 check("N11 损坏文件不在合并检测处炸掉", detect_merged_cells(bad_zip) == {})
 check("N12 非 Excel 扩展名直接返回空", detect_merged_cells(os.path.join(mdir, "x.csv")) == {})
+
+# 两行合并表头：只放行"第一个 Sheet 的顶部表头块"，压成一行后照常导入
+RAW_TOP = ["序号", "单位名称", "坐落号", "省/直辖市", "市/直辖市区", "区/县",
+           "是否主城区", "区位类型", "总计", "技术公司", None, None, None,
+           "财务公司", None, None, None]
+RAW_SECOND = [None] * 9 + ["小计", "高层", "中层", "普通员工",
+                          "小计", "高层", "中层", "普通员工"]
+RAW_MERGES = ("A1:A2", "B1:B2", "C1:C2", "D1:D2", "E1:E2", "F1:F2", "G1:G2",
+              "H1:H2", "I1:I2", "J1:M1", "N1:Q1")
+RAW_DATA = [
+    [1, "市水务局", "001", "北京市", "北京市", "海淀区", "是", "主城区",
+     100, 60, 20, 20, 20, 40, 10, 10, 20],
+    [2, "区水务站", "002", "北京市", "北京市", "朝阳区", "否", "副中心",
+     80, 45, 15, 15, 15, 35, 10, 10, 15],
+    [3, "水库管理处", "003", "河北省", "石家庄市", "长安区", "是", "一般",
+     50, 30, 10, 10, 10, 20, 5, 5, 10],
+]
+FLAT_HEADERS = ["序号", "单位名称", "坐落号", "省/直辖市", "市/直辖市区", "区/县",
+                "是否主城区", "区位类型", "总计", "技术公司-小计", "技术公司-高层",
+                "技术公司-中层", "技术公司-普通员工", "财务公司-小计",
+                "财务公司-高层", "财务公司-中层", "财务公司-普通员工"]
+
+
+def mk_raw_two_row(name, extra_merges=(), other_sheet_merge=False, single_row=False):
+    wb = _WB()
+    w = wb.active
+    w.title = "原始表"
+    if single_row:
+        w.append(["组A", None, "姓名"])
+        w.append(["甲", "乙", "丙"])
+        w.merge_cells("A1:B1")
+    else:
+        w.append(RAW_TOP)
+        w.append(RAW_SECOND)
+        for box in RAW_MERGES:
+            w.merge_cells(box)
+        for row in RAW_DATA:
+            w.append(row)
+        for box in extra_merges:
+            w.merge_cells(box)
+    if other_sheet_merge:
+        d = wb.create_sheet("其他")
+        d.append(["a", "b"])
+        d.append([1, 2])
+        d.merge_cells("A1:B1")
+    p = os.path.join(mdir, name)
+    wb.save(p)
+    return p
+
+
+p_raw = mk_raw_two_row("两行合并表头.xlsx")
+p_raw_data_merge = mk_raw_two_row("数据区合并.xlsx",
+                                  extra_merges=("A4:B4",))
+p_raw_overrun = mk_raw_two_row("表头外溢合并.xlsx",
+                               extra_merges=("R2:S3",))
+p_raw_other = mk_raw_two_row("其他页也合并.xlsx", other_sheet_merge=True)
+p_raw_one_row = mk_raw_two_row("单行合并表头.xlsx", single_row=True)
+
+t_raw = build_table_def(p_raw)
+check("N13 两行合并表头压成一行，列名与参考表逐字一致",
+      [c["field"] for c in t_raw["columns"]]
+      == ["xu_hao", "dan_wei_ming_cheng", "zuo_luo_hao", "sheng_zhi_xia_shi",
+          "shi_zhi_xia_shi_qu", "qu_xian", "shi_fou_zhu_cheng_qu",
+          "qu_wei_lei_xing", "zong_ji", "ji_shu_gong_si_xiao_ji",
+          "ji_shu_gong_si_gao_ceng", "ji_shu_gong_si_zhong_ceng", "jsgsptyg",
+          "cai_wu_gong_si_xiao_ji", "cai_wu_gong_si_gao_ceng",
+          "cai_wu_gong_si_zhong_ceng", "cwgsptyg"],
+      [(c["field"], c["type"]) for c in t_raw["columns"]])
+check("N13b 合并表头的注释是「父-子」全路径",
+      [c["comment"] for c in t_raw["columns"]] == FLAT_HEADERS,
+      [c["comment"] for c in t_raw["columns"]])
+check("N14 纵向合并只留一份标签，不会出现「序号-序号」",
+      all("-" not in c["comment"] for c in t_raw["columns"][:9])
+      and len(t_raw["columns"]) == 17,
+      [c["comment"] for c in t_raw["columns"][:9]])
+check("N15 横向合并的组名铺到组内每列，再与子标签连接",
+      [c["comment"] for c in t_raw["columns"][9:13]]
+      == ["技术公司-小计", "技术公司-高层", "技术公司-中层", "技术公司-普通员工"]
+      and [c["comment"] for c in t_raw["columns"][13:]]
+      == ["财务公司-小计", "财务公司-高层", "财务公司-中层", "财务公司-普通员工"],
+      [c["comment"] for c in t_raw["columns"][9:]])
+check("N16 展开后的数据行逐值保留，类型与主键照常推断",
+      len(t_raw["df"]) == 3
+      and list(t_raw["df"].iloc[0]) == RAW_DATA[0]
+      and list(t_raw["df"].iloc[2]) == RAW_DATA[2]
+      and t_raw["primary_key"] == "xu_hao"
+      and t_raw["columns"][9]["type"] == "INT",
+      (len(t_raw["df"]), list(t_raw["df"].iloc[0]) if len(t_raw["df"]) else None,
+       t_raw["primary_key"], t_raw["columns"][9]["type"]))
+check("N17 合并表头元数据如实回报 Sheet 与行数",
+      t_raw["merged_header"] == {"sheet": "原始表", "depth": 2},
+      t_raw["merged_header"])
+for label, bad_p in (("数据区合并", p_raw_data_merge), ("表头外溢合并", p_raw_overrun),
+                     ("其他页也合并", p_raw_other), ("单行合并表头", p_raw_one_row)):
+    try:
+        build_table_def(bad_p)
+        ok = False
+        detail = "被放行了"
+    except MergedCellsError:
+        ok = True
+        detail = ""
+    check("N18 只有第一个 Sheet 的顶部多行表头块才放行：" + label, ok, detail)
+
+w = app_main.MainWindow()
+POPUPS.clear()
+w._add_files([p_raw])
+check("N19 合并表头文件进入待导入列表",
+      len(w.tables) == 1 and w.tables[0]["merged_header"] == {"sheet": "原始表", "depth": 2},
+      [(t["table_name"], t.get("merged_header")) for t in w.tables])
+lg = w.log.toPlainText()
+check("N19b [已解析] 行说明表头按几行展开",
+      "[已解析]" in lg and "合并表头按 2 行展开" in lg,
+      [l for l in lg.splitlines() if l.startswith("[已解析]")])
+
+zip_raw = os.path.join(mdir, "合并表头包.zip")
+with zipfile.ZipFile(zip_raw, "w") as z:
+    z.writestr("两行合并表头.xlsx", open(p_raw, "rb").read())
+    z.writestr("干净.xlsx", open(p_clean, "rb").read())
+w = app_main.MainWindow()
+POPUPS.clear()
+w._add_files([zip_raw])
+lg = w.log.toPlainText()
+check("N20 zip 内的两行合并表头同样展开，同包其他文件不受影响",
+      len(w.tables) == 2 and "合并表头按 2 行展开" in lg
+      and any(t["merged_header"] is None for t in w.tables),
+      [(t["table_name"], t.get("merged_header")) for t in w.tables])
 
 section("O 模态进度框与子线程执行（长任务不能卡 UI）")
 
