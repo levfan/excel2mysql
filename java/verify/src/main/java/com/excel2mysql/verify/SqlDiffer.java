@@ -58,6 +58,13 @@ public final class SqlDiffer {
                 List<String> got = SqlScript.splitStatements(in);
                 List<Object> want = (List<Object>) rec.get("split");
                 report("split", in, got.equals(want), join(got), join(want));
+            } else if ("ddl-parse".equals(op)) {
+                // 两条线各一份 CREATE TABLE 解析器：把结果拍成一行一格逐行对，
+                // 类型、注释、主键、可空、近似说明哪一格不同都会露出来
+                checked++;
+                List<String> got = renderParsed(SqlScript.parseCreateTables(in));
+                List<Object> want = (List<Object>) rec.get("out");
+                report("ddl-parse", in, got.equals(want), join(got), join(want));
             } else if ("prefix".equals(op) || "head".equals(op)) {
                 checked++;
                 String arg = (String) rec.get("arg");
@@ -224,6 +231,28 @@ public final class SqlDiffer {
             shown.add("     差异[" + op + "] in=" + abbrev(in) + "\n       期望=" + want
                     + "\n       实际=" + got);
         }
+    }
+
+    /** 与 Python 侧 export_sql_golden.py 的 ddl_parse_lines 同一套渲染：一行一格，逐行对。 */
+    private static List<String> renderParsed(List<SqlScript.ParsedTable> tables) {
+        List<String> out = new ArrayList<String>();
+        for (SqlScript.ParsedTable t : tables) {
+            out.add("T|" + t.tableName + "|" + nz2(t.tableComment));
+            for (com.excel2mysql.core.Infer.Column c : t.columns) {
+                out.add("C|" + nz2(c.field) + "|" + nz2(c.type) + "|" + nz2(c.comment)
+                        + "|" + (c.primaryKey ? "1" : "0")
+                        + "|" + (c.nullable == null ? "-"
+                                : (c.nullable.booleanValue() ? "1" : "0")));
+            }
+            for (String n : t.notes) {
+                out.add("N|" + n);
+            }
+        }
+        return out;
+    }
+
+    private static String nz2(String s) {
+        return s == null ? "" : s;
     }
 
     private static String join(List<?> parts) {

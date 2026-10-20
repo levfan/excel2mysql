@@ -564,7 +564,67 @@ def main():
     win.on_sql_execute()
     put("sql.execute.nodb", popup_text())
 
-    # ---- 清空 ----
+    # ---- SQL 页：两颗生成按钮（脚本正文 -> 标准/简易件） ----
+    # 先把上面那两份脚本从页面清干净，生成只喂 probe.sql，
+    # 否则产物清单里混着 t_order/dim_x，两边比的就是"清场是否一致"而不是解析
+    while win.sql_files:
+        win.sql_table.selectRow(0)
+        win.on_sql_remove_selected()
+        app.processEvents()
+    gdir = os.path.join(TMP, "sqlgen")
+    os.makedirs(gdir)
+    probe = os.path.join(gdir, "probe.sql")
+    with open(probe, "w", encoding="utf-8") as fh:
+        fh.write(u"CREATE TABLE `t_gen` (\n"
+                 u"  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',\n"
+                 u"  `st` enum('a','b') DEFAULT 'a',\n"
+                 u"  PRIMARY KEY (`id`)\n"
+                 u") ENGINE=InnoDB COMMENT='生成检查表';\n"
+                 u"CREATE TABLE t_dup9 (x INT);\n"
+                 u"CREATE TABLE t_dup9 (y INT);\n"
+                 u"CREATE TABLE t_like9 LIKE t_dup9;\n")
+    gmark = win.sql_log.toPlainText()
+    win._finish_sql_load(m.sql_load_task([probe], sink))
+    app.processEvents()
+    std_root = os.path.join(gdir, "std")
+    smp_root = os.path.join(gdir, "smp")
+    os.makedirs(std_root)
+    os.makedirs(smp_root)
+    POPUPS[:] = []
+    m.program_dir = lambda: std_root
+    win.on_sql_gen_excel(u"标准", True)
+    app.processEvents()
+    m.program_dir = lambda: smp_root
+    win.on_sql_gen_excel(u"简易", False)
+    app.processEvents()
+    m.program_dir = real_pdir
+    gen_log = win.sql_log.toPlainText()[len(gmark):].strip()
+    gen_log = gen_log.replace(gdir, u"根目录")
+    put("sqlgen.log", re.sub(r"(simple_)?meta_data_file_\d{8}",
+                             r"\1meta_data_file_日期", gen_log))
+    # 生成结果弹窗：标题与正文两边都要同一句（正文里的目录同样归一化）
+    put("sqlgen.popup", re.sub(r"(simple_)?meta_data_file_\d{8}",
+                               r"\1meta_data_file_日期",
+                               popup_text().replace(gdir, u"根目录")))
+    std = os.path.join(std_root, [x for x in sorted(os.listdir(std_root))
+                                  if x.startswith("meta_data_file_")][0])
+    smp = os.path.join(smp_root, [x for x in sorted(os.listdir(smp_root))
+                                  if x.startswith("simple_meta_data_file_")][0])
+    put("sqlgen.std.content", dump_xlsx(std))
+    put("sqlgen.simple.content", dump_xlsx(smp))
+    # 用本条线自己的读取器把标准件读回来，渲染成一行给对撞器比（读不回就是缺陷）
+    try:
+        gen_file = os.path.join(std, [x for x in sorted(os.listdir(std))
+                                      if "t_gen" in x][0])
+        td = m.build_table_def(gen_file)
+        line = [td["source"], td["table_name"], td.get("table_comment") or ""]
+        for c in td["columns"]:
+            line.append("%s:%s:%s" % (c["field"], c["type"],
+                                      "pk" if c.get("primary_key") else "-"))
+        put("sqlgen.roundtrip", "|".join(line))
+    except Exception as e:
+        put("sqlgen.roundtrip", "读不回 " + type(e).__name__)
+
     win.on_clear()
     app.processEvents()
     dump_table("file", win.file_table)

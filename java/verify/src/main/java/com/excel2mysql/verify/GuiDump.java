@@ -596,6 +596,20 @@ public final class GuiDump {
                 + "INSERT INTO `t_order` VALUES (1);\n"
                 + "CREATE TABLE plain (id INT);\n");
         writeText(b, "CREATE TABLE dim_x (id INT);\n");
+        // 第二个页签的两颗生成按钮：脚本正文 -> 标准/简易件。两边喂同一段输入，
+        // 说明行、文件名、Sheet 形状与"能否被自己那条线原样读回"都要一致。
+        final File gdir = new File(tmp, "sqlgen");
+        mkdirs(gdir);
+        final String nl2 = String.valueOf((char) 10);
+        final String probe = new File(gdir, "probe.sql").getPath();
+        writeText(probe, "CREATE TABLE `t_gen` (" + nl2
+            + "  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT '主键'," + nl2
+            + "  `st` enum('a','b') DEFAULT 'a'," + nl2
+            + "  PRIMARY KEY (`id`)" + nl2
+            + ") ENGINE=InnoDB COMMENT='生成检查表';" + nl2
+            + "CREATE TABLE t_dup9 (x INT);" + nl2
+            + "CREATE TABLE t_dup9 (y INT);" + nl2
+            + "CREATE TABLE t_like9 LIKE t_dup9;" + nl2);
         ui(new Runnable() {
             @Override
             public void run() {
@@ -631,8 +645,41 @@ public final class GuiDump {
                     frame.warn(ehint);
                 }
                 put("sql.execute.nodb", popup());
+                // 先把上面那两份脚本从页面清干净，生成交付件只喂 probe.sql，
+                // 否则产物清单里混着 t_order/dim_x，两边比的就是"清场是否一致"而不是解析
+                while (frame.sqlPage().rowCount() > 0) {
+                    frame.sqlPage().selectRow(0);
+                    if (frame.sqlPage().removeSelected() == 0) {
+                        break;
+                    }
+                }
+                final List<String> gp = new ArrayList<String>();
+                gp.add(probe);
+                String gmark = frame.sqlPage().logPanel().text();
+                frame.sqlPage().addFiles(gp);
+                frame.sqlPage().generateExcel(true, new File(gdir, "std").getPath());
+                frame.sqlPage().generateExcel(false, new File(gdir, "smp").getPath());
+                // 整段日志原样比：解析说明、逐文件导出行、完成行，两边必须同字同序。
+                // 临时根目录与日期目录名换掉，否则比的是本机路径。
+                String genLog = tail(gmark, frame.sqlPage().logPanel().text())
+                        .replace(gdir.getPath(), "根目录")
+                        .replaceAll("(simple_)?meta_data_file_\\d{8}", "$1meta_data_file_日期");
+                put("sqlgen.log", genLog);
+                put("sqlgen.popup", popup().replace(gdir.getPath(), "根目录")
+                        .replaceAll("(simple_)?meta_data_file_\\d{8}", "$1meta_data_file_日期"));
             }
         });
+        // 落盘产物只能在界面无任务后再读：读 xlsx 与"能不能被本条线原样读回"都不碰 UI 线程
+        File stdDir = firstDir(new File(gdir, "std"), "meta_data_file_");
+        File smpDir = firstDir(new File(gdir, "smp"), "simple_meta_data_file_");
+        put("sqlgen.std.content", stdDir == null ? "" : dumpFolder(stdDir));
+        put("sqlgen.simple.content", smpDir == null ? "" : dumpFolder(smpDir));
+        String genFile = pickProduced(new File(gdir, "std"), "t_gen");
+        try {
+            put("sqlgen.roundtrip", readBackGen(frame, genFile));
+        } catch (Exception e) {
+            put("sqlgen.roundtrip", "读不回 " + e.getClass().getSimpleName());
+        }
     }
 
     private static void cleared() throws Exception {
@@ -646,6 +693,41 @@ public final class GuiDump {
                 }
             }
         });
+    }
+
+    /** 产物目录里挑第一个名字含 needle 的文件（日期目录深度固定为 1，直接递归找）。 */
+    private static String pickProduced(File root, String needle) {
+        File[] kids = root.listFiles();
+        if (kids == null) {
+            return "";
+        }
+        java.util.Arrays.sort(kids);
+        for (File k : kids) {
+            if (k.isDirectory()) {
+                String inner = pickProduced(k, needle);
+                if (!inner.isEmpty()) {
+                    return inner;
+                }
+            } else if (k.getName().contains(needle)) {
+                return k.getPath();
+            }
+        }
+        return "";
+    }
+
+    /** 用本条线自己的读取器把标准件读回来，渲染成一行给对撞器比（读不回就是缺陷）。 */
+    private static String readBackGen(MainFrame frame, String path) {
+        com.excel2mysql.core.TableBuilder.Result r = new com.excel2mysql.core.TableBuilder(
+                new com.excel2mysql.core.Infer(frame.names()), frame.names())
+                .build(path);
+        StringBuilder sb = new StringBuilder();
+        sb.append(r.table.source).append('|').append(r.table.tableName).append('|')
+                .append(r.table.tableComment == null ? "" : r.table.tableComment);
+        for (com.excel2mysql.core.Infer.Column c : r.table.columns) {
+            sb.append('|').append(c.field).append(':').append(c.type)
+                    .append(':').append(c.primaryKey ? "pk" : "-");
+        }
+        return sb.toString();
     }
 
     private static List<String> sortedNames(File dir) {

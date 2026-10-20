@@ -73,8 +73,38 @@ def _crash_report():
         print("=" * 72)
 
 
+def _qt_teardown():
+    """把用例留下的顶层窗口交还给还活着的 QApplication。
+
+    上面几十处 `MainWindow()` 都故意不关（每次点按钮都要一个新鲜对象），但解释器清理模块时
+    "QApplication 与窗口谁先析构"不由人定：Qt 对象排在 app 之后销毁会踩已释放的窗口资源，
+    整轮跑完照样红，而是不是红全看内存布局（界面上多两颗按钮就能翻脸），等于一门没有判据的闸。
+    注册在 atexit 上，所以中途抛异常那一条路也走同一道收尾，退出码只由用例结果决定。
+    """
+    try:
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        tops = list(QApplication.topLevelWidgets()) if app else []
+    except Exception:
+        return
+    for t in tops:
+        try:
+            t.close()
+            t.setParent(None)
+            t.deleteLater()
+        except Exception:      # C++ 侧已经删掉的包装器：跳过就是，别把收尾本身搞崩
+            pass
+    if app is None:
+        return
+    app.processEvents()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+
+
 import atexit
 atexit.register(_crash_report)
+atexit.register(_qt_teardown)
 
 
 def section(title):
@@ -2446,6 +2476,109 @@ check("R32 SQL 页替换同样走模态进度框，按文件计项",
       dlg2.updates if dlg2 else None)
 app_main.MODAL_PROGRESS = False
 
+# ---- 第二个页签的「生成标准/简易excel文件」：表定义来自脚本正文，不是来自 Excel ----
+gsql = os.path.join(_tmpdir, "gen_probe.sql")
+with open(gsql, "w", encoding="utf-8") as _gfh:
+    _gfh.write("CREATE TABLE `t_gen` (\n"
+               "  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',\n"
+               "  `name` varchar(16) NOT NULL COMMENT '名称',\n"
+               "  `st` enum('a','b') DEFAULT 'a',\n"
+               "  PRIMARY KEY (`id`)\n"
+               ") ENGINE=InnoDB COMMENT='生成检查表';\n"
+               "CREATE TABLE t_dup9 (x INT);\n"
+               "CREATE TABLE t_dup9 (y INT);\n"
+               "CREATE TABLE t_like9 LIKE t_dup9;\n")
+gw = app_main.MainWindow()
+check("R33 没加脚本时两颗生成按钮是灰的",
+      not gw.btn_sql_gen_std.isEnabled() and not gw.btn_sql_gen_simple.isEnabled())
+_orig_gofn4 = app_main.QFileDialog.getOpenFileNames
+app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([gsql], "SQL (*.sql)"))
+try:
+    gw.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn4)
+check("R34 有脚本后两颗按钮亮起，tooltip 说清数据 Sheet 只有表头",
+      gw.btn_sql_gen_std.isEnabled() and gw.btn_sql_gen_simple.isEnabled()
+      and "只有表头" in gw.btn_sql_gen_std.toolTip()
+      and "英文名表头" in gw.btn_sql_gen_simple.toolTip(), gw.btn_sql_gen_std.toolTip())
+gout = os.path.join(_tmpdir, "sqlgen_out")
+_pdir = app_main.program_dir
+app_main.program_dir = lambda: gout
+POPUPS.clear()
+try:
+    gw.btn_sql_gen_std.click()
+    gw.btn_sql_gen_simple.click()
+finally:
+    app_main.program_dir = _pdir
+_glog = gw.sql_log.toPlainText()
+check("R35 近似掉的类型逐列点名（UNSIGNED 与 ENUM 各一条）",
+      "! [WARN] 说明 | `t_gen`：列 id 的" in _glog and "（丢了 UNSIGNED）" in _glog
+      and "取值列表 'a','b'" in _glog,
+      [l for l in _glog.splitlines() if "说明" in l])
+check("R36 同名表第二处与没有列定义的 LIKE 都给出说明",
+      "表名 t_dup9 在本脚本里被定义了多次" in _glog
+      and "后面没有列定义" in _glog,
+      [l for l in _glog.splitlines() if "WARN" in l])
+def _lsd(p):
+    """目录不在就当空列表：产物没生成要红一条用例，不该 FileNotFoundError 中止整轮。"""
+    return sorted(os.listdir(p)) if os.path.isdir(p) else []
+
+
+_std = [d for d in _lsd(gout) if d.startswith("meta_data_file_")]
+_sim = [d for d in _lsd(gout) if d.startswith("simple_meta_data_file_")]
+_std0 = _std[0] if _std else ""
+_sim0 = _sim[0] if _sim else ""
+_want_files = {"t_dup9.xlsx", "生成检查表（t_gen）.xlsx"}
+check("R37 标准件与简易件各建一个日期目录，文件名沿用 表注释（表名）.xlsx",
+      len(_std) == 1 and len(_sim) == 1
+      and set(_lsd(os.path.join(gout, _std0))) == _want_files
+      and set(_lsd(os.path.join(gout, _sim0))) == _want_files,
+      (_lsd(gout), _lsd(os.path.join(gout, _std0))))
+from core.infer import build_table_def as _btd
+_gpath = os.path.join(gout, _std0, "生成检查表（t_gen）.xlsx")
+_bt = _btd(_gpath) if os.path.isfile(_gpath) else {}
+_gcols = _bt.get("columns") or []
+check("R38 标准件能被本工具原样读回（走结构定义那条路），主键与近似类型都对得上",
+      _bt.get("source") == "structured" and len(_gcols) == 3
+      and _bt.get("table_name") == "t_gen" and _bt.get("table_comment") == "生成检查表"
+      and _gcols[:1] and _gcols[0]["field"] == "id" and _gcols[0]["primary_key"]
+      and _gcols[2:3] and _gcols[2]["type"] == "TEXT",
+      (_bt.get("source"), _bt.get("table_name"), _bt.get("table_comment"),
+       [(c["field"], c["type"], c["primary_key"]) for c in _gcols]))
+import openpyxl as _gxl
+_gpath2 = os.path.join(gout, _sim0, "生成检查表（t_gen）.xlsx")
+_gwb = _gxl.load_workbook(_gpath2) if os.path.isfile(_gpath2) else None
+check("R39 简易件只有「数据」一个 Sheet，且脚本里没有数据行（只剩表头那一行）",
+      _gwb is not None and _gwb.sheetnames == ["数据"] and _gwb["数据"].max_row == 1
+      and [c.value for c in _gwb["数据"][1]] == ["id", "name", "st"],
+      (None if _gwb is None else _gwb.sheetnames,
+       None if _gwb is None else _gwb["数据"].max_row))
+check("R40 两次生成各弹一次「生成结果」，正文里带目录名",
+      sum(1 for t, _b in POPUPS if t == "生成结果") == 2
+      and all("已生成 2 个文件" in b for t, b in POPUPS if t == "生成结果"),
+      [(t, b[:40]) for t, b in POPUPS])
+gw.ed_sql_prefix.setText("ods_")
+gw.on_sql_apply_prefix()
+app_main.program_dir = lambda: os.path.join(_tmpdir, "sqlgen_out2")
+try:
+    gw.btn_sql_gen_std.click()
+finally:
+    app_main.program_dir = _pdir
+_g2 = os.path.join(_tmpdir, "sqlgen_out2")
+_std2 = [d for d in _lsd(_g2) if d.startswith("meta_data_file_")]
+_std20 = _std2[0] if _std2 else ""
+check("R41 先改前缀再生成：产物里的表名是改过之后的",
+      len(_std2) == 1 and set(_lsd(os.path.join(_g2, _std20)))
+      == {"ods_t_dup9.xlsx", "生成检查表（ods_t_gen）.xlsx"},
+      (_lsd(_g2), _lsd(os.path.join(_g2, _std20))))
+gw2 = app_main.MainWindow()
+POPUPS.clear()
+gw2.on_sql_gen_excel("标准", True)
+check("R42 没有脚本时点生成按钮当场拦下：日志与弹窗同一句",
+      any(t == "提示" and "请先添加 SQL 脚本文件" in b for t, b in POPUPS)
+      and "已拦下：请先添加 SQL 脚本文件。" in gw2.log.toPlainText(),
+      [(t, b[:40]) for t, b in POPUPS])
+
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名）")
 
 from core.infer import parse_table_name_and_comment as _PT, _col_to_field as _CF
@@ -2773,6 +2906,17 @@ else:
         check("G0 连接 MySQL 失败", False, f"{type(e).__name__}: {e}")
         traceback.print_exc()
 
+
+# ---------------------------------------------------------------------------
+# 收尾：走的是 atexit 上注册的同一道 `_qt_teardown`，Z1 是它自己的哨兵
+section("Z 收尾与退出码")
+
+_qt_teardown()
+import gc as _gc
+_gc.collect()
+_left = [x for x in QApplication.topLevelWidgets() if x.isWindow()]
+check("Z1 用例留下的顶层窗口全部显式析构（退出码只由用例结果决定）",
+      not _left, [(type(x).__name__, x.windowTitle()[:24]) for x in _left][:6])
 
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 72)

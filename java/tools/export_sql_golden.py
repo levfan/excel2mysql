@@ -17,12 +17,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
 
+sys.path.insert(0, HERE)
+
+from ddl_corpus import DDL_SCRIPTS  # noqa: E402
+
 from core.infer import build_table_def, apply_table_prefix, replace_first_segment  # noqa: E402
 from core.mysql_io import build_ddl, build_insert_sql, _convert  # noqa: E402
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment  # noqa: E402
 from core.sql_script import (  # noqa: E402
     apply_table_prefix_sql, extract_create_tables, replace_first_segment_sql,
-    split_sql_statements,
+    parse_create_tables, split_sql_statements,
 )
 
 OUT_DIR = os.path.join(ROOT, "java", "verify", "golden")
@@ -92,7 +96,32 @@ def deepcopy_table(t):
     return copy.deepcopy(t)
 
 
+def ddl_parse_lines(text):
+    """表定义渲染成扁平文本行，Java 侧 SqlDiffer 用同一种渲染逐行对。
+
+    渲染而不比结构：解析结果里类型、注释、主键、可空、近似说明哪一项都可能单边写错，
+    拍成一行一行之后任何一格不同都会露出来，两边也就不用约定嵌套 JSON 的形状。
+    """
+    out = []
+    for t in parse_create_tables(text):
+        out.append("T|%s|%s" % (t["table_name"], t["table_comment"]))
+        for c in t["columns"]:
+            out.append("C|%s|%s|%s|%s|%s" % (
+                c["field"], c["type"], c["comment"],
+                "1" if c["primary_key"] else "0",
+                "-" if c.get("nullable") is None else ("1" if c["nullable"] else "0")))
+        for n in t["notes"]:
+            out.append("N|%s" % n)
+    return out
+
+
 def sql_cases():
+    for text in SCRIPTS:
+        yield {"in": text,
+               "extract": extract_create_tables(text),
+               "split": split_sql_statements(text)}
+    for text in DDL_SCRIPTS:
+        yield {"op": "ddl-parse", "in": text, "out": ddl_parse_lines(text)}
     for text in SCRIPTS:
         yield {"in": text,
                "extract": extract_create_tables(text),

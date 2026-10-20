@@ -176,6 +176,8 @@ public final class GuiMain {
                 sql_page(frame, problems);
                 // 第三个页签「SQL 执行器」：编辑区、示例清单与空输入那道闸
                 sql_run_tab(frame, problems);
+                // 第二个页签的两颗生成按钮：解析脚本 → 标准/简易件 → 回读
+                sql_gen_excel(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
                 // 进度框文案与收尾
@@ -873,6 +875,160 @@ public final class GuiMain {
         }
         frame.showSqlSamples();
         frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+    }
+
+    /**
+     * 「SQL 脚本改名入库」页那两颗生成按钮的自检：解析→导出→回读，全程离线。
+     *
+     * 用一个新的 SqlPage 实例而不是复用 sql_page 那个：那份页面已经被前面的读取/改名
+     * 用例改过状态，混在一起查就分不清"这一条日志是刚才哪一步写的"。
+     */
+    private static void sql_gen_excel(MainFrame frame, List<String> problems) {
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-sqlgen").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建生成检查的临时目录失败：" + e);
+            return;
+        }
+        String nl = String.valueOf((char) 10);
+        java.io.File script = new java.io.File(dir, "gen.sql");
+        writeText(script.getPath(),
+                "CREATE TABLE `t_gen` (" + nl
+                        + "  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT '主键'," + nl
+                        + "  `name` varchar(16) NOT NULL COMMENT '名称'," + nl
+                        + "  `st` enum('a','b') DEFAULT 'a'," + nl
+                        + "  PRIMARY KEY (`id`)" + nl
+                        + ") ENGINE=InnoDB COMMENT='生成检查表';" + nl
+                        + "CREATE TABLE t_dup2 (x INT);" + nl
+                        + "CREATE TABLE t_dup2 (y INT);" + nl
+                        + "CREATE TABLE t_like2 LIKE t_dup2;" + nl);
+
+        com.excel2mysql.gui.SqlPage page = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> paths = new ArrayList<String>();
+        paths.add(script.getPath());
+        page.addFiles(paths);
+        // 任务体的日志走的是主窗口那份 SQL 页的面板（runSqlTask 按页归属路由日志，
+        // 只有自检才会另开一个 SqlPage），所以这些行要从 frame.sqlPage() 那边读。
+        com.excel2mysql.gui.LogPanel taskLog = frame.sqlPage().logPanel();
+
+        javax.swing.JButton std = page.genStdButton();
+        javax.swing.JButton simple = page.genSimpleButton();
+        if (std == null || simple == null) {
+            problems.add("SQL 页没有「生成标准excel文件」「生成简易excel文件」按钮");
+            return;
+        }
+        if (!"生成标准excel文件".equals(std.getText())
+                || !"生成简易excel文件".equals(simple.getText())) {
+            problems.add("两颗生成按钮的文案与 Excel 页不一致：" + std.getText()
+                    + " / " + simple.getText());
+        }
+        if (!std.isEnabled() || !simple.isEnabled()) {
+            problems.add("已有脚本时两颗生成按钮还是灰的");
+        }
+
+        String outRoot = new java.io.File(dir, "out").getPath();
+        page.generateExcel(true, outRoot);
+        String log = taskLog.text() + page.logPanel().text();
+        if (!log.contains("! [WARN] 说明 | `t_gen`：列 id 的")
+                || !log.contains("（丢了 UNSIGNED）")) {
+            problems.add("近似掉的 UNSIGNED 没在日志里点名："
+                    + tailOf(log).replace((char) 10, (char) 32));
+        }
+        if (!log.contains("列 st 的") || !log.contains("取值列表 'a','b'")) {
+            problems.add("ENUM 列被近似却没说明");
+        }
+        if (!log.contains("表名 t_dup2 在本脚本里被定义了多次")) {
+            problems.add("同名表第二处定义没说明只按第一处导出");
+        }
+        if (!log.contains("后面没有列定义")) {
+            problems.add("LIKE 那条没有列定义的表没说明被跳过");
+        }
+        if (!log.contains("===== 生成完成：2/2 个文件")) {
+            problems.add("收尾行没报出写成数："
+                    + tailOf(log).replace((char) 10, (char) 32));
+        }
+        if (!"生成结果".equals(frame.lastDialogTitle())) {
+            problems.add("生成完成没弹窗回执：" + frame.lastDialogTitle());
+        }
+
+        java.io.File stdDir = new java.io.File(outRoot, "meta_data_file_" + today());
+        String[] produced = stdDir.list();
+        java.util.Arrays.sort(produced == null ? new String[0] : produced);
+        // 只比"是哪两个文件"不比排序后的先后：文件名里带中文，
+        // Java 的字典序与 Python 的不是一套，比顺序会造出假红
+        java.util.Set<String> producedSet = produced == null
+                ? new java.util.HashSet<String>()
+                : new java.util.HashSet<String>(java.util.Arrays.asList(produced));
+        if (producedSet.size() != 2
+                || !producedSet.contains("生成检查表（t_gen）.xlsx")
+                || !producedSet.contains("t_dup2.xlsx")) {
+            problems.add("标准件目录里的文件不对：" + java.util.Arrays.toString(produced));
+        }
+        String genPath = new java.io.File(stdDir, "生成检查表（t_gen）.xlsx").getPath();
+        try {
+            List<com.excel2mysql.core.MetaExport.Dump> dumps =
+                    com.excel2mysql.core.MetaExport.dump(genPath);
+            if (dumps.size() != 2 || !"元数据".equals(dumps.get(0).sheet)
+                    || !"数据".equals(dumps.get(1).sheet)) {
+                problems.add("标准件应是元数据 + 数据两个 Sheet：" + sheetsOf(dumps));
+            }
+            if (dumps.size() > 1 && dumps.get(1).cells.size() != 1) {
+                problems.add("脚本里没有数据行，数据 Sheet 却不止表头那一行："
+                        + (dumps.get(1).cells.size() - 1) + " 行");
+            }
+            com.excel2mysql.core.TableBuilder.Result back =
+                    new com.excel2mysql.core.TableBuilder(
+                            new com.excel2mysql.core.Infer(frame.names()),
+                            frame.names()).build(genPath);
+            if (!"structured".equals(back.table.source)) {
+                problems.add("标准件回读没走结构定义那条路");
+            }
+            if (back.table.columns.size() != 3) {
+                problems.add("回读列数应为 3，实际 " + back.table.columns.size());
+            }
+            com.excel2mysql.core.Infer.Column c0 =
+                    back.table.columns.isEmpty() ? null : back.table.columns.get(0);
+            if (c0 == null || !"BIGINT(20)".equals(c0.type) || !c0.primaryKey) {
+                problems.add("回读的主键列不对：" + (c0 == null ? "没有列" : c0.field + " " + c0.type));
+            }
+            if (back.table.columns.size() == 3
+                    && !"TEXT".equals(back.table.columns.get(2).type)) {
+                problems.add("ENUM 列近似成 TEXT 后回读不是 TEXT："
+                        + back.table.columns.get(2).type);
+            }
+            if (!"生成检查表".equals(back.table.tableComment)) {
+                problems.add("表注释没跟着进交付件：" + back.table.tableComment);
+            }
+        } catch (Exception e) {
+            problems.add("标准件读不回来：" + e);
+        }
+
+        page.generateExcel(false, outRoot);
+        java.io.File simpleDir = new java.io.File(outRoot, "simple_meta_data_file_" + today());
+        String simplePath = new java.io.File(simpleDir, "生成检查表（t_gen）.xlsx").getPath();
+        try {
+            List<com.excel2mysql.core.MetaExport.Dump> dumps =
+                    com.excel2mysql.core.MetaExport.dump(simplePath);
+            if (!"[数据]".equals(sheetsOf(dumps))) {
+                problems.add("简易件应只有「数据」一个 Sheet：" + sheetsOf(dumps));
+            }
+        } catch (Exception e) {
+            problems.add("简易件读不回来：" + e);
+        }
+
+        // 空列表时点这两颗按钮要拦下来并说清楚，不是静默什么都不做
+        com.excel2mysql.gui.SqlPage empty = new com.excel2mysql.gui.SqlPage(frame);
+        empty.generateExcel(true, outRoot);
+        if (!"提示".equals(frame.lastDialogTitle())
+                || !frame.lastDialogText().contains("请先添加 SQL 脚本文件。")) {
+            problems.add("没有脚本时点生成按钮没拦下：标题=" + frame.lastDialogTitle());
+        }
+    }
+
+    private static String tailOf(String text) {
+        int from = Math.max(0, text.length() - 300);
+        return text.substring(from);
     }
 
     private static void sql_page(MainFrame frame, List<String> problems) {
