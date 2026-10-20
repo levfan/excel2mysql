@@ -3130,6 +3130,61 @@ check("R42 没有脚本时点生成按钮当场拦下：日志与弹窗同一句
       and "已拦下：请先添加 SQL 脚本文件。" in gw2.log.toPlainText(),
       [(t, b[:40]) for t, b in POPUPS])
 
+# ---- 第二个页签自己的两颗命名开关：默认不勾选，只改生成物，脚本正文不动 ----
+nsql = os.path.join(_tmpdir, "name_probe.sql")
+with open(nsql, "w", encoding="utf-8") as _nfh:
+    _nfh.write("CREATE TABLE `t_case9` (\n"
+               "  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键',\n"
+               "  `订单金额` decimal(10,2) DEFAULT NULL COMMENT '金额',\n"
+               "  `订单 金额` int(11) DEFAULT NULL COMMENT '同一首字母',\n"
+               "  `客户名称` varchar(32) DEFAULT NULL COMMENT '客户',\n"
+               "  PRIMARY KEY (`id`)\n"
+               ") ENGINE=InnoDB COMMENT='命名开关检查表';\n")
+nw = app_main.MainWindow()
+check("R43 第一页两颗命名开关默认勾选，第二页两颗默认不勾选",
+      nw.chk_initials.isChecked() and nw.chk_upper.isChecked()
+      and not nw.chk_sql_initials.isChecked() and not nw.chk_sql_upper.isChecked())
+POPUPS.clear()
+nw.chk_sql_initials.setChecked(True)
+nw.chk_sql_upper.setChecked(True)
+_nlog = nw.sql_log.toPlainText()
+check("R44 第二页开关切换写进日志：只对之后生成的 Excel 生效，脚本正文不改",
+      "[提示] 命名规则切换为：拼音首字母（对之后生成的 Excel 生效，脚本正文不改）" in _nlog
+      and "[提示] 表名与字段名大小写切换为：大写"
+          "（对之后生成的 Excel 生效，脚本正文不改）" in _nlog,
+      _nlog.splitlines()[-2:])
+_orig_gofn5 = app_main.QFileDialog.getOpenFileNames
+app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([nsql], "SQL (*.sql)"))
+try:
+    nw.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn5)
+_ntext = nw.sql_files[0]["text"]
+nout = os.path.join(_tmpdir, "sqlgen_name_out")
+app_main.program_dir = lambda: nout
+try:
+    nw.btn_sql_gen_std.click()
+finally:
+    app_main.program_dir = _pdir
+_nd = [d for d in _lsd(nout) if d.startswith("meta_data_file_")]
+_nd0 = _nd[0] if _nd else ""
+_nfiles = _lsd(os.path.join(nout, _nd0))
+check("R45 勾两颗开关：生成物表名转大写、中文字段取首字母并按需去重，脚本正文一个字不动",
+      _nfiles == ["命名开关检查表（T_CASE9）.xlsx"]
+      and nw.sql_files[0]["text"] == _ntext,
+      (_nfiles, nw.sql_files[0]["text"] != _ntext))
+_np = os.path.join(nout, _nd0, "命名开关检查表（T_CASE9）.xlsx")
+# 结构定义读回时表名取自文件名，默认会转小写；要验大写就带上 upper=True 读
+_nt = _btd(_np, upper=True) if os.path.isfile(_np) else {}
+_ncols = _nt.get("columns") or []
+check("R46 回读：表名 T_CASE9、字段 ID/DDJE/DDJE_2/KHMC，列注释原样保留",
+      _nt.get("table_name") == "T_CASE9"
+      and [c["field"] for c in _ncols] == ["ID", "DDJE", "DDJE_2", "KHMC"]
+      and [c["comment"] for c in _ncols] == ["主键", "金额", "同一首字母", "客户"],
+      (_nt.get("table_name"), [(c["field"], c["comment"]) for c in _ncols]))
+check("R47 生成日志写明命名口径（与 Java 同一句）",
+      "[命名] 生成物表名与字段名：取拼音首字母、转大写" in nw.sql_log.toPlainText())
+
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 
 from core.infer import parse_table_name_and_comment as _PT, _col_to_field as _CF

@@ -1352,6 +1352,94 @@ public final class GuiMain {
                 || !frame.lastDialogText().contains("请先添加 SQL 脚本文件。")) {
             problems.add("没有脚本时点生成按钮没拦下：标题=" + frame.lastDialogTitle());
         }
+
+        // ---- 第二页自己的两颗命名开关：默认不勾选，只改生成物，脚本正文不动 ----
+        if (page.initialsBox().isSelected() || page.upperBox().isSelected()) {
+            problems.add("SQL 页两颗命名开关默认应不勾选");
+        }
+        page.initialsBox().doClick();
+        page.upperBox().doClick();
+        String toggleLog = page.logPanel().text();
+        if (!toggleLog.contains("[提示] 命名规则切换为：拼音首字母"
+                + "（对之后生成的 Excel 生效，脚本正文不改）")
+                || !toggleLog.contains("[提示] 表名与字段名大小写切换为：大写"
+                        + "（对之后生成的 Excel 生效，脚本正文不改）")) {
+            problems.add("SQL 页命名开关切换没写日志说明作用域："
+                    + tailOf(toggleLog).replace((char) 10, (char) 32));
+        }
+
+        java.io.File caseScript = new java.io.File(dir, "name_case.sql");
+        String caseSql = "CREATE TABLE `t_case9` (" + nl
+                + "  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键'," + nl
+                + "  `订单金额` decimal(10,2) DEFAULT NULL COMMENT '金额'," + nl
+                + "  `订单 金额` int(11) DEFAULT NULL COMMENT '同一首字母'," + nl
+                + "  `客户名称` varchar(32) DEFAULT NULL COMMENT '客户'," + nl
+                + "  PRIMARY KEY (`id`)" + nl
+                + ") ENGINE=InnoDB COMMENT='命名开关检查表';" + nl;
+        writeText(caseScript.getPath(), caseSql);
+        com.excel2mysql.gui.SqlPage named = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> casePaths = new ArrayList<String>();
+        casePaths.add(caseScript.getPath());
+        named.addFiles(casePaths);
+        named.initialsBox().doClick();
+        named.upperBox().doClick();
+        java.io.File namedRoot = new java.io.File(dir, "named");
+        named.generateExcel(true, namedRoot.getPath());
+        java.io.File namedStd = new java.io.File(namedRoot, "meta_data_file_" + today());
+        String namedFile = "命名开关检查表（T_CASE9）.xlsx";
+        java.io.File namedPath = new java.io.File(namedStd, namedFile);
+        // 文件名大小写要按目录清单比：Windows 文件系统不区分大小写，isFile() 会把
+        // 小写名的产物也认成大写名，开关失效就查不出来
+        String[] namedProduced = namedStd.list();
+        java.util.Set<String> namedSet = namedProduced == null
+                ? new java.util.HashSet<String>()
+                : new java.util.HashSet<String>(java.util.Arrays.asList(namedProduced));
+        if (!namedSet.equals(java.util.Collections.singleton(namedFile))) {
+            problems.add("勾两颗开关后标准件目录里的文件不对，应只有 " + namedFile + "："
+                    + java.util.Arrays.toString(namedProduced));
+        }
+        if (namedPath.isFile()) {
+            try {
+                // 结构定义读回时表名取自文件名，默认会转小写；要验大写就带上 upperOnly 读
+                com.excel2mysql.core.Names upNames =
+                        new com.excel2mysql.core.Names(
+                                com.excel2mysql.core.PinyinLoader.get());
+                upNames.setUpperOnly(true);
+                com.excel2mysql.core.TableBuilder.Result back =
+                        new com.excel2mysql.core.TableBuilder(
+                                new com.excel2mysql.core.Infer(frame.names()),
+                                upNames).build(namedPath.getPath());
+                StringBuilder fields = new StringBuilder();
+                StringBuilder comments = new StringBuilder();
+                for (com.excel2mysql.core.Infer.Column c : back.table.columns) {
+                    fields.append(fields.length() == 0 ? "" : "/").append(c.field);
+                    comments.append(comments.length() == 0 ? "" : "/").append(c.comment);
+                }
+                if (!"T_CASE9".equals(back.table.tableName)
+                        || !"ID/DDJE/DDJE_2/KHMC".equals(fields.toString())
+                        || !"主键/金额/同一首字母/客户".equals(comments.toString())) {
+                    problems.add("SQL 页命名开关生成物回读不对：表名=" + back.table.tableName
+                            + " 字段=" + fields + " 注释=" + comments);
+                }
+            } catch (Exception e) {
+                problems.add("SQL 页命名开关生成物读不回来：" + e);
+            }
+        }
+        String onDisk = null;
+        try {
+            onDisk = new String(java.nio.file.Files.readAllBytes(
+                    java.nio.file.Paths.get(caseScript.getPath())),
+                    java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            problems.add("读回命名检查脚本失败：" + e);
+        }
+        if (!caseSql.equals(onDisk)) {
+            problems.add("勾命名开关后脚本正文被改了");
+        }
+        if (!frame.sqlPage().logPanel().text().contains(
+                "[命名] 生成物表名与字段名：取拼音首字母、转大写")) {
+            problems.add("SQL 页生成日志没写明命名口径");
+        }
     }
 
     private static String tailOf(String text) {

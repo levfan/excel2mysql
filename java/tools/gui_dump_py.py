@@ -247,6 +247,8 @@ def main():
     dump_widget("drop_existing", win.chk_drop)
     dump_widget("initials", win.chk_initials)
     dump_widget("upper", win.chk_upper)
+    dump_widget("sql_initials", win.chk_sql_initials)
+    dump_widget("sql_upper", win.chk_sql_upper)
     dump_widget("progress", win.progress)
     dump_buttons(win)
     dump_table("file", win.file_table)
