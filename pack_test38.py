@@ -853,6 +853,13 @@ _ws.title = "数据"
 _ws.append([u"发布日期（yyyy-MM-dd）", u"发布日期", u"金额（元）"])
 _ws.append([u"2008-05-19", u"2008-05-20", u"12.50"])
 _wb.save(_annot)
+# 表头整行都没写字：pandas 会连列宽一起丢掉，但"这张表有几列"文件里还记着
+_blank_head = os.path.join(_tmpdir, "空表头模板（w_blankhead）.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append(["", "", ""])
+_wb.save(_blank_head)
 
 code, out, _con = run_cli(["--dry-run", _empty, "-d", "db1"])
 check("W32 一张格子都没有的表被判解析失败（不给库里发非法建表语句）",
@@ -869,6 +876,13 @@ check("W33b 表头括号注释不进字段名，剥完同名靠 _2 去重，注�
       and "`fa_bu_ri_qi`" in out and "`fa_bu_ri_qi_2`" in out and "`jin_e`" in out
       and not re.search(r"`[a-z0-9_]*yyyy", out)
       and "COMMENT '发布日期（yyyy-MM-dd）'" in out, out.strip()[-260:])
+code, out, _con = run_cli(["--dry-run", _blank_head, "-d", "db1"])
+check("W33c 表头整行没写字也出 DDL：按列宽兜底成 col、col_2、col_3，并在日志点名",
+      code == cli_mod.EXIT_OK
+      and "`col`" in out and "`col_2`" in out and "`col_3`" in out
+      and "没有解析到任何字段" not in out
+      and "字段 3 列 | 数据 0 行" in out
+      and "表头整行没写字，按列宽兜底成：col、col_2、col_3" in out, out.strip()[-300:])
 code, out, _con = run_cli(["--dry-run", _fake, "-d", "db1"])
 check("W34 扩展名对但内容不是 Excel：拦在解析阶段而不是 SQL 语法错误",
       code == cli_mod.EXIT_PARSE and "解析失败" in out, out.strip()[:90])

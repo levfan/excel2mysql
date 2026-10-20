@@ -1541,6 +1541,36 @@ public final class GuiMain {
                         + " 空列=" + hr.emptyColumns + " 主键=" + (headNoPk ? "无" : "有"));
             }
             expectReject(tb, fake, "不是可识别的 Excel 文件", "假 Excel", problems);
+
+            // 表头整行都没写字：Python 侧 pandas 会把列宽一起丢掉，Java 读表层留着那一行。
+            // 两侧要的是同一个结果——照样出表定义、字段名走空表头兜底、没有数据可插
+            java.io.File blank = new java.io.File(dir, "空表头模板（rej_blankhead）.xlsx");
+            org.apache.poi.xssf.usermodel.XSSFWorkbook wb3 =
+                    new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+            org.apache.poi.ss.usermodel.Sheet sh3 = wb3.createSheet("数据");
+            org.apache.poi.ss.usermodel.Row r3 = sh3.createRow(0);
+            r3.createCell(0);
+            r3.createCell(1);
+            r3.createCell(2);
+            writeWorkbook(wb3, blank);
+            com.excel2mysql.core.TableBuilder.Result br = tb.build(blank.getPath());
+            java.util.List<String> bf = new java.util.ArrayList<String>();
+            for (com.excel2mysql.core.Infer.Column c : br.table.columns) {
+                bf.add(c.field);
+            }
+            boolean blankNoPk = true;
+            for (com.excel2mysql.core.Infer.Column c : br.table.columns) {
+                if (c.primaryKey) {
+                    blankNoPk = false;
+                }
+            }
+            if (!bf.equals(java.util.Arrays.asList("col", "col_2", "col_3"))
+                    || !br.rows.isEmpty() || !br.noDataRows || !br.blankHeaders.equals(bf)
+                    || !br.emptyColumns.isEmpty() || !blankNoPk) {
+                problems.add("表头整行空着应当兜底出 col、col_2、col_3 三列、0 行、不设主键，"
+                        + "实际 列=" + bf + " 行=" + br.rows.size()
+                        + " 兜底点名=" + br.blankHeaders + " 空列=" + br.emptyColumns);
+            }
         } catch (Exception e) {
             problems.add("拒绝检查本身出错：" + e);
         } finally {

@@ -310,6 +310,48 @@ check("B21c 星号只是必填标记：不进字段名，但原样留在字段�
       and t5c["empty_columns"] == [u"*标准名称", u"*标准级别", u"发布日期"],
       t5c["empty_columns"])
 
+# 表头整行都没写字：pandas 连列宽一起丢掉（实测 columns 剩 0），
+# 但"这张表有几列"文件里还记着 —— 这种也要能导入，只是没有数据可插（用户 2026-10-20 第 3 件）
+_pblank = os.path.join(_tmpdir, u"空表头模板（t_blankhead）.xlsx")
+_wb = openpyxl.Workbook()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append(["", "", ""])          # 三个格子都在，只是都没写字
+_wb.save(_pblank)
+try:
+    t6 = build_table_def(_pblank)
+    t6_fields = [c["field"] for c in t6["columns"]]
+    t6_comments = [c["comment"] for c in t6["columns"]]
+except ValueError as exc:
+    # 兜底没生效时会走到"没有解析到任何字段"那条拒绝，那是一句异常；
+    # 让它折成断言失败，别让一条用例抛异常把整轮中止、盖住是谁坏了
+    t6, t6_fields, t6_comments = None, [], []
+    t6_error = str(exc)
+else:
+    t6_error = ""
+check("B21d 表头整行空着也能出表定义：按列宽兜底成 col、col_2、col_3，0 行",
+      t6 is not None and t6_fields == ["col", "col_2", "col_3"]
+      and len(t6["df"]) == 0 and t6["no_data_rows"] and t6["primary_key"] is None,
+      (t6_fields, t6_error))
+check("B21e 兜底出来的列注释是空串，不拿 Unnamed 之类的占位名糊使用者",
+      t6 is not None and t6_comments == ["", "", ""], t6_comments)
+check("B21h 兜底名单随表定义带出去，日志才点得出名",
+      t6 is not None and t6["blank_headers"] == ["col", "col_2", "col_3"],
+      t6 is not None and t6["blank_headers"])
+_ptrue = os.path.join(_tmpdir, u"一格都没有（t_trulyempty）.xlsx")
+_wb = openpyxl.Workbook()
+_wb.active.title = "数据"
+_wb.save(_ptrue)
+try:
+    build_table_def(_ptrue)
+    _truly = None
+except ValueError as exc:
+    _truly = str(exc)
+check("B21f 连一个格子都没有的真空表照旧拒绝（建出来是 CREATE TABLE x ( )，非法）",
+      _truly is not None and "没有解析到任何字段" in _truly, _truly)
+check("B21g 表头部分空着、那一列又整列没值：仍按垃圾列丢掉，其余照旧（不是全都空）",
+      len(t5b["columns"]) == 2, len(t5b["columns"]))
+
 df_big = pd.DataFrame({"超长文本": ["啊" * 5000]})           # 15000 字节 > 16383 档位上限
 check("B22 超 VARCHAR 档位上限的文本列 → TEXT", infer_columns(df_big)[0]["type"] == "TEXT",
       infer_columns(df_big)[0]["type"])
