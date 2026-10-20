@@ -81,12 +81,19 @@ public final class GuiMain {
             MainFrame frame = null;
             try {
                 frame = new MainFrame();   // 建窗也在 try 里：构造期抛异常要让自检拿到退出码，而不是把闸门挂死
+                List<String> problems = new ArrayList<String>();
+                if (!frame.initialsBox().isSelected() || !frame.upperBox().isSelected()) {
+                    problems.add("两颗命名开关应默认勾选（取拼音首字母 / 转大写）");
+                }
+                // 后面几十处旧用例的期望值仍按全拼、小写写；先取消勾选保持口径不变，
+                // 命名开关自己的用例（naming_switches）会重新勾上再验一遍
+                frame.initialsBox().setSelected(false);
+                frame.upperBox().setSelected(false);
                 String addSummary = frame.addFiles(files);
                 int tables = frame.tables().size();
                 int fileRows = frame.fileModel().getRowCount();
                 int rows = frame.fileModel().rowTotal();
                 String ddl = frame.ddlText();
-                List<String> problems = new ArrayList<String>();
                 if (tables == 0) {
                     // 后面几十处检查都按下标取表与取行，没夹具就别硬跑：
                     // 给一句能看懂的话，别抛越界
@@ -584,41 +591,42 @@ public final class GuiMain {
         File tmp = null;
         try {
             tmp = java.nio.file.Files.createTempDirectory("e2m-naming-selftest").toFile();
-            // 1) 首字母开关：勾上后添加的文件，表名与字段名都取首字母
+            // 1) 勾回默认口径（首字母 + 大写）：新加的文件直接按这套起名
+            frame.initialsBox().doClick();
+            frame.upperBox().doClick();
             File a = writeNamingFixture(tmp, "水库信息表.xlsx",
                     new String[]{"订单金额"}, new Object[]{Double.valueOf(12.5)});
-            // 用 doClick 走用户真正的那条路：setSelected 不触发 ActionListener
-            frame.initialsBox().doClick();
             frame.addFiles(java.util.Arrays.asList(a.getPath()));
             com.excel2mysql.core.TableOps.Table ta = lastTable(frame);
-            if (ta == null || !"skxxb".equals(ta.tableName)) {
-                problems.add("勾了取首字母后表名不是 skxxb：" + (ta == null ? "(无表)" : ta.tableName));
-            } else if (ta.columns.isEmpty() || !"ddje".equals(ta.columns.get(0).field)) {
-                problems.add("勾了取首字母后字段名不是 ddje："
+            if (ta == null || !"SKXXB".equals(ta.tableName)) {
+                problems.add("默认勾选下新表名不是 SKXXB：" + (ta == null ? "(无表)" : ta.tableName));
+            } else if (ta.columns.isEmpty() || !"DDJE".equals(ta.columns.get(0).field)) {
+                problems.add("勾上首字母 + 大写后字段名不是 DDJE："
                         + (ta.columns.isEmpty() ? "(无字段)" : ta.columns.get(0).field));
             }
-            if (!frame.logPanel().contains("[提示] 命名规则切换为：拼音首字母")) {
-                problems.add("切换首字母开关没有留下日志");
+            if (!frame.logPanel().contains("[提示] 命名规则切换为：拼音首字母")
+                    || !frame.logPanel().contains("[提示] 表名与字段名大小写切换为：大写")) {
+                problems.add("勾上两颗开关没有留下日志");
             }
-            // 2) 大小写开关与首字母叠加：括号里显式写的英文表名也转大写
-            File b = writeNamingFixture(tmp, "水库信息表（n_uppercheck）.xlsx",
-                    new String[]{"订单金额"}, new Object[]{Double.valueOf(12.5)});
-            frame.upperBox().doClick();
-            frame.addFiles(java.util.Arrays.asList(b.getPath()));
-            com.excel2mysql.core.TableOps.Table tb = lastTable(frame);
-            if (tb == null || !"N_UPPERCHECK".equals(tb.tableName)) {
-                problems.add("勾了转大写后表名不是 N_UPPERCHECK："
-                        + (tb == null ? "(无表)" : tb.tableName));
-            } else if (tb.columns.isEmpty() || !"DDJE".equals(tb.columns.get(0).field)) {
-                problems.add("勾了转大写后字段名不是 DDJE："
-                        + (tb.columns.isEmpty() ? "(无字段)" : tb.columns.get(0).field));
-            }
-            if (!frame.logPanel().contains("[提示] 表名与字段名大小写切换为：大写")) {
-                problems.add("切换大小写开关没有留下日志");
-            }
-            // 3) 空模板按字段名定类型：默认小写、全拼，类型各归各位
+            // 2) 两颗都取消：回到全拼、小写，切换各留一行日志
             frame.initialsBox().doClick();
             frame.upperBox().doClick();
+            File b = writeNamingFixture(tmp, "水库信息表（n_lowercheck）.xlsx",
+                    new String[]{"订单金额"}, new Object[]{Double.valueOf(12.5)});
+            frame.addFiles(java.util.Arrays.asList(b.getPath()));
+            com.excel2mysql.core.TableOps.Table tb = lastTable(frame);
+            if (tb == null || !"n_lowercheck".equals(tb.tableName)) {
+                problems.add("取消两颗开关后表名不是 n_lowercheck："
+                        + (tb == null ? "(无表)" : tb.tableName));
+            } else if (tb.columns.isEmpty() || !"ding_dan_jin_e".equals(tb.columns.get(0).field)) {
+                problems.add("取消两颗开关后字段名不是 ding_dan_jin_e："
+                        + (tb.columns.isEmpty() ? "(无字段)" : tb.columns.get(0).field));
+            }
+            if (!frame.logPanel().contains("[提示] 命名规则切换为：全拼")
+                    || !frame.logPanel().contains("[提示] 表名与字段名大小写切换为：小写")) {
+                problems.add("取消两颗开关没有留下日志");
+            }
+            // 3) 空模板按字段名定类型：全拼、小写口径下，类型各归各位
             File c = writeNamingFixture(tmp, "采集模板（t_empty_kinds）.xlsx",
                     new String[]{"发布日期", "更新时间", "订单金额", "数量", "备注说明",
                             "年龄", "系数", "评分", "经度", "长度", "是否有效", "序号",

@@ -1636,6 +1636,31 @@ check("M22f 结构定义模式：人工写的字段名原样，表名跟开关�
       and [c["field"] for c in _te_up["columns"]] == ["publish_date"],
       (_te_up["table_name"], [c["field"] for c in _te_up["columns"]]))
 
+# 图形版默认口径（用户 2026-10-21）：两颗开关启动即勾上，新加文件直接首字母 + 大写
+_dw = app_main.MainWindow()
+check("M23 图形版两颗命名开关默认勾选",
+      _dw.chk_initials.isChecked() and _dw.chk_upper.isChecked(),
+      (_dw.chk_initials.isChecked(), _dw.chk_upper.isChecked()))
+POPUPS.clear()
+_dw._add_files([make_xlsx("水库信息表.xlsx",
+                          {"S": pd.DataFrame({"订单金额": [12.5]})})])
+check("M23b 默认口径端到端：表名 SKXXB、字段名 DDJE",
+      len(_dw.tables) == 1 and _dw.tables[0]["table_name"] == "SKXXB"
+      and [c["field"] for c in _dw.tables[0]["columns"]] == ["DDJE"],
+      [(t["table_name"], [c["field"] for c in t["columns"]]) for t in _dw.tables])
+_dw.chk_initials.setChecked(False)
+_dw.chk_upper.setChecked(False)
+check("M23c 取消勾选各留一行切换日志",
+      "[提示] 命名规则切换为：全拼" in _dw.log.toPlainText()
+      and "[提示] 表名与字段名大小写切换为：小写" in _dw.log.toPlainText())
+POPUPS.clear()
+_dw._add_files([make_xlsx("水库信息表（n_lowercheck）.xlsx",
+                          {"S": pd.DataFrame({"订单金额": [12.5]})})])
+check("M23d 取消后回到全拼、小写",
+      len(_dw.tables) == 2 and _dw.tables[-1]["table_name"] == "n_lowercheck"
+      and _dw.tables[-1]["columns"][0]["field"] == "ding_dan_jin_e",
+      (_dw.tables[-1]["table_name"], _dw.tables[-1]["columns"][0]["field"]))
+
 # 真实语料：从内部数据包的 create_table*.sql 中文列注释里取，量化碰撞率。
 # 语料在仓库之外，不设环境变量时显式记为 SKIP，不影响用例集全绿。
 corpus = []
@@ -2896,7 +2921,14 @@ check("R19 空输入不改写脚本，也不报任何跳过（什么都没尝试
 f1 = make_xlsx("订单表（ods_t_order）.xlsx", {"S": pd.DataFrame({"编号": ["A1"]})})
 f2 = make_xlsx("测试表（adb_table2）.xlsx", {"S": pd.DataFrame({"编号": ["B1"]})})
 f3 = make_xlsx("用户表（users）.xlsx", {"S": pd.DataFrame({"编号": ["C1"]})})
-rw3 = app_main.MainWindow()
+def _legacy_naming(win):
+    """R 组验的是前缀改写：先关掉两颗命名开关，别让默认大写改写期望值。"""
+    win.chk_initials.setChecked(False)
+    win.chk_upper.setChecked(False)
+    return win
+
+
+rw3 = _legacy_naming(app_main.MainWindow())
 rw3.cb_db.addItem("alpha", "alpha")
 rw3._add_files([f1, f2, f3])
 rw3.ed_prefix.setText("change")
@@ -2918,7 +2950,7 @@ check("R23 替换后的表名成为新基础名，再加前缀基于它算",
       rw3.file_table.item(0, 1).text() == "dim_change_t_order",
       [rw3.file_table.item(i, 1).text() for i in range(3)])
 
-rw4 = app_main.MainWindow()
+rw4 = _legacy_naming(app_main.MainWindow())
 rw4._add_files([f1])
 rw4.ed_prefix.setText("cha-nge")
 POPUPS.clear()
@@ -2974,7 +3006,7 @@ check("R30 保存后落盘的脚本用的是新表名",
 app_main.ProgressDialog = _FakeProgress
 app_main.MODAL_PROGRESS = True
 _FakeProgress.made.clear()
-pw3 = app_main.MainWindow()
+pw3 = _legacy_naming(app_main.MainWindow())
 pw3.cb_db.addItem("alpha", "alpha")
 pw3._add_files([f1, f2, f3])
 pw3.ed_prefix.setText("ods2")

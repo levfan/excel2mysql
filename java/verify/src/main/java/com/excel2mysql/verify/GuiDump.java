@@ -710,7 +710,7 @@ public final class GuiDump {
         put("sqlgen.simple.content", smpDir == null ? "" : dumpFolder(smpDir));
         String genFile = pickProduced(new File(gdir, "std"), "t_gen");
         try {
-            put("sqlgen.roundtrip", readBackGen(frame, genFile));
+            put("sqlgen.roundtrip", readBackGen(genFile));
         } catch (Exception e) {
             put("sqlgen.roundtrip", "读不回 " + e.getClass().getSimpleName());
         }
@@ -749,10 +749,17 @@ public final class GuiDump {
         return "";
     }
 
-    /** 用本条线自己的读取器把标准件读回来，渲染成一行给对撞器比（读不回就是缺陷）。 */
-    private static String readBackGen(MainFrame frame, String path) {
+    /**
+     * 用本条线自己的读取器把标准件读回来，渲染成一行给对撞器比（读不回就是缺陷）。
+     * 这里验的是"产物能否原样读回"，与界面上的命名开关无关：Python 侧走
+     * build_table_def 的默认口径，Java 侧也得用默认 Names，不能借 frame 的那一份
+     * （默认勾上首字母 + 大写后，标准件里的 t_gen 会被改写成 T_GEN）。
+     */
+    private static String readBackGen(String path) {
+        com.excel2mysql.core.Names plain = new com.excel2mysql.core.Names(
+                com.excel2mysql.core.PinyinLoader.get());
         com.excel2mysql.core.TableBuilder.Result r = new com.excel2mysql.core.TableBuilder(
-                new com.excel2mysql.core.Infer(frame.names()), frame.names())
+                new com.excel2mysql.core.Infer(plain), plain)
                 .build(path);
         StringBuilder sb = new StringBuilder();
         sb.append(r.table.source).append('|').append(r.table.tableName).append('|')
