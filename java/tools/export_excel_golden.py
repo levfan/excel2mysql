@@ -181,12 +181,30 @@ def make_star_template(path):
     wb.save(path)
 
 
+def make_head_note(path):
+    """表头带成对括号注释：发布日期（yyyy-MM-dd）、金额（元）、是否已婚【是/否】。
+
+    压三条规则：注释整段不进字段名（fa_bu_ri_qi 而不是 fa_bu_ri_qi_yyyy_mm_dd）；
+    「发布日期（yyyy-MM-dd）」与「发布日期」剥完同名，靠 _2 去重而不是合并成一列；
+    列注释仍是原始表头，口径信息一个不丢。
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "数据"
+    ws.append([u"标准名称（必填）", u"发布日期（yyyy-MM-dd）", u"发布日期",
+               u"金额（元）", u"是否已婚【是/否】", u"平均日数(d)", u"（备注说明）"])
+    ws.append([u"SL 1", u"2008-05-19", u"2008-05-20", u"12.50", u"是", u"3", u"x"])
+    ws.append([u"SL 2", u"2009-01-02", u"2009-01-03", u"8", u"否", u"12", u"y"])
+    wb.save(path)
+
+
 FIXTURES = [
     (u"水库基础信息（dim_reservoir_info）.xlsx", make_basic),
     (u"大表压精度（ods_t_big）.xlsx", make_overflow),
     (u"结构定义订单（ods_t_order_meta）.xlsx", make_meta),
     (u"必填表头（ods_t_star_form）.xlsx", make_star_form),
     (u"空采集模板（ods_t_star_tpl）.xlsx", make_star_template),
+    (u"表头带注释（ods_t_head_note）.xlsx", make_head_note),
     (u"超长拼音名统计（a_very_long_table_name_that_keeps_going_and_going_x）.xlsx",
      make_cn_name),
     (u"人员信息表（人事处）.xlsx", make_cn_name),

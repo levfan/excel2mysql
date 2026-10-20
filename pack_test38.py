@@ -844,6 +844,15 @@ _ws.title = "数据"
 _ws.append(["序号", "数值"])
 _ws.append([1, 2.5])
 _wb.save(_good)
+# 表头带括号注释：真实表单里"发布日期（yyyy-MM-dd）""金额（元）"这类写法极常见，
+# 注释是给填表人看的，不该进字段名（用户 2026-10-20 点名）
+_annot = os.path.join(_tmpdir, "表头带注释（w_annot）.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append([u"发布日期（yyyy-MM-dd）", u"发布日期", u"金额（元）"])
+_ws.append([u"2008-05-19", u"2008-05-20", u"12.50"])
+_wb.save(_annot)
 
 code, out, _con = run_cli(["--dry-run", _empty, "-d", "db1"])
 check("W32 一张格子都没有的表被判解析失败（不给库里发非法建表语句）",
@@ -854,6 +863,12 @@ check("W33 只有表头的采集模板不再被拒：字段 2 列、数据 0 行
       and "字段 2 列 | 数据 0 行" in out
       and "整列为空的字段照旧保留：编号、名称" in out
       and "没有数据行，建出来是空表" in out, out.strip()[-300:])
+code, out, _con = run_cli(["--dry-run", _annot, "-d", "db1"])
+check("W33b 表头括号注释不进字段名，剥完同名靠 _2 去重，注释里仍留原文",
+      code == cli_mod.EXIT_OK
+      and "`fa_bu_ri_qi`" in out and "`fa_bu_ri_qi_2`" in out and "`jin_e`" in out
+      and not re.search(r"`[a-z0-9_]*yyyy", out)
+      and "COMMENT '发布日期（yyyy-MM-dd）'" in out, out.strip()[-260:])
 code, out, _con = run_cli(["--dry-run", _fake, "-d", "db1"])
 check("W34 扩展名对但内容不是 Excel：拦在解析阶段而不是 SQL 语法错误",
       code == cli_mod.EXIT_PARSE and "解析失败" in out, out.strip()[:90])

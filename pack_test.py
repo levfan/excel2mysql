@@ -1318,8 +1318,8 @@ check("M1b 逐音节下划线分隔", _col_to_field("员工编号") == "yuan_gon
 check("M2 短的用全拼不降级", _col_to_field("单价") == "dan_jia"
       and _col_to_field("数量") == "shu_liang")
 check("M3 全拼在 30 字符内即使较长也保留全拼",
-      _col_to_field("总库容（亿立方米）") == "zong_ku_rong_yi_li_fang_mi"
-      and len(_col_to_field("总库容（亿立方米）")) <= 30, _col_to_field("总库容（亿立方米）"))
+      _col_to_field("水库基础信息表") == "shui_ku_ji_chu_xin_xi_biao"
+      and len(_col_to_field("水库基础信息表")) == 26, _col_to_field("水库基础信息表"))
 long_name = _col_to_field("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表")
 check("M4 全拼超 30 则整列强制首字母",
       "_" not in long_name and long_name == "bjshdqswjxsdxsksngcjcxxhzb", long_name)
@@ -1364,8 +1364,37 @@ mm = [_col_to_field(f"累年月日降水量≥{v}mm平均日数(d)")
       for v in ("1.0", "10.0", "100.0", "150.0")]
 check("M13 首字母模式下数字音节整段保留（否则 1.0/10.0/100.0 全塌成同一个名）",
       len(set(mm)) == 4, mm)
-check("M13b 单位字母同样保留", mm[0].endswith("mmpjrsd"), mm[0])
+check("M13b 括号外的单位字母同样保留（括号里的 (d) 按注释剥掉）",
+      mm[0].endswith("mmpjrs"), mm[0])
 check("M13c 降级后仍不超上限", all(len(x) <= 30 for x in mm), [len(x) for x in mm])
+
+# 表头里成对括号包起来的是给填表人看的注释，不是字段名的一部分（用户 2026-10-20 点名）：
+# 「发布日期（yyyy-MM-dd）」要出 fa_bu_ri_qi，而不是 fa_bu_ri_qi_yyyy_mm_dd。
+check("M15 括号注释不进字段名（半角与全角都不进）",
+      _col_to_field("发布日期（yyyy-MM-dd）") == "fa_bu_ri_qi"
+      and _col_to_field("发布日期(yyyy-MM-dd)") == "fa_bu_ri_qi",
+      [_col_to_field("发布日期（yyyy-MM-dd）"), _col_to_field("发布日期(yyyy-MM-dd)")])
+check("M15b 单位与取值注释同样不进名字",
+      _col_to_field("金额（元）") == "jin_e"
+      and _col_to_field("是否已婚【是/否】") == "shi_fou_yi_hun"
+      and _col_to_field("总库容（亿立方米）") == "zong_ku_rong",
+      [_col_to_field("金额（元）"), _col_to_field("是否已婚【是/否】"),
+       _col_to_field("总库容（亿立方米）")])
+check("M15c 必填标记加括号注释一起剥净",
+      _col_to_field("★（必填）联系电话") == "lian_xi_dian_hua",
+      _col_to_field("★（必填）联系电话"))
+check("M15d 嵌套括号不留半个尾巴",
+      _col_to_field("单价（含税（13%））") == "dan_jia", _col_to_field("单价（含税（13%））"))
+check("M15e 整格就是括号时不剥成空（否则退化成 col）",
+      _col_to_field("（备注说明）") == "bei_zhu_shuo_ming", _col_to_field("（备注说明）"))
+head_note = infer_columns(pd.DataFrame([["1", "2"]],
+                                       columns=["发布日期（yyyy-MM-dd）", "发布日期"]))
+check("M16 剥完撞名仍靠 _2 去重，两张列不会合并成一列",
+      [c["field"] for c in head_note] == ["fa_bu_ri_qi", "fa_bu_ri_qi_2"],
+      [c["field"] for c in head_note])
+check("M17 列注释保留原始表头（括号里的口径不能丢）",
+      [c["comment"] for c in head_note] == ["发布日期（yyyy-MM-dd）", "发布日期"],
+      [c["comment"] for c in head_note])
 
 # 真实语料：从内部数据包的 create_table*.sql 中文列注释里取，量化碰撞率。
 # 语料在仓库之外，不设环境变量时显式记为 SKIP，不影响用例集全绿。

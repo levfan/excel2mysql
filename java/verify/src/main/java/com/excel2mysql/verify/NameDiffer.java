@@ -81,13 +81,16 @@ public final class NameDiffer {
                     // 只有第 1 类普通表的字段名是拼音推出来的，这才是要撞的契约。
                     // 第 2 类结构定义表的字段名是用户在元数据 Sheet 里手写的，
                     // 拿拼音实现去比它必然假红，比的是"手写值 vs 推出来的值"两回事。
+                    // 撞的是"一张表按顺序命名下来"的结果，不是单列的转写：表头注释剥完之后
+                    // 「发布日期（yyyy-MM-dd）」与「发布日期」同名，去重必须走同一份实现
+                    Map<String, Integer> seen = Names.newDedupState();
                     for (Object o : cols) {
                         @SuppressWarnings("unchecked")
                         Map<String, Object> c = (Map<String, Object>) o;
                         String field = (String) c.get("field");
                         String cn = (String) c.get("comment");
                         fields++;
-                        String actual = names.colToField(cn);
+                        String actual = Names.dedupField(seen, names.colToField(cn));
                         if (!actual.equals(field)) {
                             bad++;
                             if (shown.size() < 12) {
