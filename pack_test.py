@@ -374,6 +374,43 @@ _en = infer_columns(pd.DataFrame({"create_date": [], "update": [], "qty": [],
 check("B22d 英文按成词匹配：create_date/qty 命中，update/birthday 不误中",
       [c["type"] for c in _en] == ["DATE", "VARCHAR(64)", "INT", "VARCHAR(64)"],
       [c["type"] for c in _en])
+_kinds = infer_columns(pd.DataFrame({
+    "年龄": [], "工龄": [], "系数": [], "毛利率": [], "评分": [], "经度": [],
+    "长度": [], "数量": [], "序号": [], "年份": [], "是否有效": [],
+    "备注说明": []}))
+check("B22f 空列中文词表扩展：年龄/系数/评分/经纬度/计量/序号/年份/布尔各归各位",
+      [c["type"] for c in _kinds]
+      == ["INT", "INT", "DECIMAL(18,6)", "DECIMAL(18,6)", "DECIMAL(10,2)",
+          "DECIMAL(18,8)", "DECIMAL(18,4)", "INT", "INT", "INT", "TINYINT(1)",
+          "VARCHAR(64)"],
+      [c["type"] for c in _kinds])
+check("B22g 新分类留痕点名具体口径，没命中的不带文案",
+      all(c.get("type_note") for c in _kinds[:11]) and not _kinds[11].get("type_note")
+      and "比率/系数" in _kinds[2]["type_note"] and "评分" in _kinds[4]["type_note"]
+      and "经纬度/坐标" in _kinds[5]["type_note"] and "计量" in _kinds[6]["type_note"]
+      and "布尔" in _kinds[10]["type_note"],
+      [c.get("type_note") for c in _kinds])
+_priority = infer_columns(pd.DataFrame({
+    "频率": [], "功率": [], "速率": [], "容积率": [], "毛利率": [], "订单金额": []}))
+check("B22h 词表优先级：频率/功率/速率走计量，容积率/毛利率走比率，订单金额仍归金额",
+      [c["type"] for c in _priority]
+      == ["DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,6)",
+          "DECIMAL(18,6)", "DECIMAL(16,2)"],
+      [c["type"] for c in _priority])
+_en2 = infer_columns(pd.DataFrame({k: [] for k in (
+    "age", "rate", "score", "longitude", "length", "is_deleted", "sort_no", "year",
+    "update", "birthday", "remark", "status")}))
+check("B22i 英文词表扩展且成词匹配：age/rate/score/longitude/length/is_/sort/year 命中，update/status 不误中",
+      [c["type"] for c in _en2]
+      == ["INT", "DECIMAL(18,6)", "DECIMAL(10,2)", "DECIMAL(18,8)",
+          "DECIMAL(18,4)", "TINYINT(1)", "INT", "INT",
+          "VARCHAR(64)", "VARCHAR(64)", "VARCHAR(64)", "VARCHAR(64)"],
+      [(c["comment"], c["type"]) for c in _en2])
+_valued = infer_columns(pd.DataFrame({"年龄": ["1", "2"], "系数": ["1.25", "2.5"]}))
+check("B22j 有值时新词表同样让位数据判定，不套按名文案",
+      _valued[0]["type"] == "INT" and _valued[1]["type"].startswith("DECIMAL")
+      and not any(c.get("type_note") for c in _valued),
+      [(c["type"], c.get("type_note")) for c in _valued])
 _meta_empty = pd.DataFrame({
     "序号": [1],
     "字段名(英文)": ["publish_date"],

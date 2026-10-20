@@ -1124,6 +1124,21 @@ check("W41c 大写时空列按名定类型照旧，字段名整体大写",
       and "`GENG_XIN_SHI_JIAN` DATETIME" in out
       and "`DING_DAN_JIN_E` DECIMAL(16,2)" in out
       and "`SHU_LIANG` INT" in out, out.strip()[-320:])
+_kinds = os.path.join(_tmpdir, "采集模板（w_kinds）.xlsx")
+_wb = _WB()
+_ws = _wb.active
+_ws.title = "数据"
+_ws.append([u"年龄", u"系数", u"评分", u"经度", u"长度", u"是否有效", u"序号", u"年份"])
+_wb.save(_kinds)
+code, out, _con = run_cli(["--dry-run", _kinds, "-d", "db1"])
+check("W42 空模板中文词表扩展：年龄/系数/评分/经纬度/计量/布尔/序号/年份各归各位",
+      code == cli_mod.EXIT_OK
+      and "`nian_ling` INT" in out and "`xi_shu` DECIMAL(18,6)" in out
+      and "`ping_fen` DECIMAL(10,2)" in out and "`jing_du` DECIMAL(18,8)" in out
+      and "`chang_du` DECIMAL(18,4)" in out
+      and "`shi_fou_you_xiao` TINYINT(1)" in out
+      and "`xu_hao` INT" in out and "`nian_fen` INT" in out
+      and "含比率/系数语义" in out, out.strip()[-480:])
 
 section("X CLI 端到端·假连接（断到真实落库调用序列，不只看退出码）")
 
