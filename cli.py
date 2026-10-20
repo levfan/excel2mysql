@@ -169,6 +169,12 @@ def build_parser():
     p.add_argument("--swap-prefix", metavar="NEW",
                    help="替换表名第一个下划线之前的首段：ods_t_order → new_t_order；"
                         "名里没有下划线的表不改并在日志里列出")
+    p.add_argument("--initials", action="store_true",
+                   help="表名与字段名的汉字取拼音首字母（订单金额 → ddje）；默认全拼（ding_dan_jin_e）。"
+                        "文件名括号里显式写下的英文表名不受影响")
+    p.add_argument("--upper", action="store_true",
+                   help="表名与字段名转大写（DING_DAN_JIN_E / T_IMPORT_DATA）；默认小写。"
+                        "只作用于由中文或文件名转写出来的名字，结构定义 Sheet 里人工写的字段名原样使用")
     p.add_argument("--drop-if-exists", action="store_true",
                    help="建表前先 DROP TABLE IF EXISTS（会删掉目标库里的同名表及其数据）")
     p.add_argument("--batch", type=int, default=500, metavar="N",
@@ -390,10 +396,10 @@ def expand_zips(zips, tmp_dir, log):
     return out, bad
 
 
-def parse_one(path, origin, log):
+def parse_one(path, origin, log, initials=False, upper=False):
     """解析一个 Excel 为表定义，返回 (td, 错误说明)；失败时 td 为 None。"""
     try:
-        td = build_table_def(path)
+        td = build_table_def(path, initials=initials, upper=upper)
     except MergedCellsError as e:
         total = sum(len(v) for v in e.merged.values())
         log.error("拒绝导入 | %s | 含 %d 处合并单元格，未进入待导入列表"
@@ -429,7 +435,10 @@ def parse_one(path, origin, log):
     log.ok(msg)
     notes = [c["type_note"] for c in td["columns"] if c.get("type_note")]
     if notes:
-        log.info("类型修正 | %s | %d 列按表头语义调整" % (origin, len(notes)))
+        # 文案要跟 GUI 的 [类型修正] 一样带出来：只报条数的话，
+        # 现场看到 DATE 一列还是不知道为什么（可见痕迹口径）
+        log.info("类型修正 | %s | %d 列按表头语义调整：%s"
+                 % (origin, len(notes), "；".join(notes)))
         for n in notes:
             log.detail(n)
     return td, None
@@ -736,11 +745,13 @@ def run(argv=None):
     code = EXIT_OK
     tmp_dir = None
     try:
-        log.info("excel2mysql-cli %s | Python %s | 动作 %s"
+        log.info("excel2mysql-cli %s | Python %s | 动作 %s%s%s"
                  % (APP_VERSION, sys.version.split()[0],
                     "检查连接" if args.check
                     else ("只推断" if args.dry_run
-                          else "建表导入" + ("+执行脚本" if args.run_sql else ""))))
+                          else "建表导入" + ("+执行脚本" if args.run_sql else "")),
+                    "，命名取拼音首字母" if args.initials else "",
+                    "，表名与字段名转大写" if args.upper else ""))
         try:
             cfg = resolve_cfg(args, log)
         except ValueError as e:
@@ -774,7 +785,8 @@ def run(argv=None):
         tables = []
         if entries:
             for path, origin in entries:
-                td, err = parse_one(path, origin, log)
+                td, err = parse_one(path, origin, log, initials=args.initials,
+                                   upper=args.upper)
                 if td is None:
                     parse_failed += 1
                 else:

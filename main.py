@@ -34,6 +34,8 @@ warnings.filterwarnings("ignore", message=".*no default style.*", append=True)
 warnings.filterwarnings("ignore", message=".*no longer supported by the Python core team.*",
                         append=True)
 
+import functools
+
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat
 from PySide6.QtWidgets import (
@@ -376,7 +378,8 @@ class ProgressWorker(QThread):
 _PARSE_UNITS = 5
 
 
-def parse_import_files(files, existing_paths, zip_dir, dest_start, sink):
+def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
+                       initials=False, upper=False):
     """ZIP 展开 + 逐文件解析表结构，返回待导入列表与汇总计数。
 
     进度总项数先按「每个压缩包 1 项 + 包内每个 Excel 解出 1 项 + 每个待解析 Excel
@@ -454,7 +457,8 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink):
                 sink.advance(1, f"{n}：{text}")
 
         try:
-            td = build_table_def(f, progress_cb=phase)
+            td = build_table_def(f, progress_cb=phase, initials=initials,
+                                 upper=upper)
             tables.append(td)
             (added_zip if f in from_zip else added_loose).append(f)
             pk = td.get("primary_key")
@@ -1081,6 +1085,28 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.ed_prefix, 1)
         prefix_row.addWidget(self.btn_apply_prefix)
         prefix_row.addWidget(self.btn_replace_prefix)
+        # 命名开关放在表名治理行：它和前缀一样是"名字怎么起"的治理项。
+        # 不能进底部操作条——那条的最小宽度已经贴着 768，再塞一颗复选框
+        # 会被 U7 的"整窗落在可用区内"当场抓住（实测顶到 922）。
+        # 两颗复选框竖着摞，横向只占一颗的宽度，免得把这一行也顶宽
+        name_switches = QVBoxLayout()
+        self.chk_initials = QCheckBox("表名与字段名取拼音首字母")
+        self.chk_initials.setToolTip(
+            "勾选后，由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、\n"
+            "水库基础信息 → skjcxx）；默认全拼（ding_dan_jin_e）。\n"
+            "文件名括号里显式写下的英文表名不受影响；对之后添加的文件生效。")
+        self.chk_initials.toggled.connect(self.on_initials_toggled)
+        name_switches.addWidget(self.chk_initials)
+        self.chk_upper = QCheckBox("表名与字段名转大写")
+        self.chk_upper.setToolTip(
+            "勾选后，由中文或文件名转写出来的表名与字段名全部大写\n"
+            "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；\n"
+            "默认小写。文件名括号里写下的英文表名同样转大写；\n"
+            "结构定义 Sheet 里人工写的字段名与手动改过的表名前缀原样保留；\n"
+            "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
+        self.chk_upper.toggled.connect(self.on_upper_toggled)
+        name_switches.addWidget(self.chk_upper)
+        prefix_row.addLayout(name_switches)
         fl.addLayout(prefix_row)
 
         btns = QHBoxLayout()
@@ -1704,6 +1730,18 @@ class MainWindow(QWidget):
                        f"{cfg['host']}:{cfg['port']}（用户 {cfg['user']}），库列表未加载\n"
                        + indent_detail(describe_db_error(e)), error=True)
 
+    def on_initials_toggled(self, checked):
+        """命名开关切换要留痕：之后看到 ddje 这样的字段名，得能对上是自己勾的。"""
+        self.log.appendPlainText(
+            "[提示] 命名规则切换为：%s（对之后添加的文件生效）"
+            % ("拼音首字母" if checked else "全拼"))
+
+    def on_upper_toggled(self, checked):
+        """大小写开关同样留痕：列表里忽然一片大写，得能对上是自己勾的。"""
+        self.log.appendPlainText(
+            "[提示] 表名与字段名大小写切换为：%s（对之后添加的文件生效，"
+            "结构定义 Sheet 里人工写的字段名不受影响）" % ("大写" if checked else "小写"))
+
     def on_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, "选择 Excel 文件或 ZIP 压缩包", "",
@@ -1722,8 +1760,14 @@ class MainWindow(QWidget):
     def _add_files(self, files):
         """添加文件：展开压缩包 + 解析表结构全在子线程，主线程只弹模态进度框。"""
         has_zip = any(f.lower().endswith(".zip") for f in files)
+        # 开关状态在主线程取好再进子线程：子线程不碰控件。
+        # 用 partial 绑关键字，不塞进 args 元组——_run_modal 会把 sink 追加在末尾，
+        # 塞进去就会把 sink 挤到 initials 形参上（H11 那次就是这么红的）
         self._run_modal(
-            "正在解析文件…", parse_import_files,
+            "正在解析文件…",
+            functools.partial(parse_import_files,
+                              initials=self.chk_initials.isChecked(),
+                              upper=self.chk_upper.isChecked()),
             (files, {t.get("filepath") for t in self.tables},
              self._zip_dir() if has_zip else None, len(self._zip_origin)),
             on_done=self._finish_add_files)
