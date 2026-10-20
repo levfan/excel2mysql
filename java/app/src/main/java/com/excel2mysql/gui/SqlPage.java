@@ -335,7 +335,7 @@ public final class SqlPage extends JPanel {
         return false;
     }
 
-    /** 目标库提示条由主窗口同源刷新，两页说的是同一个库。 */
+    /** 目标库提示条由主窗口同源刷新，三页说的是同一个库。 */
     public void setHint(boolean ok, String message) {
         if (ok) {
             hint.setOk(message);

@@ -105,6 +105,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JButton sqlRunClearBtn;
     private javax.swing.JButton sqlRunHelpBtn;
     private javax.swing.JLabel sqlRunHint;
+    /** 第三个页签顶部的当前目标库信息条：与前两页同一次刷新、同一个来源。 */
+    private HintLabel sqlRunDbHint;
     private javax.swing.JDialog sqlRunSamples;
     private javax.swing.JList<String> sqlRunSamplesList;
     private javax.swing.JTextArea sqlRunPreview;
@@ -136,7 +138,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         north.add(buildHeaderRow(), BorderLayout.NORTH);
         north.add(buildConnectionBar(), BorderLayout.CENTER);
         add(north, BorderLayout.NORTH);
-        // 两个页签共用上方那条连接栏：口令只有一份，写在页签里会出现"这页连的是哪个库"的歧义
+        // 三个页签共用上方那条连接栏：口令只有一份，写在页签里会出现"这页连的是哪个库"的歧义
         tabs = new javax.swing.JTabbedPane();
         sqlPage = new SqlPage(this);
         impHint = new HintLabel();
@@ -144,7 +146,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tabs.addTab("SQL 脚本改名入库", sqlPage);
         tabs.addTab("SQL 执行器", buildSqlRunPage());
         add(tabs, BorderLayout.CENTER);
-        // 切页也要刷新：两页提示条同源，不刷就会停在"上一个页签当时看到的库"
+        // 切页也要刷新：三页提示条同源，不刷就会停在"上一个页签当时看到的库"
         tabs.addChangeListener(e -> refreshDbLabels());
         bindHelpKey();
         refreshDbLabels();
@@ -550,8 +552,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 两页顶部的目标库提示条同源刷新：一条说 Excel 导到哪，一条说 SQL 跑到哪。
-     * 各写一份的话，用户会在两个页签看到两个"当前库"。
+     * 三页顶部的目标库提示条同源刷新：一条说 Excel 导到哪，一条说脚本跑到哪，
+     * 一条说编辑区这段 SQL 跑到哪。各写一份的话，用户会在三个页签看到三个"当前库"。
      */
     public void refreshDbLabels() {
         if (impHint == null) {
@@ -564,6 +566,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             if (sqlPage != null) {
                 sqlPage.setHint(false, text);
             }
+            if (sqlRunDbHint != null) {
+                sqlRunDbHint.setBad(text);
+            }
             return;
         }
         String head = "当前目标库：" + db + "（" + hostField.getText().trim() + ":"
@@ -572,6 +577,22 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         if (sqlPage != null) {
             sqlPage.setHint(true, head + "SQL 脚本将执行到这个库");
         }
+        if (sqlRunDbHint != null) {
+            sqlRunDbHint.setOk(head + "编辑区里的 SQL 将执行到这个库");
+        }
+    }
+
+    /** 第三个页签那条信息条的文本与本体：自检与对撞器按这两个口取证。 */
+    public String runDbHintText() {
+        return sqlRunDbHint == null ? "" : sqlRunDbHint.hintText();
+    }
+
+    public HintLabel runDbHint() {
+        return sqlRunDbHint;
+    }
+
+    public boolean runDbHintIsOk() {
+        return sqlRunDbHint != null && sqlRunDbHint.isOk();
     }
 
     public String excelHintText() {
@@ -1562,9 +1583,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JPanel north = new javax.swing.JPanel(new java.awt.BorderLayout());
         javax.swing.JPanel bar = new javax.swing.JPanel(
                 new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        sqlRunDbHint = new HintLabel();
+        north.add(sqlRunDbHint, java.awt.BorderLayout.NORTH);
         sqlRunHint = new javax.swing.JLabel(
                 "直接输入 SQL 执行：建库、建表、改结构、查元数据都行；一次可以写多条，用分号分隔");
-        north.add(sqlRunHint, java.awt.BorderLayout.NORTH);
+        north.add(sqlRunHint, java.awt.BorderLayout.CENTER);
         sqlRunHelpBtn = new javax.swing.JButton("示例 (?)");
         sqlRunHelpBtn.setToolTipText("打开示例清单：选中一条可复制到剪贴板或插到编辑区");
         sqlRunHelpBtn.addActionListener(e -> openSqlSamples());

@@ -96,7 +96,7 @@ def program_dir() -> str:
 LOG_ERROR_COLOR = "#c62828"
 MAX_LOG_STATEMENT = 2000   # 出错语句全文最长展示，超出截断，避免超大 INSERT 刷爆日志
 
-# 连接区在两个页签上方常驻，不属于任何一页，指引必须指向"上方"而不是某个页签
+# 连接区在三个页签上方常驻，不属于任何一页，指引必须指向"上方"而不是某个页签
 NO_DB_HINT = "未选择目标数据库：请先在上方填写连接信息并点「连接并加载库」，再选择目标库"
 NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
 
@@ -1152,7 +1152,7 @@ class MainWindow(QWidget):
         self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本改名入库")
         self.main_tabs.addTab(self._build_sql_run_page(), "SQL 执行器")
         root.addWidget(self.main_tabs, 1)
-        # 切页签 / 切换目标库 / 改主机端口时，刷新两页顶部各自的当前数据库信息条
+        # 切页签 / 切换目标库 / 改主机端口时，刷新三页顶部各自的当前数据库信息条
         #（信息条文案含 host:port，改了主机端口必须同步，否则显示的是旧地址）
         self.main_tabs.currentChanged.connect(self._on_tab_changed)
         self.cb_db.currentIndexChanged.connect(self._on_db_changed)
@@ -1160,7 +1160,7 @@ class MainWindow(QWidget):
         self.ed_port.valueChanged.connect(self._refresh_db_labels)
         self._refresh_db_labels()
 
-    # -------------------- 当前目标库状态条（两个页签各一条，同源刷新） --------------------
+    # -------------------- 当前目标库状态条（三个页签各一条，同源刷新） --------------------
     def _on_tab_changed(self, index):
         self._refresh_db_labels()
 
@@ -1174,13 +1174,16 @@ class MainWindow(QWidget):
             head = f"当前目标库：{db}（{cfg['host']}:{cfg['port']}）——"
             self.lbl_imp_db.setText(head + "Excel 数据将导入到这个库")
             self.lbl_sql_db.setText(head + "SQL 脚本将执行到这个库")
+            self.lbl_run_db.setText(head + "编辑区里的 SQL 将执行到这个库")
             style = "color: #1a7f37; font-weight: bold;"
         else:
             self.lbl_imp_db.setText("⚠ " + NO_DB_HINT)
             self.lbl_sql_db.setText("⚠ " + NO_DB_HINT)
+            self.lbl_run_db.setText("⚠ " + NO_DB_HINT)
             style = "color: #c62828; font-weight: bold;"
         self.lbl_imp_db.setStyleSheet(style)
         self.lbl_sql_db.setStyleSheet(style)
+        self.lbl_run_db.setStyleSheet(style)
 
     # -------------------- 使用说明 / 关于 --------------------
     def on_help(self):
@@ -1557,6 +1560,11 @@ class MainWindow(QWidget):
         """
         page = QWidget()
         lay = QVBoxLayout(page)
+
+        # 当前目标库状态条：与前两页同源、同一次刷新（公共连接区改了库或改了主机端口都得跟着变）
+        self.lbl_run_db = QLabel()
+        self.lbl_run_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(self.lbl_run_db)
 
         # 提示单独占一行，三颗按钮另起一行：QLabel 不折行，它的最小宽度就是整句的宽度，
         # 和按钮排在同一行会把整个窗口的最小宽度顶到 830 以上——小屏（1024x768 的现场机、
