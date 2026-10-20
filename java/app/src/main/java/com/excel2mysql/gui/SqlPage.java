@@ -3,6 +3,7 @@ package com.excel2mysql.gui;
 import com.excel2mysql.core.Config;
 import com.excel2mysql.core.DbClient;
 import com.excel2mysql.core.ImportParse;
+import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.LogText;
 import com.excel2mysql.core.MetaExport;
 import com.excel2mysql.core.TableOps;
@@ -13,6 +14,7 @@ import com.excel2mysql.core.SqlScript;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -148,6 +150,9 @@ public final class SqlPage extends JPanel {
                     + "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头";
     private JButton genStd;
     private JButton genSimple;
+    /** 第二页自己的命名开关：默认都不勾选，脚本里的名字原样生成。 */
+    private final JCheckBox initialsBox = new JCheckBox("表名与字段名取拼音首字母");
+    private final JCheckBox upperBox = new JCheckBox("表名与字段名转大写");
     private final List<String> rowPath = new ArrayList<String>();
     private final DefaultTableModel model;
     private final JTable table;
@@ -233,6 +238,20 @@ public final class SqlPage extends JPanel {
         JButton clearLog = new JButton("清除日志");
         clearLog.addActionListener(e -> logPanel.clearLog());
 
+        // 只改之后生成的 Excel：默认不勾选，脚本正文与表名清单一个字不动
+        initialsBox.setToolTipText("勾选后，生成的 Excel 里含中文的表名与字段名取拼音首字母"
+                + "（订单金额 → ddje）；默认不勾选，脚本里写什么就生成什么。"
+                + "只影响之后生成的 Excel，不改脚本正文。");
+        initialsBox.addActionListener(e -> log("[提示] 命名规则切换为："
+                + (initialsBox.isSelected() ? "拼音首字母" : "保持原样")
+                + "（对之后生成的 Excel 生效，脚本正文不改）"));
+        upperBox.setToolTipText("勾选后，生成的 Excel 里的表名与字段名全部大写"
+                + "（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；默认不勾选。"
+                + "只影响之后生成的 Excel，不改脚本正文。");
+        upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："
+                + (upperBox.isSelected() ? "大写" : "保持原样")
+                + "（对之后生成的 Excel 生效，脚本正文不改）"));
+
         // 前缀行按 Python 的 addWidget(ed_sql_prefix, 1)：输入框吃掉剩余宽度，两颗按钮贴右
         JPanel prefixBtns = flow();
         prefixBtns.add(apply);
@@ -252,8 +271,13 @@ public final class SqlPage extends JPanel {
         actRow.add(runBtns, BorderLayout.WEST);
         actRow.add(clearLog, BorderLayout.EAST);
 
+        JPanel nameRow = flow();
+        nameRow.add(initialsBox);
+        nameRow.add(upperBox);
+
         JPanel actions = new JPanel(new BorderLayout());
         actions.add(prefixRow, BorderLayout.NORTH);
+        actions.add(nameRow, BorderLayout.CENTER);
         actions.add(actRow, BorderLayout.SOUTH);
 
         JPanel upper = new JPanel(new BorderLayout(4, 4));
@@ -442,6 +466,14 @@ public final class SqlPage extends JPanel {
             paths.add(f.getPath());
         }
         addFiles(paths);
+    }
+
+    public JCheckBox initialsBox() {
+        return initialsBox;
+    }
+
+    public JCheckBox upperBox() {
+        return upperBox;
     }
 
     /**
@@ -921,8 +953,10 @@ public final class SqlPage extends JPanel {
         }
         log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（脚本 " + items.size()
                 + " 个，输出根目录 " + outRoot + "）=====");
+        final boolean initials = initialsBox.isSelected();
+        final boolean upper = upperBox.isSelected();
         host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
-                sink -> exportFromScripts(items, outRoot, withMeta, sink),
+                sink -> exportFromScripts(items, outRoot, withMeta, initials, upper, sink),
                 out -> finishGenerate((GenResult) out));
     }
 
@@ -943,10 +977,26 @@ public final class SqlPage extends JPanel {
      * 只有表头——这些都是日志里要看得见的决定，不是静默近似。
      */
     static GenResult exportFromScripts(List<Src> items, String outRoot, boolean withMeta,
+                                       boolean initials, boolean upper,
                                        ImportParse.Sink sink) {
         GenResult res = new GenResult();
         List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
         Map<String, String> where = new LinkedHashMap<String, String>();
+        Map<String, Integer> usedTables = new LinkedHashMap<String, Integer>();
+        Names naming = null;
+        if (initials || upper) {
+            naming = new Names(com.excel2mysql.core.PinyinLoader.get());
+            naming.setInitialsOnly(initials);
+            List<String> parts = new ArrayList<String>();
+            if (initials) {
+                parts.add("取拼音首字母");
+            }
+            if (upper) {
+                parts.add("转大写");
+            }
+            // 与 Python 的 sql_meta_export_task 同一句：生成物被改过名要能一眼看见
+            sink.log("[命名] 生成物表名与字段名：" + String.join("、", parts));
+        }
         for (Src s : items) {
             if (sink.cancelled()) {
                 break;
@@ -969,7 +1019,7 @@ public final class SqlPage extends JPanel {
                 if (t.columns.isEmpty()) {
                     continue;      // 为什么不可导出，上面那条说明已经讲了
                 }
-                work.add(ofParsed(t));
+                work.add(ofParsed(t, naming, initials, upper, usedTables));
             }
         }
         res.total = work.size();
@@ -991,14 +1041,55 @@ public final class SqlPage extends JPanel {
 
     /** 解析结果 -> meta_export 的入参：脚本里没有数据行，rows 留空，数据 Sheet 只剩表头。 */
     static MetaExport.Source ofParsed(SqlScript.ParsedTable t) {
+        return ofParsed(t, null, false, false, null);
+    }
+
+    /**
+     * 第二页的命名开关只作用在生成物上：默认（naming 为 null）原样照搬；
+     * 勾选后含中文的名字按首字母转写，英文标识符只在勾了大写时改大小写。
+     */
+    static MetaExport.Source ofParsed(SqlScript.ParsedTable t, Names naming,
+                                      boolean initials, boolean upper,
+                                      Map<String, Integer> usedTables) {
         TableOps.Table table = new TableOps.Table();
-        table.tableName = t.tableName;
-        table.baseTableName = t.tableName;
         table.tableComment = t.tableComment;
-        table.columns = t.columns;
+        if (naming == null) {
+            table.tableName = t.tableName;
+            table.baseTableName = t.tableName;
+            table.columns = t.columns;
+        } else {
+            table.tableName = Names.dedupField(usedTables,
+                    namingName(t.tableName, true, initials, upper, naming));
+            table.baseTableName = table.tableName;
+            Map<String, Integer> seen = new LinkedHashMap<String, Integer>();
+            List<Infer.Column> cols = new ArrayList<Infer.Column>();
+            for (Infer.Column c : t.columns) {
+                Infer.Column nc = new Infer.Column();
+                nc.field = Names.dedupField(seen,
+                        namingName(c.field, false, initials, upper, naming));
+                nc.comment = c.comment;
+                nc.type = c.type;
+                nc.primaryKey = c.primaryKey;
+                nc.nullable = c.nullable;
+                cols.add(nc);
+            }
+            table.columns = cols;
+        }
         MetaExport.Source s = new MetaExport.Source();
         s.table = table;
         return s;
+    }
+
+    private static final java.util.regex.Pattern HAN =
+            java.util.regex.Pattern.compile("[\\u4e00-\\u9fff]");
+
+    static String namingName(String name, boolean isTable, boolean initials, boolean upper,
+                             Names naming) {
+        String out = name == null ? "" : name;
+        if (initials && HAN.matcher(out).find()) {
+            out = isTable ? naming.sanitizeTableName(out) : naming.colToField(out);
+        }
+        return upper ? out.toUpperCase(java.util.Locale.ROOT) : out;
     }
 
     /** 生成收尾：日志与弹窗双写同一句话，目录名原样给出来。 */

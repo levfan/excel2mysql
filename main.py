@@ -35,6 +35,7 @@ warnings.filterwarnings("ignore", message=".*no longer supported by the Python c
                         append=True)
 
 import functools
+import re
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat
@@ -49,7 +50,7 @@ from PySide6.QtWidgets import (
 from core.log_text import describe_db_error
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
-    replace_first_segment,
+    replace_first_segment, sanitize_table_name, _col_to_field, dedup_field,
 )
 from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
@@ -778,17 +779,38 @@ def sql_run_task(text, cfg, sink):
             pass
 
 
-def sql_meta_export_task(items, out_root, with_meta, sink):
+def _sql_naming(name, initials, upper, is_table):
+    """第二页的命名开关：只重写含中文的名字；纯英文只在勾了大写时改大小写。
+
+    脚本里的英文标识符本来就是合法表名/字段名，默认不勾选时一个字不动；
+    勾「取拼音首字母」才有转写动作，勾「转大写」才有大小写动作。
+    """
+    if initials and re.search(r"[\u4e00-\u9fff]", name):
+        name = (sanitize_table_name(name, initials=True)
+                if is_table else _col_to_field(name, initials=True))
+    return name.upper() if upper else name
+
+
+def sql_meta_export_task(items, out_root, with_meta, initials, upper, sink):
     """「SQL 脚本改名入库」页的生成标准/简易 Excel：先从脚本正文解析表定义，再走同一套导出。
 
     items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
     所以"先批量改前缀、再生成交付件"这条路是通的——产物里的表名就是新表名。
     脚本里只有结构没有数据，所以「数据」Sheet 只有英文字段名那一行表头，
     给下游当可填模板用，不假装里面有数据。
+    第二页的两颗命名开关只作用在生成物上：默认不勾选时表名与字段名原样，
+    勾选后含中文的名字按首字母转写、并按需转大写；脚本正文一个字不动。
     """
     from core.meta_export import export_tables
 
-    tables, where = [], {}
+    if initials or upper:
+        parts = []
+        if initials:
+            parts.append("取拼音首字母")
+        if upper:
+            parts.append("转大写")
+        sink.log("[命名] 生成物表名与字段名：%s" % "、".join(parts))
+    tables, where, used_tables = [], {}, {}
     for path, text in items:
         if sink.cancelled:
             break
@@ -805,6 +827,17 @@ def sql_meta_export_task(items, out_root, with_meta, sink):
                 sink.log("! [WARN] 说明 | `%s`：%s" % (name, note))
             if not t["columns"]:
                 continue        # 为什么不可导出，上面那条说明已经讲了
+            if initials or upper:
+                t = dict(t)
+                t["table_name"] = dedup_field(
+                    used_tables, _sql_naming(t["table_name"], initials, upper, True))
+                seen_fields = {}
+                t["columns"] = [
+                    dict(c, field=dedup_field(
+                        seen_fields,
+                        _sql_naming(c["field"], initials, upper, False)))
+                    for c in t["columns"]
+                ]
             tables.append(t)
     if not tables:
         sink.log("! [WARN] 没有可导出的表：这些脚本里解析不出带列定义的 CREATE TABLE")
@@ -1385,6 +1418,25 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.btn_sql_prefix)
         prefix_row.addWidget(self.btn_sql_replace)
 
+        # 第二页自己的两颗命名开关：默认都不勾选，脚本里的名字原样生成。
+        # 只改之后生成的 Excel，不改脚本正文，也不动上面的表名清单。
+        name_row = QHBoxLayout()
+        self.chk_sql_initials = QCheckBox("表名与字段名取拼音首字母")
+        self.chk_sql_initials.setToolTip(
+            "勾选后，生成的 Excel 里含中文的表名与字段名取拼音首字母\n"
+            "（订单金额 → ddje）；默认不勾选，脚本里写什么就生成什么。\n"
+            "只影响之后生成的 Excel，不改脚本正文。")
+        self.chk_sql_initials.toggled.connect(self.on_sql_initials_toggled)
+        self.chk_sql_upper = QCheckBox("表名与字段名转大写")
+        self.chk_sql_upper.setToolTip(
+            "勾选后，生成的 Excel 里的表名与字段名全部大写\n"
+            "（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；默认不勾选。\n"
+            "只影响之后生成的 Excel，不改脚本正文。")
+        self.chk_sql_upper.toggled.connect(self.on_sql_upper_toggled)
+        name_row.addWidget(self.chk_sql_initials)
+        name_row.addWidget(self.chk_sql_upper)
+        name_row.addStretch(1)
+
         act_row = QHBoxLayout()
         self.btn_sql_save = QPushButton("保存修改后脚本")
         self.btn_sql_save.clicked.connect(self.on_sql_save_modified)
@@ -1425,6 +1477,7 @@ class MainWindow(QWidget):
         up_lay.setContentsMargins(0, 0, 0, 0)
         up_lay.addWidget(self.sql_table, 1)
         up_lay.addLayout(prefix_row)
+        up_lay.addLayout(name_row)
         up_lay.addLayout(act_row)
 
         self.sql_split = QSplitter(Qt.Vertical)
@@ -1455,6 +1508,17 @@ class MainWindow(QWidget):
             items[0].setToolTip(path)
             for j, it in enumerate(items):
                 self.sql_table.setItem(i, j, it)
+
+    def on_sql_initials_toggled(self, checked):
+        """第二页的命名开关只作用于生成物，日志里说清作用域，别让人以为脚本被改了。"""
+        self.sql_log.appendPlainText(
+            "[提示] 命名规则切换为：%s（对之后生成的 Excel 生效，脚本正文不改）"
+            % ("拼音首字母" if checked else "保持原样"))
+
+    def on_sql_upper_toggled(self, checked):
+        self.sql_log.appendPlainText(
+            "[提示] 表名与字段名大小写切换为：%s（对之后生成的 Excel 生效，脚本正文不改）"
+            % ("大写" if checked else "保持原样"))
 
     def on_sql_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -1579,7 +1643,9 @@ class MainWindow(QWidget):
                    % len(self.sql_files))
         items = [(s["path"], s["text"]) for s in self.sql_files]
         self._run_modal("正在生成%sexcel文件…" % label, sql_meta_export_task,
-                        (items, out_root, with_meta),
+                        (items, out_root, with_meta,
+                         self.chk_sql_initials.isChecked(),
+                         self.chk_sql_upper.isChecked()),
                         on_done=self._finish_sql_gen_excel, log_view=self.sql_log)
 
     def _finish_sql_gen_excel(self, res):
