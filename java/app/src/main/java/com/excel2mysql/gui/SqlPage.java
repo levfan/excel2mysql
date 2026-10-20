@@ -32,7 +32,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * SQL 脚本页签，对应 main.py:1115-1324。
+ * SQL 脚本改名入库页签，对应 main.py:1115-1324。
  *
  * 脚本的改写只动内存里的文本，落盘要另外点「保存修改后脚本」——
  * 和 Python 侧一样：改错了不该把原文件覆盖掉。

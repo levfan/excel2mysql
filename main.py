@@ -918,7 +918,7 @@ class MainWindow(QWidget):
         fit_client(self, 1100, 780)
         self.tables = []            # 解析后的表定义列表
         self.worker = None
-        self.sql_files = []         # SQL 脚本页：[{"path","text","modified","rename_map"}]
+        self.sql_files = []         # SQL 脚本改名入库页：[{"path","text","modified","rename_map"}]
         self._zip_tmp = None        # ZIP 展开用的会话级临时目录，惰性创建
         self._zip_origin = {}       # 解压出的路径 → "包名!包内路径"，供文件列表 tooltip
         self.task_dialog = None     # 当前模态进度框，None 表示没有任务在跑
@@ -976,12 +976,12 @@ class MainWindow(QWidget):
         f.addRow("目标库：", h)
         root.addWidget(conn_box)
 
-        # 2. 功能页签：Excel 导入 / SQL 脚本 / SQL 执行器（位于数据库信息下方）
+        # 2. 功能页签：Excel 导入 / SQL 脚本改名入库 / SQL 执行器（位于数据库信息下方）
         self.main_tabs = QTabWidget()
         excel_page = QWidget()
         excel_lay = QVBoxLayout(excel_page)
 
-        # 2.0 当前目标库状态条：与「SQL 脚本」页顶部同源，随目标库选择联动刷新
+        # 2.0 当前目标库状态条：与「SQL 脚本改名入库」页顶部同源，随目标库选择联动刷新
         self.lbl_imp_db = QLabel()
         self.lbl_imp_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
         excel_lay.addWidget(self.lbl_imp_db)
@@ -1111,7 +1111,7 @@ class MainWindow(QWidget):
         excel_lay.addWidget(self.progress)
 
         self.main_tabs.addTab(excel_page, "Excel 导入")
-        self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本")
+        self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本改名入库")
         self.main_tabs.addTab(self._build_sql_run_page(), "SQL 执行器")
         root.addWidget(self.main_tabs, 1)
         # 切页签 / 切换目标库 / 改主机端口时，刷新两页顶部各自的当前数据库信息条
@@ -1242,7 +1242,7 @@ class MainWindow(QWidget):
     def on_clear_log(self):
         self.log.clear()
 
-    # -------------------- SQL 脚本页 --------------------
+    # -------------------- SQL 脚本改名入库页 --------------------
     def _build_sql_page(self):
         page = QWidget()
         lay = QVBoxLayout(page)
@@ -1464,7 +1464,7 @@ class MainWindow(QWidget):
 
     # -------------------- SQL 执行器页 --------------------
     def _build_sql_run_page(self):
-        """第三个页签。与「SQL 脚本」页的分工：那一页管"手上有一批 .sql 文件要入库"
+        """第三个页签。与「SQL 脚本改名入库」页的分工：那一页管"手上有一批 .sql 文件要入库"
         （挑文件、改表名、落盘副本），这一页管"临时问一句、顺手改点结构"，
         所以它不挑文件也不落盘，只吃编辑区里那段文本。
         """

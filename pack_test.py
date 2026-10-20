@@ -443,7 +443,7 @@ check("F1 MainWindow 构造成功，标题带版本号",
       w.windowTitle().startswith("Excel → MySQL 批量导入工具 v")
       and app_main.APP_VERSION in w.windowTitle(), w.windowTitle())
 check("F2 前两个页签齐全", [w.main_tabs.tabText(i) for i in range(2)]
-      == ["Excel 导入", "SQL 脚本"])
+      == ["Excel 导入", "SQL 脚本改名入库"])
 w.cb_db.blockSignals(True); w.cb_db.clear()
 w.cb_db.addItem("testdb", "testdb")
 w.cb_db.blockSignals(False)
@@ -537,9 +537,9 @@ check("F18 保存后 modified 标记复位，重复保存不再产生新写入",
       w.sql_files[-1]["modified"] is False)
 
 # ---- 第三个页签「SQL 执行器」：编辑区、三颗按钮、示例对话框与执行语义 ----
-check("F19 页签顺序为 Excel 导入 / SQL 脚本 / SQL 执行器",
+check("F19 页签顺序为 Excel 导入 / SQL 脚本改名入库 / SQL 执行器",
       [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())]
-      == ["Excel 导入", "SQL 脚本", "SQL 执行器"],
+      == ["Excel 导入", "SQL 脚本改名入库", "SQL 执行器"],
       [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())])
 check("F20 编辑区开场就是那句连通检查且不折行",
       w.sql_run_input.toPlainText() == app_main.SQL_RUN_DEFAULT
@@ -1078,7 +1078,7 @@ check("K8 固定件不在分隔条内（提示条/操作条/进度条不跟着�
       w.lbl_imp_db.parent() is not sp and w.progress.parent() is not sp
       and w.btn_import.parent() is not sp)
 check("K9 初始三段高度都大于 0", all(x > 0 for x in sp.sizes()), sp.sizes())
-# ---- SQL 脚本页：待处理文件表格与日志之间同样可拖拽分配高度 ----
+# ---- SQL 脚本改名入库页：待处理文件表格与日志之间同样可拖拽分配高度 ----
 from PySide6.QtWidgets import QTableWidget
 
 w.main_tabs.setCurrentIndex(1)
@@ -2389,7 +2389,7 @@ rw5.btn_replace_prefix.click()
 check("R26 没有文件时只提示，不报错",
       any(x == app_main.NO_FILE_HINT for _, x in POPUPS) and rw5.tables == [])
 
-# ---- SQL 脚本页 UI ----
+# ---- SQL 脚本改名入库页 UI ----
 rpath = os.path.join(_tmpdir, "换前缀样本.sql")
 open(rpath, "w", encoding="utf-8").write(rsql)
 sw3 = app_main.MainWindow()

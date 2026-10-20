@@ -877,12 +877,12 @@ public final class GuiMain {
 
     private static void sql_page(MainFrame frame, List<String> problems) {
         List<String> titles = frame.tabTitles();
-        if (!titles.contains("Excel 导入") || !titles.contains("SQL 脚本")) {
+        if (!titles.contains("Excel 导入") || !titles.contains("SQL 脚本改名入库")) {
             problems.add("页签不齐全：" + titles);
         }
         com.excel2mysql.gui.SqlPage page = frame.sqlPage();
         if (page == null) {
-            problems.add("界面上没有 SQL 脚本页");
+            problems.add("界面上没有「SQL 脚本改名入库」页");
             return;
         }
         // 分栏配置照 Python：把手 6px、余量 1:3 给日志、初始 260

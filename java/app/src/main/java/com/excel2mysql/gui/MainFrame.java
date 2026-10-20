@@ -141,7 +141,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlPage = new SqlPage(this);
         impHint = new HintLabel();
         tabs.addTab("Excel 导入", buildCenter());
-        tabs.addTab("SQL 脚本", sqlPage);
+        tabs.addTab("SQL 脚本改名入库", sqlPage);
         tabs.addTab("SQL 执行器", buildSqlRunPage());
         add(tabs, BorderLayout.CENTER);
         // 切页也要刷新：两页提示条同源，不刷就会停在"上一个页签当时看到的库"
@@ -1546,7 +1546,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 双端界面枚举对撞器要按页归属分按钮（两页有重名按钮）。 */
     /**
-     * 第三个页签「SQL 执行器」。与「SQL 脚本」页的分工要说清：那一页管"手上有一批 .sql
+     * 第三个页签「SQL 执行器」。与「SQL 脚本改名入库」页的分工要说清：那一页管"手上有一批 .sql
      * 文件要入库"（挑文件、改表名、落盘副本），这一页管"临时问一句、顺手改点结构"，
      * 所以它不挑文件也不落盘，只吃编辑区里那段文本。
      */
@@ -1597,7 +1597,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return page;
     }
 
-    /** 执行编辑区里那段 SQL。事务与回滚语义走 SqlExecute，与「SQL 脚本」页同一套。 */
+    /** 执行编辑区里那段 SQL。事务与回滚语义走 SqlExecute，与「SQL 脚本改名入库」页同一套。 */
     private void runSqlStatements() {
         final String text = sqlRunInput.getText();
         if (text == null || text.trim().isEmpty()) {

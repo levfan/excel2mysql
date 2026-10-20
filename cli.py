@@ -477,7 +477,7 @@ def read_sql_text(path):
 def plan_scripts(sqls, args, log):
     """读入脚本、报 CREATE TABLE 数量、应用前缀改写，返回 ([(路径, 语句列表)], 读取失败数)。
 
-    改写走 core.sql_script 里 GUI「SQL 脚本」页那两个按钮背后的同一批函数，
+    改写走 core.sql_script 里 GUI「SQL 脚本改名入库」页那两个按钮背后的同一批函数，
     所以同一个脚本在界面里改和在命令行里改，结果逐字符一致。
     """
     plans = []
