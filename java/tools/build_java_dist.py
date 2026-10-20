@@ -75,7 +75,14 @@ def rmtree_writable(path):
         except OSError as e:
             last = e
             time.sleep(0.5 * (attempt + 1))
-    raise RuntimeError("删不掉旧交付目录 %s：%s" % (path, last))
+    raise RuntimeError(
+        "删不掉旧交付目录 %s：%s\n"
+        "      这个目录里有进程还活着——常见的是双击 启动.bat 开着的界面窗口，"
+        "或上一次冒烟测试留下的 java.exe，它把 jre\\bin\\server\\jvm.dll 占住。\n"
+        "      谁在占：powershell -c \"Get-CimInstance Win32_Process -Filter \"\"name='java.exe'\""
+        " | Select ProcessId,CommandLine\"\n"
+        "      命令行里带这个目录路径的那条结束掉再重跑本脚本（关界面窗口也算结束）；"
+        "急着出包就先换个空目录跑，别删正在用的那份。" % (path, last))
 
 
 def pom_version():
