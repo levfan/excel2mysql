@@ -496,7 +496,7 @@ public final class GuiMain {
         for (javax.swing.AbstractButton b : frame.buttons()) {
             texts.add(b.getText());
         }
-        String[] wanted = {"清空列表", "生成表结构预览", "预览 DDL", "清除日志",
+        String[] wanted = {"清空待上传文件", "生成表结构预览", "预览 DDL", "清除日志",
                 "批量应用前缀", "替换首个前缀", "连接并加载库", "开始导入",
                 "生成标准excel文件", "生成简易excel文件"};
         for (String w : wanted) {
@@ -906,7 +906,7 @@ public final class GuiMain {
         }
         frame.clearAll();
         if (frame.pageProgressValue() != 0 || !frame.tables().isEmpty()) {
-            problems.add("「清空列表」没把进度条归零或没清空表");
+            problems.add("「清空待上传文件」没把进度条归零或没清空表");
         }
 
         // 占位提示必须是空态就能看见的灰字，不是只有悬停才出的 tooltip
@@ -1354,6 +1354,11 @@ public final class GuiMain {
         if (!"生成结果".equals(frame.lastDialogTitle())) {
             problems.add("生成完成没弹窗回执：" + frame.lastDialogTitle());
         }
+        javax.swing.JComponent copyBody = frame.popupMessageComponent("目录：复制检查");
+        if (!(copyBody instanceof javax.swing.JTextArea)
+                || ((javax.swing.JTextArea) copyBody).isEditable()) {
+            problems.add("生成结果弹窗正文不可复制：应使用只读文本区");
+        }
 
         java.io.File stdDir = new java.io.File(outRoot, "meta_data_file_" + today());
         String[] produced = stdDir.list();
@@ -1428,18 +1433,25 @@ public final class GuiMain {
             problems.add("没有脚本时点生成按钮没拦下：标题=" + frame.lastDialogTitle());
         }
 
-        // ---- 第二页自己的两颗命名开关：默认不勾选，只改生成物，脚本正文不动 ----
-        if (page.initialsBox().isSelected() || page.upperBox().isSelected()) {
-            problems.add("SQL 页两颗命名开关默认应不勾选");
+        // ---- 第二页的大小写开关：默认不勾选，清单/元数据/生成物一起转大写，脚本正文不动 ----
+        if (page.upperBox().isSelected()) {
+            problems.add("SQL 页大写开关默认应不勾选");
         }
-        page.initialsBox().doClick();
+        boolean hasSqlInitials = false;
+        for (java.awt.Component c : ((java.awt.Container) page.upperBox().getParent()).getComponents()) {
+            if (c instanceof javax.swing.JCheckBox
+                    && "表名与字段名取拼音首字母".equals(((javax.swing.JCheckBox) c).getText())) {
+                hasSqlInitials = true;
+            }
+        }
+        if (hasSqlInitials) {
+            problems.add("SQL 页不应再有「表名与字段名取拼音首字母」开关");
+        }
         page.upperBox().doClick();
         String toggleLog = page.logPanel().text();
-        if (!toggleLog.contains("[提示] 命名规则切换为：拼音首字母"
-                + "（对之后生成的 Excel 生效，脚本正文不改）")
-                || !toggleLog.contains("[提示] 表名与字段名大小写切换为：大写"
-                        + "（对之后生成的 Excel 生效，脚本正文不改）")) {
-            problems.add("SQL 页命名开关切换没写日志说明作用域："
+        if (!toggleLog.contains("[提示] 表名与字段名大小写切换为：大写"
+                + "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）")) {
+            problems.add("SQL 页大小写开关切换没写日志说明作用域："
                     + tailOf(toggleLog).replace((char) 10, (char) 32));
         }
 
@@ -1447,21 +1459,42 @@ public final class GuiMain {
         String caseSql = "CREATE TABLE `t_case9` (" + nl
                 + "  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键'," + nl
                 + "  `订单金额` decimal(10,2) DEFAULT NULL COMMENT '金额'," + nl
-                + "  `订单 金额` int(11) DEFAULT NULL COMMENT '同一首字母'," + nl
                 + "  `客户名称` varchar(32) DEFAULT NULL COMMENT '客户'," + nl
                 + "  PRIMARY KEY (`id`)" + nl
-                + ") ENGINE=InnoDB COMMENT='命名开关检查表';" + nl;
+                + ") ENGINE=InnoDB COMMENT='大小写检查表';" + nl;
         writeText(caseScript.getPath(), caseSql);
         com.excel2mysql.gui.SqlPage named = new com.excel2mysql.gui.SqlPage(frame);
         List<String> casePaths = new ArrayList<String>();
         casePaths.add(caseScript.getPath());
         named.addFiles(casePaths);
-        named.initialsBox().doClick();
         named.upperBox().doClick();
+        if (!named.sqlRowNameEditable(0)) {
+            problems.add("SQL 页「当前表名」列不可直接编辑");
+        }
+        if (!"T_CASE9".equals(named.sqlRowDisplayName(0))
+                || !"t_case9".equals(named.sqlRowActualName(0))) {
+            problems.add("SQL 页当前表名显示大写失败：显示=" + named.sqlRowDisplayName(0)
+                    + " 实际=" + named.sqlRowActualName(0));
+        }
+        com.excel2mysql.core.SqlScript.ParsedTable parsedCase = named.metadataAtRow(0);
+        if (parsedCase == null || parsedCase.columns.size() != 3
+                || !"主键".equals(parsedCase.columns.get(0).comment)) {
+            problems.add("SQL 页双击行的元数据解析不对");
+        }
+        named.setSqlRowName(0, "manual_case");
+        String namedText = named.textOf(caseScript.getPath());
+        if (!"manual_case".equals(named.sqlRowActualName(0))
+                || !"MANUAL_CASE".equals(named.sqlRowDisplayName(0))
+                || !namedText.contains("CREATE TABLE `manual_case`")
+                || !namedText.contains("PRIMARY KEY (`id`)")) {
+            problems.add("SQL 页手改当前表名没落到这一行的脚本文本：" + tailOf(namedText));
+        }
+        named.setSqlRowName(0, "t_case9");
+
         java.io.File namedRoot = new java.io.File(dir, "named");
         named.generateExcel(true, namedRoot.getPath());
         java.io.File namedStd = new java.io.File(namedRoot, "meta_data_file_" + today());
-        String namedFile = "命名开关检查表（T_CASE9）.xlsx";
+        String namedFile = "大小写检查表（T_CASE9）.xlsx";
         java.io.File namedPath = new java.io.File(namedStd, namedFile);
         // 文件名大小写要按目录清单比：Windows 文件系统不区分大小写，isFile() 会把
         // 小写名的产物也认成大写名，开关失效就查不出来
@@ -1470,12 +1503,11 @@ public final class GuiMain {
                 ? new java.util.HashSet<String>()
                 : new java.util.HashSet<String>(java.util.Arrays.asList(namedProduced));
         if (!namedSet.equals(java.util.Collections.singleton(namedFile))) {
-            problems.add("勾两颗开关后标准件目录里的文件不对，应只有 " + namedFile + "："
+            problems.add("勾大写开关后标准件目录里的文件不对，应只有 " + namedFile + "："
                     + java.util.Arrays.toString(namedProduced));
         }
         if (namedPath.isFile()) {
             try {
-                // 结构定义读回时表名取自文件名，默认会转小写；要验大写就带上 upperOnly 读
                 com.excel2mysql.core.Names upNames =
                         new com.excel2mysql.core.Names(
                                 com.excel2mysql.core.PinyinLoader.get());
@@ -1491,13 +1523,13 @@ public final class GuiMain {
                     comments.append(comments.length() == 0 ? "" : "/").append(c.comment);
                 }
                 if (!"T_CASE9".equals(back.table.tableName)
-                        || !"ID/DDJE/DDJE_2/KHMC".equals(fields.toString())
-                        || !"主键/金额/同一首字母/客户".equals(comments.toString())) {
-                    problems.add("SQL 页命名开关生成物回读不对：表名=" + back.table.tableName
+                        || !"ID/订单金额/客户名称".equals(fields.toString())
+                        || !"主键/金额/客户".equals(comments.toString())) {
+                    problems.add("SQL 页大小写开关生成物回读不对：表名=" + back.table.tableName
                             + " 字段=" + fields + " 注释=" + comments);
                 }
             } catch (Exception e) {
-                problems.add("SQL 页命名开关生成物读不回来：" + e);
+                problems.add("SQL 页大小写开关生成物读不回来：" + e);
             }
         }
         String onDisk = null;
@@ -1509,11 +1541,35 @@ public final class GuiMain {
             problems.add("读回命名检查脚本失败：" + e);
         }
         if (!caseSql.equals(onDisk)) {
-            problems.add("勾命名开关后脚本正文被改了");
+            problems.add("勾大小写开关后脚本正文被改了");
         }
         if (!frame.sqlPage().logPanel().text().contains(
-                "[命名] 生成物表名与字段名：取拼音首字母、转大写")) {
+                "[命名] 生成物表名与字段名：转大写")) {
             problems.add("SQL 页生成日志没写明命名口径");
+        }
+        // UTF-8 正文里本来就带 U+FFFD 时，仍要按 UTF-8 解；不能拿这个合法字符当 GBK 信号
+        java.io.File replScript = new java.io.File(dir, "replacement_utf8.sql");
+        String replSql = "CREATE TABLE `t_repl` (`id` int NOT NULL COMMENT '\u7f16\u53f7')"
+                + " COMMENT='\u7f16\u53f7\u8868 \ufffd';";
+        writeText(replScript.getPath(), replSql);
+        try {
+            String readBack = com.excel2mysql.core.SqlRunner.readScript(replScript);
+            com.excel2mysql.core.SqlScript.ParsedTable repl =
+                    com.excel2mysql.core.SqlScript.parseCreateTables(readBack).get(0);
+            if (!"\u7f16\u53f7".equals(repl.columns.get(0).comment)
+                    || !("\u7f16\u53f7\u8868 \ufffd").equals(repl.tableComment)) {
+                int at = repl.tableComment.indexOf(0xFFFD);
+                String around = at < 0 ? repl.tableComment
+                        : repl.tableComment.substring(Math.max(0, at - 3), Math.min(repl.tableComment.length(), at + 3));
+                StringBuilder esc = new StringBuilder();
+                for (int k = 0; k < around.length(); k++) {
+                    esc.append(esc.length() == 0 ? "" : "/").append((int) around.charAt(k));
+                }
+                problems.add("含 U+FFFD 的 UTF-8 脚本被误判编码，元数据注释变成："
+                        + repl.columns.get(0).comment + " / " + esc);
+            }
+        } catch (Exception e) {
+            problems.add("读含 U+FFFD 的 UTF-8 脚本失败：" + e);
         }
     }
 
@@ -1601,7 +1657,7 @@ public final class GuiMain {
             problems.add("加前缀没改到表名：" + text);
         }
         if (!page.isModified(a)) {
-            problems.add("改过却没标记成已修改，「保存修改后脚本」会漏掉它");
+            problems.add("改过却没标记成已修改，「保存修改后ddl脚本」会漏掉它");
         }
         int rowsBefore = page.rowCount();
         page.setPrefixText("ods_");
@@ -1756,8 +1812,8 @@ public final class GuiMain {
                 onUi.add(b.getText());
             }
             String[] named = {"批量应用前缀", "替换首个前缀", "生成表结构预览",
-                    "预览 DDL", "开始导入", "添加 SQL 文件", "保存修改后脚本",
-                    "执行脚本到当前库", "连接并加载库",
+                    "预览 DDL", "开始导入", "添加 SQL 文件", "保存修改后ddl脚本",
+                    "执行修改后ddl脚本到当前库", "连接并加载库",
                     "生成标准excel文件", "生成简易excel文件", "示例 (?)",
                     "清空编辑区", "清空结果区"};
             for (String n : named) {
@@ -2491,7 +2547,7 @@ public final class GuiMain {
     }
 
     /**
-     * 「执行脚本到当前库」任务体的连不上库那一支：端口 1 保证秒失败，不需要真库也能把
+     * 「执行修改后ddl脚本到当前库」任务体的连不上库那一支：端口 1 保证秒失败，不需要真库也能把
      * 这段代码真跑一遍——断的是 connFailed 标志、计数在连库前就算准、错误行按错误级报出。
      */
     private static void sql_run_connect_failure(List<String> problems) {
@@ -2852,7 +2908,7 @@ public final class GuiMain {
 
         frame.clearAll();
         if (std.isEnabled() || simple.isEnabled()) {
-            problems.add("清空列表后生成按钮还亮着");
+            problems.add("清空待上传文件后生成按钮还亮着");
         }
     }
 

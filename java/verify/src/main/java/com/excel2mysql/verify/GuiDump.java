@@ -102,7 +102,6 @@ public final class GuiDump {
                 dumpWidget("drop_existing", frame.dropExistingBox());
                 dumpWidget("initials", frame.initialsBox());
                 dumpWidget("upper", frame.upperBox());
-                dumpWidget("sql_initials", frame.sqlPage().initialsBox());
                 dumpWidget("sql_upper", frame.sqlPage().upperBox());
                 dumpWidget("progress", frame.pageProgressBar());
                 dumpButtons();

@@ -147,11 +147,37 @@ check("A3b cryptography 在场（否则 MySQL 8 重启后首个连接连不上�
 
 import main as app_main
 
-# QMessageBox 是模态的，离屏测试里会把进程挂死；换成记录弹窗内容的桩
+# QMessageBox 是模态的，离屏测试里会把进程挂死；换成记录弹窗内容的桩。
+# 桩同时支持旧的静态方法和新的 build_popup_box 实例接口。
 POPUPS = []
+_REAL_QMESSAGEBOX = app_main.QMessageBox
 
 
 class _RecDialog:
+    def __init__(self, parent=None, *a, **k):
+        self.parent = parent
+        self._title = ""
+        self._text = ""
+
+    def setWindowTitle(self, title):
+        self._title = title
+
+    def setText(self, text):
+        self._text = text
+
+    def setIcon(self, icon):
+        pass
+
+    def setStandardButtons(self, buttons):
+        pass
+
+    def findChildren(self, cls):
+        return []
+
+    def exec(self):
+        POPUPS.append((self._title, self._text))
+        return 0
+
     @staticmethod
     def information(parent, title, text, *a, **k):
         POPUPS.append((title, text))
@@ -161,6 +187,7 @@ class _RecDialog:
 
 
 app_main.QMessageBox = _RecDialog
+app_main._POPUP_MESSAGE_BOX = _RecDialog
 # 进度框同样是模态的，离屏用例里 exec() 会挂住进程。关掉它之后长任务原地跑完，
 # 用的还是同一个工作函数和同一个回报接口，所以断言依然对着线上那段逻辑。
 app_main.MODAL_PROGRESS = False
@@ -2224,7 +2251,7 @@ ow2.sql_files.append({"path": sql_a, "text": open(sql_a, encoding="utf-8").read(
 _FakeProgress.made.clear()
 ow2.on_sql_save_modified()
 d5 = _last_dialog()
-check("O27 「保存修改后脚本」在子线程写盘并弹框",
+check("O27 「保存修改后ddl脚本」在子线程写盘并弹框",
       d5 is not None and "保存" in d5.title and os.path.isfile(
           os.path.join(os.path.dirname(sql_a), "t_a_prefix.sql").replace("t_a_prefix", "a_prefix")),
       [p for p in os.listdir(os.path.dirname(sql_a))])
@@ -2415,7 +2442,7 @@ app_main.HelpDialog = _real_help
 # 文档漂移守卫：说明里写到的按钮名必须是界面上真实存在的文案
 from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
-           "开始导入", "添加 SQL 文件", "保存修改后脚本", "执行脚本到当前库",
+           "开始导入", "添加 SQL 文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
            "示例 (?)", "清空编辑区", "清空结果区"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
@@ -2626,7 +2653,7 @@ aw.worker.abort()
 check("Q18 abort 置位后工作侧立刻能读到取消标志",
       aw.worker._abort is True and sink_probe.cancelled is True)
 
-# ---- 清空列表 / 两页日志各清各的 ----
+# ---- 清空待上传文件 / 两页日志各清各的 ----
 cw = app_main.MainWindow()
 cw._add_files([jx1])
 cw.log.appendPlainText("Excel 页占位")
@@ -2634,9 +2661,11 @@ cw.sql_log.appendPlainText("SQL 页占位")
 cw.btn_clear.click()
 cw.progress.setValue(66)
 cw.btn_clear.click()
-check("Q19 「清空列表」清掉数据与界面并禁用导入按钮",
+check("Q19a 按钮文案已改为「清空待上传文件」",
+      cw.btn_clear.text() == "清空待上传文件", cw.btn_clear.text())
+check("Q19 「清空待上传文件」清掉数据与界面并禁用导入按钮",
       cw.tables == [] and cw.file_table.rowCount() == 0 and cw.btn_import.isEnabled() is False)
-check("Q19b 清空列表时进度条一起归零，不留上次跑到一半的痕迹",
+check("Q19b 清空待上传文件时进度条一起归零，不留上次跑到一半的痕迹",
       cw.progress.value() == 0, cw.progress.value())
 cw.btn_clear_log.click()
 check("Q20 「清除日志」只清本页，不影响另一页",
@@ -3169,36 +3198,75 @@ check("R42 没有脚本时点生成按钮当场拦下：日志与弹窗同一句
       and "已拦下：请先添加 SQL 脚本文件。" in gw2.log.toPlainText(),
       [(t, b[:40]) for t, b in POPUPS])
 
-# ---- 第二个页签自己的两颗命名开关：默认不勾选，只改生成物，脚本正文不动 ----
+# ---- 第二个页签的大小写开关：只留大写一项，清单/元数据/生成物同步，脚本正文默认不动 ----
 nsql = os.path.join(_tmpdir, "name_probe.sql")
 with open(nsql, "w", encoding="utf-8") as _nfh:
     _nfh.write("CREATE TABLE `t_case9` (\n"
                "  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键',\n"
                "  `订单金额` decimal(10,2) DEFAULT NULL COMMENT '金额',\n"
-               "  `订单 金额` int(11) DEFAULT NULL COMMENT '同一首字母',\n"
                "  `客户名称` varchar(32) DEFAULT NULL COMMENT '客户',\n"
                "  PRIMARY KEY (`id`)\n"
-               ") ENGINE=InnoDB COMMENT='命名开关检查表';\n")
+               ") ENGINE=InnoDB COMMENT='大小写检查表';\n")
 nw = app_main.MainWindow()
-check("R43 第一页两颗命名开关默认勾选，第二页两颗默认不勾选",
+check("R43 第一页两颗命名开关默认勾选，第二页只留大小写开关且默认不勾选",
       nw.chk_initials.isChecked() and nw.chk_upper.isChecked()
-      and not nw.chk_sql_initials.isChecked() and not nw.chk_sql_upper.isChecked())
-POPUPS.clear()
-nw.chk_sql_initials.setChecked(True)
-nw.chk_sql_upper.setChecked(True)
-_nlog = nw.sql_log.toPlainText()
-check("R44 第二页开关切换写进日志：只对之后生成的 Excel 生效，脚本正文不改",
-      "[提示] 命名规则切换为：拼音首字母（对之后生成的 Excel 生效，脚本正文不改）" in _nlog
-      and "[提示] 表名与字段名大小写切换为：大写"
-          "（对之后生成的 Excel 生效，脚本正文不改）" in _nlog,
-      _nlog.splitlines()[-2:])
+      and not nw.chk_sql_upper.isChecked() and not hasattr(nw, "chk_sql_initials"))
 _orig_gofn5 = app_main.QFileDialog.getOpenFileNames
 app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([nsql], "SQL (*.sql)"))
 try:
     nw.on_sql_add_files()
 finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn5)
-_ntext = nw.sql_files[0]["text"]
+check("R44 未勾大写时清单沿用脚本原名",
+      nw.sql_table.item(0, 3).text() == "t_case9"
+      and nw._sql_rows[0]["actual"] == "t_case9",
+      (nw.sql_table.item(0, 3).text(), nw._sql_rows[0]["actual"]))
+POPUPS.clear()
+nw.chk_sql_upper.setChecked(True)
+_nlog = nw.sql_log.toPlainText()
+check("R44b 第二页大小写切换写进日志：清单、元数据、生成物一起变，脚本正文不改",
+      "[提示] 表名与字段名大小写切换为：大写"
+      "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）" in _nlog,
+      _nlog.splitlines()[-1:])
+check("R44c 已加载的行切换大写后立即刷新，实际脚本名仍保持原样",
+      nw.sql_table.item(0, 3).text() == "T_CASE9"
+      and nw._sql_rows[0]["actual"] == "t_case9",
+      (nw.sql_table.item(0, 3).text(), nw._sql_rows[0]["actual"]))
+_meta = nw._build_sql_metadata_dialog(0)
+check("R45 双击 SQL 行可查看该表元数据，字段随大写开关显示",
+      _meta is not None and _meta.tableWidget().rowCount() == 3
+      and _meta.tableWidget().item(0, 0).text() == "ID"
+      and _meta.tableWidget().item(1, 0).text() == "订单金额",
+      None if _meta is None else [
+          _meta.tableWidget().item(r, 0).text() for r in range(_meta.tableWidget().rowCount())])
+_nrow_text_before = nw.sql_files[0]["text"]
+from PySide6.QtWidgets import QAbstractItemDelegate as _QDelegate
+
+
+def _edit_sql_name(row, name):
+    cell = nw.sql_table.item(row, 3)
+    nw.sql_table.setCurrentItem(cell)
+    nw.sql_table.editItem(cell)
+    _app.processEvents()
+    editor = nw.sql_table.findChildren(app_main.QLineEdit)
+    if not editor:
+        return False
+    nw.sql_table.closeEditor(editor[0], _QDelegate.NoHint)
+    _app.processEvents()
+    nw.sql_table.item(row, 3).setText(name)
+    _app.processEvents()
+    return True
+
+
+check("R46a 当前表名单元格确实能进入编辑器", _edit_sql_name(0, "manual_case"))
+check("R46 双击当前表名可直接编辑，并同步改写这一行脚本的 CREATE 引用",
+      nw.sql_files[0]["text"] != _nrow_text_before
+      and "CREATE TABLE `manual_case`" in nw.sql_files[0]["text"]
+      and nw._sql_rows[0]["actual"] == "manual_case"
+      and nw.sql_table.item(0, 3).text() == "MANUAL_CASE",
+      (nw._sql_rows[0]["actual"], nw.sql_table.item(0, 3).text()))
+_edit_sql_name(0, "t_case9")
+_ntext = _nrow_text_before
 nout = os.path.join(_tmpdir, "sqlgen_name_out")
 app_main.program_dir = lambda: nout
 try:
@@ -3208,21 +3276,31 @@ finally:
 _nd = [d for d in _lsd(nout) if d.startswith("meta_data_file_")]
 _nd0 = _nd[0] if _nd else ""
 _nfiles = _lsd(os.path.join(nout, _nd0))
-check("R45 勾两颗开关：生成物表名转大写、中文字段取首字母并按需去重，脚本正文一个字不动",
-      _nfiles == ["命名开关检查表（T_CASE9）.xlsx"]
+check("R47 只勾大写：生成物表名转大写、中文列名原样保留，脚本正文一个字不动",
+      _nfiles == ["大小写检查表（T_CASE9）.xlsx"]
       and nw.sql_files[0]["text"] == _ntext,
       (_nfiles, nw.sql_files[0]["text"] != _ntext))
-_np = os.path.join(nout, _nd0, "命名开关检查表（T_CASE9）.xlsx")
+_np = os.path.join(nout, _nd0, "大小写检查表（T_CASE9）.xlsx")
 # 结构定义读回时表名取自文件名，默认会转小写；要验大写就带上 upper=True 读
 _nt = _btd(_np, upper=True) if os.path.isfile(_np) else {}
 _ncols = _nt.get("columns") or []
-check("R46 回读：表名 T_CASE9、字段 ID/DDJE/DDJE_2/KHMC，列注释原样保留",
+check("R48 回读：表名 T_CASE9、字段保留原中文名，列注释原样保留",
       _nt.get("table_name") == "T_CASE9"
-      and [c["field"] for c in _ncols] == ["ID", "DDJE", "DDJE_2", "KHMC"]
-      and [c["comment"] for c in _ncols] == ["主键", "金额", "同一首字母", "客户"],
+      and [c["field"] for c in _ncols] == ["ID", "订单金额", "客户名称"]
+      and [c["comment"] for c in _ncols] == ["主键", "金额", "客户"],
       (_nt.get("table_name"), [(c["field"], c["comment"]) for c in _ncols]))
-check("R47 生成日志写明命名口径（与 Java 同一句）",
-      "[命名] 生成物表名与字段名：取拼音首字母、转大写" in nw.sql_log.toPlainText())
+check("R49 生成日志写明命名口径（与 Java 同一句）",
+      "[命名] 生成物表名与字段名：转大写" in nw.sql_log.toPlainText())
+_repl_sql = os.path.join(_tmpdir, "replacement_utf8.sql")
+with open(_repl_sql, "wb") as _rfh:
+    _rfh.write("CREATE TABLE `t_repl` (`id` int NOT NULL COMMENT '编号')"
+               " COMMENT='编号表 ';".encode("utf-8"))
+_repl_text = app_main.read_sql_text(_repl_sql)
+_repl_tab = app_main.parse_create_tables(_repl_text)[0]
+check("R49b 正文自带 U+FFFD 的 UTF-8 脚本仍按 UTF-8 解码",
+      _repl_tab["table_comment"] == "编号表 "
+      and _repl_tab["columns"][0]["comment"] == "编号",
+      (_repl_tab["table_comment"], _repl_tab["columns"][0]["comment"]))
 
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 
@@ -3456,6 +3534,16 @@ check("U8 消息弹窗真的走了折行那一道（首屏不会横向撑出屏�
       "\n" in _shown and all(_COLS(ln) <= 56 for ln in _shown.split("\n")), _shown[:60])
 check("U9 折行后说的话与原来同一句",
       _shown.replace("\n", "") == _LONG_ONE_LINE, _shown[:60])
+_copy_box = app_main.build_popup_box(None, "生成结果", "目录：测试", "information",
+                                     box_class=_REAL_QMESSAGEBOX)
+_copy_labels = [x for x in _copy_box.findChildren(QLabel) if x.text()]
+check("U11 结果弹窗正文可用鼠标选中并 Ctrl+C 复制",
+      _copy_labels and all(
+          bool(x.textInteractionFlags() & _Qt.TextSelectableByMouse) for x in _copy_labels),
+      [(x.text()[:12], str(x.textInteractionFlags())) for x in _copy_labels])
+_copy_box.close()
+_copy_box.deleteLater()
+_app.processEvents()
 
 # 故意要一个装不下的尺寸：夹取逻辑没生效的话这条会红。
 # 本机屏幕大，"没超屏"那种断言在这台机器上咬不住东西

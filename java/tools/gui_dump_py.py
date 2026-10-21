@@ -36,27 +36,56 @@ POPUPS = []
 
 
 class _StubBox(object):
-    def __init__(self, parent):
+    def __init__(self, parent=None):
         self.parent = parent
+        self._kind = "information"
+        self._title = ""
+        self._text = ""
 
-    def information(self, title, text, *a, **k):
+    def setWindowTitle(self, title):
+        self._title = title
+
+    def setText(self, text):
+        self._text = text
+
+    def setIcon(self, icon):
+        name = getattr(icon, "name", str(icon))
+        self._kind = {"Information": "information", "Warning": "warning",
+                      "Critical": "critical"}.get(name, "information")
+
+    def setStandardButtons(self, buttons):
+        pass
+
+    def findChildren(self, cls):
+        return []
+
+    def exec(self):
+        POPUPS.append((self._kind, self._title, self._text))
+        return 0
+
+    @staticmethod
+    def information(parent, title, text, *a, **k):
         POPUPS.append(("information", title, text))
         return 0
 
-    def warning(self, title, text, *a, **k):
+    @staticmethod
+    def warning(parent, title, text, *a, **k):
         POPUPS.append(("warning", title, text))
         return 0
 
-    def critical(self, title, text, *a, **k):
+    @staticmethod
+    def critical(parent, title, text, *a, **k):
         POPUPS.append(("critical", title, text))
         return 0
 
-    def question(self, *a, **k):
-        POPUPS.append(("question", a[1] if len(a) > 1 else "", a[2] if len(a) > 2 else ""))
+    @staticmethod
+    def question(parent, title, text, *a, **k):
+        POPUPS.append(("question", title, text))
         return 0
 
 
 m.QMessageBox = _StubBox
+m._POPUP_MESSAGE_BOX = _StubBox
 os.chdir(REPO)
 
 D = {}
@@ -247,7 +276,6 @@ def main():
     dump_widget("drop_existing", win.chk_drop)
     dump_widget("initials", win.chk_initials)
     dump_widget("upper", win.chk_upper)
-    dump_widget("sql_initials", win.chk_sql_initials)
     dump_widget("sql_upper", win.chk_sql_upper)
     dump_widget("progress", win.progress)
     dump_buttons(win)
