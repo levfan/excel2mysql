@@ -742,9 +742,10 @@ _run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
              w.btn_sql_run_exec.text(): w.btn_sql_run_exec,
              w.btn_sql_run_clear_input.text(): w.btn_sql_run_clear_input,
              w.btn_sql_run_clear_log.text(): w.btn_sql_run_clear_log}
-check("F20b 结果区与编辑区同一支等宽字体（表格靠对齐，字体不等宽就错行）",
+check("F20b 编辑区与结果区同一支 16 号等宽字体（表格靠对齐，字体不等宽就错行）",
       w.sql_run_log.font().family() == w.sql_run_input.font().family()
-      and w.sql_run_log.font().pointSize() == w.sql_run_input.font().pointSize(),
+      and w.sql_run_log.font().pointSize() == w.sql_run_input.font().pointSize()
+      and w.sql_run_input.font().pointSize() == 16,
       (w.sql_run_log.font().family(), w.sql_run_log.font().pointSize()))
 from core.sql_execute import render_table as _rt
 _TABLE = _rt(["id", "名称"], [["1", "某公司"], [None, "x"]])
@@ -890,6 +891,11 @@ check("F33 条目文案为「【分组】说明」，打开即选中第一条",
       _dlg.list.item(0).text() == "【建库与选库】%s" % app_main.SQL_SAMPLES[0][1]
       and _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[0][2],
       _dlg.list.item(0).text())
+check("F33b 示例全文与编辑区同一支等宽字体、同一档 16 号字",
+      _dlg.preview.font().family() == w.sql_run_input.font().family()
+      and _dlg.preview.font().pointSize() == w.sql_run_input.font().pointSize()
+      and _dlg.preview.font().pointSize() == 16,
+      (_dlg.preview.font().family(), _dlg.preview.font().pointSize()))
 check("F34 每条示例都能切成至少一句可执行语句",
       all(split_sql_statements(s[2]) for s in app_main.SQL_SAMPLES),
       [i for i, s in enumerate(app_main.SQL_SAMPLES) if not split_sql_statements(s[2])])
