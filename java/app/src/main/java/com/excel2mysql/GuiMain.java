@@ -1407,7 +1407,7 @@ public final class GuiMain {
                 || ((javax.swing.JTextArea) copyBody).isEditable()) {
             problems.add("生成结果弹窗正文不可复制：应使用只读文本区");
         }
-        if (popupSize.width < 620 || popupSize.height < 220) {
+        if (popupSize.width < 820 || popupSize.height < 420) {
             problems.add("生成结果弹窗正文太小，产物路径看不清：" + popupSize);
         }
 
@@ -1671,6 +1671,11 @@ public final class GuiMain {
         if (page.entryCount() != 2) {
             problems.add("两个脚本应全部加载成功，实际并入 " + page.entryCount() + " 个");
         }
+        if (!"添加结果".equals(frame.lastDialogTitle())
+                || !frame.lastDialogText().replace("\n", "").contains(a)
+                || !frame.lastDialogText().replace("\n", "").contains(b)) {
+            problems.add("添加结果弹窗没列出脚本完整路径：" + frame.lastDialogTitle());
+        }
         // 四个 SQL 任务都要走主窗口的任务位，标题得是 Python 的那句原话
         if (!"正在读取 SQL 脚本…".equals(frame.lastTaskTitle())) {
             problems.add("读取任务标题不对：" + frame.lastTaskTitle());
@@ -1792,6 +1797,9 @@ public final class GuiMain {
             problems.add("保存后没有结果弹窗：" + frame.lastDialogTitle());
         }
         String outA = com.excel2mysql.gui.SqlPage.modifiedPath(a);
+        if (!frame.lastDialogText().replace("\n", "").contains(outA)) {
+            problems.add("保存结果弹窗没列出副本完整路径：" + frame.lastDialogText());
+        }
         if (!new java.io.File(outA).isFile()) {
             problems.add("保存后没有生成副本：" + outA);
         }
@@ -1815,9 +1823,19 @@ public final class GuiMain {
         if (hint == null || !hint.contains("未选择目标数据库")) {
             problems.add("没选库时执行应当拦下并说明：" + hint);
         }
-        String summary = page.finishRun(1, 1, 0, false, "testdb@127.0.0.1:3306");
+        List<com.excel2mysql.gui.SqlPage.RunFile> runFiles =
+                new ArrayList<com.excel2mysql.gui.SqlPage.RunFile>();
+        runFiles.add(new com.excel2mysql.gui.SqlPage.RunFile(a, "fail",
+                "第 3/9 条语句报错，本文件事务已回滚"));
+        runFiles.add(new com.excel2mysql.gui.SqlPage.RunFile(b, "ok", "4 条语句已提交"));
+        String summary = page.finishRun(new com.excel2mysql.gui.SqlPage.RunResult(
+                1, 1, 0, false, false, runFiles, "testdb@127.0.0.1:3306"));
         if (!summary.contains("成功 1 个文件，失败 1 个文件")) {
             problems.add("执行收尾文案不对：" + summary.replace((char) 10, ' '));
+        }
+        if (!summary.contains("目标库 testdb@127.0.0.1:3306")
+                || !summary.contains(a) || !summary.contains(b)) {
+            problems.add("执行结果弹窗没列出目标库与脚本完整路径");
         }
         if (!page.logPanel().isErrorLine("===== 执行完成：成功 1 个文件，失败 1 个文件")) {
             problems.add("有失败时执行收尾行没标成错误级");
@@ -2054,9 +2072,9 @@ public final class GuiMain {
     private static void checkPopupWrap(java.util.List<String> problems) {
         // 期望值写死成契约数字：拿常量当期望值的断言是恒真的，
         // 把预算改成 400 它照样绿，洞还留着。常量本身另外钉一条。
-        if (com.excel2mysql.gui.PopupText.WRAP_COLS != 56
-                || com.excel2mysql.gui.PopupText.MAX_LINES != 22) {
-            problems.add("折行预算与上限应当是 56 列 / 22 行，实际 "
+        if (com.excel2mysql.gui.PopupText.WRAP_COLS != 72
+                || com.excel2mysql.gui.PopupText.MAX_LINES != 24) {
+            problems.add("折行预算与上限应当是 72 列 / 24 行，实际 "
                     + com.excel2mysql.gui.PopupText.WRAP_COLS + " 列 / "
                     + com.excel2mysql.gui.PopupText.MAX_LINES + " 行");
         }
@@ -2075,17 +2093,17 @@ public final class GuiMain {
         for (String src : samples) {
             String out = com.excel2mysql.gui.PopupText.wrap(src);
             String[] lines = out.split("\n", -1);
-            if (lines.length > 22) {
-                problems.add("折行后仍有 " + lines.length + " 行，超过 22 行上限");
+            if (lines.length > 24) {
+                problems.add("折行后仍有 " + lines.length + " 行，超过 24 行上限");
             }
             for (String ln : lines) {
-                if (com.excel2mysql.gui.PopupText.width(ln) > 56) {
-                    problems.add("折行后有一行超出 56 列预算：" + ln);
+                if (com.excel2mysql.gui.PopupText.width(ln) > 72) {
+                    problems.add("折行后有一行超出 72 列预算：" + ln);
                 }
             }
-            if (lines.length == 22
+            if (lines.length == 24
                     && !lines[lines.length - 1].contains("完整内容见底部日志")) {
-                problems.add("行数正好卡在 22 上限，却没告诉用户其余内容在日志里");
+                problems.add("行数正好卡在 24 上限，却没告诉用户其余内容在日志里");
             }
             if (!flat(out).startsWith(flat(src).substring(0, Math.min(12,
                     flat(src).length())))) {

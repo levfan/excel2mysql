@@ -119,11 +119,11 @@ ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交�
                  "回滚仅对其后的数据操作生效。")
 
 # 弹窗正文的折行预算，两个数都按最小的目标机 1024x768 算：
-# 56 显示列（汉字/全角算 2 列）约等于 28 个汉字的宽度，加上图标与边框仍远在屏内；
-# 22 行连标题栏和按钮也还在可用高度里。再长就不往弹窗里硬塞了——放不下的部分
+# 72 显示列（汉字/全角算 2 列）约等于 36 个汉字的宽度，长路径也能一行放下大半；
+# 24 行连标题栏和按钮仍在可用高度里。再长就不往弹窗里硬塞了——放不下的部分
 # 会把开头几行顶出屏幕，那才是真的看不见；完整内容本来就写在底部日志里。
-POPUP_WRAP_COLS = 56
-POPUP_MAX_LINES = 22
+POPUP_WRAP_COLS = 72
+POPUP_MAX_LINES = 24
 POPUP_OVERFLOW_NOTE = "……（其余 %d 行放不下，完整内容见底部日志）"
 
 
@@ -163,8 +163,8 @@ class PopupMessageBox(QMessageBox):
     def showEvent(self, event):
         super().showEvent(event)
         # QMessageBox 显示时会按正文重算尺寸，把外部设的最小值一并丢掉
-        self.setMinimumSize(620, 220)
-        self.resize(max(self.width(), 620), max(self.height(), 220))
+        self.setMinimumSize(820, 420)
+        self.resize(max(self.width(), 820), max(self.height(), 420))
 
 
 _POPUP_MESSAGE_BOX = PopupMessageBox
@@ -182,10 +182,10 @@ def build_popup_box(parent, title: str, text: str, kind: str = "information",
     box.setText(wrap_popup_text(text))
     box.setIcon(_POPUP_ICONS[kind])
     box.setStandardButtons(_POPUP_OK)
-    # 结果里常带产物目录；默认按正文折行只有 400 多像素宽，长路径看着像被截掉。
-    # 这里给一个与 56 显示列相称的下限，小屏（1024）仍放得下。
-    box.setMinimumWidth(620)
-    box.setMinimumHeight(220)
+    # 结果里常带产物目录与脚本完整路径；按正文折行只有 400 多像素宽，长路径看着像被截掉。
+    # 这里给一个与 72 显示列相称的下限，小屏（1024）仍放得下。
+    box.setMinimumWidth(820)
+    box.setMinimumHeight(420)
     return box
 
 
@@ -583,13 +583,18 @@ def read_sql_text(path):
     return raw.decode("utf-8", errors="replace")
 
 
-def sql_load_task(paths, sink):
+def sql_load_task(paths, duplicates, sink):
     """读入 SQL 脚本文本并提取表名：几十万行的脚本读盘 + 正则扫描都在这里。
 
-    返回 loaded（可直接并入 self.sql_files 的记录），不碰界面数据。
+    duplicates 是加入列表时就被拦下的重复路径，一并计入进度与添加结果；
+    返回 loaded（可直接并入 self.sql_files 的记录）、failed 与 duplicates，
+    弹窗里要逐个列出完整路径，用户才知道刚才选的是哪个目录里的脚本。
     """
-    sink.set_total(len(paths))
-    loaded = []
+    sink.set_total(len(paths) + len(duplicates))
+    loaded, failed = [], []
+    for p in duplicates:
+        sink.log(f"[跳过] 已在列表：{os.path.basename(p)}")
+        sink.step(os.path.basename(p))
     for p in paths:
         fname = os.path.basename(p)
         if sink.cancelled:
@@ -597,9 +602,10 @@ def sql_load_task(paths, sink):
         try:
             text = read_sql_text(p)
         except Exception as e:
-            failed += 1
+            reason = describe_db_error(e)
+            failed.append({"path": p, "reason": reason})
             sink.log_error(f"[读取失败] {fname} 未能读入，已跳过\n"
-                           + indent_detail(describe_db_error(e)))
+                           + indent_detail(reason))
             sink.step(fname)
             continue
         tabs = extract_create_tables(text)
@@ -608,16 +614,18 @@ def sql_load_task(paths, sink):
         loaded.append({"path": p, "text": text, "modified": False,
                        "rename_map": {}, "display_map": {}, "tabs": tabs})
         sink.step(fname)
-    return {"loaded": loaded, "cancelled": sink.cancelled}
+    return {"loaded": loaded, "failed": failed, "duplicates": list(duplicates),
+            "cancelled": sink.cancelled}
 
 
 def sql_save_task(items, sink):
     """把改过的脚本写成 *_prefix.sql，几十万行的写盘放在子线程里。
 
-    items 为 [(path, text), ...]；返回 saved 为 [(原路径, 落盘路径), ...]。
+    items 为 [(path, text), ...]；返回 saved 为 [(原路径, 落盘路径), ...]，
+    failed 为 [{path, reason}]。结果弹窗要按文件列出完整路径，失败也要写清是哪一份。
     """
     sink.set_total(len(items))
-    saved = []
+    saved, failed = [], []
     for path, text in items:
         fname = os.path.basename(path)
         if sink.cancelled:
@@ -628,13 +636,15 @@ def sql_save_task(items, sink):
             with open(out, "w", encoding="utf-8") as fh:
                 fh.write(text)
         except Exception as e:
-            sink.log_error(f"[保存失败] {fname}：{describe_db_error(e)}")
+            reason = describe_db_error(e)
+            failed.append({"path": path, "reason": reason})
+            sink.log_error(f"[保存失败] {fname}：{reason}")
             sink.step(fname)
             continue
         saved.append((path, out))
         sink.log(f"[已保存] {out}")
         sink.step(fname)
-    return {"saved": saved, "cancelled": sink.cancelled}
+    return {"saved": saved, "failed": failed, "cancelled": sink.cancelled}
 
 
 def sql_execute_task(items, cfg, sink):
@@ -654,12 +664,15 @@ def sql_execute_task(items, cfg, sink):
 
     target = f"{cfg['database']}@{cfg['host']}:{cfg['port']}"
     ok_files = fail_files = skipped = 0
+    files = []                                      # 逐文件结局，执行完成弹窗按路径列出来
     for path, stmts in plans:
         fname = os.path.basename(path)
         if sink.cancelled:
             break
         if not stmts:
             skipped += 1
+            files.append({"path": path, "status": "skip",
+                          "detail": "没有可执行的语句"})
             sink.log(f"[跳过] {fname}：没有可执行的语句")
             continue
         try:
@@ -669,11 +682,13 @@ def sql_execute_task(items, cfg, sink):
                 f"[连接失败] 无法连接到 {target}（用户 {cfg['user']}），剩余脚本均未执行\n"
                 + indent_detail(describe_db_error(e)))
             return {"ok": ok_files, "fail": fail_files, "skipped": skipped,
+                    "files": files, "target": target,
                     "cancelled": True, "conn_failed": True}
         chunk = max(1, len(stmts) // 100)           # 每个文件最多约 100 次刷新
         reported = 0
         failed = False
         executed = 0                                # 供异常分支引用，begin/cursor 失败时也已有值
+        outcome, detail = "ok", ""
         try:
             conn.begin()                            # 先开启事务
             cur = conn.cursor()
@@ -688,6 +703,8 @@ def sql_execute_task(items, cfg, sink):
                 except Exception as e:
                     conn.rollback()                 # 执行失败 → 回滚事务
                     failed = True
+                    outcome = "fail"
+                    detail = f"第 {pos}/{len(stmts)} 条语句报错，本文件事务已回滚"
                     sink.log_error((
                         f"[执行失败] {fname} 第 {pos}/{len(stmts)} 条语句报错，"
                         f"目标库 {target}，本文件事务已回滚\n"
@@ -708,13 +725,18 @@ def sql_execute_task(items, cfg, sink):
             elif sink.cancelled and executed < len(stmts):
                 # 中途取消：本文件不提交，回滚后重跑才是干净的（DDL 隐式提交的部分除外）
                 conn.rollback()
+                outcome = "cancel"
+                detail = f"已执行 {executed}/{len(stmts)} 条，本文件事务已回滚"
                 sink.log(f"[已取消] {fname}：已执行 {executed}/{len(stmts)} 条，"
                          f"本文件事务已回滚\n    " + ROLLBACK_NOTE)
             else:
                 conn.commit()                       # 全部成功 → 提交事务
+                detail = f"{executed} 条语句已提交"
                 sink.log(f"[提交] {fname}：{executed} 条语句已提交")
         except Exception as e:
             failed = True
+            outcome = "fail"
+            detail = f"执行异常（已提交 {executed} 条），本文件事务已回滚"
             try:
                 conn.rollback()
             except Exception:
@@ -730,11 +752,17 @@ def sql_execute_task(items, cfg, sink):
             except Exception:
                 pass
         sink.advance(len(stmts) - reported, f"{fname} 收尾")   # 把余数补齐，进度条落准
+        files.append({"path": path, "status": outcome, "detail": detail})
         if failed:
             fail_files += 1
         else:
             ok_files += 1
+    done_paths = {f["path"] for f in files}
+    for path, _ in plans:                            # 取消或连接中断后没轮到的脚本
+        if path not in done_paths:
+            files.append({"path": path, "status": "cancel", "detail": "未执行"})
     return {"ok": ok_files, "fail": fail_files, "skipped": skipped,
+            "files": files, "target": target,
             "cancelled": sink.cancelled, "conn_failed": False}
 
 
@@ -1610,21 +1638,46 @@ class MainWindow(QWidget):
         if not files:
             return
         existing = {s["path"] for s in self.sql_files}
-        todo = []
+        todo, dups = [], []
         for f in files:
             if f in existing:
-                self.sql_log.appendPlainText(f"[跳过] 已在列表：{os.path.basename(f)}")
+                dups.append(f)
                 continue
             todo.append(f)
         if not todo:
+            for p in dups:
+                self.sql_log.appendPlainText(f"[跳过] 已在列表：{os.path.basename(p)}")
             self._refresh_sql_table()
+            self._show_sql_add_result({"loaded": [], "failed": [], "duplicates": dups,
+                                       "cancelled": False})
             return
-        self._run_modal("正在读取 SQL 脚本…", sql_load_task, (todo,),
+        self._run_modal("正在读取 SQL 脚本…", sql_load_task, (todo, dups),
                         on_done=self._finish_sql_load, log_view=self.sql_log)
 
     def _finish_sql_load(self, res):
         self.sql_files.extend(res["loaded"])
         self._refresh_sql_table()
+        self._show_sql_add_result(res)
+
+    def _show_sql_add_result(self, res):
+        """添加结束的弹窗：逐个列出完整路径，用户才分得清同名脚本来自哪个目录。"""
+        loaded = res["loaded"]
+        head = f"已加载 {len(loaded)} 个脚本，共 {sum(len(s['tabs']) for s in loaded)} 张表。"
+        if res["cancelled"]:
+            head += "（已取消，剩余文件未读入）"
+        lines = [head]
+        for s in loaded:
+            lines.append(f"[已加载] {s['path']}：{len(s['tabs'])} 张表")
+        for p in res["duplicates"]:
+            lines.append(f"[跳过] {p}：已在列表")
+        for f in res["failed"]:
+            lines.append(f"[读取失败] {f['path']}：{' '.join(f['reason'].split())}")
+        append_log(self.sql_log,
+                   f"===== 添加完成：{len(loaded)} 个脚本，{len(res['failed'])} 个读取失败，"
+                   f"{len(res['duplicates'])} 个重复 =====",
+                   error=bool(res["failed"]))
+        popup_box(self, "添加结果", "\n".join(lines),
+                  "warning" if res["failed"] else "information")
 
     def on_sql_remove_selected(self):
         rows = sorted({i.row() for i in self.sql_table.selectedIndexes()}, reverse=True)
@@ -1780,12 +1833,19 @@ class MainWindow(QWidget):
                 s["modified"] = False
         n = len(done)
         note = "（已取消，剩余脚本未保存）" if res["cancelled"] else ""
+        lines = [f"已保存 {n} 个脚本副本{note}。" if n else f"没有文件写出{note}。"]
+        for _, out in res["saved"]:
+            lines.append(f"[已保存] {out}")
+        for f in res["failed"]:
+            lines.append(f"[保存失败] {f['path']}：{' '.join(f['reason'].split())}")
+        lines.append("详见日志。")
         if n:
             append_log(self.sql_log, f"===== 保存完成：{n} 个脚本副本{note} =====")
-            popup_box(self, "保存完成", f"已保存 {n} 个脚本副本{note}。\n详见日志。")
+            popup_box(self, "保存完成", "\n".join(lines),
+                      "warning" if res["failed"] else "information")
         else:
             append_log(self.sql_log, f"===== 保存完成：没有文件写出{note} =====", error=True)
-            popup_box(self, "保存完成", f"没有文件写出{note}，详见日志。", "warning")
+            popup_box(self, "保存完成", "\n".join(lines), "warning")
 
     def on_sql_execute(self):
         cfg = self._conn_cfg()
@@ -1810,8 +1870,15 @@ class MainWindow(QWidget):
         append_log(self.sql_log,
                    f"===== 执行完成：成功 {res['ok']} 个文件，失败 {res['fail']} 个文件"
                    f"{note} =====", error=bool(res["fail"]))
-        popup_box(self, "执行完成",
-                  f"成功 {res['ok']} 个文件，失败 {res['fail']} 个文件{note}。\n详见日志。")
+        labels = {"ok": "成功", "fail": "失败", "skip": "跳过", "cancel": "已取消"}
+        lines = [f"成功 {res['ok']} 个文件，失败 {res['fail']} 个文件{note}。",
+                 f"目标库 {res['target']}"]
+        for f in res["files"]:
+            lines.append(f"[{labels.get(f['status'], f['status'])}] "
+                         f"{f['path']}：{f['detail']}")
+        lines.append("详见日志。")
+        popup_box(self, "执行完成", "\n".join(lines),
+                  "warning" if res["fail"] else "information")
 
     def on_sql_gen_excel(self, label, with_meta):
         """从脚本正文解析表定义再生成交付件；写盘在子线程，输出落在程序同级。"""

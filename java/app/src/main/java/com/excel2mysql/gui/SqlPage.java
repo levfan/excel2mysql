@@ -104,7 +104,49 @@ public final class SqlPage extends JPanel {
         }
     }
 
-    /** 执行任务的结局：三个计数加两个状态，回事件分发线程只用来写汇总与弹窗。 */
+    /** 读盘任务的结局：成功并进来的、读失败的、原本就在列表里的，弹窗要逐条列出完整路径。 */
+    public static final class LoadResult {
+        public final List<Entry> loaded;
+        public final List<String[]> failed;
+        public final List<String> duplicates;
+        public final boolean cancelled;
+
+        public LoadResult(List<Entry> loaded, List<String[]> failed,
+                          List<String> duplicates, boolean cancelled) {
+            this.loaded = loaded;
+            this.failed = failed;
+            this.duplicates = duplicates;
+            this.cancelled = cancelled;
+        }
+    }
+
+    /** 保存任务的结局：saved/failed 里的数组都是 { 源路径, 落盘路径或失败原因 }。 */
+    public static final class SaveResult {
+        public final List<String[]> saved;
+        public final List<String[]> failed;
+        public final boolean cancelled;
+
+        public SaveResult(List<String[]> saved, List<String[]> failed, boolean cancelled) {
+            this.saved = saved;
+            this.failed = failed;
+            this.cancelled = cancelled;
+        }
+    }
+
+    /** 一个脚本文件的执行结局：status 取 ok / fail / skip / cancel。 */
+    public static final class RunFile {
+        public final String path;
+        public final String status;
+        public final String detail;
+
+        public RunFile(String path, String status, String detail) {
+            this.path = path;
+            this.status = status;
+            this.detail = detail;
+        }
+    }
+
+    /** 执行任务的结局：三个计数、两个状态，以及逐文件结局（弹窗按完整路径列出来）。 */
     public static final class RunResult {
         public final int ok;
         public final int fail;
@@ -112,13 +154,18 @@ public final class SqlPage extends JPanel {
         public final boolean cancelled;
         /** 连不上库：详细原因已经在日志里报过了，收尾不该再重复一遍汇总。 */
         public final boolean connFailed;
+        public final List<RunFile> files;
+        public final String target;
 
-        public RunResult(int ok, int fail, int skipped, boolean cancelled, boolean connFailed) {
+        public RunResult(int ok, int fail, int skipped, boolean cancelled, boolean connFailed,
+                         List<RunFile> files, String target) {
             this.ok = ok;
             this.fail = fail;
             this.skipped = skipped;
             this.cancelled = cancelled;
             this.connFailed = connFailed;
+            this.files = files;
+            this.target = target;
         }
     }
 
@@ -545,21 +592,33 @@ public final class SqlPage extends JPanel {
     public void addFiles(List<String> paths) {
         Set<String> existing = new LinkedHashSet<String>(paths());
         List<String> todo = new ArrayList<String>();
+        List<String> dups = new ArrayList<String>();
         for (String p : paths) {
             if (existing.contains(p)) {
-                log("[跳过] 已在列表：" + baseName(p));
+                dups.add(p);
                 continue;
             }
             todo.add(p);
         }
         if (todo.isEmpty()) {
+            for (String p : dups) {
+                log("[跳过] 已在列表：" + baseName(p));
+            }
             refreshTable();
+            finishAdd(new LoadResult(new ArrayList<Entry>(), new ArrayList<String[]>(),
+                    dups, false));
             return;
         }
         final List<String> files = todo;
+        final List<String> duplicates = dups;
         host.runSqlTask("正在读取 SQL 脚本…", sink -> {
-            sink.setTotal(files.size());
+            sink.setTotal(files.size() + duplicates.size());
             List<Entry> loaded = new ArrayList<Entry>();
+            List<String[]> failed = new ArrayList<String[]>();
+            for (String p : duplicates) {
+                sink.log("[跳过] 已在列表：" + baseName(p));
+                sink.step(baseName(p));
+            }
             for (String p : files) {
                 String fname = baseName(p);
                 if (sink.cancelled()) {
@@ -569,8 +628,10 @@ public final class SqlPage extends JPanel {
                 try {
                     text = SqlRunner.readScript(new File(p));
                 } catch (Exception ex) {
+                    String reason = LogText.describe(ex);
+                    failed.add(new String[]{p, reason});
                     sink.logError("[读取失败] " + fname + " 未能读入，已跳过" + LogText.NL
-                            + LogText.indentDetail(LogText.describe(ex)));
+                            + LogText.indentDetail(reason));
                     sink.step(fname);
                     continue;
                 }
@@ -585,13 +646,44 @@ public final class SqlPage extends JPanel {
                 loaded.add(new Entry(p, text, tabs));
                 sink.step(fname);
             }
-            return loaded;
-        }, out -> {
-            for (Entry e : (List<Entry>) out) {
-                entries.add(e);
-            }
-            refreshTable();
-        });
+            return new LoadResult(loaded, failed, duplicates, sink.cancelled());
+        }, out -> finishAdd((LoadResult) out));
+    }
+
+    /** 添加结束：日志写一行汇总，弹窗逐个列出完整路径，同名脚本才分得清来自哪个目录。 */
+    private void finishAdd(LoadResult r) {
+        for (Entry e : r.loaded) {
+            entries.add(e);
+        }
+        refreshTable();
+        int tables = 0;
+        for (Entry e : r.loaded) {
+            tables += e.tabs.size();
+        }
+        String head = "已加载 " + r.loaded.size() + " 个脚本，共 " + tables + " 张表。";
+        if (r.cancelled) {
+            head += "（已取消，剩余文件未读入）";
+        }
+        StringBuilder body = new StringBuilder(head);
+        for (Entry e : r.loaded) {
+            body.append(LogText.NL).append("[已加载] ").append(e.path)
+                    .append("：").append(e.tabs.size()).append(" 张表");
+        }
+        for (String p : r.duplicates) {
+            body.append(LogText.NL).append("[跳过] ").append(p).append("：已在列表");
+        }
+        for (String[] f : r.failed) {
+            body.append(LogText.NL).append("[读取失败] ").append(f[0]).append("：")
+                    .append(f[1].replaceAll("\\s+", " ").trim());
+        }
+        String line = "===== 添加完成：" + r.loaded.size() + " 个脚本，"
+                + r.failed.size() + " 个读取失败，" + r.duplicates.size() + " 个重复 =====";
+        if (r.failed.isEmpty()) {
+            log(line);
+        } else {
+            error(line);
+        }
+        host.inform2("添加结果", body.toString());
     }
 
     /** 选中行可能同属一个文件的多个表名，按文件去重后整文件移除。 */
@@ -797,7 +889,8 @@ public final class SqlPage extends JPanel {
         final List<Src> todo = items;
         host.runSqlTask("正在保存修改后的脚本…", sink -> {
             sink.setTotal(todo.size());
-            List<String> saved = new ArrayList<String>();
+            List<String[]> saved = new ArrayList<String[]>();
+            List<String[]> failed = new ArrayList<String[]>();
             for (Src s : todo) {
                 String fname = baseName(s.path);
                 if (sink.cancelled()) {
@@ -807,31 +900,51 @@ public final class SqlPage extends JPanel {
                 try {
                     Files.write(Paths.get(out), s.text.getBytes(UTF8));
                 } catch (Exception ex) {
-                    sink.logError("[保存失败] " + fname + "：" + LogText.describe(ex));
+                    String reason = LogText.describe(ex);
+                    failed.add(new String[]{s.path, reason});
+                    sink.logError("[保存失败] " + fname + "：" + reason);
                     sink.step(fname);
                     continue;
                 }
-                saved.add(s.path);
+                saved.add(new String[]{s.path, out});
                 sink.log("[已保存] " + out);
                 sink.step(fname);
             }
-            return saved;
-        }, out -> {
-            Set<String> done = new LinkedHashSet<String>((List<String>) out);
-            for (Entry e : entries) {
-                if (done.contains(e.path)) {
-                    e.modified = false;
-                }
+            return new SaveResult(saved, failed, sink.cancelled());
+        }, out -> finishSave((SaveResult) out));
+    }
+
+    /** 保存结束：日志与弹窗都按文件列出落盘路径，失败要写明是哪一份、为什么。 */
+    private void finishSave(SaveResult r) {
+        Set<String> done = new LinkedHashSet<String>();
+        for (String[] s : r.saved) {
+            done.add(s[0]);
+        }
+        for (Entry e : entries) {
+            if (done.contains(e.path)) {
+                e.modified = false;
             }
-            int n = done.size();
-            if (n > 0) {
-                log("===== 保存完成：" + n + " 个脚本副本 =====");
-                host.inform2("保存完成", "已保存 " + n + " 个脚本副本。" + LogText.NL + "详见日志。");
-            } else {
-                error("===== 保存完成：没有文件写出 =====");
-                host.inform2("保存完成", "没有文件写出，详见日志。");
-            }
-        });
+        }
+        int n = done.size();
+        String note = r.cancelled ? "（已取消，剩余脚本未保存）" : "";
+        StringBuilder body = new StringBuilder();
+        body.append(n > 0 ? "已保存 " + n + " 个脚本副本" + note + "。"
+                : "没有文件写出" + note + "。");
+        for (String[] s : r.saved) {
+            body.append(LogText.NL).append("[已保存] ").append(s[1]);
+        }
+        for (String[] f : r.failed) {
+            body.append(LogText.NL).append("[保存失败] ").append(f[0]).append("：")
+                    .append(f[1].replaceAll("\\s+", " ").trim());
+        }
+        body.append(LogText.NL).append("详见日志。");
+        if (n > 0) {
+            log("===== 保存完成：" + n + " 个脚本副本" + note + " =====");
+            host.inform2("保存完成", body.toString());
+        } else {
+            error("===== 保存完成：没有文件写出" + note + " =====");
+            host.inform2("保存完成", body.toString());
+        }
     }
 
     /**
@@ -847,7 +960,6 @@ public final class SqlPage extends JPanel {
             return LogText.NO_SQL_HINT;
         }
         materializeDisplayNames();
-        final String target = cfg.database + "@" + cfg.host + ":" + cfg.port;
         log("===== 开始执行脚本（目标库 " + cfg.database + "，每个文件一个事务）=====");
         List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
@@ -860,7 +972,7 @@ public final class SqlPage extends JPanel {
             if (r.connFailed) {
                 return;                       // 连不上库时已经报过详细原因，不再重复汇总
             }
-            host.inform2("执行完成", finishRun(r.ok, r.fail, r.skipped, r.cancelled, target));
+            host.inform2("执行完成", finishRun(r));
         });
         return null;
     }
@@ -888,6 +1000,7 @@ public final class SqlPage extends JPanel {
         int ok = 0;
         int fail = 0;
         int skipped = 0;
+        List<RunFile> files = new ArrayList<RunFile>();
         DbClient client;
         try {
             client = new DbClient(cfg);
@@ -895,7 +1008,7 @@ public final class SqlPage extends JPanel {
             sink.logError("[连接失败] 无法连接到 " + target + "（用户 " + cfg.user
                     + "），剩余脚本均未执行" + LogText.NL
                     + LogText.indentDetail(LogText.describe(ex)));
-            return new RunResult(0, 0, 0, true, true);
+            return new RunResult(0, 0, 0, true, true, files, target);
         }
         for (int i = 0; i < items.size(); i++) {
             Src s = items.get(i);
@@ -906,6 +1019,7 @@ public final class SqlPage extends JPanel {
             }
             if (stmts.isEmpty()) {
                 skipped++;
+                files.add(new RunFile(s.path, "skip", "没有可执行的语句"));
                 sink.log("[跳过] " + fname + "：没有可执行的语句");
                 sink.step(fname);
                 continue;
@@ -933,13 +1047,18 @@ public final class SqlPage extends JPanel {
             if (r.cancelled) {
                 // 取消的文件既不算成功也不算失败，但它确实被处理过了
                 ok++;
+                files.add(new RunFile(s.path, "cancel", "已执行 " + r.executed + "/" + size
+                        + " 条，本文件事务已回滚"));
                 sink.log("[已取消] " + fname + "：已执行 " + r.executed + "/" + size + " 条，"
                         + "本文件事务已回滚" + LogText.NL + "    " + LogText.ROLLBACK_NOTE);
             } else if (r.ok) {
                 ok++;
+                files.add(new RunFile(s.path, "ok", r.executed + " 条语句已提交"));
                 sink.log("[提交] " + fname + "：" + r.executed + " 条语句已提交");
             } else {
                 fail++;
+                files.add(new RunFile(s.path, "fail", "第 " + r.failedAt + "/"
+                        + r.statements.size() + " 条语句报错，本文件事务已回滚"));
                 sink.logError("[执行失败] " + fname + " 第 " + r.failedAt + "/" + r.statements.size()
                         + " 条语句报错，目标库 " + target + "，本文件事务已回滚" + LogText.NL
                         + LogText.indentDetail(r.error) + LogText.NL + "    出错语句："
@@ -949,24 +1068,44 @@ public final class SqlPage extends JPanel {
             }
         }
         client.close();
-        return new RunResult(ok, fail, skipped, sink.cancelled(), false);
+        Set<String> counted = new LinkedHashSet<String>();
+        for (RunFile f : files) {
+            counted.add(f.path);
+        }
+        for (Src s : items) {                         // 取消后没轮到的脚本
+            if (!counted.contains(s.path)) {
+                files.add(new RunFile(s.path, "cancel", "未执行"));
+            }
+        }
+        return new RunResult(ok, fail, skipped, sink.cancelled(), false, files, target);
     }
 
-    /** 收尾：先写日志，把要在弹窗里重复的那句话返回给调用方。 */
-    public String finishRun(int ok, int fail, int skipped, boolean cancelled, String target) {
-        String note = cancelled ? "（已取消，剩余脚本未执行）" : "";
-        String line = "===== 执行完成：成功 " + ok + " 个文件，失败 " + fail + " 个文件" + note
+    /** 收尾：先写日志，再把逐文件结局拼成弹窗正文（完整路径 + 目标库）。 */
+    public String finishRun(RunResult r) {
+        String note = r.cancelled ? "（已取消，剩余脚本未执行）" : "";
+        String line = "===== 执行完成：成功 " + r.ok + " 个文件，失败 " + r.fail + " 个文件" + note
                 + " =====";
-        if (fail > 0) {
+        if (r.fail > 0) {
             error(line);
         } else {
             log(line);
         }
-        if (skipped > 0) {
-            log("跳过 " + skipped + " 个没有可执行语句的文件");
+        if (r.skipped > 0) {
+            log("跳过 " + r.skipped + " 个没有可执行语句的文件");
         }
-        return "成功 " + ok + " 个文件，失败 " + fail + " 个文件" + note + "。"
-                + LogText.NL + "详见日志。";
+        StringBuilder body = new StringBuilder();
+        body.append("成功 ").append(r.ok).append(" 个文件，失败 ").append(r.fail)
+                .append(" 个文件").append(note).append("。");
+        body.append(LogText.NL).append("目标库 ").append(r.target);
+        for (RunFile f : r.files) {
+            String label = f.status.equals("ok") ? "成功"
+                    : f.status.equals("fail") ? "失败"
+                    : f.status.equals("skip") ? "跳过" : "已取消";
+            body.append(LogText.NL).append("[").append(label).append("] ")
+                    .append(f.path).append("：").append(f.detail);
+        }
+        body.append(LogText.NL).append("详见日志。");
+        return body.toString();
     }
 
     // ---------------------------------------------------------------- 内部

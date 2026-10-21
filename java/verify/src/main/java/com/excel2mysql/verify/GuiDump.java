@@ -698,6 +698,7 @@ public final class GuiDump {
                 frame.sqlPage().addFiles(paths);
                 dumpSqlTable();
                 put("sql.log", frame.sqlPage().logPanel().text());
+                put("sql.add.popup", popup().replace(dir.getPath(), "根目录"));
                 frame.sqlPage().setPrefixText("ods_");
                 frame.sqlPage().applyPrefix();
                 dumpSqlTable();
@@ -721,6 +722,7 @@ public final class GuiDump {
                 smark = frame.sqlPage().logPanel().text();
                 frame.sqlPage().saveModified();
                 put("sql.save.log", tail(smark, frame.sqlPage().logPanel().text()));
+                put("sql.save.popup", popup().replace(dir.getPath(), "根目录"));
                 String ehint = frame.sqlPage().execute();
                 if (ehint != null) {
                     frame.warn(ehint);

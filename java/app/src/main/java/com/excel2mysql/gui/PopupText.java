@@ -8,9 +8,10 @@ package com.excel2mysql.gui;
  * Qt 会自己折，但同一句话两边折出来的样子不一样，而且 30 行正文能把窗口撑到
  * 894 像素高——比屏幕高，底部直接被裁。
  *
- * <p>所以折行自己算。预算按最小的目标机 1024x768 定：56 显示列（全角记 2 列）
- * 约等于 28 个汉字的宽度，22 行连标题栏和按钮仍在可用高度内。放不下的行不硬塞，
- * 换一句"其余见日志"——完整内容本来就写在底部日志里，硬塞只会把开头几行顶出屏幕。
+ * <p>所以折行自己算。预算按最小的目标机 1024x768 定：72 显示列（全角记 2 列）
+ * 约等于 36 个汉字的宽度，弹窗放大到 820x420 后长路径也能一行放下大半；24 行连
+ * 标题栏和按钮仍在可用高度内。放不下的行不硬塞，换一句"其余见日志"——完整内容
+ * 本来就写在底部日志里，硬塞只会把开头几行顶出屏幕。
  *
  * <p>这里的列宽规则与 Python 侧 {@code main._display_cols}（unicodedata 的 F/W 判宽）
  * 必须逐字符一致，两条线的界面才有得比；对撞器直接比折行后的整串文字。
@@ -18,10 +19,10 @@ package com.excel2mysql.gui;
 public final class PopupText {
 
     /** 一行最多几个显示列。 */
-    public static final int WRAP_COLS = 56;
+    public static final int WRAP_COLS = 72;
 
     /** 弹窗最多几行，超出的换成"其余见日志"。 */
-    public static final int MAX_LINES = 22;
+    public static final int MAX_LINES = 24;
 
     private PopupText() {
     }

@@ -62,7 +62,7 @@ with open(sql_file, "w", encoding="utf-8") as fh:
 win.ed_sql_prefix.setText("ods_")
 sink = m.ProgressSink(on_log=lambda t: win.sql_log.appendPlainText(t),
                       on_log_error=lambda t: win.sql_log.appendPlainText(t))
-res = m.sql_load_task([sql_file], sink)
+res = m.sql_load_task([sql_file], [], sink)
 win.sql_files.extend(res["loaded"])
 win._refresh_sql_table()
 app.processEvents()
