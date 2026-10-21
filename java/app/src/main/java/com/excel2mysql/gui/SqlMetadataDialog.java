@@ -24,8 +24,9 @@ public final class SqlMetadataDialog extends JDialog {
     public SqlMetadataDialog(Frame owner, SqlScript.ParsedTable table,
                              String displayName, boolean upper) {
         super(owner, "表元数据（" + displayName + "）", false);
-        JPanel content = new JPanel(new java.awt.BorderLayout(0, 6));
-        content.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
+        JPanel content = new JPanel(new java.awt.BorderLayout(0, UiScale.px(6)));
+        content.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(8), UiScale.px(10), UiScale.px(8), UiScale.px(10)));
 
         JPanel header = new JPanel();
         GroupLayout layout = new GroupLayout(header);
@@ -66,18 +67,19 @@ public final class SqlMetadataDialog extends JDialog {
                     Boolean.FALSE.equals(c.nullable) ? "否" : "是"});
         }
         JTable fieldTable = new JTable(model);
-        fieldTable.setRowHeight(22);
+        fieldTable.setRowHeight(UiScale.px(22));
         fieldTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         fieldTable.getTableHeader().setReorderingAllowed(false);
-        fieldTable.getColumnModel().getColumn(0).setPreferredWidth(230);
-        fieldTable.getColumnModel().getColumn(1).setPreferredWidth(280);
-        fieldTable.getColumnModel().getColumn(2).setPreferredWidth(130);
-        fieldTable.getColumnModel().getColumn(3).setPreferredWidth(80);
+        fieldTable.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(230));
+        fieldTable.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(280));
+        fieldTable.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(130));
+        fieldTable.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(80));
         JScrollPane scroll = new JScrollPane(fieldTable);
         content.add(scroll, java.awt.BorderLayout.CENTER);
 
         JPanel footer = new JPanel();
-        footer.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 0));
+        footer.setLayout(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
         getRootPane().setDefaultButton(close);

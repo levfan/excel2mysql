@@ -20,7 +20,7 @@ public final class LogPanel extends javax.swing.JTextPane {
     private static final Color ERROR_COLOR = new Color(0xc6, 0x28, 0x28);
     private static final int MAX_LINES = 2000;
     private static final int TRIM_TO = 1500;
-    /** 12 号与 14 号在 1080p 上都偏小，现场两次反馈看不清；所有日志统一 16。 */
+    /** 12 与 14 在 1080p 上都偏小，现场两次反馈看不清；所有日志统一 16pt（同 Python）。 */
     private static final int DEFAULT_FONT_SIZE = 16;
 
     private final Deque<Entry> entries = new ArrayDeque<Entry>();
@@ -39,11 +39,13 @@ public final class LogPanel extends javax.swing.JTextPane {
         this(DEFAULT_FONT_SIZE);
     }
 
+    /** fontSize 是 Python 的 pt 值；Swing 这边按屏幕 DPI 折成物理像素。 */
     public LogPanel(int fontSize) {
         setEditable(false);
         // 用逻辑等宽字体而不是 Consolas：前者的中文回退正好占两格，结果区的表格才对得齐；
         // Consolas 的回退字形只有一格多，混排时整张表会歪。
-        setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, fontSize));
+        setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN,
+                UiScale.fontPt(fontSize)));
         setBackground(new Color(0xfb, 0xfb, 0xfb));
     }
 

@@ -226,13 +226,13 @@ public final class SqlPage extends JPanel {
             }
         };
         table = new JTable(model);
-        table.setRowHeight(22);
+        table.setRowHeight(UiScale.px(22));
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
-        table.getColumnModel().getColumn(0).setPreferredWidth(54);
-        table.getColumnModel().getColumn(1).setPreferredWidth(300);
-        table.getColumnModel().getColumn(2).setPreferredWidth(260);
-        table.getColumnModel().getColumn(3).setPreferredWidth(130);
+        table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(54));
+        table.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(300));
+        table.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(260));
+        table.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(130));
         // 「文件」列挂完整路径：脚本同名时只靠文件名分不出是哪个目录里的那份（同 Python 的 tooltip）
         table.getColumnModel().getColumn(1).setCellRenderer(new javax.swing.table.DefaultTableCellRenderer() {
             @Override
@@ -256,7 +256,7 @@ public final class SqlPage extends JPanel {
         });
 
         JScrollPane scroll = new JScrollPane(table);
-        scroll.setMinimumSize(new Dimension(300, 120));
+        scroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(120)));
 
         JButton add = new JButton("添加 SQL 文件");
         add.addActionListener(e -> chooseFiles());
@@ -319,7 +319,7 @@ public final class SqlPage extends JPanel {
         JPanel prefixBtns = flow();
         prefixBtns.add(apply);
         prefixBtns.add(replace);
-        JPanel prefixRow = new JPanel(new BorderLayout(6, 0));
+        JPanel prefixRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
         prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixBtns, BorderLayout.EAST);
@@ -342,7 +342,7 @@ public final class SqlPage extends JPanel {
         actions.add(nameRow, BorderLayout.CENTER);
         actions.add(actRow, BorderLayout.SOUTH);
 
-        JPanel upper = new JPanel(new BorderLayout(4, 4));
+        JPanel upper = new JPanel(new BorderLayout(UiScale.px(4), UiScale.px(4)));
         upper.add(scroll, BorderLayout.CENTER);
         upper.add(actions, BorderLayout.SOUTH);
 
@@ -352,16 +352,16 @@ public final class SqlPage extends JPanel {
 
         JScrollPane logScroll = new JScrollPane(logPanel);
         // Python 的 SQL 日志区同样没有组框标题，只有上面那排按钮
-        logScroll.setMinimumSize(new Dimension(300, 100));
+        logScroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(100)));
 
         // 段数、比例、把手宽度照 main.py:1191-1197：初始 260/290、把手 6px、拉伸 1:3。
         // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
-        upper.setMinimumSize(new Dimension(10, 80));
+        upper.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(80)));
         split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
-        split.setDividerSize(6);
+        split.setDividerSize(UiScale.px(6));
         // Qt 的 setStretchFactor(1, 3) 换到 Swing 就是"上段拿 1/(1+3) 的余量"
         split.setResizeWeight(0.25);
-        split.setDividerLocation(260);
+        split.setDividerLocation(UiScale.px(260));
         split.setContinuousLayout(true);
         // 与 Excel 页同一件事：Qt 的 setSizes([260,290]) 会等比缩放，JSplitPane 只认绝对值
         splitPlaced = false;
@@ -382,7 +382,8 @@ public final class SqlPage extends JPanel {
     }
 
     private static JPanel flow() {
-        return new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        return new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
     }
 
     // ---------------------------------------------------------------- 数据
@@ -458,7 +459,7 @@ public final class SqlPage extends JPanel {
 
     /** 表格与日志按 260:290 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
     public void applySplitProportions() {
-        if (splitPlaced || split == null || split.getHeight() < 120
+        if (splitPlaced || split == null || split.getHeight() < UiScale.px(120)
                 || sqlUpper == null || sqlLog == null) {
             return;
         }

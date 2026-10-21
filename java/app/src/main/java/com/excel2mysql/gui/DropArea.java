@@ -49,8 +49,8 @@ public final class DropArea extends javax.swing.JPanel {
     public DropArea(Handler handler, Runnable onChoose) {
         this.handler = handler;
         this.onChoose = onChoose;
-        setPreferredSize(new Dimension(200, 96));
-        setMinimumSize(new Dimension(120, 80));
+        setPreferredSize(new Dimension(UiScale.px(200), UiScale.px(96)));
+        setMinimumSize(new Dimension(UiScale.px(120), UiScale.px(80)));
         setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
         setToolTipText("点击选择 Excel / ZIP 文件；也可以直接拖到这里");
 
@@ -177,15 +177,22 @@ public final class DropArea extends javax.swing.JPanel {
         try {
             g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
                     java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            // QSS 里的圆角、线宽、虚线间距都是逻辑像素，150% 屏上要一起放大
+            int inset = UiScale.px(1);
+            int radius = UiScale.px(8);
             g2.setColor(hover ? BG_HOVER : BG);
-            g2.fillRoundRect(1, 1, getWidth() - 3, getHeight() - 3, 8, 8);
+            g2.fillRoundRect(inset, inset, getWidth() - 2 * inset - 1,
+                    getHeight() - 2 * inset - 1, radius, radius);
             g2.setColor(hover ? LINE_HOVER : LINE);
-            g2.setStroke(new java.awt.BasicStroke(2f, java.awt.BasicStroke.CAP_BUTT,
-                    java.awt.BasicStroke.JOIN_MITER, 1f, new float[]{6f, 4f}, 0f));
-            g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 3, 8, 8);
+            g2.setStroke(new java.awt.BasicStroke(UiScale.px(2), java.awt.BasicStroke.CAP_BUTT,
+                    java.awt.BasicStroke.JOIN_MITER, 1f,
+                    new float[]{UiScale.px(6), UiScale.px(4)}, 0f));
+            g2.drawRoundRect(inset, inset, getWidth() - 2 * inset - 1,
+                    getHeight() - 2 * inset - 1, radius, radius);
 
             g2.setColor(new Color(0x33, 0x33, 0x33));
-            g2.setFont(getFont().deriveFont(Font.PLAIN, 12f));
+            // Python 是 QFont("", 12)：默认字族、12pt，与界面同源
+            g2.setFont(getFont().deriveFont(Font.PLAIN, (float) UiScale.fontPt(12)));
             FontMetrics fm = g2.getFontMetrics();
             String[] lines = HINT.split("\n");
             int lineHeight = fm.getHeight();

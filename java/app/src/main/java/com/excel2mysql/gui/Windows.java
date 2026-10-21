@@ -20,8 +20,9 @@ import javax.swing.JComponent;
  * 所以 pack 完按当前屏幕的可用区夹一次：夹的是客户区，外框仍在可用区内，
  * 弹窗底部的按钮不会被任务栏吃掉。
  *
- * <p>配置值本身记在内容面板的 {@code e2mWant} 上，两条线的对撞器比的是它——
- * 实测尺寸受现场屏幕影响，不该拿来跨线比。
+ * <p>配置值按 Qt 的逻辑像素写，真正摆窗时经 {@link UiScale#px(int)} 折成物理像素；
+ * {@code e2mWant} 记的仍是未折算的设计值，两条线的对撞器比的就是它——实测尺寸
+ * 受现场屏幕影响，不该拿来跨线比。
  */
 public final class Windows {
 
@@ -33,6 +34,10 @@ public final class Windows {
         if (content instanceof JComponent) {
             ((JComponent) content).putClientProperty("e2mWant", w + "x" + h);
         }
+        // w/h 是 Qt 的逻辑像素，Swing 要按屏幕 DPI 折成物理像素，否则 150% 屏上
+        // 整窗只有 Python 的三分之二，字再对也显得小
+        int wantW = UiScale.px(w);
+        int wantH = UiScale.px(h);
         // 用最小尺寸而不是首选尺寸兜底：Qt 的 resize 会被布局的 minimumSize 顶上去，
         // 但 JScrollPane/QTextBrowser 的首选尺寸是整篇文档那么大——拿首选尺寸来比，
         // 说明窗会被撑到 2550 宽。滚动区的最小尺寸很小，所以能钉回 960x700，
@@ -41,8 +46,8 @@ public final class Windows {
         win.pack();
         Dimension floor = content.getMinimumSize();
         Rectangle work = workArea(win);
-        int cw = Math.max(w, floor.width);
-        int ch = Math.max(h, floor.height);
+        int cw = Math.max(wantW, floor.width);
+        int ch = Math.max(wantH, floor.height);
         // 夹取按真实外框尺寸算，不按猜的常量：这台机器量出来标题栏加边框是 50x56，
         // 原先写死的 48 让"要 99999 宽"仍然超可用区 8 像素（GuiMain 的夹取断言抓到的）
         for (int i = 0; i < 4; i++) {

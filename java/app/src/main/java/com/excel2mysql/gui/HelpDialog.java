@@ -47,10 +47,10 @@ public final class HelpDialog extends JDialog {
         JScrollPane tocScroll = new JScrollPane(toc,
                 ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
                 ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        Dimension fixed = new Dimension(170, 100);
+        Dimension fixed = new Dimension(UiScale.px(170), UiScale.px(100));
         tocScroll.setPreferredSize(fixed);
         tocScroll.setMinimumSize(fixed);
-        tocScroll.setMaximumSize(new Dimension(170, 32767));
+        tocScroll.setMaximumSize(new Dimension(UiScale.px(170), 32767));
 
         browser = new JEditorPane();
         browser.setEditable(false);
@@ -68,11 +68,11 @@ public final class HelpDialog extends JDialog {
 
         JLabel titleLabel = new JLabel("目录");
         titleLabel.setFont(titleLabel.getFont().deriveFont(java.awt.Font.BOLD));
-        JPanel left = new JPanel(new BorderLayout(4, 4));
+        JPanel left = new JPanel(new BorderLayout(UiScale.px(4), UiScale.px(4)));
         left.add(titleLabel, BorderLayout.NORTH);
         left.add(tocScroll, BorderLayout.CENTER);
 
-        JPanel center = new JPanel(new BorderLayout(8, 0));
+        JPanel center = new JPanel(new BorderLayout(UiScale.px(8), 0));
         center.add(left, BorderLayout.WEST);
         center.add(bodyScroll, BorderLayout.CENTER);
 
@@ -84,10 +84,11 @@ public final class HelpDialog extends JDialog {
         row.add(hint, BorderLayout.WEST);
         row.add(close, BorderLayout.EAST);
 
-        JPanel root = new JPanel(new BorderLayout(6, 6));
-        root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        JPanel root = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(6)));
+        root.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(8), UiScale.px(8), UiScale.px(8), UiScale.px(8)));
         root.add(center, BorderLayout.CENTER);
-        row.setPreferredSize(new Dimension(10, 32));
+        row.setPreferredSize(new Dimension(10, UiScale.px(32)));
         root.add(row, BorderLayout.SOUTH);
         setContentPane(root);
 
@@ -107,19 +108,20 @@ public final class HelpDialog extends JDialog {
     }
 
     /**
-     * Swing 的 HTML 渲染器按 72dpi 把 pt 折成 px（14pt → 10.5px），Qt 按 96dpi
-     * （10.5pt → 14px），同一份 CSS 在 Java 里只有三分之二大。这里把 pt 换成等价 px，
-     * 让 Java 手册与 Python 端同一字号；其余样式原样保留。
+     * Qt 在 150% 屏上把 10.5pt 渲染成 21 个物理像素。Swing 的 HTML 渲染器却把
+     * CSS 的 px 当成 pt 用（96dpi 的 px 落进 72dpi 的字体，字号放大 4/3），
+     * 写 21px 实际画出 28px。这里先按屏幕 DPI 折出目标物理像素，再乘 3/4 写回
+     * CSS，手册正文才与 Python 同为 21px；其余样式原样保留。
      */
     public static String swingHtml(String html) {
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("font-size:\\s*([0-9]+(?:\\.[0-9]+)?)pt").matcher(html);
         StringBuffer sb = new StringBuffer();
         while (m.find()) {
-            double px = Double.parseDouble(m.group(1)) * 4.0 / 3.0;
-            String num = px == Math.rint(px) ? String.valueOf((int) px)
-                    : String.format(java.util.Locale.ROOT, "%.1f", px);
-            m.appendReplacement(sb, "font-size: " + num + "px");
+            double css = UiScale.fontPt(Double.parseDouble(m.group(1))) * 0.75;
+            String px = css == Math.rint(css) ? String.valueOf((int) css)
+                    : String.valueOf(css);
+            m.appendReplacement(sb, "font-size: " + px + "px");
         }
         m.appendTail(sb);
         return sb.toString();
@@ -218,6 +220,25 @@ public final class HelpDialog extends JDialog {
     /** 自检用：正文真的渲染出来了才有这个长度。 */
     public int bodyLength() {
         return browser.getDocument().getLength();
+    }
+
+    /**
+     * 自检用：正文首段第一行的实际像素行高。只查 HTML 字符串里写了多少 px
+     * 咬不住"Swing 把 CSS px 又放大 4/3"这件事，这里量渲染结果。
+     */
+    public int bodyLineHeight() {
+        try {
+            javax.swing.text.Document doc = browser.getDocument();
+            String text = doc.getText(0, doc.getLength());
+            int at = text.indexOf("这个工具把一批");
+            if (at < 0) {
+                return -1;
+            }
+            java.awt.Rectangle r = browser.modelToView(at);
+            return r == null ? -1 : r.height;
+        } catch (javax.swing.text.BadLocationException e) {
+            return -1;
+        }
     }
 
     /** 自检用：窗口里实际渲染的那份 HTML（字号已折成 px）。 */

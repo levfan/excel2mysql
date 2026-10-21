@@ -53,7 +53,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             "把表名第一个下划线之前的部分换成上面填的内容："
             + "ods_t_order → change_t_order、adb_table2 → change_table2；"
             + "表名里没有下划线的（如 users）不动，日志会列出。末尾下划线不用写";
-    /** SQL 执行器左右两栏与示例全文的字号：12 号现场反馈"太小"，两栏统一抬到 16。 */
+    /** SQL 执行器左右两栏与示例全文的字号：16pt，按屏幕 DPI 折算（144dpi → 32px）。 */
     private static final int SQL_RUN_FONT_SIZE = 16;
 
     private final FileRowModel fileModel = new FileRowModel();
@@ -184,7 +184,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 「?」放在最贴近标题栏的右上角，对应 main.py:838-858。
      */
     private JPanel buildHeaderRow() {
-        JPanel row = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 0));
+        JPanel row = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(4), 0));
         java.awt.Font bold = row.getFont().deriveFont(java.awt.Font.BOLD);
         JButton about = new JButton("i");
         about.setFont(bold);
@@ -200,8 +201,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JButton[] tiny = {about, help};
         for (JButton b : tiny) {
             b.setMargin(new java.awt.Insets(0, 0, 0, 0));
-            b.setPreferredSize(new Dimension(26, 22));
-            b.setMinimumSize(new Dimension(26, 22));
+            b.setPreferredSize(new Dimension(UiScale.px(26), UiScale.px(22)));
+            b.setMinimumSize(new Dimension(UiScale.px(26), UiScale.px(22)));
         }
         row.add(about);
         row.add(help);
@@ -239,7 +240,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JPanel bar = new JPanel(new BorderLayout());
         bar.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder("MySQL 连接信息"),
-                BorderFactory.createEmptyBorder(2, 8, 6, 8)));
+                BorderFactory.createEmptyBorder(
+                        UiScale.px(2), UiScale.px(8), UiScale.px(6), UiScale.px(8))));
 
         connect = new JButton("连接并加载库");
         connect.addActionListener(e -> {
@@ -269,7 +271,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         portField = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(
                 Integer.valueOf(3306), Integer.valueOf(1), Integer.valueOf(65535),
                 Integer.valueOf(1)));
-        portField.setPreferredSize(new Dimension(70, 24));
+        portField.setPreferredSize(new Dimension(UiScale.px(70), UiScale.px(24)));
         // Qt 的 QSpinBox 不带千分位；JSpinner 默认按本地 NumberFormat 会显示成 3,306
         portField.setEditor(new javax.swing.JSpinner.NumberEditor(portField, "#0"));
         userField = new javax.swing.JTextField(10);
@@ -278,7 +280,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 库列表要先连上服务器才拿得到，没加载之前下拉是禁用的：
         // 让用户手填库名，等于把"连到一个不存在的库"推迟到导入那一刻才爆
         dbCombo.setEnabled(false);
-        dbCombo.setPreferredSize(new Dimension(180, 24));
+        dbCombo.setPreferredSize(new Dimension(UiScale.px(180), UiScale.px(24)));
         dbCombo.addActionListener(e -> refreshDbLabels());
         hostField.setText("127.0.0.1");
 
@@ -291,7 +293,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             }
         });
 
-        JPanel dbRow = new JPanel(new BorderLayout(6, 0));
+        JPanel dbRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
         dbRow.add(dbCombo, BorderLayout.CENTER);
         dbRow.add(connect, BorderLayout.EAST);
         // QFormLayout 的等价物：标签一列按内容宽，输入一列吃掉剩余宽度，五行各占一行
@@ -315,13 +317,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         c.gridx = 0;
         c.gridy = y;
         c.anchor = java.awt.GridBagConstraints.WEST;
-        c.insets = new java.awt.Insets(2, 0, 2, 8);
+        c.insets = new java.awt.Insets(UiScale.px(2), 0, UiScale.px(2), UiScale.px(8));
         row.add(new JLabel(label), c);
         c.gridx = 1;
         c.weightx = stretch ? 1.0 : 0.0;
         c.fill = stretch ? java.awt.GridBagConstraints.HORIZONTAL
                          : java.awt.GridBagConstraints.NONE;
-        c.insets = new java.awt.Insets(2, 0, 2, 0);
+        c.insets = new java.awt.Insets(UiScale.px(2), 0, UiScale.px(2), 0);
         row.add(field, c);
     }
 
@@ -334,7 +336,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }, this::chooseFiles);
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
-        table.setRowHeight(22);
+        table.setRowHeight(UiScale.px(22));
         // 表名单击就进编辑器改这一张表；双击其余列进结构弹窗改字段与主键
         javax.swing.DefaultCellEditor nameEditor =
                 new javax.swing.DefaultCellEditor(new javax.swing.JTextField());
@@ -353,12 +355,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         });
         int[] widths = {54, 320, 200, 280, 80, 90, 160};
         for (int i = 0; i < widths.length && i < table.getColumnCount(); i++) {
-            table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
+            table.getColumnModel().getColumn(i).setPreferredWidth(UiScale.px(widths[i]));
         }
         // 列宽可自由拖动，最后一列自动吃掉剩余空间（Qt 的 Interactive + stretchLastSection）
         table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN);
         JScrollPane tableScroll = new JScrollPane(table);
-        tableScroll.setMinimumSize(new Dimension(300, 120));
+        tableScroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(120)));
 
         // 「待导入文件」组框里是三样东西：表格、前缀行、四个操作按钮（main.py:893-946）。
         // 这些控件原先全被塞在顶部连接栏里，等于把"改表名的输入框"和"连接数据库"混在一处。
@@ -368,7 +370,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JButton replacePrefix = new JButton("替换首个前缀");
         replacePrefix.setToolTipText(REPLACE_HEAD_TIP);
         replacePrefix.addActionListener(e -> replaceFirstPrefix());
-        JPanel prefixBtns = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0));
+        JPanel prefixBtns = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
         prefixBtns.add(applyPrefix);
         prefixBtns.add(replacePrefix);
         // 命名开关（全拼/首字母、小写/大写）跟表名前缀同属"名字怎么起"的治理项。
@@ -397,10 +400,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         nameSwitches.setLayout(new javax.swing.BoxLayout(nameSwitches, javax.swing.BoxLayout.Y_AXIS));
         nameSwitches.add(initialsBox);
         nameSwitches.add(upperBox);
-        JPanel prefixEast = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0));
+        JPanel prefixEast = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
         prefixEast.add(prefixBtns);
         prefixEast.add(nameSwitches);
-        JPanel prefixRow = new JPanel(new BorderLayout(6, 0));
+        JPanel prefixRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
         prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixEast, BorderLayout.EAST);
@@ -412,25 +416,28 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         preview = new JButton("预览 DDL");
         preview.addActionListener(e -> previewDdl());
         // Qt 的 QHBoxLayout 会把三颗按钮等宽铺满整行，Swing 的 FlowLayout 只会左对齐按内容宽
-        JPanel btnRow = new JPanel(new java.awt.GridLayout(1, 3, 6, 0));
+        JPanel btnRow = new JPanel(new java.awt.GridLayout(
+                1, 3, UiScale.px(6), 0));
         btnRow.add(clear);
         btnRow.add(structure);
         btnRow.add(preview);
 
-        JPanel fileRows = new JPanel(new BorderLayout(0, 2));
+        JPanel fileRows = new JPanel(new BorderLayout(0, UiScale.px(2)));
         fileRows.add(prefixRow, BorderLayout.NORTH);
         fileRows.add(btnRow, BorderLayout.SOUTH);
         JPanel fileBox = new JPanel(new BorderLayout());
         fileBox.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createTitledBorder("待导入文件（单击表名改名，双击其他列改字段）"),
-                BorderFactory.createEmptyBorder(2, 6, 4, 6)));
+                BorderFactory.createEmptyBorder(
+                        UiScale.px(2), UiScale.px(6), UiScale.px(4), UiScale.px(6))));
         fileBox.add(tableScroll, BorderLayout.CENTER);
         fileBox.add(fileRows, BorderLayout.SOUTH);
 
         // 日志区：上面一排只有右对齐的「清除日志」，下面才是文本框（main.py:949-960）
         JButton clearLog = new JButton("清除日志");
         clearLog.addActionListener(e -> logPanel.clearLog());
-        JPanel logHead = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 2));
+        JPanel logHead = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), UiScale.px(2)));
         logHead.add(clearLog);
         JScrollPane logScroll = new JScrollPane(logPanel);
         JPanel logBox = new JPanel(new BorderLayout());
@@ -439,18 +446,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
         // 三段纵向分栏：拖拽区 / 文件组框 / 日志，段数、比例、把手宽度都照 main.py:964-971。
         // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
-        drop.setMinimumSize(new Dimension(10, 60));
-        fileBox.setMinimumSize(new Dimension(300, 150));
-        logBox.setMinimumSize(new Dimension(300, 100));
+        drop.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(60)));
+        fileBox.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(150)));
+        logBox.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(100)));
         JSplitPane lower = new JSplitPane(JSplitPane.VERTICAL_SPLIT, fileBox, logBox);
-        lower.setDividerSize(6);
+        lower.setDividerSize(UiScale.px(6));
         // Qt 的 stretchFactor 0/2/3：拖拽区不参与拉伸，剩下 2:3 分给文件表与日志
         lower.setResizeWeight(0.4);
         JSplitPane stacked = new JSplitPane(JSplitPane.VERTICAL_SPLIT, drop, lower);
-        stacked.setDividerSize(6);
+        stacked.setDividerSize(UiScale.px(6));
         stacked.setResizeWeight(0.0);
-        stacked.setDividerLocation(130);
-        lower.setDividerLocation(250);
+        stacked.setDividerLocation(UiScale.px(130));
+        lower.setDividerLocation(UiScale.px(250));
         excelSplit = stacked;
         excelLower = lower;
         excelDrop = drop;
@@ -487,7 +494,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 + "每张表一个 xlsx：<br>只留「数据」一个 Sheet</html>");
         genSimple.setEnabled(false);
         genSimple.addActionListener(e -> generateExcel(false));
-        JPanel opRight = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 2));
+        JPanel opRight = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), UiScale.px(2)));
         opRight.add(stopBtn);
         opRight.add(importBtn);
         opRight.add(genStd);
@@ -500,8 +508,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // Qt 的 QProgressBar 默认就在条上印百分比，Swing 默认什么都不画：
         // 不开这个，页内进度条在两条线上看起来是两种东西
         pageProgress.setStringPainted(true);
-        pageProgress.setPreferredSize(new Dimension(200, 18));
-        JPanel south = new JPanel(new BorderLayout(0, 2));
+        pageProgress.setPreferredSize(new Dimension(UiScale.px(200), UiScale.px(18)));
+        JPanel south = new JPanel(new BorderLayout(0, UiScale.px(2)));
         south.add(op, BorderLayout.NORTH);
         south.add(pageProgress, BorderLayout.SOUTH);
 
@@ -1565,7 +1573,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 只在真拿到足够高度时做，且做一次就够——用户之后自己拖把手，不该被程序改回去。
      */
     public void applySplitProportions() {
-        if (splitPlaced || excelSplit == null || excelSplit.getHeight() < 200) {
+        if (splitPlaced || excelSplit == null
+                || excelSplit.getHeight() < UiScale.px(200)) {
             return;
         }
         splitPlaced = true;
@@ -1660,12 +1669,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 所以它不挑文件也不落盘，只吃编辑区里那段文本。
      */
     private javax.swing.JPanel buildSqlRunPage() {
-        javax.swing.JPanel page = new javax.swing.JPanel(new java.awt.BorderLayout(8, 6));
+        javax.swing.JPanel page = new javax.swing.JPanel(new java.awt.BorderLayout(
+                UiScale.px(8), UiScale.px(6)));
         // 提示单独占一行，三颗按钮另起一行。合成一行时这一行的最小宽度是"整句提示 + 三颗按钮"，
         // 会把整窗最小宽度顶到 830 以上，1024x768 的现场机和 800 宽的离屏用例都放不下。
         javax.swing.JPanel north = new javax.swing.JPanel(new java.awt.BorderLayout());
         javax.swing.JPanel bar = new javax.swing.JPanel(
-                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT,
+                        UiScale.px(6), UiScale.px(2)));
         sqlRunDbHint = new HintLabel();
         north.add(sqlRunDbHint, java.awt.BorderLayout.NORTH);
         sqlRunHint = new javax.swing.JLabel(
@@ -1684,14 +1695,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
         sqlRunInput = new javax.swing.JTextArea(8, 60);
         sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
-                SQL_RUN_FONT_SIZE));
+                UiScale.fontPt(SQL_RUN_FONT_SIZE)));
         sqlRunInput.setLineWrap(false);
         sqlRunInput.setText("SELECT 1 AS 连通检查;");
         // 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
         sqlRunClearInputBtn = new javax.swing.JButton("清空编辑区");
         sqlRunClearInputBtn.setToolTipText("只清掉左边这段 SQL，右侧结果区不动");
         sqlRunClearInputBtn.addActionListener(e -> sqlRunInput.setText(""));
-        javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
+        javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(
+                0, UiScale.px(2)));
         left.add(paneHeader("SQL 文本", sqlRunClearInputBtn), java.awt.BorderLayout.NORTH);
         left.add(new javax.swing.JScrollPane(sqlRunInput), java.awt.BorderLayout.CENTER);
 
@@ -1699,7 +1711,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunClearLogBtn = new javax.swing.JButton("清空结果区");
         sqlRunClearLogBtn.setToolTipText("只清掉右边的执行结果，左边编辑区不动");
         sqlRunClearLogBtn.addActionListener(e -> sqlRunLog.clearLog());
-        javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
+        javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(
+                0, UiScale.px(2)));
         right.add(paneHeader("执行结果", sqlRunClearLogBtn), java.awt.BorderLayout.NORTH);
         right.add(new javax.swing.JScrollPane(sqlRunLog), java.awt.BorderLayout.CENTER);
 
@@ -1784,7 +1797,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunPreview = new javax.swing.JTextArea(12, 60);
         sqlRunPreview.setEditable(false);
         sqlRunPreview.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
-                SQL_RUN_FONT_SIZE));
+                UiScale.fontPt(SQL_RUN_FONT_SIZE)));
         sqlRunPreview.setText(SqlSamples.ALL[0].sql);
         final javax.swing.JTextArea preview = sqlRunPreview;
         list.addListSelectionListener(e -> {
@@ -1795,7 +1808,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         });
 
         javax.swing.JPanel buttons = new javax.swing.JPanel(
-                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT,
+                        UiScale.px(6), UiScale.px(2)));
         sqlRunCopyBtn = new javax.swing.JButton("复制到剪贴板");
         sqlRunCopyBtn.addActionListener(e -> {
             String receipt;
@@ -1827,12 +1841,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         buttons.add(sqlRunInsertBtn);
         buttons.add(closeBtn);
 
-        javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(0, 4));
+        javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(
+                0, UiScale.px(4)));
         right.add(new javax.swing.JLabel("语句全文（可全选复制）"), java.awt.BorderLayout.NORTH);
         right.add(new javax.swing.JScrollPane(preview), java.awt.BorderLayout.CENTER);
         right.add(buttons, java.awt.BorderLayout.SOUTH);
 
-        javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(0, 2));
+        javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(
+                0, UiScale.px(2)));
         left.add(new javax.swing.JLabel("示例清单（按分组，选中看右半边的全文）"),
                 java.awt.BorderLayout.NORTH);
         left.add(new javax.swing.JScrollPane(list), java.awt.BorderLayout.CENTER);

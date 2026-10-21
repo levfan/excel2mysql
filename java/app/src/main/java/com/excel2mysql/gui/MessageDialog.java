@@ -26,21 +26,22 @@ import java.awt.datatransfer.StringSelection;
 import java.awt.event.KeyEvent;
 
 /**
- * 结果/告警消息框：16 号字、正文可滚动可选中、带「复制全部」。
+ * 结果/告警消息框：Python 默认 9pt 字、正文可滚动可选中、带「复制全部」。
  *
  * <p>以前直接用 {@link JOptionPane#showMessageDialog}：正文是 12 号字，比主界面
- * 16 号的日志小一截；内容一长没有滚动条，超出的行只能去底部日志里找；想复制
+ * 16pt 的日志小一截；内容一长没有滚动条，超出的行只能去底部日志里找；想复制
  * 整段报错也只能拖着鼠标从第一行选到最后一行。这几件事在现场都挨过反馈。
  *
  * <p>正文走 {@link PopupText#wrapAll}：按同一套 72 列折行，但不截成 24 行，
  * 行数多时靠滚动条看全。「复制全部」复制的是折行前的完整原文。
- * 窗口至少 820x420，按内容算高后夹进屏幕可用区。
+ * 窗口至少 820x420（Qt 逻辑像素，按屏幕 DPI 折算），按内容算高后夹进屏幕可用区。
  */
 public final class MessageDialog extends JDialog {
 
-    /** 正文与标题共用的字号：与 LogPanel 的 16 号对齐。 */
-    public static final int FONT_SIZE = 16;
+    /** 正文与标题共用 Python 应用默认的 9pt，按 DPI 折成物理像素（144dpi → 18px）。 */
+    public static final int FONT_SIZE = UiScale.fontPt(UiScale.UI_POINT_SIZE);
 
+    /** 以下四个是 Qt 逻辑像素的设计值，交给 Windows.clientSize 统一折算一次。 */
     private static final int WANT_WIDTH = 880;
     private static final int MIN_WIDTH = 820;
     private static final int MIN_HEIGHT = 420;
@@ -63,8 +64,9 @@ public final class MessageDialog extends JDialog {
         scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scroll.getViewport().setBackground(Color.WHITE);
 
-        JPanel content = new JPanel(new BorderLayout(0, 10));
-        content.setBorder(BorderFactory.createEmptyBorder(14, 14, 12, 14));
+        JPanel content = new JPanel(new BorderLayout(0, UiScale.px(10)));
+        content.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(14), UiScale.px(14), UiScale.px(12), UiScale.px(14)));
         content.add(buildHeader(title, iconType), BorderLayout.NORTH);
         content.add(scroll, BorderLayout.CENTER);
 
@@ -73,12 +75,12 @@ public final class MessageDialog extends JDialog {
         copy.addActionListener(e -> copyAll());
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(8), 0));
         buttons.add(copy);
         buttons.add(close);
         content.add(buttons, BorderLayout.SOUTH);
 
-        content.setMinimumSize(new Dimension(680, 320));
+        content.setMinimumSize(new Dimension(UiScale.px(680), UiScale.px(320)));
         setContentPane(content);
         getRootPane().setDefaultButton(close);
         getRootPane().registerKeyboardAction(e -> dispose(),
@@ -89,13 +91,18 @@ public final class MessageDialog extends JDialog {
 
         int lines = Math.max(1, body.split("\n", -1).length);
         FontMetrics fm = area.getFontMetrics(area.getFont());
-        int height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, lines * fm.getHeight() + 120));
+        // clientSize 会把设计值折成物理像素，所以行高先按同一因子折回设计像素，
+        // 不能把已经乘过 1.5 的高度再乘一次
+        int designLine = Math.max(1,
+                (int) Math.round(fm.getHeight() / UiScale.factor()));
+        int height = Math.max(MIN_HEIGHT,
+                Math.min(MAX_HEIGHT, lines * designLine + 120));
         Windows.clientSize(content, this, WANT_WIDTH, height);
-        setMinimumSize(new Dimension(MIN_WIDTH, MIN_HEIGHT));
+        setMinimumSize(new Dimension(UiScale.px(MIN_WIDTH), UiScale.px(MIN_HEIGHT)));
     }
 
     private static JPanel buildHeader(String title, int iconType) {
-        JPanel head = new JPanel(new BorderLayout(10, 0));
+        JPanel head = new JPanel(new BorderLayout(UiScale.px(10), 0));
         head.setOpaque(false);
         Icon icon = icon(iconType);
         if (icon != null) {
@@ -124,15 +131,18 @@ public final class MessageDialog extends JDialog {
         area.setFont(area.getFont().deriveFont(Font.PLAIN, (float) FONT_SIZE));
         area.setBackground(Color.WHITE);
         area.setForeground(new Color(0x22, 0x22, 0x22));
-        area.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+        area.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(10), UiScale.px(12), UiScale.px(10), UiScale.px(12)));
         area.setCaretPosition(0);
         // 与 Python 结果弹窗同一个下限：长路径与文件清单不至于被挤成一团
-        area.setMinimumSize(new Dimension(MIN_WIDTH, MIN_HEIGHT));
+        int minW = UiScale.px(MIN_WIDTH);
+        int minH = UiScale.px(MIN_HEIGHT);
+        area.setMinimumSize(new Dimension(minW, minH));
         // 折行文本区必须先给宽度再问首选高度，算出来的才是「按这个宽度折完有多高」。
         // 直接钉成 420 高的话，80 行报错也只报 420，滚动区以为装得下，尾部就看不到了
-        area.setSize(MIN_WIDTH, Short.MAX_VALUE);
+        area.setSize(minW, Short.MAX_VALUE);
         Dimension pref = area.getPreferredSize();
-        area.setPreferredSize(new Dimension(MIN_WIDTH, Math.max(MIN_HEIGHT, pref.height)));
+        area.setPreferredSize(new Dimension(minW, Math.max(minH, pref.height)));
         return area;
     }
 

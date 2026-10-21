@@ -37,7 +37,9 @@ public final class AboutDialog extends JDialog {
         super(owner, "关于", true);
 
         JLabel title = new JLabel("Excel → MySQL 批量导入工具");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, title.getFont().getSize2D() + 2f));
+        // Python 是默认 9pt 再加 2pt；这里按 11pt 折成物理像素（144dpi → 22px）
+        title.setFont(title.getFont().deriveFont(Font.BOLD,
+                (float) UiScale.fontPt(UiScale.UI_POINT_SIZE + 2)));
 
         // 两列不能等宽：GridLayout 会按容器宽一分为二，长提交号只能挤在 171px 里被裁；
         // 这一列要按文字自己报的宽度算，多出来的宽度再给它
@@ -51,8 +53,9 @@ public final class AboutDialog extends JDialog {
         JPanel row = new JPanel(new BorderLayout());
         row.add(close, BorderLayout.EAST);
 
-        JPanel root = new JPanel(new BorderLayout(6, 10));
-        root.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+        JPanel root = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(10)));
+        root.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(10), UiScale.px(12), UiScale.px(10), UiScale.px(12)));
         JPanel top = new JPanel(new BorderLayout());
         top.add(title, BorderLayout.NORTH);
         top.add(grid, BorderLayout.SOUTH);
@@ -91,7 +94,8 @@ public final class AboutDialog extends JDialog {
         c.gridx = 0;
         c.gridy = row;
         c.anchor = java.awt.GridBagConstraints.WEST;
-        c.insets = new java.awt.Insets(0, 0, last ? 0 : 7, 14);
+        c.insets = new java.awt.Insets(0, 0,
+                last ? 0 : UiScale.px(7), UiScale.px(14));
         grid.add(head, c);
         c.gridx = 1;
         c.weightx = 1;

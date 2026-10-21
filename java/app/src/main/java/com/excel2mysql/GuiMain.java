@@ -1,6 +1,7 @@
 package com.excel2mysql;
 
 import com.excel2mysql.gui.MainFrame;
+import com.excel2mysql.gui.UiScale;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
@@ -27,11 +28,7 @@ public final class GuiMain {
     }
 
     private static void showWindow(List<String> args) {
-        try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception e) {
-            System.out.println("! [WARN] GUI | 系统外观设置失败，用默认外观：" + e.getMessage());
-        }
+        com.excel2mysql.gui.UiScale.apply();
         SwingUtilities.invokeLater(() -> {
             MainFrame frame = new MainFrame();
             List<String> files = new ArrayList<String>();
@@ -48,6 +45,9 @@ public final class GuiMain {
     }
 
     private static int selftest(List<String> args) {
+        // 自检要与生产走同一套外观与字号：以前这里停在 Metal 默认外观，
+        // 量到的字体不是用户看到那一套，字号缩了也咬不住
+        com.excel2mysql.gui.UiScale.apply();
         int from = args.indexOf("--selftest");
         String dir = from + 1 < args.size() && !args.get(from + 1).startsWith("-")
                 ? args.get(from + 1) : "java/verify/fixtures";
@@ -876,8 +876,23 @@ public final class GuiMain {
         // （首次打开就能看见全部文字与按钮，老屏上也不会被任务栏吃掉半截）
         java.awt.Rectangle work = com.excel2mysql.gui.Windows.workArea(frame);
         java.awt.Dimension client = frame.getContentPane().getSize();
-        if (client.width < 1100 || client.height < 780) {
-            problems.add("客户区比设计的 1100x780 还小：" + client);
+        // 设计值 1100x780 是 Qt 的逻辑像素；150% 屏上应为 1650x1170。
+        // 期望值在这里独立按 DPI 算一遍，UiScale 被改坏时这条会红。
+        int dpi = java.awt.Toolkit.getDefaultToolkit().getScreenResolution();
+        int wantClientW = (int) Math.round(1100 * Math.max(1.0, dpi / 96.0));
+        int wantClientH = (int) Math.round(780 * Math.max(1.0, dpi / 96.0));
+        if (client.width < wantClientW || client.height < wantClientH) {
+            problems.add("客户区没按 DPI 折算到 " + wantClientW + "x" + wantClientH
+                    + "（实际 " + client + "），整窗会比 Python 小一圈");
+        }
+        // Python 的应用默认字体是 Microsoft YaHei UI 9pt：144dpi 下 18px。
+        // 不装这一档时 Swing 会退回 SimSun，字形明显更瘦更小。
+        java.awt.Font uiFont = UIManager.getFont("Label.font");
+        int wantUiPx = (int) Math.round(9 * dpi / 72.0);
+        if (uiFont == null || uiFont.getSize() != wantUiPx
+                || !uiFont.getFamily().contains("YaHei")) {
+            problems.add("界面默认字体没对齐 Python 的 Microsoft YaHei UI 9pt/"
+                    + wantUiPx + "px：" + uiFont);
         }
         if (!work.contains(frame.getBounds())) {
             problems.add("主窗口超出屏幕可用区：" + frame.getBounds() + " 可用 " + work);
@@ -976,6 +991,12 @@ public final class GuiMain {
         }
         if (!frame.excelHintText().contains("未选择目标数据库") || frame.excelHintIsOk()) {
             problems.add("未选库时 Excel 页提示条没按红级说明：" + frame.excelHintText());
+        }
+        // ⚠ 在 Microsoft YaHei 下没有字形，直接画就是豆腐块；显示文字里不许留它，
+        // 但 hintText 要保留原文给双端对撞。图标由 HintLabel 自绘。
+        String badShown = frame.excelHint().getText();
+        if (badShown.contains("⚠") || !badShown.contains("未选择目标数据库")) {
+            problems.add("告警条显示文字仍是 ⚠ 原文或丢了正文：" + badShown);
         }
         if (!frame.sqlPage().hintText().equals(frame.excelHintText())
                 || !frame.runDbHintText().equals(frame.excelHintText())) {
@@ -1161,20 +1182,21 @@ public final class GuiMain {
         // 编辑区与结果区都是第三页给人读的主区域：等宽、同档 16 号，表格才不会错行
         java.awt.Font resultFont = frame.sqlRunLogPanel().getFont();
         java.awt.Font inputFont = frame.sqlRunInputFont();
+        int want16 = wantFontPx(16);
         if (resultFont == null || !"Monospaced".equals(resultFont.getFamily())) {
             problems.add("结果区不是等宽字体："
                     + (resultFont == null ? "无字体" : resultFont.getFamily()));
         }
-        if (resultFont == null || resultFont.getSize() != 16) {
-            problems.add("结果区字号不是 16："
+        if (resultFont == null || resultFont.getSize() != want16) {
+            problems.add("结果区字号不是 16pt 折算的 " + want16 + "px："
                     + (resultFont == null ? "无字体" : resultFont.getSize()));
         }
         if (inputFont == null || !"Monospaced".equals(inputFont.getFamily())) {
             problems.add("编辑区不是等宽字体："
                     + (inputFont == null ? "无字体" : inputFont.getFamily()));
         }
-        if (inputFont == null || inputFont.getSize() != 16) {
-            problems.add("编辑区字号不是 16："
+        if (inputFont == null || inputFont.getSize() != want16) {
+            problems.add("编辑区字号不是 16pt 折算的 " + want16 + "px："
                     + (inputFont == null ? "无字体" : inputFont.getSize()));
         }
         if (resultFont != null && inputFont != null
@@ -1225,10 +1247,11 @@ public final class GuiMain {
         }
         java.awt.Font previewFont = frame.sqlRunPreviewFont();
         if (previewFont == null || !"Monospaced".equals(previewFont.getFamily())
-                || previewFont.getSize() != 16) {
-            problems.add("示例全文不是 16 号等宽字体："
+                || previewFont.getSize() != want16) {
+            problems.add("示例全文不是 16pt 折算的等宽字体："
                     + (previewFont == null ? "无字体"
-                    : previewFont.getFamily() + "/" + previewFont.getSize()));
+                    : previewFont.getFamily() + "/" + previewFont.getSize()
+                    + "，期望 " + want16 + "px"));
         }
         if (!"SQL 示例（100 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
@@ -1295,21 +1318,36 @@ public final class GuiMain {
         frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
     }
 
+    /** 自检独立按 DPI 折算一遍，不引用 UiScale：产品侧折算被改坏时断言才会红。 */
+    private static int wantFontPx(double pt) {
+        return (int) Math.round(
+                pt * java.awt.Toolkit.getDefaultToolkit().getScreenResolution() / 72.0);
+    }
+
+    /** Qt 逻辑像素 → 物理像素的独立折算，口径与 UiScale.px 相同但刻意不复用它。 */
+    private static int wantPx(int design) {
+        return (int) Math.round(design * Math.max(1.0,
+                java.awt.Toolkit.getDefaultToolkit().getScreenResolution() / 96.0));
+    }
+
     /**
      * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：12 号、14 号都被现场判过太小，钉 16。
      * 第三页的编辑区与结果区也在这档，由 sql_run_tab 里那组断言管。
+     * "16" 是 Python 侧的 pt，Swing 里必须折成 DPI 对应的物理像素（144dpi → 32px）。
      */
     private static void checkLogFonts(MainFrame frame, List<String> problems) {
         com.excel2mysql.gui.LogPanel[] logs = {
                 frame.logPanel(), frame.sqlPage().logPanel()};
         String[] names = {"主页日志", "SQL 脚本页日志"};
+        int want16 = wantFontPx(16);
         for (int i = 0; i < logs.length; i++) {
             java.awt.Font f = logs[i].getFont();
             if (f == null || !"Monospaced".equals(f.getFamily())) {
                 problems.add(names[i] + "不是等宽字体：" + (f == null ? "无字体" : f.getFamily()));
             }
-            if (f == null || f.getSize() != 16) {
-                problems.add(names[i] + "字号不是 16：" + (f == null ? "无字体" : f.getSize()));
+            if (f == null || f.getSize() != want16) {
+                problems.add(names[i] + "字号不是 16pt 折算的 " + want16 + "px："
+                        + (f == null ? "无字体" : f.getSize()));
             }
         }
         java.awt.Font base = logs[0].getFont();
@@ -1407,11 +1445,15 @@ public final class GuiMain {
                 || ((javax.swing.JTextArea) copyBody).isEditable()) {
             problems.add("生成结果弹窗正文不可复制：应使用只读文本区");
         }
-        if (popupSize.width < 820 || popupSize.height < 420) {
+        if (popupSize.width < UiScale.px(820) || popupSize.height < UiScale.px(420)) {
             problems.add("生成结果弹窗正文太小，产物路径看不清：" + popupSize);
         }
-        if (copyBody.getFont() == null || copyBody.getFont().getSize() < 16) {
-            problems.add("结果弹窗正文字号没跟主界面 16 号对齐：" + copyBody.getFont());
+        // Python 的消息框吃应用默认字体 9pt；144dpi 下应折成 18px。
+        // 期望值独立算，不拿 MessageDialog.FONT_SIZE 自己比自己。
+        int wantPopupPx = wantFontPx(9);
+        if (copyBody.getFont() == null || copyBody.getFont().getSize() != wantPopupPx) {
+            problems.add("结果弹窗正文字号不是 Python 默认 9pt 折算的 " + wantPopupPx
+                    + "px：" + copyBody.getFont());
         }
         StringBuilder longText = new StringBuilder("任务异常：以下文件未能读入。");
         for (int i = 0; i < 40; i++) {
@@ -1447,8 +1489,15 @@ public final class GuiMain {
         if (md.fullText().length() <= 0 || !md.fullText().contains("第39批")) {
             problems.add("「复制全部」拿到的不是完整原文");
         }
-        if (md.getWidth() < 820 || md.getHeight() < 420) {
-            problems.add("结果弹窗本身小于 820x420：" + md.getSize());
+        if (md.getWidth() < UiScale.px(820) || md.getHeight() < UiScale.px(420)) {
+            problems.add("结果弹窗本身小于按 DPI 折算的 "
+                    + UiScale.px(820) + "x" + UiScale.px(420) + "：" + md.getSize());
+        }
+        // 弹窗尺寸常量是设计值，只能由 Windows.clientSize 折一次；先折再传会变成 1.5 倍
+        java.awt.Dimension mdClient = md.getContentPane().getPreferredSize();
+        if (mdClient.width != UiScale.px(880)) {
+            problems.add("结果弹窗客户区宽度被重复折算：" + mdClient.width
+                    + "，应为 " + UiScale.px(880));
         }
         if (!com.excel2mysql.gui.Windows.workArea(md).contains(md.getBounds())) {
             problems.add("结果弹窗超出屏幕可用区：" + md.getBounds());
@@ -1686,15 +1735,16 @@ public final class GuiMain {
             problems.add("界面上没有「SQL 脚本改名入库」页");
             return;
         }
-        // 分栏配置照 Python：把手 6px、余量 1:3 给日志、初始 260
-        if (page.splitDividerSize() != 6) {
-            problems.add("SQL 页分栏把手宽度不是 6px：" + page.splitDividerSize());
+        // 分栏配置照 Python：把手 6px、余量 1:3 给日志、初始 260（设计值按 DPI 折算）
+        if (page.splitDividerSize() != wantPx(6)) {
+            problems.add("SQL 页分栏把手宽度不是 " + wantPx(6) + "px：" + page.splitDividerSize());
         }
         if (Math.abs(page.splitResizeWeight() - 0.25) > 0.001) {
             problems.add("SQL 页分栏拉伸比例不对，应为 1:3：" + page.splitResizeWeight());
         }
-        if (page.splitDividerLocation() != 260) {
-            problems.add("SQL 页分栏初始位置不是 260：" + page.splitDividerLocation());
+        if (page.splitDividerLocation() != wantPx(260)) {
+            problems.add("SQL 页分栏初始位置不是 " + wantPx(260) + "："
+                    + page.splitDividerLocation());
         }
         java.io.File dir;
         try {
@@ -1926,12 +1976,28 @@ public final class GuiMain {
             if (hd.bodyLength() < 2000) {
                 problems.add("说明正文没渲染出来，长度只有 " + hd.bodyLength());
             }
-            // Swing 按 72dpi 折 pt（10.5pt → 7.9px），Qt 按 96dpi（→14px）；不折成 px 字号会明显偏小
+            // Qt 在 150% 屏上把 10.5pt 渲染成 21 个物理像素；Swing 的 HTML 渲染器
+            // 又会把 CSS px 按 4/3 放大，所以 CSS 里只该写 21*3/4=15.75px。
+            // 期望值同样独立按 DPI 算，不引用 UiScale 和 HelpDialog 的折算。
             String helpHtml = hd.html();
-            if (!helpHtml.contains("font-size: 14px")
+            int helpTarget = wantFontPx(10.5);
+            double helpCss = helpTarget * 0.75;
+            String helpCssText = helpCss == Math.rint(helpCss)
+                    ? String.valueOf((int) helpCss) : String.valueOf(helpCss);
+            String wantBodyPx = "font-size: " + helpCssText + "px";
+            if (!helpHtml.contains(wantBodyPx)
                     || java.util.regex.Pattern.compile("font-size:\\s*[0-9.]+pt")
                     .matcher(helpHtml).find()) {
-                problems.add("说明正文字号没折成 px：Swing 会把 10.5pt 渲染成约 7.9px");
+                problems.add("说明正文字号没折成 " + wantBodyPx
+                        + "：Swing 会把物理像素再放大 4/3");
+            }
+            // 字符串对不代表画出来对：量首段第一行，把 4/3 放大真的咬住
+            int helpLine = hd.bodyLineHeight();
+            int wantHelpLine = hd.getFontMetrics(new java.awt.Font(
+                    "Microsoft YaHei", java.awt.Font.PLAIN, helpTarget)).getHeight();
+            if (helpLine < 0 || Math.abs(helpLine - wantHelpLine) > 4) {
+                problems.add("说明正文渲染行高 " + helpLine + "px，应接近 "
+                        + helpTarget + "px 字号的 " + wantHelpLine + "px");
             }
             // 按标题找而不是按序号：说明里插一章就会把序号挪位，写死序号的守卫会假红
             int excelChapter = -1;
@@ -2784,8 +2850,9 @@ public final class GuiMain {
             problems.add("文件表应有 7 列（序号 + 原 6 列），实际 " + cols.getColumnCount());
         }
         for (int i = 0; i < want.length && i < cols.getColumnCount(); i++) {
-            if (cols.getColumn(i).getPreferredWidth() != want[i]) {
-                problems.add("文件表第 " + (i + 1) + " 列宽不是 " + want[i] + "，实际 "
+            int expected = wantPx(want[i]);
+            if (cols.getColumn(i).getPreferredWidth() != expected) {
+                problems.add("文件表第 " + (i + 1) + " 列宽不是 " + expected + "，实际 "
                         + cols.getColumn(i).getPreferredWidth());
             }
         }
@@ -2816,10 +2883,16 @@ public final class GuiMain {
             if (!"正在解析文件…".equals(pd.getTitle())) {
                 problems.add("进度框标题没生效：" + pd.getTitle());
             }
-            // Qt 的 resize(480,140) 说的是客户区，所以量内容面板而不是整个窗
+            // Qt 的 resize(480,140) 说的是逻辑像素的客户区，Swing 这边要按 DPI 折算；
+            // 量内容面板而不是整个窗，外框不参与比较
             java.awt.Dimension client = pd.getContentPane().getPreferredSize();
-            if (client.width != 480 || client.height != 140) {
-                problems.add("进度框客户区与 Python 不一致：" + client);
+            int wantW = (int) Math.round(480 * Math.max(1.0,
+                    java.awt.Toolkit.getDefaultToolkit().getScreenResolution() / 96.0));
+            int wantH = (int) Math.round(140 * Math.max(1.0,
+                    java.awt.Toolkit.getDefaultToolkit().getScreenResolution() / 96.0));
+            if (client.width != wantW || client.height != wantH) {
+                problems.add("进度框客户区应为 " + wantW + "x" + wantH
+                        + "（Python 480x140 折算后），实际 " + client);
             }
             if (!"取消".equals(pd.cancelText())) {
                 problems.add("取消按钮默认文案不对：" + pd.cancelText());

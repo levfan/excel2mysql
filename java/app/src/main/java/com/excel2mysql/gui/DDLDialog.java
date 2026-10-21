@@ -31,7 +31,9 @@ public final class DDLDialog extends JDialog {
         for (TableOps.Table t : tables) {
             JTextArea area = new JTextArea();
             area.setEditable(false);
-            area.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
+            // Python 用 QFont("Menlo") 的默认 9pt；按 DPI 折成物理像素才对得上
+            area.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
+                    UiScale.fontPt(UiScale.UI_POINT_SIZE)));
             area.setText(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, dropIfExists));
             area.setCaretPosition(0);
             JScrollPane scroll = new JScrollPane(area);
@@ -41,13 +43,15 @@ public final class DDLDialog extends JDialog {
 
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
-        JPanel row = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 4));
+        JPanel row = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), UiScale.px(4)));
         row.add(close);
 
-        JPanel body = new JPanel(new BorderLayout(6, 6));
-        body.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        JPanel body = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(6)));
+        body.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(8), UiScale.px(8), UiScale.px(8), UiScale.px(8)));
         body.add(tabs, BorderLayout.CENTER);
-        row.setPreferredSize(new Dimension(10, 36));
+        row.setPreferredSize(new Dimension(10, UiScale.px(36)));
         body.add(row, BorderLayout.SOUTH);
         setContentPane(body);
 

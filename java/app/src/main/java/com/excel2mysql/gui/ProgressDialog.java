@@ -44,8 +44,9 @@ public final class ProgressDialog extends JDialog {
 
     public ProgressDialog(Frame owner, String title) {
         super(owner, title, true);
-        JPanel body = new JPanel(new BorderLayout(8, 8));
-        body.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        JPanel body = new JPanel(new BorderLayout(UiScale.px(8), UiScale.px(8)));
+        body.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(12), UiScale.px(12), UiScale.px(12), UiScale.px(12)));
         bar.setStringPainted(true);
         // Qt 的 setFormat("%p%") 是"显示百分比"，Swing 的 setString 是字面文本：
         // 照抄会让进度条真的印出 "%p%" 四个字符，所以每次改值都自己写百分比
@@ -55,11 +56,12 @@ public final class ProgressDialog extends JDialog {
         // 任务名只靠窗口标题太弱，框体里也得有一句
         JLabel head = new JLabel(title);
         head.setFont(head.getFont().deriveFont(java.awt.Font.BOLD));
-        JPanel top = new JPanel(new BorderLayout(0, 4));
+        JPanel top = new JPanel(new BorderLayout(0, UiScale.px(4)));
         top.add(head, BorderLayout.NORTH);
         top.add(label, BorderLayout.SOUTH);
         // 取消按钮靠右、按自身宽度：直接 add 到 SOUTH 会被 BorderLayout 拉成整行宽
-        JPanel btnRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 0));
+        JPanel btnRow = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
         btnRow.add(cancel);
         body.add(top, BorderLayout.NORTH);
         body.add(bar, BorderLayout.CENTER);

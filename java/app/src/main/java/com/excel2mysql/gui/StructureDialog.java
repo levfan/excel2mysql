@@ -99,14 +99,14 @@ public final class StructureDialog extends JDialog {
             editors.add(ed);
             JTable table = new JTable(ed.model);
             table.setFillsViewportHeight(true);
-            table.setRowHeight(22);
+            table.setRowHeight(UiScale.px(22));
             // 主键列窄、其余列分摊剩余宽度：对应 Qt 的 ResizeToContents(0) + Stretch(1,2)，
             // Swing 没有"按内容自适应"这一档，用固定窄列 + 后续列均分来贴
             table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
-            table.getColumnModel().getColumn(0).setPreferredWidth(46);
-            table.getColumnModel().getColumn(4).setPreferredWidth(96);
+            table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(46));
+            table.getColumnModel().getColumn(4).setPreferredWidth(UiScale.px(96));
             JScrollPane scroll = new JScrollPane(table);
-            scroll.setPreferredSize(new Dimension(900, 420));
+            scroll.setPreferredSize(new Dimension(UiScale.px(900), UiScale.px(420)));
             tabs.addTab(r.table.tableName, scroll);
         }
 
@@ -114,15 +114,17 @@ public final class StructureDialog extends JDialog {
         ok.addActionListener(e -> confirmClicked());
         JButton cancel = new JButton("取消");
         cancel.addActionListener(e -> dispose());
-        JPanel buttons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 4));
+        JPanel buttons = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), UiScale.px(4)));
         buttons.add(ok);
         buttons.add(cancel);
 
         JLabel tip = new JLabel(TIP);
         tip.setForeground(new java.awt.Color(0x66, 0x66, 0x66));
 
-        JPanel body = new JPanel(new BorderLayout(8, 8));
-        body.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        JPanel body = new JPanel(new BorderLayout(UiScale.px(8), UiScale.px(8)));
+        body.setBorder(BorderFactory.createEmptyBorder(
+                UiScale.px(10), UiScale.px(10), UiScale.px(10), UiScale.px(10)));
         body.add(tip, BorderLayout.NORTH);
         body.add(tabs, BorderLayout.CENTER);
         body.add(buttons, BorderLayout.SOUTH);
