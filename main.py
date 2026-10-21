@@ -107,6 +107,10 @@ NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
 # 也是「插入到编辑区」判断"这段还是默认值、可以直接覆盖掉"的比对基准
 SQL_RUN_DEFAULT = "SELECT 1 AS 连通检查;"
 
+# 第三页两栏与示例全文共用的等宽字号：12 号在 1080p 上连字段名都要凑近看，
+# 现场反馈"文字字体太小"；三处同源，改这一处就整页一起变
+SQL_RUN_FONT_SIZE = 16
+
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
 
@@ -1696,7 +1700,7 @@ class MainWindow(QWidget):
         lay.addLayout(bar)
 
         self.sql_run_input = QPlainTextEdit(SQL_RUN_DEFAULT)
-        self.sql_run_input.setFont(QFont("Consolas", 12))
+        self.sql_run_input.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
         # 不折行：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
         self.sql_run_input.setLineWrapMode(QPlainTextEdit.NoWrap)
         # 两颗清空各归各的pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
@@ -1716,7 +1720,7 @@ class MainWindow(QWidget):
         self.sql_run_log = QPlainTextEdit()
         self.sql_run_log.setReadOnly(True)
         # 结果集是按显示宽度排出来的表格，字体不是等宽就会错行：与编辑区同一支字体
-        self.sql_run_log.setFont(QFont("Consolas", 12))
+        self.sql_run_log.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
         self.sql_run_log.setMaximumBlockCount(2000)
         right = QWidget()
         rl = QVBoxLayout(right)
@@ -2261,7 +2265,7 @@ class SqlSamplesDialog(QDialog):
             self.list.addItem("【%s】%s" % (group, desc))
         self.preview = QPlainTextEdit(SQL_SAMPLES[0][2])
         self.preview.setReadOnly(True)
-        self.preview.setFont(QFont("Consolas", 12))
+        self.preview.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
         self.list.currentRowChanged.connect(self._on_pick)
 
         left = QWidget()

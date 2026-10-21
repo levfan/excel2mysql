@@ -20,8 +20,8 @@ public final class LogPanel extends javax.swing.JTextPane {
     private static final Color ERROR_COLOR = new Color(0xc6, 0x28, 0x28);
     private static final int MAX_LINES = 2000;
     private static final int TRIM_TO = 1500;
-    /** 12 号在 1080p 上中文只有米粒大，现场反馈"基本看不清"；三处日志共用这一档。 */
-    private static final int FONT_SIZE = 14;
+    /** 12 号在 1080p 上中文只有米粒大，现场反馈"基本看不清"；默认 14，SQL 执行器按调用方传入。 */
+    private static final int DEFAULT_FONT_SIZE = 14;
 
     private final Deque<Entry> entries = new ArrayDeque<Entry>();
 
@@ -36,10 +36,14 @@ public final class LogPanel extends javax.swing.JTextPane {
     }
 
     public LogPanel() {
+        this(DEFAULT_FONT_SIZE);
+    }
+
+    public LogPanel(int fontSize) {
         setEditable(false);
         // 用逻辑等宽字体而不是 Consolas：前者的中文回退正好占两格，结果区的表格才对得齐；
         // Consolas 的回退字形只有一格多，混排时整张表会歪。
-        setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, FONT_SIZE));
+        setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, fontSize));
         setBackground(new Color(0xfb, 0xfb, 0xfb));
     }
 

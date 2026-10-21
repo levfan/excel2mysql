@@ -53,6 +53,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             "把表名第一个下划线之前的部分换成上面填的内容："
             + "ods_t_order → change_t_order、adb_table2 → change_table2；"
             + "表名里没有下划线的（如 users）不动，日志会列出。末尾下划线不用写";
+    /** SQL 执行器左右两栏与示例全文的字号：12 号现场反馈"太小"，两栏统一抬到 16。 */
+    private static final int SQL_RUN_FONT_SIZE = 16;
 
     private final FileRowModel fileModel = new FileRowModel();
     private final javax.swing.JTable table = new javax.swing.JTable(fileModel) {
@@ -1649,7 +1651,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         page.add(north, java.awt.BorderLayout.NORTH);
 
         sqlRunInput = new javax.swing.JTextArea(8, 60);
-        sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
+        sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
+                SQL_RUN_FONT_SIZE));
         sqlRunInput.setLineWrap(false);
         sqlRunInput.setText("SELECT 1 AS 连通检查;");
         // 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
@@ -1660,7 +1663,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         left.add(paneHeader("SQL 文本", sqlRunClearInputBtn), java.awt.BorderLayout.NORTH);
         left.add(new javax.swing.JScrollPane(sqlRunInput), java.awt.BorderLayout.CENTER);
 
-        sqlRunLog = new LogPanel();
+        sqlRunLog = new LogPanel(SQL_RUN_FONT_SIZE);
         sqlRunClearLogBtn = new javax.swing.JButton("清空结果区");
         sqlRunClearLogBtn.setToolTipText("只清掉右边的执行结果，左边编辑区不动");
         sqlRunClearLogBtn.addActionListener(e -> sqlRunLog.clearLog());
@@ -1748,7 +1751,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         final javax.swing.JList<String> list = sqlRunSamplesList;
         sqlRunPreview = new javax.swing.JTextArea(12, 60);
         sqlRunPreview.setEditable(false);
-        sqlRunPreview.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
+        sqlRunPreview.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
+                SQL_RUN_FONT_SIZE));
         sqlRunPreview.setText(SqlSamples.ALL[0].sql);
         final javax.swing.JTextArea preview = sqlRunPreview;
         list.addListSelectionListener(e -> {
@@ -1862,6 +1866,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 编辑区是否折行：两条线都要求"一句 SQL 不折行"，否则分号位置得数着看。 */
     public String sqlRunWrap() {
         return sqlRunInput != null && sqlRunInput.getLineWrap() ? "wrap" : "nowrap";
+    }
+
+    public java.awt.Font sqlRunInputFont() {
+        return sqlRunInput == null ? null : sqlRunInput.getFont();
+    }
+
+    public java.awt.Font sqlRunPreviewFont() {
+        return sqlRunPreview == null ? null : sqlRunPreview.getFont();
     }
 
     public String sqlSamplesItemText(int index) {

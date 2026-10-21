@@ -234,7 +234,7 @@ public final class GuiMain {
                 sql_page(frame, problems);
                 // 第三个页签「SQL 执行器」：编辑区、示例清单与空输入那道闸
                 sql_run_tab(frame, problems);
-                // 三处日志区的字号：现场反馈 12 号基本看不清，这里钉住共同的那一档
+                // 主日志区的字号：现场反馈 12 号基本看不清，这里钉住共同的那一档
                 checkLogFonts(frame, problems);
                 // 第二个页签的两颗生成按钮：解析脚本 → 标准/简易件 → 回读
                 sql_gen_excel(frame, problems);
@@ -1099,9 +1099,31 @@ public final class GuiMain {
         if (!"nowrap".equals(frame.sqlRunWrap())) {
             problems.add("SQL 编辑区应不折行（折行后分号要数着看），实际 " + frame.sqlRunWrap());
         }
-        // 结果集是按显示宽度排出来的表格，字体不等宽就错行
-        if (!"Monospaced".equals(frame.sqlRunLogPanel().getFont().getFamily())) {
-            problems.add("结果区不是等宽字体：" + frame.sqlRunLogPanel().getFont().getFamily());
+        // 编辑区与结果区都是第三页给人读的主区域：等宽、同档 16 号，表格才不会错行
+        java.awt.Font resultFont = frame.sqlRunLogPanel().getFont();
+        java.awt.Font inputFont = frame.sqlRunInputFont();
+        if (resultFont == null || !"Monospaced".equals(resultFont.getFamily())) {
+            problems.add("结果区不是等宽字体："
+                    + (resultFont == null ? "无字体" : resultFont.getFamily()));
+        }
+        if (resultFont == null || resultFont.getSize() != 16) {
+            problems.add("结果区字号不是 16："
+                    + (resultFont == null ? "无字体" : resultFont.getSize()));
+        }
+        if (inputFont == null || !"Monospaced".equals(inputFont.getFamily())) {
+            problems.add("编辑区不是等宽字体："
+                    + (inputFont == null ? "无字体" : inputFont.getFamily()));
+        }
+        if (inputFont == null || inputFont.getSize() != 16) {
+            problems.add("编辑区字号不是 16："
+                    + (inputFont == null ? "无字体" : inputFont.getSize()));
+        }
+        if (resultFont != null && inputFont != null
+                && (!resultFont.getFamily().equals(inputFont.getFamily())
+                || resultFont.getSize() != inputFont.getSize())) {
+            problems.add("编辑区与结果区字体不一致：编辑区 " + inputFont.getFamily() + "/"
+                    + inputFont.getSize() + "，结果区 " + resultFont.getFamily() + "/"
+                    + resultFont.getSize());
         }
         if (!"SELECT 1 AS 连通检查;".equals(frame.sqlRunInputText())) {
             problems.add("编辑区开场不是那句连通检查：" + frame.sqlRunInputText());
@@ -1141,6 +1163,13 @@ public final class GuiMain {
         frame.showSqlSamples();
         if (!frame.sqlSamplesShowing()) {
             problems.add("「示例 (?)」点了没开出对话框");
+        }
+        java.awt.Font previewFont = frame.sqlRunPreviewFont();
+        if (previewFont == null || !"Monospaced".equals(previewFont.getFamily())
+                || previewFont.getSize() != 16) {
+            problems.add("示例全文不是 16 号等宽字体："
+                    + (previewFont == null ? "无字体"
+                    : previewFont.getFamily() + "/" + previewFont.getSize()));
         }
         if (!"SQL 示例（100 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
@@ -1208,13 +1237,13 @@ public final class GuiMain {
     }
 
     /**
-     * 三处日志区（主页 / SQL 脚本页 / SQL 执行结果）共用 LogPanel：字号必须是同一档。
-     * 现场反馈 12 号"基本看不清"，这里钉 14；只改一处会立刻以"不一致"报出来。
+     * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：现场反馈 12 号"基本看不清"，这里钉 14。
+     * 第三页的编辑区与结果区更常盯着看，单独抬到 16，由 sql_run_tab 里那组断言管。
      */
     private static void checkLogFonts(MainFrame frame, List<String> problems) {
         com.excel2mysql.gui.LogPanel[] logs = {
-                frame.logPanel(), frame.sqlPage().logPanel(), frame.sqlRunLogPanel()};
-        String[] names = {"主页日志", "SQL 脚本页日志", "SQL 执行结果区"};
+                frame.logPanel(), frame.sqlPage().logPanel()};
+        String[] names = {"主页日志", "SQL 脚本页日志"};
         for (int i = 0; i < logs.length; i++) {
             java.awt.Font f = logs[i].getFont();
             if (f == null || !"Monospaced".equals(f.getFamily())) {
