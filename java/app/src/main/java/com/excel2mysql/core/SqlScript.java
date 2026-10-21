@@ -148,6 +148,25 @@ public final class SqlScript {
         return r;
     }
 
+    /** 把一个现有表名改成新名字，并同步 CREATE/DROP/INSERT/ALTER/TRUNCATE 引用。 */
+    public static Rewrite renameTable(String text, String oldName, String newName) {
+        Rewrite r = new Rewrite();
+        r.text = text;
+        String old = trimIdentifier(oldName);
+        String rep = trimIdentifier(newName);
+        if (old.isEmpty() || rep.isEmpty() || old.equals(rep)
+                || !rep.matches("[A-Za-z_][A-Za-z0-9_$]*")) {
+            return r;
+        }
+        Map<String, String> plan = new LinkedHashMap<String, String>();
+        plan.put(old, rep);
+        return rewriteNames(text, plan);
+    }
+
+    private static String trimIdentifier(String name) {
+        return name == null ? "" : name.trim().replace("`", "");
+    }
+
     /**
      * 按分号切语句，正确跳过 '...' / "..." 字符串（支持反斜杠与双写引号转义）、
      * `...` 反引号标识符、-- 与 # 行注释、块注释。不支持 DELIMITER 存储过程脚本。

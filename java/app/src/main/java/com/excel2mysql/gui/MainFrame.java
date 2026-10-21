@@ -397,7 +397,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixEast, BorderLayout.EAST);
 
-        JButton clear = new JButton("清空列表");
+        JButton clear = new JButton("清空待上传文件");
         clear.addActionListener(e -> clearAll());
         JButton structure = new JButton("生成表结构预览");
         structure.addActionListener(e -> previewStructure());
@@ -2034,7 +2034,24 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
             return;
         }
-        javax.swing.JOptionPane.showMessageDialog(this, body, title, icon);
+        javax.swing.JOptionPane.showMessageDialog(this, popupMessage(body), title, icon);
+    }
+
+    /** 结果弹窗正文用可选中的文本区；自检验的是实际会放进 JOptionPane 的那个组件。 */
+    public javax.swing.JComponent popupMessageComponent(String text) {
+        return popupMessage(PopupText.wrap(text));
+    }
+
+    private static javax.swing.JTextArea popupMessage(String body) {
+        javax.swing.JTextArea area = new javax.swing.JTextArea(body);
+        area.setEditable(false);
+        area.setLineWrap(true);
+        area.setWrapStyleWord(true);
+        area.setOpaque(false);
+        area.setBackground(new java.awt.Color(0, 0, 0, 0));
+        java.awt.Font font = javax.swing.UIManager.getFont("OptionPane.messageFont");
+        area.setFont(font == null ? area.getFont() : font);
+        return area;
     }
 
     /** 最后一次弹窗的标题与正文：两条路都写满，自检读这一份，模态那条才真弹。 */

@@ -102,6 +102,24 @@ def replace_first_segment_sql(text: str, new_head: str) -> tuple:
     return new_text, renamed, skipped + nohit
 
 
+def rename_table_sql(text: str, old: str, new: str) -> tuple:
+    """把脚本里的一个现有表名改成新名字，并同步其 SQL 引用。
+
+    返回 (新文本, 改写处数)。名字没变、新名不合法或找不到引用时返回原句和 0，
+    由界面明确写出为什么没落盘，不能静默吞掉一次操作。
+    """
+    old = str(old or "").strip().strip("`")
+    new = str(new or "").strip().strip("`")
+    if not old or not new or old == new:
+        return text, 0
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", new):
+        return text, 0
+    new_text, renamed, nohit = _rewrite_names(text, {old: new})
+    if renamed:
+        return new_text, renamed[0]["n"]
+    return text, 0
+
+
 def split_sql_statements(text: str) -> list:
     """
     按分号切分 SQL 语句，正确跳过以下内容中的分号：

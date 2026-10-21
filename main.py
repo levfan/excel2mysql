@@ -55,7 +55,7 @@ from core.infer import (
 from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
     extract_create_tables, apply_table_prefix_sql, split_sql_statements,
-    replace_first_segment_sql, parse_create_tables,
+    replace_first_segment_sql, parse_create_tables, rename_table_sql,
 )
 from core.naming import clean_prefix, is_valid_prefix
 from sql_samples import SAMPLES as SQL_SAMPLES
@@ -158,12 +158,27 @@ def wrap_popup_text(text: str) -> str:
     return "\n".join(kept)
 
 
+_POPUP_MESSAGE_BOX = QMessageBox
+_POPUP_ICONS = {"information": QMessageBox.Information,
+                "warning": QMessageBox.Warning,
+                "critical": QMessageBox.Critical}
+_POPUP_OK = QMessageBox.Ok
+
+
+def build_popup_box(parent, title: str, text: str, kind: str = "information",
+                    box_class=None):
+    """构造结果弹窗：折行只写一遍，正文允许鼠标选中后用 Ctrl+C 复制。"""
+    box = (box_class or _POPUP_MESSAGE_BOX)(parent)
+    box.setWindowTitle(title)
+    box.setText(wrap_popup_text(text))
+    box.setIcon(_POPUP_ICONS[kind])
+    box.setStandardButtons(_POPUP_OK)
+    return box
+
+
 def popup_box(parent, title: str, text: str, kind: str = "information"):
-    """消息弹窗都走这一道：折行与限高只在这里写一遍，两条线同一口径。"""
-    fn = {"information": QMessageBox.information,
-          "warning": QMessageBox.warning,
-          "critical": QMessageBox.critical}[kind]
-    return fn(parent, title, wrap_popup_text(text))
+    """消息弹窗都走这一道，确保日志、弹窗和复制出来的是同一份文案。"""
+    return build_popup_box(parent, title, text, kind).exec()
 
 
 
@@ -565,7 +580,7 @@ def sql_replace_prefix_task(items, new_head, sink):
                      f"（表名里没有下划线，或脚本中找不到引用）")
         sink.step(fname)
     sink.log(f"[换前缀完成] 共改写 {total} 个表名"
-             f"（修改在内存中，可点「保存修改后脚本」落盘）")
+             f"（修改在内存中，可点「保存修改后ddl脚本」落盘）")
     return {"updates": updates, "cancelled": sink.cancelled}
 
 
@@ -635,7 +650,7 @@ def sql_prefix_task(items, prefix, sink):
             sink.log(f"[跳过] {fname}：已带前缀 {'、'.join(skipped)}")
         sink.step(fname)
     sink.log(f"[前缀完成] 共改写 {total} 个表名"
-             f"（修改在内存中，可点「保存修改后脚本」落盘）")
+             f"（修改在内存中，可点「保存修改后ddl脚本」落盘）")
     return {"updates": updates, "cancelled": sink.cancelled}
 
 
@@ -798,25 +813,19 @@ def _sql_naming(name, initials, upper, is_table):
     return name.upper() if upper else name
 
 
-def sql_meta_export_task(items, out_root, with_meta, initials, upper, sink):
+def sql_meta_export_task(items, out_root, with_meta, upper, sink):
     """「SQL 脚本改名入库」页的生成标准/简易 Excel：先从脚本正文解析表定义，再走同一套导出。
 
     items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
     所以"先批量改前缀、再生成交付件"这条路是通的——产物里的表名就是新表名。
     脚本里只有结构没有数据，所以「数据」Sheet 只有英文字段名那一行表头，
     给下游当可填模板用，不假装里面有数据。
-    第二页的两颗命名开关只作用在生成物上：默认不勾选时表名与字段名原样，
-    勾选后含中文的名字按首字母转写、并按需转大写；脚本正文一个字不动。
+    第二页的大小写开关只作用在清单、元数据视图和生成物上；脚本正文一个字不动。
     """
     from core.meta_export import export_tables
 
-    if initials or upper:
-        parts = []
-        if initials:
-            parts.append("取拼音首字母")
-        if upper:
-            parts.append("转大写")
-        sink.log("[命名] 生成物表名与字段名：%s" % "、".join(parts))
+    if upper:
+        sink.log("[命名] 生成物表名与字段名：转大写")
     tables, where, used_tables = [], {}, {}
     for path, text in items:
         if sink.cancelled:
@@ -834,15 +843,15 @@ def sql_meta_export_task(items, out_root, with_meta, initials, upper, sink):
                 sink.log("! [WARN] 说明 | `%s`：%s" % (name, note))
             if not t["columns"]:
                 continue        # 为什么不可导出，上面那条说明已经讲了
-            if initials or upper:
+            if upper:
                 t = dict(t)
                 t["table_name"] = dedup_field(
-                    used_tables, _sql_naming(t["table_name"], initials, upper, True))
+                    used_tables, _sql_naming(t["table_name"], False, upper, True))
                 seen_fields = {}
                 t["columns"] = [
                     dict(c, field=dedup_field(
                         seen_fields,
-                        _sql_naming(c["field"], initials, upper, False)))
+                        _sql_naming(c["field"], False, upper, False)))
                     for c in t["columns"]
                 ]
             tables.append(t)
@@ -1026,6 +1035,9 @@ class MainWindow(QWidget):
         self.tables = []            # 解析后的表定义列表
         self.worker = None
         self.sql_files = []         # SQL 脚本改名入库页：[{"path","text","modified","rename_map"}]
+        self._sql_rows = []         # 表格每一行对应的实际表名，避免显示大小写与脚本内容混淆
+        self._sql_display_names = []  # 上一轮刷新出来的显示值，用来识别"没编辑却提交同名"
+        self._refreshing_sql_table = False
         self._zip_tmp = None        # ZIP 展开用的会话级临时目录，惰性创建
         self._zip_origin = {}       # 解压出的路径 → "包名!包内路径"，供文件列表 tooltip
         self.task_dialog = None     # 当前模态进度框，None 表示没有任务在跑
@@ -1167,7 +1179,7 @@ class MainWindow(QWidget):
         fl.addLayout(prefix_row)
 
         btns = QHBoxLayout()
-        self.btn_clear = QPushButton("清空列表")
+        self.btn_clear = QPushButton("清空待上传文件")
         self.btn_clear.clicked.connect(self.on_clear)
         self.btn_preview = QPushButton("生成表结构预览")
         self.btn_preview.clicked.connect(self.on_preview_structure)
@@ -1413,6 +1425,8 @@ class MainWindow(QWidget):
         self.sql_table.setColumnWidth(2, 130)
         self.sql_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sql_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.sql_table.itemDoubleClicked.connect(self.on_sql_table_double_clicked)
+        self.sql_table.itemChanged.connect(self.on_sql_table_item_changed)
         # 表格与下面的两行操作条作为一个整体参与高度缩放，先不挂到页面布局上
 
         prefix_row = QHBoxLayout()
@@ -1433,31 +1447,24 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.btn_sql_prefix)
         prefix_row.addWidget(self.btn_sql_replace)
 
-        # 第二页自己的两颗命名开关：默认都不勾选，脚本里的名字原样生成。
-        # 只改之后生成的 Excel，不改脚本正文，也不动上面的表名清单。
+        # 第二页只保留大小写开关：默认不勾选。勾选后表名清单、元数据弹窗和生成件都按大写显示，
+        # 但脚本正文仍保持原样，避免用户只是想看一份大写清单却把源文件改掉。
         name_row = QHBoxLayout()
-        self.chk_sql_initials = QCheckBox("表名与字段名取拼音首字母")
-        self.chk_sql_initials.setToolTip(
-            "勾选后，生成的 Excel 里含中文的表名与字段名取拼音首字母\n"
-            "（订单金额 → ddje）；默认不勾选，脚本里写什么就生成什么。\n"
-            "只影响之后生成的 Excel，不改脚本正文。")
-        self.chk_sql_initials.toggled.connect(self.on_sql_initials_toggled)
         self.chk_sql_upper = QCheckBox("表名与字段名转大写")
         self.chk_sql_upper.setToolTip(
-            "勾选后，生成的 Excel 里的表名与字段名全部大写\n"
+            "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部大写\n"
             "（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；默认不勾选。\n"
-            "只影响之后生成的 Excel，不改脚本正文。")
+            "脚本正文不改，手动改过的新表名会保留其输入内容。")
         self.chk_sql_upper.toggled.connect(self.on_sql_upper_toggled)
-        name_row.addWidget(self.chk_sql_initials)
         name_row.addWidget(self.chk_sql_upper)
         name_row.addStretch(1)
 
         act_row = QHBoxLayout()
-        self.btn_sql_save = QPushButton("保存修改后脚本")
+        self.btn_sql_save = QPushButton("保存修改后ddl脚本")
         self.btn_sql_save.clicked.connect(self.on_sql_save_modified)
-        self.btn_sql_run = QPushButton("执行脚本到当前库")
+        self.btn_sql_run = QPushButton("执行修改后ddl脚本到当前库")
         self.btn_sql_run.clicked.connect(self.on_sql_execute)
-        # 两颗生成按钮排在「执行脚本到当前库」右侧：与 Excel 导入页那两颗同一排同一口径，
+        # 两颗生成按钮排在「执行修改后ddl脚本到当前库」右侧：与 Excel 导入页那两颗同一排同一口径，
         # 数据源换成了脚本里的 CREATE TABLE，产物形状不变
         self.btn_sql_gen_std = QPushButton("生成标准excel文件")
         self.btn_sql_gen_std.setToolTip(
@@ -1507,34 +1514,117 @@ class MainWindow(QWidget):
         lay.addWidget(self.sql_split, 1)
         return page
 
-    def _refresh_sql_table(self):
-        rows = []
-        for s in self.sql_files:
-            base = os.path.basename(s["path"])
-            rev = {v: k for k, v in s["rename_map"].items()}
-            # 表名清单在读取/改写时就已算好，几十万行的脚本不再回扫一遍
-            for t in s.get("tabs") or extract_create_tables(s["text"]):
-                rows.append((base, rev.get(t["name"], t["name"]),
-                             str(t["count"]), t["name"], s["path"]))
-        self.sql_table.setRowCount(len(rows))
-        for i, (base, orig, cnt, cur, path) in enumerate(rows):
-            items = [QTableWidgetItem(base), QTableWidgetItem(orig),
-                     QTableWidgetItem(cnt), QTableWidgetItem(cur)]
-            items[0].setData(Qt.UserRole, path)
-            items[0].setToolTip(path)
-            for j, it in enumerate(items):
-                self.sql_table.setItem(i, j, it)
+    def _sql_display_name(self, actual):
+        return actual.upper() if self.chk_sql_upper.isChecked() else actual
 
-    def on_sql_initials_toggled(self, checked):
-        """第二页的命名开关只作用于生成物，日志里说清作用域，别让人以为脚本被改了。"""
+    def _refresh_sql_table(self):
+        self._refreshing_sql_table = True
+        try:
+            rows = []
+            for s in self.sql_files:
+                base = os.path.basename(s["path"])
+                rev = {v: k for k, v in s["rename_map"].items()}
+                # 表名清单在读取/改写时就已算好，几十万行的脚本不再回扫一遍
+                for t in s.get("tabs") or extract_create_tables(s["text"]):
+                    rows.append({"path": s["path"], "base": base,
+                                 "orig": rev.get(t["name"], t["name"]),
+                                 "actual": t["name"], "count": str(t["count"])})
+            self._sql_rows = rows
+            self._sql_display_names = [self._sql_display_name(r["actual"]) for r in rows]
+            self.sql_table.setRowCount(len(rows))
+            for i, row in enumerate(rows):
+                items = [QTableWidgetItem(row["base"]), QTableWidgetItem(row["orig"]),
+                         QTableWidgetItem(row["count"]),
+                         QTableWidgetItem(self._sql_display_name(row["actual"]))]
+                items[0].setData(Qt.UserRole, row["path"])
+                items[0].setToolTip(row["path"])
+                for j, it in enumerate(items):
+                    flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                    if j == 3:
+                        flags |= Qt.ItemIsEditable
+                    it.setFlags(flags)
+                for j, it in enumerate(items):
+                    self.sql_table.setItem(i, j, it)
+        finally:
+            self._refreshing_sql_table = False
+
+    def on_sql_table_double_clicked(self, item):
+        """当前表名列交给编辑器；其余列只是查看这一行对应表的元数据。"""
+        if item is None or self.task_dialog is not None:
+            return
+        row = item.row()
+        if item.column() == 3:
+            self.sql_table.editItem(item)
+            return
+        if item.column() < 3:
+            self.show_sql_table_metadata(row)
+
+    def show_sql_table_metadata(self, row_index):
+        dlg = self._build_sql_metadata_dialog(row_index)
+        if dlg is not None:
+            dlg.exec()
+
+    def _build_sql_metadata_dialog(self, row_index):
+        if row_index < 0 or row_index >= len(self._sql_rows):
+            return None
+        row = self._sql_rows[row_index]
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return None
+        table = next((t for t in parse_create_tables(record["text"])
+                      if t["table_name"] == row["actual"]), None)
+        if table is None:
+            self.sql_log.appendPlainText(
+                "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
+            return None
+        return SqlMetadataDialog(table, self._sql_display_name(row["actual"]),
+                                 self.chk_sql_upper.isChecked(), self)
+
+    def on_sql_table_item_changed(self, item):
+        """只有手动编辑「当前表名」会到这里；同步改脚本引用，日志说清改了多少处。"""
+        if self._refreshing_sql_table or item.column() != 3:
+            return
+        row_index = item.row()
+        if row_index >= len(self._sql_rows):
+            return
+        row = self._sql_rows[row_index]
+        new = item.text().strip().strip("`")
+        old = row["actual"]
+        old_display = self._sql_display_names[row_index]
+        if new == old_display:
+            if new == old:
+                self.sql_log.appendPlainText("[表名] %s 未发生变化，脚本未改写" % old)
+            self._refresh_sql_table()
+            return
+        if not new:
+            self._warn("表名不能为空，已恢复原表名「%s」。" % old)
+            self._refresh_sql_table()
+            return
+        if new == old:
+            self.sql_log.appendPlainText("[表名] %s 未发生变化，脚本未改写" % old)
+            self._refresh_sql_table()
+            return
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return
+        new_text, changed = rename_table_sql(record["text"], old, new)
+        if not changed:
+            self._warn("表名「%s」改成「%s」没找到可改写的 SQL 引用，脚本未改。" % (old, new))
+            self._refresh_sql_table()
+            return
+        record["text"] = new_text
+        record["tabs"] = extract_create_tables(new_text)
+        record["modified"] = True
+        record["rename_map"][row["orig"]] = new
+        self._refresh_sql_table()
         self.sql_log.appendPlainText(
-            "[提示] 命名规则切换为：%s（对之后生成的 Excel 生效，脚本正文不改）"
-            % ("拼音首字母" if checked else "保持原样"))
+            "[表名] %s → %s（已同步改写 %d 处引用；未落盘）" % (old, new, changed))
 
     def on_sql_upper_toggled(self, checked):
+        self._refresh_sql_table()
         self.sql_log.appendPlainText(
-            "[提示] 表名与字段名大小写切换为：%s（对之后生成的 Excel 生效，脚本正文不改）"
-            % ("大写" if checked else "保持原样"))
+            "[提示] 表名与字段名大小写切换为：%s（当前表名清单、表元数据和生成的 Excel 一起变；"
+            "脚本正文不改）" % ("大写" if checked else "保持原样"))
 
     def on_sql_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -1659,9 +1749,7 @@ class MainWindow(QWidget):
                    % len(self.sql_files))
         items = [(s["path"], s["text"]) for s in self.sql_files]
         self._run_modal("正在生成%sexcel文件…" % label, sql_meta_export_task,
-                        (items, out_root, with_meta,
-                         self.chk_sql_initials.isChecked(),
-                         self.chk_sql_upper.isChecked()),
+                        (items, out_root, with_meta, self.chk_sql_upper.isChecked()),
                         on_done=self._finish_sql_gen_excel, log_view=self.sql_log)
 
     def _finish_sql_gen_excel(self, res):
@@ -1940,7 +2028,7 @@ class MainWindow(QWidget):
         self.file_table.setRowCount(0)
         self.btn_import.setEnabled(False)
         self._sync_gen_buttons()
-        self.progress.setValue(0)      # 清空列表后不留上一次的进度残留
+        self.progress.setValue(0)      # 清空待上传文件后不留上一次的进度残留
 
     def closeEvent(self, e):
         """退出时清掉 ZIP 展开出来的临时文件。"""
@@ -2230,6 +2318,58 @@ class StructureDialog(QDialog):
 
     def get_tables(self):
         return self.tables
+
+
+# ---------------------------------------------------------------------------
+# SQL 脚本页的表元数据弹窗（只读）
+# ---------------------------------------------------------------------------
+class SqlMetadataDialog(QDialog):
+    def __init__(self, table, display_name, upper, parent=None):
+        super().__init__(parent)
+        from core.meta_export import split_type
+
+        self.setWindowTitle("表元数据（%s）" % display_name)
+        fit_client(self, 980, 640)
+        lay = QVBoxLayout(self)
+        head = QLabel("表名：%s    表注释：%s"
+                      % (display_name, table.get("table_comment") or "（无）"))
+        head.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        lay.addWidget(QLabel("这里按脚本里的 CREATE TABLE 原样展示；"
+                             "勾选「表名与字段名转大写」只切换显示，不回写脚本正文。"))
+        cols = table.get("columns") or []
+        tw = QTableWidget(len(cols), 6)
+        tw.setHorizontalHeaderLabels(["字段名", "字段注释", "数据类型", "长度", "主键", "可空"])
+        tw.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tw.setSelectionBehavior(QAbstractItemView.SelectRows)
+        for i, c in enumerate(cols):
+            field = c["field"]
+            typ, length = split_type(c.get("type") or "")
+            values = [field.upper() if upper else field, c.get("comment") or "",
+                      typ, length or "",
+                      "是" if c.get("primary_key") else "",
+                      "是" if c.get("nullable", True) else "否"]
+            for j, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignCenter if j >= 4 else Qt.AlignLeft | Qt.AlignVCenter)
+                tw.setItem(i, j, item)
+        tw.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        tw.horizontalHeader().setStretchLastSection(True)
+        tw.setColumnWidth(0, 230)
+        tw.setColumnWidth(1, 280)
+        tw.setColumnWidth(2, 130)
+        tw.setColumnWidth(3, 80)
+        tw.setColumnWidth(4, 70)
+        lay.addWidget(tw, 1)
+        self.field_table = tw
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        btns.clicked.connect(lambda _: self.reject())
+        lay.addWidget(btns)
+
+    def tableWidget(self):
+        return self.field_table
 
 
 # ---------------------------------------------------------------------------

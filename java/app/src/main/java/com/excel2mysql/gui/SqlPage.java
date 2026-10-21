@@ -39,7 +39,7 @@ import java.util.Set;
 /**
  * SQL 脚本改名入库页签，对应 main.py:1115-1324。
  *
- * 脚本的改写只动内存里的文本，落盘要另外点「保存修改后脚本」——
+ * 脚本的改写只动内存里的文本，落盘要另外点「保存修改后ddl脚本」——
  * 和 Python 侧一样：改错了不该把原文件覆盖掉。
  */
 public final class SqlPage extends JPanel {
@@ -150,10 +150,12 @@ public final class SqlPage extends JPanel {
                     + "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头";
     private JButton genStd;
     private JButton genSimple;
-    /** 第二页自己的命名开关：默认都不勾选，脚本里的名字原样生成。 */
-    private final JCheckBox initialsBox = new JCheckBox("表名与字段名取拼音首字母");
+    /** 大小写开关：清单、元数据弹窗和生成件同步按大写显示；脚本正文不回写。 */
     private final JCheckBox upperBox = new JCheckBox("表名与字段名转大写");
     private final List<String> rowPath = new ArrayList<String>();
+    private final List<String> rowOrigin = new ArrayList<String>();
+    private final List<String> rowActual = new ArrayList<String>();
+    private boolean editingRowName;
     private final DefaultTableModel model;
     private final JTable table;
     private final LogPanel logPanel = new LogPanel();
@@ -170,7 +172,16 @@ public final class SqlPage extends JPanel {
         model = new DefaultTableModel(COLUMNS, 0) {
             @Override
             public boolean isCellEditable(int row, int col) {
-                return false;
+                return col == 3;
+            }
+
+            @Override
+            public void setValueAt(Object value, int row, int col) {
+                Object old = col == 3 && row >= 0 && row < getRowCount() ? getValueAt(row, col) : null;
+                super.setValueAt(value, row, col);
+                if (col == 3 && !editingRowName && !String.valueOf(old).equals(String.valueOf(value))) {
+                    renameRow(row, String.valueOf(value));
+                }
             }
         };
         table = new JTable(model);
@@ -188,6 +199,17 @@ public final class SqlPage extends JPanel {
                 super.getTableCellRendererComponent(t, v, selected, focus, row, column);
                 setToolTipText(row < rowPath.size() ? rowPath.get(row) : "");
                 return this;
+            }
+        });
+        table.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    int column = table.columnAtPoint(e.getPoint());
+                    if (column >= 0 && column <= 2) {
+                        showMetadataAtRow(table.rowAtPoint(e.getPoint()));
+                    }
+                }
             }
         });
 
@@ -218,9 +240,9 @@ public final class SqlPage extends JPanel {
                 host.warn(hint);
             }
         });
-        JButton save = new JButton("保存修改后脚本");
+        JButton save = new JButton("保存修改后ddl脚本");
         save.addActionListener(e -> saveModified());
-        runButton = new JButton("执行脚本到当前库");
+        runButton = new JButton("执行修改后ddl脚本到当前库");
         runButton.addActionListener(e -> {
             String hint = execute();
             if (hint != null) {
@@ -238,19 +260,16 @@ public final class SqlPage extends JPanel {
         JButton clearLog = new JButton("清除日志");
         clearLog.addActionListener(e -> logPanel.clearLog());
 
-        // 只改之后生成的 Excel：默认不勾选，脚本正文与表名清单一个字不动
-        initialsBox.setToolTipText("勾选后，生成的 Excel 里含中文的表名与字段名取拼音首字母"
-                + "（订单金额 → ddje）；默认不勾选，脚本里写什么就生成什么。"
-                + "只影响之后生成的 Excel，不改脚本正文。");
-        initialsBox.addActionListener(e -> log("[提示] 命名规则切换为："
-                + (initialsBox.isSelected() ? "拼音首字母" : "保持原样")
-                + "（对之后生成的 Excel 生效，脚本正文不改）"));
-        upperBox.setToolTipText("勾选后，生成的 Excel 里的表名与字段名全部大写"
-                + "（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；默认不勾选。"
-                + "只影响之后生成的 Excel，不改脚本正文。");
-        upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："
-                + (upperBox.isSelected() ? "大写" : "保持原样")
-                + "（对之后生成的 Excel 生效，脚本正文不改）"));
+        // 默认不勾选；勾选后清单和元数据一起按大写显示，脚本正文仍不回写
+        upperBox.setToolTipText("勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的"
+                + "表名与字段名全部大写（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；"
+                + "默认不勾选。脚本正文不改，手动改过的新表名会保留其输入内容。");
+        upperBox.addActionListener(e -> {
+            refreshTable();
+            log("[提示] 表名与字段名大小写切换为："
+                    + (upperBox.isSelected() ? "大写" : "保持原样")
+                    + "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）");
+        });
 
         // 前缀行按 Python 的 addWidget(ed_sql_prefix, 1)：输入框吃掉剩余宽度，两颗按钮贴右
         JPanel prefixBtns = flow();
@@ -272,7 +291,6 @@ public final class SqlPage extends JPanel {
         actRow.add(clearLog, BorderLayout.EAST);
 
         JPanel nameRow = flow();
-        nameRow.add(initialsBox);
         nameRow.add(upperBox);
 
         JPanel actions = new JPanel(new BorderLayout());
@@ -468,14 +486,52 @@ public final class SqlPage extends JPanel {
         addFiles(paths);
     }
 
-    public JCheckBox initialsBox() {
-        return initialsBox;
-    }
-
     public JCheckBox upperBox() {
         return upperBox;
     }
 
+    /** 自检入口：不靠模拟鼠标，直接核对行数据、单元格可编辑性与改名/元数据动作。 */
+    public int sqlRowCount() {
+        return rowActual.size();
+    }
+
+    public String sqlRowActualName(int row) {
+        return row < 0 || row >= rowActual.size() ? null : rowActual.get(row);
+    }
+
+    public String sqlRowDisplayName(int row) {
+        return row < 0 || row >= rowActual.size() ? null : String.valueOf(model.getValueAt(row, 3));
+    }
+
+    public boolean sqlRowNameEditable(int row) {
+        return row >= 0 && row < model.getRowCount() && model.isCellEditable(row, 3);
+    }
+
+    public void setSqlRowName(int row, String name) {
+        model.setValueAt(name, row, 3);
+    }
+
+    public void showMetadata(int row) {
+        showMetadataAtRow(row);
+    }
+
+    public SqlScript.ParsedTable metadataAtRow(int row) {
+        if (row < 0 || row >= rowActual.size()) {
+            return null;
+        }
+        String actual = rowActual.get(row);
+        for (Entry e : entries) {
+            if (!e.path.equals(rowPath.get(row))) {
+                continue;
+            }
+            for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(e.text)) {
+                if (actual.equals(t.tableName)) {
+                    return t;
+                }
+            }
+        }
+        return null;
+    }
     /**
      * 读盘与提取表名都在子线程跑（几十万行的脚本不能压在事件分发线程上），
      * 只有"并入列表 + 刷新表格"回到事件分发线程；日志全程留在 SQL 页。
@@ -593,7 +649,7 @@ public final class SqlPage extends JPanel {
                 sink.step(fname);
             }
             sink.log("[前缀完成] 共改写 " + total
-                    + " 个表名（修改在内存中，可点「保存修改后脚本」落盘）");
+                    + " 个表名（修改在内存中，可点「保存修改后ddl脚本」落盘）");
             return updates;
         }, out -> applyUpdates(out));
         return null;
@@ -637,7 +693,7 @@ public final class SqlPage extends JPanel {
                 sink.step(fname);
             }
             sink.log("[换前缀完成] 共改写 " + total
-                    + " 个表名（修改在内存中，可点「保存修改后脚本」落盘）");
+                    + " 个表名（修改在内存中，可点「保存修改后ddl脚本」落盘）");
             return updates;
         }, out -> applyUpdates(out));
         return null;
@@ -890,31 +946,121 @@ public final class SqlPage extends JPanel {
         return String.join("、", parts);
     }
 
-    /** 表格里一行是一个表名，不是一个文件。 */
+    /** 表格里一行是一个表名，不是一个文件；显示大小写只改视图，实际名字留在 rowActual。 */
     private void refreshTable() {
-        model.setRowCount(0);
-        rowPath.clear();
-        for (Entry e : entries) {
-            for (Map<String, Object> t : e.tabs) {
-                String name = String.valueOf(t.get("name"));
-                // renameMap 存的是 原→新，"原表名"这一列要的是反查
-                String origin = name;
-                for (Map.Entry<String, String> en : e.renameMap.entrySet()) {
-                    if (en.getValue().equals(name)) {
-                        origin = en.getKey();
-                        break;
+        editingRowName = true;
+        try {
+            model.setRowCount(0);
+            rowPath.clear();
+            rowOrigin.clear();
+            rowActual.clear();
+            for (Entry e : entries) {
+                for (Map<String, Object> t : e.tabs) {
+                    String name = String.valueOf(t.get("name"));
+                    // renameMap 存的是 原→新，"原表名"这一列要的是反查
+                    String origin = name;
+                    for (Map.Entry<String, String> en : e.renameMap.entrySet()) {
+                        if (en.getValue().equals(name)) {
+                            origin = en.getKey();
+                            break;
+                        }
                     }
+                    model.addRow(new Object[]{baseName(e.path), origin,
+                            String.valueOf(t.get("count")), displayName(name)});
+                    rowPath.add(e.path);
+                    rowOrigin.add(origin);
+                    rowActual.add(name);
                 }
-                model.addRow(new Object[]{baseName(e.path), origin,
-                        String.valueOf(t.get("count")), name});
-                rowPath.add(e.path);
             }
+        } finally {
+            editingRowName = false;
         }
         // 判据是"有没有脚本"，不是"解析得出几张表"：解析在点下去之后才做，
         // 解析不出东西时日志会给话，按钮不该一直灰着让人以为程序坏了
         boolean hasScript = !entries.isEmpty();
         genStd.setEnabled(hasScript);
         genSimple.setEnabled(hasScript);
+    }
+
+    private String displayName(String actual) {
+        return upperBox.isSelected() ? actual.toUpperCase(java.util.Locale.ROOT) : actual;
+    }
+
+    /** 手改「当前表名」：只重写这一行所在脚本里的这个表名及引用，脚本先留在内存。 */
+    private void renameRow(int row, String typedName) {
+        if (row < 0 || row >= rowActual.size()) {
+            return;
+        }
+        String path = rowPath.get(row);
+        String oldName = rowActual.get(row);
+        String origin = rowOrigin.get(row);
+        String newName = typedName == null ? "" : typedName.trim().replace("`", "");
+        if (newName.isEmpty()) {
+            host.warn("表名不能为空，已恢复原表名「" + oldName + "」。");
+            refreshTable();
+            return;
+        }
+        if (newName.equals(oldName)) {
+            log("[表名] " + oldName + " 未发生变化，脚本未改写");
+            refreshTable();
+            return;
+        }
+        Entry entry = null;
+        for (Entry e : entries) {
+            if (e.path.equals(path)) {
+                entry = e;
+                break;
+            }
+        }
+        if (entry == null) {
+            return;
+        }
+        SqlScript.Rewrite rw = SqlScript.renameTable(entry.text, oldName, newName);
+        if (rw.renamed.isEmpty()) {
+            host.warn("表名「" + oldName + "」改成「" + newName
+                    + "」没找到可改写的 SQL 引用，脚本未改。");
+            refreshTable();
+            return;
+        }
+        entry.text = rw.text;
+        entry.tabs = SqlScript.extractCreateTables(entry.text);
+        entry.modified = true;
+        entry.renameMap.put(origin, newName);
+        refreshTable();
+        Object count = rw.renamed.get(0).get("n");
+        log("[表名] " + oldName + " → " + newName + "（已同步改写 " + count
+                + " 处引用；未落盘）");
+    }
+
+    private void showMetadataAtRow(int row) {
+        if (row < 0 || row >= rowActual.size()) {
+            return;
+        }
+        String path = rowPath.get(row);
+        String actual = rowActual.get(row);
+        Entry entry = null;
+        for (Entry e : entries) {
+            if (e.path.equals(path)) {
+                entry = e;
+                break;
+            }
+        }
+        if (entry == null) {
+            return;
+        }
+        SqlScript.ParsedTable parsed = null;
+        for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(entry.text)) {
+            if (actual.equals(t.tableName)) {
+                parsed = t;
+                break;
+            }
+        }
+        if (parsed == null) {
+            log("[元数据] 未找到表 " + actual + " 的定义（可能被后续语句改写）");
+            return;
+        }
+        new SqlMetadataDialog(host.owner(), parsed, displayName(actual),
+                upperBox.isSelected()).setVisible(true);
     }
 
     private void log(String text) {
@@ -953,10 +1099,9 @@ public final class SqlPage extends JPanel {
         }
         log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（脚本 " + items.size()
                 + " 个，输出根目录 " + outRoot + "）=====");
-        final boolean initials = initialsBox.isSelected();
         final boolean upper = upperBox.isSelected();
         host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
-                sink -> exportFromScripts(items, outRoot, withMeta, initials, upper, sink),
+                sink -> exportFromScripts(items, outRoot, withMeta, upper, sink),
                 out -> finishGenerate((GenResult) out));
     }
 
@@ -977,25 +1122,15 @@ public final class SqlPage extends JPanel {
      * 只有表头——这些都是日志里要看得见的决定，不是静默近似。
      */
     static GenResult exportFromScripts(List<Src> items, String outRoot, boolean withMeta,
-                                       boolean initials, boolean upper,
+                                       boolean upper,
                                        ImportParse.Sink sink) {
         GenResult res = new GenResult();
         List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
         Map<String, String> where = new LinkedHashMap<String, String>();
         Map<String, Integer> usedTables = new LinkedHashMap<String, Integer>();
-        Names naming = null;
-        if (initials || upper) {
-            naming = new Names(com.excel2mysql.core.PinyinLoader.get());
-            naming.setInitialsOnly(initials);
-            List<String> parts = new ArrayList<String>();
-            if (initials) {
-                parts.add("取拼音首字母");
-            }
-            if (upper) {
-                parts.add("转大写");
-            }
+        if (upper) {
             // 与 Python 的 sql_meta_export_task 同一句：生成物被改过名要能一眼看见
-            sink.log("[命名] 生成物表名与字段名：" + String.join("、", parts));
+            sink.log("[命名] 生成物表名与字段名：转大写");
         }
         for (Src s : items) {
             if (sink.cancelled()) {
@@ -1019,7 +1154,7 @@ public final class SqlPage extends JPanel {
                 if (t.columns.isEmpty()) {
                     continue;      // 为什么不可导出，上面那条说明已经讲了
                 }
-                work.add(ofParsed(t, naming, initials, upper, usedTables));
+                work.add(ofParsed(t, upper, usedTables));
             }
         }
         res.total = work.size();
@@ -1041,32 +1176,28 @@ public final class SqlPage extends JPanel {
 
     /** 解析结果 -> meta_export 的入参：脚本里没有数据行，rows 留空，数据 Sheet 只剩表头。 */
     static MetaExport.Source ofParsed(SqlScript.ParsedTable t) {
-        return ofParsed(t, null, false, false, null);
+        return ofParsed(t, false, null);
     }
 
-    /**
-     * 第二页的命名开关只作用在生成物上：默认（naming 为 null）原样照搬；
-     * 勾选后含中文的名字按首字母转写，英文标识符只在勾了大写时改大小写。
-     */
-    static MetaExport.Source ofParsed(SqlScript.ParsedTable t, Names naming,
-                                      boolean initials, boolean upper,
+    /** 第二页的大小写开关只作用在生成物上；不勾选时脚本里的名字原样照搬。 */
+    static MetaExport.Source ofParsed(SqlScript.ParsedTable t, boolean upper,
                                       Map<String, Integer> usedTables) {
         TableOps.Table table = new TableOps.Table();
         table.tableComment = t.tableComment;
-        if (naming == null) {
+        if (!upper) {
             table.tableName = t.tableName;
             table.baseTableName = t.tableName;
             table.columns = t.columns;
         } else {
             table.tableName = Names.dedupField(usedTables,
-                    namingName(t.tableName, true, initials, upper, naming));
+                    t.tableName.toUpperCase(java.util.Locale.ROOT));
             table.baseTableName = table.tableName;
             Map<String, Integer> seen = new LinkedHashMap<String, Integer>();
             List<Infer.Column> cols = new ArrayList<Infer.Column>();
             for (Infer.Column c : t.columns) {
                 Infer.Column nc = new Infer.Column();
                 nc.field = Names.dedupField(seen,
-                        namingName(c.field, false, initials, upper, naming));
+                        c.field.toUpperCase(java.util.Locale.ROOT));
                 nc.comment = c.comment;
                 nc.type = c.type;
                 nc.primaryKey = c.primaryKey;
@@ -1078,18 +1209,6 @@ public final class SqlPage extends JPanel {
         MetaExport.Source s = new MetaExport.Source();
         s.table = table;
         return s;
-    }
-
-    private static final java.util.regex.Pattern HAN =
-            java.util.regex.Pattern.compile("[\\u4e00-\\u9fff]");
-
-    static String namingName(String name, boolean isTable, boolean initials, boolean upper,
-                             Names naming) {
-        String out = name == null ? "" : name;
-        if (initials && HAN.matcher(out).find()) {
-            out = isTable ? naming.sanitizeTableName(out) : naming.colToField(out);
-        }
-        return upper ? out.toUpperCase(java.util.Locale.ROOT) : out;
     }
 
     /** 生成收尾：日志与弹窗双写同一句话，目录名原样给出来。 */
