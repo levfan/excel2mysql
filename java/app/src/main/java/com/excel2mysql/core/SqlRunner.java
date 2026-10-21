@@ -2,7 +2,11 @@ package com.excel2mysql.core;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.file.Files;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -47,17 +51,21 @@ public final class SqlRunner {
     }
 
     /**
-     * 读脚本原文。编码按 UTF-8（含 BOM）→ GBK 回退：
-     * UTF-8 解出的替换字符 � 一旦存在就说明不是 UTF-8，交给 GBK 再解一次。
-     * GBK 解任何字节序列都不抛异常，所以只能靠这个判据，不能靠 try/catch。
+     * 读脚本原文。编码按 UTF-8（含 BOM）严格解码 → GBK 回退：
+     * 原正文里的 U+FFFD 是合法 Unicode 字符，不能拿"出现了替换字符"当成不是 UTF-8；
+     * 只有 UTF-8 字节序列本身非法，才轮到 GBK。GBK 解任何字节序列都不抛异常，
+     * 因此只在 UTF-8 严格解码失败时使用。
      */
     public static String readScript(File file) throws IOException {
         byte[] raw = Files.readAllBytes(file.toPath());
-        String utf8 = new String(raw, Charset.forName("UTF-8"));
-        if (utf8.indexOf('�') < 0) {
-            return stripBom(utf8);
+        CharsetDecoder decoder = UTF8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try {
+            return stripBom(decoder.decode(ByteBuffer.wrap(raw)).toString());
+        } catch (CharacterCodingException notUtf8) {
+            return stripBom(new String(raw, Charset.forName("GBK")));
         }
-        return stripBom(new String(raw, Charset.forName("GBK")));
     }
 
     private static String stripBom(String text) {
