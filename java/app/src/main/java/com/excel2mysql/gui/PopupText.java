@@ -61,12 +61,31 @@ public final class PopupText {
                 || (cp >= 0x20000 && cp <= 0x3FFFD);
     }
 
-    /** 折行并在超高时截断，保证弹窗首屏就装得下它自己要说的话。 */
+    /** 折行并在超高时截断，与 Python 线拿到同一个字符串（对撞与日志用这一份）。 */
     public static String wrap(String text) {
-        if (text == null || text.isEmpty()) {
-            return "";
+        java.util.List<String> lines = wrapLines(text);
+        if (lines.size() <= MAX_LINES) {
+            return join(lines);
         }
+        java.util.List<String> kept = new java.util.ArrayList<String>(
+                lines.subList(0, MAX_LINES - 1));
+        kept.add("……（其余 " + (lines.size() - kept.size()) + " 行放不下，完整内容见底部日志）");
+        return join(kept);
+    }
+
+    /**
+     * 只折行、不砍行：Java 的结果弹窗有滚动区，长报错可以整篇留在框里翻，
+     * 不再逼用户关掉弹窗去底部日志找。对撞仍用 {@link #wrap} 的截断版。
+     */
+    public static String wrapAll(String text) {
+        return join(wrapLines(text));
+    }
+
+    private static java.util.List<String> wrapLines(String text) {
         java.util.List<String> lines = new java.util.ArrayList<String>();
+        if (text == null || text.isEmpty()) {
+            return lines;
+        }
         String[] segs = text.split("\n", -1);
         for (int s = 0; s < segs.length; s++) {
             String seg = segs[s];
@@ -87,13 +106,7 @@ public final class PopupText {
             }
             lines.add(buf.toString());
         }
-        if (lines.size() <= MAX_LINES) {
-            return join(lines);
-        }
-        java.util.List<String> kept = new java.util.ArrayList<String>(
-                lines.subList(0, MAX_LINES - 1));
-        kept.add("……（其余 " + (lines.size() - kept.size()) + " 行放不下，完整内容见底部日志）");
-        return join(kept);
+        return lines;
     }
 
     private static String join(java.util.List<String> lines) {

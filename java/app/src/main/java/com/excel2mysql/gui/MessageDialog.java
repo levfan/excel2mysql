@@ -1,0 +1,192 @@
+package com.excel2mysql.gui;
+
+import javax.swing.BorderFactory;
+import javax.swing.Icon;
+import javax.swing.JButton;
+import javax.swing.JComponent;
+import javax.swing.JDialog;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import javax.swing.KeyStroke;
+import javax.swing.SwingUtilities;
+import javax.swing.Timer;
+import javax.swing.UIManager;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Toolkit;
+import java.awt.Window;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
+
+/**
+ * 结果/告警消息框：16 号字、正文可滚动可选中、带「复制全部」。
+ *
+ * <p>以前直接用 {@link JOptionPane#showMessageDialog}：正文是 12 号字，比主界面
+ * 16 号的日志小一截；内容一长没有滚动条，超出的行只能去底部日志里找；想复制
+ * 整段报错也只能拖着鼠标从第一行选到最后一行。这几件事在现场都挨过反馈。
+ *
+ * <p>正文走 {@link PopupText#wrapAll}：按同一套 72 列折行，但不截成 24 行，
+ * 行数多时靠滚动条看全。「复制全部」复制的是折行前的完整原文。
+ * 窗口至少 820x420，按内容算高后夹进屏幕可用区。
+ */
+public final class MessageDialog extends JDialog {
+
+    /** 正文与标题共用的字号：与 LogPanel 的 16 号对齐。 */
+    public static final int FONT_SIZE = 16;
+
+    private static final int WANT_WIDTH = 880;
+    private static final int MIN_WIDTH = 820;
+    private static final int MIN_HEIGHT = 420;
+    private static final int MAX_HEIGHT = 640;
+
+    private final JTextArea area;
+    private final JScrollPane scroll;
+    private final JButton copy;
+    private final String displayText;
+    private final String fullText;
+
+    private MessageDialog(Window owner, String title, String body, String fullText, int iconType) {
+        super(owner, title, ModalityType.APPLICATION_MODAL);
+        this.displayText = body;
+        this.fullText = fullText == null ? body : fullText;
+        area = createArea(body);
+        scroll = new JScrollPane(area);
+        scroll.setBorder(BorderFactory.createLineBorder(new Color(0xdd, 0xdd, 0xdd)));
+        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scroll.getViewport().setBackground(Color.WHITE);
+
+        JPanel content = new JPanel(new BorderLayout(0, 10));
+        content.setBorder(BorderFactory.createEmptyBorder(14, 14, 12, 14));
+        content.add(buildHeader(title, iconType), BorderLayout.NORTH);
+        content.add(scroll, BorderLayout.CENTER);
+
+        copy = new JButton("复制全部");
+        copy.setToolTipText("复制未折行的完整内容，可直接粘贴到工单或聊天窗口");
+        copy.addActionListener(e -> copyAll());
+        JButton close = new JButton("关闭");
+        close.addActionListener(e -> dispose());
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttons.add(copy);
+        buttons.add(close);
+        content.add(buttons, BorderLayout.SOUTH);
+
+        content.setMinimumSize(new Dimension(680, 320));
+        setContentPane(content);
+        getRootPane().setDefaultButton(close);
+        getRootPane().registerKeyboardAction(e -> dispose(),
+                KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW);
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        setResizable(true);
+
+        int lines = Math.max(1, body.split("\n", -1).length);
+        FontMetrics fm = area.getFontMetrics(area.getFont());
+        int height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, lines * fm.getHeight() + 120));
+        Windows.clientSize(content, this, WANT_WIDTH, height);
+        setMinimumSize(new Dimension(MIN_WIDTH, MIN_HEIGHT));
+    }
+
+    private static JPanel buildHeader(String title, int iconType) {
+        JPanel head = new JPanel(new BorderLayout(10, 0));
+        head.setOpaque(false);
+        Icon icon = icon(iconType);
+        if (icon != null) {
+            head.add(new JLabel(icon), BorderLayout.WEST);
+        }
+        JLabel label = new JLabel(title);
+        label.setFont(label.getFont().deriveFont(Font.BOLD, (float) FONT_SIZE));
+        head.add(label, BorderLayout.CENTER);
+        return head;
+    }
+
+    private static Icon icon(int iconType) {
+        String key = iconType == JOptionPane.ERROR_MESSAGE ? "OptionPane.errorIcon"
+                : iconType == JOptionPane.WARNING_MESSAGE ? "OptionPane.warningIcon"
+                : iconType == JOptionPane.QUESTION_MESSAGE ? "OptionPane.questionIcon"
+                : "OptionPane.informationIcon";
+        return UIManager.getIcon(key);
+    }
+
+    /** 正文控件单独抽出来，自检量到的就是真实弹窗里的那一个。 */
+    public static JTextArea createArea(String body) {
+        JTextArea area = new JTextArea(body);
+        area.setEditable(false);
+        area.setLineWrap(true);
+        area.setWrapStyleWord(true);
+        area.setFont(area.getFont().deriveFont(Font.PLAIN, (float) FONT_SIZE));
+        area.setBackground(Color.WHITE);
+        area.setForeground(new Color(0x22, 0x22, 0x22));
+        area.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+        area.setCaretPosition(0);
+        // 与 Python 结果弹窗同一个下限：长路径与文件清单不至于被挤成一团
+        area.setMinimumSize(new Dimension(MIN_WIDTH, MIN_HEIGHT));
+        // 折行文本区必须先给宽度再问首选高度，算出来的才是「按这个宽度折完有多高」。
+        // 直接钉成 420 高的话，80 行报错也只报 420，滚动区以为装得下，尾部就看不到了
+        area.setSize(MIN_WIDTH, Short.MAX_VALUE);
+        Dimension pref = area.getPreferredSize();
+        area.setPreferredSize(new Dimension(MIN_WIDTH, Math.max(MIN_HEIGHT, pref.height)));
+        return area;
+    }
+
+    /**
+     * 构造但不显示。GuiMain 的自检就靠这一句量字体、滚动区与窗口尺寸，
+     * 不必在事件分发线程上把模态框真摆出来。
+     */
+    public static MessageDialog create(Window owner, String title, String body,
+                                       String fullText, int iconType) {
+        return new MessageDialog(owner, title, body, fullText, iconType);
+    }
+
+    public static void show(Window owner, String title, String body, String fullText, int iconType) {
+        MessageDialog dialog = create(owner, title, body, fullText, iconType);
+        dialog.setVisible(true);
+        dialog.dispose();
+    }
+
+    private void copyAll() {
+        try {
+            Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new StringSelection(fullText), null);
+            copy.setText("已复制");
+        } catch (RuntimeException ex) {
+            copy.setText("复制失败");
+        }
+        Timer restore = new Timer(1200, e -> copy.setText("复制全部"));
+        restore.setRepeats(false);
+        restore.start();
+    }
+
+    public JTextArea textArea() {
+        return area;
+    }
+
+    public JScrollPane scrollPane() {
+        return scroll;
+    }
+
+    public JButton copyButton() {
+        return copy;
+    }
+
+    public String displayText() {
+        return displayText;
+    }
+
+    public String fullText() {
+        return fullText;
+    }
+
+    /** 自检要在事件分发线程外也能问一句：控件树里有没有滚动区。 */
+    public static boolean hasScrollPane(JComponent component) {
+        return component instanceof JScrollPane
+                || SwingUtilities.getAncestorOfClass(JScrollPane.class, component) != null;
+    }
+}

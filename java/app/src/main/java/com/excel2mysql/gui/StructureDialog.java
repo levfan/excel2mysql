@@ -189,9 +189,9 @@ public final class StructureDialog extends JDialog {
         if (applyEdits()) {
             return;
         }
-        javax.swing.JOptionPane.showMessageDialog(this,
-                String.join("\n", problems) + "\n\n请调整主键勾选或字段类型后重试。",
-                "主键设置无效", javax.swing.JOptionPane.WARNING_MESSAGE);
+        String text = String.join("\n", problems) + "\n\n请调整主键勾选或字段类型后重试。";
+        MessageDialog.show(this, "主键设置无效", PopupText.wrapAll(text), text,
+                javax.swing.JOptionPane.WARNING_MESSAGE);
     }
 
     public boolean isConfirmed() {

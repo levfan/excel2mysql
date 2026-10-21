@@ -2057,11 +2057,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     private void dialog(String title, String text, int icon) {
-        // 显示与记录都用折好行的那份：Python 侧弹窗走的同一道折行，
-        // 两边比的就是用户实际看到的文字，不是各自排版前的半成品
-        String body = PopupText.wrap(text);
+        // 记录用折行并截断的那份：Python 侧弹窗走的同一道折行，对撞比的就是它；
+        // 显示用不截断的全量折行，超出的行靠滚动条看，不再换成「见日志」那句
+        String record = PopupText.wrap(text);
         lastDialogTitle = title;
-        lastDialogText = body;
+        lastDialogText = record;
         lastDialogIsError = icon == javax.swing.JOptionPane.ERROR_MESSAGE;
         lastDialogIcon = icon == javax.swing.JOptionPane.ERROR_MESSAGE ? "critical"
                 : icon == javax.swing.JOptionPane.WARNING_MESSAGE ? "warning" : "information";
@@ -2069,37 +2069,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
             return;
         }
-        javax.swing.JOptionPane.showMessageDialog(this, popupMessage(body), title, icon);
+        MessageDialog.show(this, title, PopupText.wrapAll(text), text, icon);
     }
 
-    /** 结果弹窗正文用可选中的文本区；自检验的是实际会放进 JOptionPane 的那个组件。 */
+    /** 结果弹窗正文用可选中的文本区；自检验的是真实弹窗里的同一个组件。 */
     public javax.swing.JComponent popupMessageComponent(String text) {
-        return popupMessage(PopupText.wrap(text));
-    }
-
-    private static javax.swing.JTextArea popupMessage(String body) {
-        javax.swing.JTextArea area = new javax.swing.JTextArea(body);
-        area.setEditable(false);
-        area.setLineWrap(true);
-        area.setWrapStyleWord(true);
-        area.setOpaque(false);
-        area.setBackground(new java.awt.Color(0, 0, 0, 0));
-        java.awt.Font font = javax.swing.UIManager.getFont("OptionPane.messageFont");
-        area.setFont(font == null ? area.getFont() : font);
-        java.awt.FontMetrics fm = area.getFontMetrics(area.getFont());
-        String[] lines = body.split("\n", -1);
-        int textWidth = 0;
-        for (String line : lines) {
-            textWidth = Math.max(textWidth, fm.stringWidth(line));
-        }
-        // JTextArea 默认只按 20 列报首选尺寸；结果弹窗里的产物路径会被挤成一团。
-        // 正文已按 72 显示列折行，下限给到 820x420，长路径与文件清单才看得完整。
-        int width = Math.max(820, Math.min(900, textWidth + 44));
-        int height = Math.max(420, Math.min(560, lines.length * fm.getHeight() + 70));
-        java.awt.Dimension size = new java.awt.Dimension(width, height);
-        area.setPreferredSize(size);
-        area.setMinimumSize(size);
-        return area;
+        return MessageDialog.createArea(PopupText.wrapAll(text));
     }
 
     /** 最后一次弹窗的标题与正文：两条路都写满，自检读这一份，模态那条才真弹。 */
