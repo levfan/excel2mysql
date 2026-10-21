@@ -1354,10 +1354,17 @@ public final class GuiMain {
         if (!"生成结果".equals(frame.lastDialogTitle())) {
             problems.add("生成完成没弹窗回执：" + frame.lastDialogTitle());
         }
-        javax.swing.JComponent copyBody = frame.popupMessageComponent("目录：复制检查");
+        javax.swing.JComponent copyBody = frame.popupMessageComponent(
+                "已生成 124 个文件（共 124 张表）。\n目录：\n"
+                + "C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物\\"
+                + "03-Java-图形与命令行-带JRE\\meta_data_file_20261022");
+        java.awt.Dimension popupSize = copyBody.getPreferredSize();
         if (!(copyBody instanceof javax.swing.JTextArea)
                 || ((javax.swing.JTextArea) copyBody).isEditable()) {
             problems.add("生成结果弹窗正文不可复制：应使用只读文本区");
+        }
+        if (popupSize.width < 620 || popupSize.height < 220) {
+            problems.add("生成结果弹窗正文太小，产物路径看不清：" + popupSize);
         }
 
         java.io.File stdDir = new java.io.File(outRoot, "meta_data_file_" + today());

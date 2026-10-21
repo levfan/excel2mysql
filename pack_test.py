@@ -150,7 +150,7 @@ import main as app_main
 # QMessageBox 是模态的，离屏测试里会把进程挂死；换成记录弹窗内容的桩。
 # 桩同时支持旧的静态方法和新的 build_popup_box 实例接口。
 POPUPS = []
-_REAL_QMESSAGEBOX = app_main.QMessageBox
+_REAL_POPUP_BOX = app_main.PopupMessageBox
 
 
 class _RecDialog:
@@ -170,6 +170,12 @@ class _RecDialog:
 
     def setStandardButtons(self, buttons):
         pass
+
+    def setMinimumWidth(self, width):
+        self.min_width = width
+
+    def setMinimumHeight(self, height):
+        self.min_height = height
 
     def findChildren(self, cls):
         return []
@@ -3536,13 +3542,21 @@ check("U8 消息弹窗真的走了折行那一道（首屏不会横向撑出屏�
       "\n" in _shown and all(_COLS(ln) <= 56 for ln in _shown.split("\n")), _shown[:60])
 check("U9 折行后说的话与原来同一句",
       _shown.replace("\n", "") == _LONG_ONE_LINE, _shown[:60])
-_copy_box = app_main.build_popup_box(None, "生成结果", "目录：测试", "information",
-                                     box_class=_REAL_QMESSAGEBOX)
+_copy_box = app_main.build_popup_box(
+    None, "生成结果",
+    "已生成 124 个文件（共 124 张表）。\n目录：\n"
+    "C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物\\03-Java-图形与命令行-带JRE\\meta_data_file_20261022",
+    "information", box_class=_REAL_POPUP_BOX)
+_copy_box.show()
+_app.processEvents()
 _copy_labels = [x for x in _copy_box.findChildren(QLabel) if x.text()]
 check("U11 结果弹窗正文可用鼠标选中并 Ctrl+C 复制",
       _copy_labels and all(
           bool(x.textInteractionFlags() & _Qt.TextSelectableByMouse) for x in _copy_labels),
       [(x.text()[:12], str(x.textInteractionFlags())) for x in _copy_labels])
+check("U11b 结果弹窗至少 620x220，产物路径不被挤成一小块",
+      _copy_box.width() >= 620 and _copy_box.height() >= 220,
+      (_copy_box.width(), _copy_box.height()))
 _copy_box.close()
 _copy_box.deleteLater()
 _app.processEvents()

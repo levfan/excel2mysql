@@ -56,6 +56,12 @@ class _StubBox(object):
     def setStandardButtons(self, buttons):
         pass
 
+    def setMinimumWidth(self, width):
+        pass
+
+    def setMinimumHeight(self, height):
+        pass
+
     def findChildren(self, cls):
         return []
 
