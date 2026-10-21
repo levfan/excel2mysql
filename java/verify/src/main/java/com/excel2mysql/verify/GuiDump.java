@@ -9,6 +9,7 @@ import com.excel2mysql.gui.MainFrame;
 import com.excel2mysql.gui.ProgressDialog;
 import com.excel2mysql.gui.SqlPage;
 import com.excel2mysql.gui.StructureDialog;
+import com.excel2mysql.gui.UiScale;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -51,11 +52,13 @@ public final class GuiDump {
             System.exit(2);
         }
         MainFrame.modalProgress = false;
+        ui(UiScale::apply);
         ui(new Runnable() {
             @Override
             public void run() {
                 frame = new MainFrame();
-                frame.getContentPane().setPreferredSize(new java.awt.Dimension(1100, 780));
+                frame.getContentPane().setPreferredSize(new java.awt.Dimension(
+                        UiScale.px(1100), UiScale.px(780)));
                 frame.pack();
                 frame.setVisible(true);
             }

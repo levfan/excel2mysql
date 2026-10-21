@@ -29,6 +29,9 @@ app = QApplication(sys.argv)
 m.MODAL_PROGRESS = False
 for _name in ("information", "warning", "critical", "question"):
     setattr(m.QMessageBox, _name, staticmethod(lambda *a, **k: 0))
+# 添加文件后的「添加结果」走的是自绘 PopupBox，不归 QMessageBox 那组桩管；
+# 不压掉它，exec() 会在离屏环境里永久等一个没人点的确定键
+m.popup_box = lambda *a, **k: 0
 os.chdir(REPO)
 
 

@@ -7,10 +7,10 @@ import com.excel2mysql.gui.HelpDialog;
 import com.excel2mysql.gui.MainFrame;
 import com.excel2mysql.gui.ProgressDialog;
 import com.excel2mysql.gui.StructureDialog;
+import com.excel2mysql.gui.UiScale;
 
 import javax.imageio.ImageIO;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Container;
@@ -32,17 +32,12 @@ import java.util.List;
  */
 public final class UiShot {
 
+    /** 设计稿尺寸（Qt 的逻辑像素）：实际画布按屏幕 DPI 放大，与 Python 侧同口径。 */
     private static final int W = 1100;
     private static final int H = 780;
 
     public static void main(String[] args) throws Exception {
-        ui(() -> {
-            try {
-                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            } catch (Exception e) {
-                System.out.println("! [WARN] UI-SHOT | 系统外观设置失败：" + e.getMessage());
-            }
-        });
+        ui(UiScale::apply);
         MainFrame.modalProgress = false;
         final String dir = args.length > 0 ? args[0]
                 : System.getenv("SHOT_OUT") == null ? "shots/java" : System.getenv("SHOT_OUT");
@@ -82,7 +77,8 @@ public final class UiShot {
         final MainFrame frame = box[0];
         // 画客户区而不是整窗：Qt 的 grab() 本来就不含标题栏，画整窗会把底部挤到画面外
         ui(() -> {
-            frame.getContentPane().setPreferredSize(new Dimension(W, H));
+            frame.getContentPane().setPreferredSize(
+                    new Dimension(UiScale.px(W), UiScale.px(H)));
             frame.pack();
             frame.setVisible(true);
         });
@@ -163,7 +159,8 @@ public final class UiShot {
         ui(() -> {
             dialog.setModal(false);
             if (w > 0 && h > 0) {
-                dialog.getContentPane().setPreferredSize(new Dimension(w, h));
+                dialog.getContentPane().setPreferredSize(
+                        new Dimension(UiScale.px(w), UiScale.px(h)));
             }
             dialog.pack();
             dialog.setVisible(true);
