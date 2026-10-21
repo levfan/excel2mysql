@@ -339,19 +339,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.DefaultCellEditor nameEditor =
                 new javax.swing.DefaultCellEditor(new javax.swing.JTextField());
         nameEditor.setClickCountToStart(1);
-        table.getColumnModel().getColumn(1).setCellEditor(nameEditor);
+        table.getColumnModel().getColumn(2).setCellEditor(nameEditor);
         table.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() == 2) {
                     // 「表名」列只改名，不叠一个结构窗
-                    if (table.columnAtPoint(e.getPoint()) != 1) {
+                    if (table.columnAtPoint(e.getPoint()) != 2) {
                         editStructure();
                     }
                 }
             }
         });
-        int[] widths = {320, 200, 280, 80, 90, 160};
+        int[] widths = {54, 320, 200, 280, 80, 90, 160};
         for (int i = 0; i < widths.length && i < table.getColumnCount(); i++) {
             table.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
         }

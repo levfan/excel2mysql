@@ -1071,19 +1071,20 @@ class MainWindow(QWidget):
         # 3. 文件列表
         file_box = QGroupBox("待导入文件（单击表名改名，双击其他列改字段）")
         fl = QVBoxLayout(file_box)
-        self.file_table = QTableWidget(0, 6)
+        self.file_table = QTableWidget(0, 7)
         self.file_table.setHorizontalHeaderLabels(
-            ["文件", "表名", "表注释", "字段数", "数据行数", "主键"])
+            ["序号", "文件", "表名", "表注释", "字段数", "数据行数", "主键"])
         # 列宽可自由拖动调节；最后一列自动填满剩余空间
         header = self.file_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.file_table.setColumnWidth(0, 320)
-        self.file_table.setColumnWidth(1, 200)
-        self.file_table.setColumnWidth(2, 280)
-        self.file_table.setColumnWidth(3, 80)
-        self.file_table.setColumnWidth(4, 90)
-        self.file_table.setColumnWidth(5, 160)
+        self.file_table.setColumnWidth(0, 54)
+        self.file_table.setColumnWidth(1, 320)
+        self.file_table.setColumnWidth(2, 200)
+        self.file_table.setColumnWidth(3, 280)
+        self.file_table.setColumnWidth(4, 80)
+        self.file_table.setColumnWidth(5, 90)
+        self.file_table.setColumnWidth(6, 160)
         self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         # 单击「表名」直接进编辑器改这一张表的名字；双击其余列看这一行的结构。
         # 触发器关掉仍能 editItem，和 SQL 页同一个做法，避免单击别的列也弹编辑框。
@@ -1374,15 +1375,16 @@ class MainWindow(QWidget):
         btn_row.addStretch(1)
         lay.addLayout(btn_row)
 
-        self.sql_table = QTableWidget(0, 4)
+        self.sql_table = QTableWidget(0, 5)
         self.sql_table.setHorizontalHeaderLabels(
-            ["文件", "原表名", "CREATE 出现次数", "当前表名"])
+            ["序号", "文件", "原表名", "CREATE 出现次数", "当前表名"])
         header = self.sql_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.sql_table.setColumnWidth(0, 300)
-        self.sql_table.setColumnWidth(1, 260)
-        self.sql_table.setColumnWidth(2, 130)
+        self.sql_table.setColumnWidth(0, 54)
+        self.sql_table.setColumnWidth(1, 300)
+        self.sql_table.setColumnWidth(2, 260)
+        self.sql_table.setColumnWidth(3, 130)
         self.sql_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sql_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.sql_table.itemDoubleClicked.connect(self.on_sql_table_double_clicked)
@@ -1501,14 +1503,14 @@ class MainWindow(QWidget):
             self._sql_display_names = [r["display"] for r in rows]
             self.sql_table.setRowCount(len(rows))
             for i, row in enumerate(rows):
-                items = [QTableWidgetItem(row["base"]), QTableWidgetItem(row["orig"]),
-                         QTableWidgetItem(row["count"]),
+                items = [QTableWidgetItem(str(i + 1)), QTableWidgetItem(row["base"]),
+                         QTableWidgetItem(row["orig"]), QTableWidgetItem(row["count"]),
                          QTableWidgetItem(row["display"])]
-                items[0].setData(Qt.UserRole, row["path"])
-                items[0].setToolTip(row["path"])
+                items[1].setData(Qt.UserRole, row["path"])
+                items[1].setToolTip(row["path"])
                 for j, it in enumerate(items):
                     flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                    if j == 3:
+                    if j == 4:
                         flags |= Qt.ItemIsEditable
                     it.setFlags(flags)
                 for j, it in enumerate(items):
@@ -1521,10 +1523,10 @@ class MainWindow(QWidget):
         if item is None or self.task_dialog is not None:
             return
         row = item.row()
-        if item.column() == 3:
+        if item.column() == 4:
             self.sql_table.editItem(item)
             return
-        if item.column() < 3:
+        if item.column() < 4:
             self.show_sql_table_metadata(row)
 
     def show_sql_table_metadata(self, row_index):
@@ -1550,7 +1552,7 @@ class MainWindow(QWidget):
 
     def on_sql_table_item_changed(self, item):
         """只有手动编辑「当前表名」会到这里；同步改脚本引用，日志说清改了多少处。"""
-        if self._refreshing_sql_table or item.column() != 3:
+        if self._refreshing_sql_table or item.column() != 4:
             return
         row_index = item.row()
         if row_index >= len(self._sql_rows):
@@ -1628,7 +1630,7 @@ class MainWindow(QWidget):
         rows = sorted({i.row() for i in self.sql_table.selectedIndexes()}, reverse=True)
         paths = set()
         for r in rows:
-            it = self.sql_table.item(r, 0)
+            it = self.sql_table.item(r, 1)
             if it:
                 paths.add(it.data(Qt.UserRole))
         if not paths:
@@ -2097,18 +2099,19 @@ class MainWindow(QWidget):
                 return it
 
             for i, t in enumerate(self.tables):
+                self.file_table.setItem(i, 0, read_only(str(i + 1)))
                 item = read_only(os.path.basename(t["filepath"]))
                 # ZIP 展开出来的文件要能看出来自哪个包的哪个内部路径
                 item.setToolTip(self._zip_origin.get(t["filepath"]) or t["filepath"])
-                self.file_table.setItem(i, 0, item)
+                self.file_table.setItem(i, 1, item)
                 name_item = QTableWidgetItem(t["table_name"])
                 name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
-                self.file_table.setItem(i, 1, name_item)
-                self.file_table.setItem(i, 2, read_only(t["table_comment"]))
-                self.file_table.setItem(i, 3, read_only(str(len(t["columns"]))))
-                self.file_table.setItem(i, 4, read_only(str(len(t["df"]))))
+                self.file_table.setItem(i, 2, name_item)
+                self.file_table.setItem(i, 3, read_only(t["table_comment"]))
+                self.file_table.setItem(i, 4, read_only(str(len(t["columns"]))))
+                self.file_table.setItem(i, 5, read_only(str(len(t["df"]))))
                 pk = ", ".join(c["field"] for c in t["columns"] if c.get("primary_key")) or "无"
-                self.file_table.setItem(i, 5, read_only(pk))
+                self.file_table.setItem(i, 6, read_only(pk))
         finally:
             self._refreshing_file_table = False
 
@@ -2188,17 +2191,17 @@ class MainWindow(QWidget):
 
     def on_file_table_clicked(self, row: int, col: int) -> None:
         """单击「表名」直接进编辑器；其他列保持只读（双击才去看结构）。"""
-        if col != 1 or self.task_dialog is not None:
+        if col != 2 or self.task_dialog is not None:
             return
         if not 0 <= row < self.file_table.rowCount():
             return
-        item = self.file_table.item(row, 1)
+        item = self.file_table.item(row, 2)
         if item is not None:
             self.file_table.editItem(item)
 
     def on_file_table_item_changed(self, item) -> None:
         """手动改单张表的表名：校验不过就恢复原名，改成了就以新名为基础名。"""
-        if self._refreshing_file_table or item is None or item.column() != 1:
+        if self._refreshing_file_table or item is None or item.column() != 2:
             return
         row = item.row()
         if not 0 <= row < len(self.tables):
@@ -2228,7 +2231,7 @@ class MainWindow(QWidget):
         整列表一起弹会让人分不清改的是哪张表，Swing 那条线一直是按行弹的。
         「表名」列例外——单击/双击都只进改名编辑器，不叠一个结构窗。
         """
-        if col == 1:
+        if col == 2:
             return
         if not self.tables:
             popup_box(self, "提示", NO_FILE_HINT)

@@ -17,7 +17,7 @@ import java.util.List;
 public final class FileRowModel extends AbstractTableModel {
 
     private static final String[] COLUMNS =
-            {"文件", "表名", "表注释", "字段数", "数据行数", "主键"};
+            {"序号", "文件", "表名", "表注释", "字段数", "数据行数", "主键"};
 
     /** 一行文件。 */
     public static final class Item {
@@ -60,12 +60,12 @@ public final class FileRowModel extends AbstractTableModel {
     /** 只有表名列可编辑：字段改动仍走双击的结构弹窗。 */
     @Override
     public boolean isCellEditable(int row, int col) {
-        return col == 1 && row >= 0 && row < items.size();
+        return col == 2 && row >= 0 && row < items.size();
     }
 
     @Override
     public void setValueAt(Object value, int row, int col) {
-        if (col != 1 || row < 0 || row >= items.size()) {
+        if (col != 2 || row < 0 || row >= items.size()) {
             return;
         }
         Item it = items.get(row);
@@ -82,16 +82,18 @@ public final class FileRowModel extends AbstractTableModel {
         Item it = items.get(row);
         switch (col) {
             case 0:
-                return baseName(it.table.filepath);
+                return String.valueOf(row + 1);
             case 1:
-                return it.table.tableName;
+                return baseName(it.table.filepath);
             case 2:
-                return it.table.tableComment;
+                return it.table.tableName;
             case 3:
-                return String.valueOf(it.table.columns.size());
+                return it.table.tableComment;
             case 4:
-                return String.valueOf(it.result == null ? 0 : it.result.rows.size());
+                return String.valueOf(it.table.columns.size());
             case 5:
+                return String.valueOf(it.result == null ? 0 : it.result.rows.size());
+            case 6:
                 return primaryKeyOf(it.table);
             default:
                 return "";

@@ -214,10 +214,16 @@ public final class GuiMain {
                 // 表数的可见痕迹是文件表行数与日志里那句汇总（Python 没有状态栏），
                 // 两者已分别在上面断过，这里不再断自造的状态文字
                 // 文件表只有「表名」列可就地编辑：单击改名，字段仍走双击结构弹窗
-                if (!frame.fileModel().isCellEditable(0, 1)
+                if (!frame.fileModel().isCellEditable(0, 2)
                         || frame.fileModel().isCellEditable(0, 0)
                         || frame.fileModel().isCellEditable(0, 3)) {
                     problems.add("文件表应只有表名列可就地编辑");
+                }
+                int serialRows = frame.fileModel().getRowCount();
+                if (!"1".equals(frame.fileModel().getValueAt(0, 0))
+                        || !String.valueOf(serialRows).equals(
+                                frame.fileModel().getValueAt(serialRows - 1, 0))) {
+                    problems.add("文件表序号列没按行号连续编号");
                 }
                 fileRename(frame, problems);
                 // 结构弹窗要能真的改到表定义：改字段类型后 DDL 必须跟着变
@@ -376,7 +382,7 @@ public final class GuiMain {
     private static void fileRename(MainFrame frame, List<String> problems) {
         String before = frame.tables().get(0).tableName;
         String renamed = before + "_probe";
-        frame.fileModel().setValueAt(renamed, 0, 1);
+        frame.fileModel().setValueAt(renamed, 0, 2);
         if (!renamed.equals(frame.tables().get(0).tableName)
                 || !renamed.equals(frame.tables().get(0).baseTableName)) {
             problems.add("文件表改名没同时更新基础表名");
@@ -385,23 +391,23 @@ public final class GuiMain {
                 + "（手动修改，后续批量前缀基于新名计算）")) {
             problems.add("文件表改名没写进日志");
         }
-        frame.fileModel().setValueAt("", 0, 1);
+        frame.fileModel().setValueAt("", 0, 2);
         if (!renamed.equals(frame.tables().get(0).tableName)
                 || !frame.lastDialogText().contains("表名不能为空")) {
             problems.add("空表名没被拦下并恢复原名");
         }
-        frame.fileModel().setValueAt("bad name", 0, 1);
+        frame.fileModel().setValueAt("bad name", 0, 2);
         if (!renamed.equals(frame.tables().get(0).tableName)
                 || !frame.lastDialogText().contains("含非法字符")) {
             problems.add("含空格的表名没被拦下");
         }
         String dup = frame.tables().get(1).tableName;
-        frame.fileModel().setValueAt(dup, 0, 1);
+        frame.fileModel().setValueAt(dup, 0, 2);
         if (!renamed.equals(frame.tables().get(0).tableName)
                 || !frame.lastDialogText().contains("重名")) {
             problems.add("与其他表重名没被拦下");
         }
-        frame.fileModel().setValueAt(before, 0, 1);
+        frame.fileModel().setValueAt(before, 0, 2);
         if (!before.equals(frame.tables().get(0).tableName)
                 || !before.equals(frame.tables().get(0).baseTableName)) {
             problems.add("文件表表名改回原名失败");
@@ -1672,6 +1678,10 @@ public final class GuiMain {
         if (page.rowCount() != 3) {
             problems.add("表格按表名出行，应有 3 行，实际 " + page.rowCount());
         }
+        if (!"1".equals(page.cellText(0, 0)) || !"3".equals(page.cellText(2, 0))) {
+            problems.add("SQL 表序号列没按行号连续编号：" + page.cellText(0, 0)
+                    + "/" + page.cellText(2, 0));
+        }
         if (!page.logPanel().contains("[已加载] a.sql：2 个表")) {
             problems.add("加载日志没报每个文件的表数");
         }
@@ -1705,11 +1715,11 @@ public final class GuiMain {
         if (page.isModified(a)) {
             problems.add("只改显示的前缀不该把脚本标记成已修改");
         }
-        if (!page.cellText(0, 3).equals("ods_t_order")) {
-            problems.add("「当前表名」列没跟着显示前缀走：" + page.cellText(0, 3));
+        if (!page.cellText(0, 4).equals("ods_t_order")) {
+            problems.add("「当前表名」列没跟着显示前缀走：" + page.cellText(0, 4));
         }
-        if (!page.cellText(0, 1).equals("t_order")) {
-            problems.add("「原表名」列显示的不是最初的表名：" + page.cellText(0, 1));
+        if (!page.cellText(0, 2).equals("t_order")) {
+            problems.add("「原表名」列显示的不是最初的表名：" + page.cellText(0, 2));
         }
         if (!"ods_t_order".equals(page.metadataShownName(0))) {
             problems.add("元数据弹窗没跟着显示前缀：" + page.metadataShownName(0));
@@ -1720,14 +1730,14 @@ public final class GuiMain {
         int rowsBefore = page.rowCount();
         page.setPrefixText("ods_");
         page.applyPrefix();
-        if (page.rowCount() != rowsBefore || page.cellText(0, 3).contains("ods_ods_")) {
+        if (page.rowCount() != rowsBefore || page.cellText(0, 4).contains("ods_ods_")) {
             problems.add("重复加同一个前缀叠了一层");
         }
         page.setPrefixText("");
         page.applyPrefix();
-        if (!page.cellText(0, 3).equals("t_order") || !page.cellText(2, 3).equals("dim_x")) {
-            problems.add("清空前缀再点一次没恢复脚本原名：" + page.cellText(0, 3)
-                    + "/" + page.cellText(2, 3));
+        if (!page.cellText(0, 4).equals("t_order") || !page.cellText(2, 4).equals("dim_x")) {
+            problems.add("清空前缀再点一次没恢复脚本原名：" + page.cellText(0, 4)
+                    + "/" + page.cellText(2, 4));
         }
         if (!page.logPanel().contains("前缀已清空")) {
             problems.add("清空前缀没有留下恢复原名的日志");
@@ -1746,13 +1756,13 @@ public final class GuiMain {
         if (after.contains("change_t_order") || after.contains("change_plain")) {
             problems.add("「替换首个前缀」不该改脚本正文：" + after);
         }
-        if (!page.cellText(0, 3).equals("change_t_order")
-                || !page.cellText(1, 3).equals("change_plain")) {
-            problems.add("替换首段没改到显示名：" + page.cellText(0, 3)
-                    + "/" + page.cellText(1, 3));
+        if (!page.cellText(0, 4).equals("change_t_order")
+                || !page.cellText(1, 4).equals("change_plain")) {
+            problems.add("替换首段没改到显示名：" + page.cellText(0, 4)
+                    + "/" + page.cellText(1, 4));
         }
-        if (!page.cellText(2, 3).equals("change_dim_x")) {
-            problems.add("ods_dim_x 的首段在显示层没被换掉：" + page.cellText(2, 3));
+        if (!page.cellText(2, 4).equals("change_dim_x")) {
+            problems.add("ods_dim_x 的首段在显示层没被换掉：" + page.cellText(2, 4));
         }
         if (page.isModified(a) || page.isModified(b)) {
             problems.add("只改显示的换前缀不该标记成已修改");
@@ -2703,8 +2713,11 @@ public final class GuiMain {
             dropping.dispose();
         }
 
-        int[] want = {320, 200, 280, 80, 90, 160};
+        int[] want = {54, 320, 200, 280, 80, 90, 160};
         javax.swing.table.TableColumnModel cols = frame.fileTable().getColumnModel();
+        if (cols.getColumnCount() != want.length) {
+            problems.add("文件表应有 7 列（序号 + 原 6 列），实际 " + cols.getColumnCount());
+        }
         for (int i = 0; i < want.length && i < cols.getColumnCount(); i++) {
             if (cols.getColumn(i).getPreferredWidth() != want[i]) {
                 problems.add("文件表第 " + (i + 1) + " 列宽不是 " + want[i] + "，实际 "

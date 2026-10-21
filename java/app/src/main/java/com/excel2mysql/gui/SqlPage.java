@@ -87,7 +87,8 @@ public final class SqlPage extends JPanel {
         }
     }
 
-    private static final String[] COLUMNS = {"文件", "原表名", "CREATE 出现次数", "当前表名"};
+    private static final String[] COLUMNS =
+            {"序号", "文件", "原表名", "CREATE 出现次数", "当前表名"};
 
     /**
      * 交给子线程的输入快照：改写期间主线程可能继续动列表，子线程只读这份拷贝。
@@ -165,14 +166,14 @@ public final class SqlPage extends JPanel {
         model = new DefaultTableModel(COLUMNS, 0) {
             @Override
             public boolean isCellEditable(int row, int col) {
-                return col == 3;
+                return col == 4;
             }
 
             @Override
             public void setValueAt(Object value, int row, int col) {
-                Object old = col == 3 && row >= 0 && row < getRowCount() ? getValueAt(row, col) : null;
+                Object old = col == 4 && row >= 0 && row < getRowCount() ? getValueAt(row, col) : null;
                 super.setValueAt(value, row, col);
-                if (col == 3 && !editingRowName && !String.valueOf(old).equals(String.valueOf(value))) {
+                if (col == 4 && !editingRowName && !String.valueOf(old).equals(String.valueOf(value))) {
                     renameRow(row, String.valueOf(value));
                 }
             }
@@ -181,11 +182,12 @@ public final class SqlPage extends JPanel {
         table.setRowHeight(22);
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
-        table.getColumnModel().getColumn(0).setPreferredWidth(300);
-        table.getColumnModel().getColumn(1).setPreferredWidth(260);
-        table.getColumnModel().getColumn(2).setPreferredWidth(130);
-        // 第一列挂完整路径：脚本同名时只靠文件名分不出是哪个目录里的那份（同 Python 的 tooltip）
-        table.getColumnModel().getColumn(0).setCellRenderer(new javax.swing.table.DefaultTableCellRenderer() {
+        table.getColumnModel().getColumn(0).setPreferredWidth(54);
+        table.getColumnModel().getColumn(1).setPreferredWidth(300);
+        table.getColumnModel().getColumn(2).setPreferredWidth(260);
+        table.getColumnModel().getColumn(3).setPreferredWidth(130);
+        // 「文件」列挂完整路径：脚本同名时只靠文件名分不出是哪个目录里的那份（同 Python 的 tooltip）
+        table.getColumnModel().getColumn(1).setCellRenderer(new javax.swing.table.DefaultTableCellRenderer() {
             @Override
             public java.awt.Component getTableCellRendererComponent(javax.swing.JTable t, Object v,
                     boolean selected, boolean focus, int row, int column) {
@@ -199,7 +201,7 @@ public final class SqlPage extends JPanel {
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() == 2) {
                     int column = table.columnAtPoint(e.getPoint());
-                    if (column >= 0 && column <= 2) {
+                    if (column >= 0 && column <= 3) {
                         showMetadataAtRow(table.rowAtPoint(e.getPoint()));
                     }
                 }
@@ -495,15 +497,15 @@ public final class SqlPage extends JPanel {
     }
 
     public String sqlRowDisplayName(int row) {
-        return row < 0 || row >= rowActual.size() ? null : String.valueOf(model.getValueAt(row, 3));
+        return row < 0 || row >= rowActual.size() ? null : String.valueOf(model.getValueAt(row, 4));
     }
 
     public boolean sqlRowNameEditable(int row) {
-        return row >= 0 && row < model.getRowCount() && model.isCellEditable(row, 3);
+        return row >= 0 && row < model.getRowCount() && model.isCellEditable(row, 4);
     }
 
     public void setSqlRowName(int row, String name) {
-        model.setValueAt(name, row, 3);
+        model.setValueAt(name, row, 4);
     }
 
     public void showMetadata(int row) {
@@ -1017,8 +1019,9 @@ public final class SqlPage extends JPanel {
                             break;
                         }
                     }
-                    model.addRow(new Object[]{baseName(e.path), origin,
-                            String.valueOf(t.get("count")), displayName(displayBase(e, name))});
+                    model.addRow(new Object[]{String.valueOf(rowPath.size() + 1),
+                            baseName(e.path), origin, String.valueOf(t.get("count")),
+                            displayName(displayBase(e, name))});
                     rowPath.add(e.path);
                     rowOrigin.add(origin);
                     rowActual.add(name);
