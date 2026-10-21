@@ -1579,6 +1579,55 @@ public final class GuiMain {
                 || !frame.lastDialogText().contains("请先添加 SQL 脚本文件。")) {
             problems.add("没有脚本时点生成按钮没拦下：标题=" + frame.lastDialogTitle());
         }
+        // 前缀两颗按钮同样要有前置守卫：无文件时返回提示，由按钮接线走 host.warn
+        empty.setPrefixText("dim_");
+        if (!com.excel2mysql.core.LogText.NO_SQL_HINT.equals(empty.applyPrefix())) {
+            problems.add("没有脚本时「批量应用前缀」没返回提示：" + empty.applyPrefix());
+        }
+        if (!com.excel2mysql.core.LogText.NO_SQL_HINT.equals(empty.replaceFirstPrefix())) {
+            problems.add("没有脚本时「替换首个前缀」没返回提示：" + empty.replaceFirstPrefix());
+        }
+
+        // 空脚本（0 张表）：点按钮要弹窗说明，不是记一行"共 0 个表名"就算完
+        String emptySql = new File(dir, "empty.sql").getPath();
+        writeText(emptySql, "");
+        com.excel2mysql.gui.SqlPage emptyScript = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> emptyPaths = new ArrayList<String>();
+        emptyPaths.add(emptySql);
+        emptyScript.addFiles(emptyPaths);
+        if (emptyScript.entryCount() != 1 || emptyScript.rowCount() != 0) {
+            problems.add("空脚本应加载成 1 个文件、0 行表名，实际 "
+                    + emptyScript.entryCount() + "/" + emptyScript.rowCount());
+        }
+        // 任务日志按页归属路由到主窗口那份 SQL 页，不在这颗临时页自己的面板里
+        String emptyLog = frame.sqlPage().logPanel().text();
+        if (!emptyLog.contains("[已加载] empty.sql：0 个表（未发现 CREATE TABLE 语句）")
+                || emptyLog.contains("0 个表（（")) {
+            problems.add("空脚本加载日志的括号或文案不对：" + emptyLog.replace((char) 10, ' '));
+        }
+        emptyScript.setPrefixText("dim_");
+        javax.swing.JButton emptyApply = buttonIn(emptyScript, "批量应用前缀");
+        javax.swing.JButton emptyReplace = buttonIn(emptyScript, "替换首个前缀");
+        if (emptyApply == null || emptyReplace == null) {
+            problems.add("SQL 页上找不到两颗前缀按钮");
+        } else {
+            emptyApply.doClick();
+            if (!"提示".equals(frame.lastDialogTitle())
+                    || !"warning".equals(frame.lastDialogIcon())
+                    || !frame.lastDialogText().contains("没有解析出 CREATE TABLE")) {
+                problems.add("空脚本点「批量应用前缀」没弹窗说明：标题=" + frame.lastDialogTitle()
+                        + " 图标=" + frame.lastDialogIcon()
+                        + " 正文=" + frame.lastDialogText().replace((char) 10, ' '));
+            }
+            emptyReplace.doClick();
+            if (!"提示".equals(frame.lastDialogTitle())
+                    || !"warning".equals(frame.lastDialogIcon())
+                    || !frame.lastDialogText().contains("没有解析出 CREATE TABLE")) {
+                problems.add("空脚本点「替换首个前缀」没弹窗说明：标题=" + frame.lastDialogTitle()
+                        + " 图标=" + frame.lastDialogIcon()
+                        + " 正文=" + frame.lastDialogText().replace((char) 10, ' '));
+            }
+        }
 
         // ---- 第二页的大小写开关：默认不勾选，清单/元数据/生成物一起转大写，脚本正文不动 ----
         if (page.upperBox().isSelected()) {
@@ -1723,6 +1772,23 @@ public final class GuiMain {
     private static String tailOf(String text) {
         int from = Math.max(0, text.length() - 300);
         return text.substring(from);
+    }
+
+    /** 按文字找按钮：自检按用户的方式点按钮，才验得到"返回提示 → 弹窗"这段接线。 */
+    private static javax.swing.JButton buttonIn(java.awt.Container root, String text) {
+        for (java.awt.Component c : root.getComponents()) {
+            if (c instanceof javax.swing.JButton
+                    && text.equals(((javax.swing.JButton) c).getText())) {
+                return (javax.swing.JButton) c;
+            }
+            if (c instanceof java.awt.Container) {
+                javax.swing.JButton found = buttonIn((java.awt.Container) c, text);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     private static void sql_page(MainFrame frame, List<String> problems) {

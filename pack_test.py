@@ -2843,6 +2843,41 @@ check("Q28a 多个脚本文件的建模语句共用一套连续序号，最后�
 sw2.sql_files = []
 sw2._refresh_sql_table()
 
+# ---- 空脚本 / 空列表时两颗前缀按钮：弹窗说明，不静默报"0 个表名" ----
+_empty_sql = os.path.join(_tmpdir, "空脚本.sql")
+open(_empty_sql, "w", encoding="utf-8").write("")
+ew2 = app_main.MainWindow()
+POPUPS.clear()
+app_main.QFileDialog.getOpenFileNames = staticmethod(
+    lambda *a, **k: ([_empty_sql], "SQL 脚本 (*.sql)"))
+try:
+    ew2.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn)
+check("Q29 空脚本加载日志不再套两层括号",
+      "[已加载] 空脚本.sql：0 个表（未发现 CREATE TABLE 语句）" in ew2.sql_log.toPlainText(),
+      [l for l in ew2.sql_log.toPlainText().splitlines() if l.startswith("[已加载]")])
+POPUPS.clear()
+ew2.ed_sql_prefix.setText("dim_")
+ew2.on_sql_apply_prefix()
+check("Q29a 空脚本点「批量应用前缀」弹窗说明没有可处理的表",
+      any(t == "提示" and "没有解析出 CREATE TABLE" in x for t, x in POPUPS), POPUPS)
+POPUPS.clear()
+ew2.on_sql_replace_prefix()
+check("Q29b 空脚本点「替换首个前缀」同样弹窗说明",
+      any(t == "提示" and "没有解析出 CREATE TABLE" in x for t, x in POPUPS), POPUPS)
+_empty_list = app_main.MainWindow()
+POPUPS.clear()
+_empty_list.ed_sql_prefix.setText("dim_")
+_empty_list.on_sql_apply_prefix()
+check("Q29c 没有加任何脚本时点加前缀，弹窗要求先添加文件",
+      any(t == "提示" and x == "请先添加 SQL 脚本文件。" for t, x in POPUPS), POPUPS)
+POPUPS.clear()
+_empty_list.ed_sql_prefix.setText("")
+_empty_list.on_sql_replace_prefix()
+check("Q29d 没有脚本且前缀为空时点替换，也先弹窗说明",
+      any(t == "提示" and x == "请先添加 SQL 脚本文件。" for t, x in POPUPS), POPUPS)
+
 # ---- 空列表时的预览入口：只提示，不弹空窗 ----
 ew = app_main.MainWindow()
 POPUPS.clear()
