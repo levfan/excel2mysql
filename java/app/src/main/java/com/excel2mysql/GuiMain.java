@@ -1410,6 +1410,53 @@ public final class GuiMain {
         if (popupSize.width < 820 || popupSize.height < 420) {
             problems.add("生成结果弹窗正文太小，产物路径看不清：" + popupSize);
         }
+        if (copyBody.getFont() == null || copyBody.getFont().getSize() < 16) {
+            problems.add("结果弹窗正文字号没跟主界面 16 号对齐：" + copyBody.getFont());
+        }
+        StringBuilder longText = new StringBuilder("任务异常：以下文件未能读入。");
+        for (int i = 0; i < 40; i++) {
+            longText.append("\n[读取失败] C:\\data\\第").append(i)
+                    .append("批\\很长的文件名用来验证滚动与复制.sql：编码无法识别");
+        }
+        javax.swing.JComponent longArea = frame.popupMessageComponent(longText.toString());
+        if (!(longArea instanceof javax.swing.JTextArea)
+                || ((javax.swing.JTextArea) longArea).getLineCount() <= 24
+                || !((javax.swing.JTextArea) longArea).getText().contains("第39批")) {
+            problems.add("弹窗正文这条线仍按 24 行截断，后面的报错看不到");
+        }
+        String shown = com.excel2mysql.gui.PopupText.wrapAll(longText.toString());
+        com.excel2mysql.gui.MessageDialog md = com.excel2mysql.gui.MessageDialog.create(
+                frame, "任务异常", shown, longText.toString(),
+                javax.swing.JOptionPane.ERROR_MESSAGE);
+        if (!com.excel2mysql.gui.MessageDialog.hasScrollPane(md.textArea())) {
+            problems.add("结果弹窗正文没装进滚动区，超出部分无处可看");
+        }
+        md.validate();
+        if (!md.scrollPane().getVerticalScrollBar().isVisible()) {
+            problems.add("长报错没有滚动条，超出一屏的内容看不到");
+        }
+        if (!"复制全部".equals(md.copyButton().getText())
+                || md.copyButton().getActionListeners().length == 0) {
+            problems.add("结果弹窗没有可用的「复制全部」：" + md.copyButton().getText());
+        }
+        if (!md.displayText().contains("第39批")
+                || md.textArea().getLineCount() <= 24) {
+            // 走截断版的话第 25 行往后会换成「见日志」，40 条报错只剩 23 条
+            problems.add("长报错被截成 24 行，弹窗里翻不到后几批：" + md.textArea().getLineCount());
+        }
+        if (md.fullText().length() <= 0 || !md.fullText().contains("第39批")) {
+            problems.add("「复制全部」拿到的不是完整原文");
+        }
+        if (md.getWidth() < 820 || md.getHeight() < 420) {
+            problems.add("结果弹窗本身小于 820x420：" + md.getSize());
+        }
+        if (!com.excel2mysql.gui.Windows.workArea(md).contains(md.getBounds())) {
+            problems.add("结果弹窗超出屏幕可用区：" + md.getBounds());
+        }
+        if (!md.isResizable()) {
+            problems.add("结果弹窗不能拖动改大小，长路径只能横向挤着看");
+        }
+        md.dispose();
 
         java.io.File stdDir = new java.io.File(outRoot, "meta_data_file_" + today());
         String[] produced = stdDir.list();
