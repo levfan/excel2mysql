@@ -213,11 +213,13 @@ public final class GuiMain {
                 }
                 // 表数的可见痕迹是文件表行数与日志里那句汇总（Python 没有状态栏），
                 // 两者已分别在上面断过，这里不再断自造的状态文字
-                // 文件表刻意不可就地编辑：字段级改动在双击打开的结构弹窗里做，
-                // 和 Python 侧一致（就地编辑会让"改的是哪张表"变含糊）
-                if (frame.fileModel().isCellEditable(0, 3)) {
-                    problems.add("文件表不该可就地编辑，改动要走结构弹窗");
+                // 文件表只有「表名」列可就地编辑：单击改名，字段仍走双击结构弹窗
+                if (!frame.fileModel().isCellEditable(0, 1)
+                        || frame.fileModel().isCellEditable(0, 0)
+                        || frame.fileModel().isCellEditable(0, 3)) {
+                    problems.add("文件表应只有表名列可就地编辑");
                 }
+                fileRename(frame, problems);
                 // 结构弹窗要能真的改到表定义：改字段类型后 DDL 必须跟着变
                 table_select_for_dialog(frame, problems);
                 // 多表标签页弹窗：校验不过不能先写回，否则表定义停在改了一半的状态
@@ -368,6 +370,42 @@ public final class GuiMain {
             return 1;
         }
         return result[0];
+    }
+
+    /** 文件表单击表名改名：改到基础表名，四类非法输入都恢复原名。 */
+    private static void fileRename(MainFrame frame, List<String> problems) {
+        String before = frame.tables().get(0).tableName;
+        String renamed = before + "_probe";
+        frame.fileModel().setValueAt(renamed, 0, 1);
+        if (!renamed.equals(frame.tables().get(0).tableName)
+                || !renamed.equals(frame.tables().get(0).baseTableName)) {
+            problems.add("文件表改名没同时更新基础表名");
+        }
+        if (!frame.logPanel().contains("[表名] " + before + " → " + renamed
+                + "（手动修改，后续批量前缀基于新名计算）")) {
+            problems.add("文件表改名没写进日志");
+        }
+        frame.fileModel().setValueAt("", 0, 1);
+        if (!renamed.equals(frame.tables().get(0).tableName)
+                || !frame.lastDialogText().contains("表名不能为空")) {
+            problems.add("空表名没被拦下并恢复原名");
+        }
+        frame.fileModel().setValueAt("bad name", 0, 1);
+        if (!renamed.equals(frame.tables().get(0).tableName)
+                || !frame.lastDialogText().contains("含非法字符")) {
+            problems.add("含空格的表名没被拦下");
+        }
+        String dup = frame.tables().get(1).tableName;
+        frame.fileModel().setValueAt(dup, 0, 1);
+        if (!renamed.equals(frame.tables().get(0).tableName)
+                || !frame.lastDialogText().contains("重名")) {
+            problems.add("与其他表重名没被拦下");
+        }
+        frame.fileModel().setValueAt(before, 0, 1);
+        if (!before.equals(frame.tables().get(0).tableName)
+                || !before.equals(frame.tables().get(0).baseTableName)) {
+            problems.add("文件表表名改回原名失败");
+        }
     }
 
     /**

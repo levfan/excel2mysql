@@ -3377,6 +3377,108 @@ check("R49b 正文自带 U+FFFD 的 UTF-8 脚本仍按 UTF-8 解码",
       and _repl_tab["columns"][0]["comment"] == "编号",
       (_repl_tab["table_comment"], _repl_tab["columns"][0]["comment"]))
 
+# ---- Excel 导入页：单击表名单独改一张表 ----
+rw6 = _legacy_naming(app_main.MainWindow())
+rw6._add_files([f1, f2, f3])
+_file_flags = [bool(rw6.file_table.item(0, c).flags() & Qt.ItemIsEditable) for c in range(6)]
+check("R50 文件表只有「表名」列可编辑，其余列仍只读",
+      _file_flags == [False, True, False, False, False, False], _file_flags)
+_enter_old = rw6.tables[0]["table_name"]
+rw6.on_file_table_clicked(0, 1)
+_app.processEvents()
+_editors = rw6.file_table.findChildren(app_main.QLineEdit)
+check("R51 单击「表名」直接进入编辑器", bool(_editors),
+      len(_editors))
+# 真实编辑器里按回车提交：itemChanged 在编辑器收尾前触发整表刷新，别把编辑器留在半开状态
+from PySide6.QtTest import QTest as _QTest
+if _editors:
+    _editors[0].setText("enter_name")
+    _QTest.keyClick(_editors[0], Qt.Key_Return)
+    _app.processEvents()
+    _app.processEvents()
+check("R51c 编辑器里回车提交改名，编辑器随后关闭",
+      rw6.tables[0]["table_name"] == "enter_name"
+      and rw6.file_table.item(0, 1).text() == "enter_name"
+      and not rw6.file_table.findChildren(app_main.QLineEdit),
+      (rw6.tables[0]["table_name"], rw6.file_table.item(0, 1).text(),
+       len(rw6.file_table.findChildren(app_main.QLineEdit))))
+_ed_count = len(rw6.file_table.findChildren(app_main.QLineEdit))
+rw6.on_file_table_clicked(0, 2)
+_app.processEvents()
+check("R51b 单击其他列不会弹编辑器",
+      len(rw6.file_table.findChildren(app_main.QLineEdit)) == _ed_count)
+rw6.file_table.item(0, 1).setText(_enter_old)
+_app.processEvents()
+rw6.file_table.item(1, 1).setText("manual_orders")
+_app.processEvents()
+check("R52 改一张表的表名只动这一张，基础表名同步更新",
+      [t["table_name"] for t in rw6.tables] == ["ods_t_order", "manual_orders", "users"]
+      and rw6.tables[1]["base_table_name"] == "manual_orders",
+      [t["table_name"] for t in rw6.tables])
+check("R52b 改名写进日志，说明后续前缀基于新名算",
+      "[表名] adb_table2 → manual_orders（手动修改，后续批量前缀基于新名计算）"
+      in rw6.log.toPlainText())
+rw6.ed_prefix.setText("dim_")
+rw6.on_apply_prefix()
+_app.processEvents()
+check("R53 手动改过的名字成为新基础名：再加前缀基于它算",
+      [t["table_name"] for t in rw6.tables]
+      == ["dim_ods_t_order", "dim_manual_orders", "dim_users"],
+      [t["table_name"] for t in rw6.tables])
+rw6.ed_prefix.setText("")
+rw6.on_apply_prefix()
+_app.processEvents()
+check("R53b 清空前缀恢复基础名（手动名保留）",
+      [t["table_name"] for t in rw6.tables] == ["ods_t_order", "manual_orders", "users"],
+      [t["table_name"] for t in rw6.tables])
+POPUPS.clear()
+rw6.file_table.item(1, 1).setText("")
+_app.processEvents()
+check("R54 空表名被拦下并恢复原名",
+      rw6.tables[1]["table_name"] == "manual_orders"
+      and any("表名不能为空" in x and "已恢复原表名「manual_orders」" in x
+              for _, x in POPUPS), POPUPS[-1] if POPUPS else "无弹窗")
+POPUPS.clear()
+rw6.file_table.item(1, 1).setText("bad name!")
+_app.processEvents()
+check("R55 含空格/标点的表名被拦下并恢复",
+      rw6.tables[1]["table_name"] == "manual_orders"
+      and any("含非法字符" in x for _, x in POPUPS), POPUPS[-1] if POPUPS else "无弹窗")
+POPUPS.clear()
+rw6.file_table.item(1, 1).setText(rw6.tables[0]["table_name"])
+_app.processEvents()
+check("R56 与其他表重名被拦下并恢复",
+      rw6.tables[1]["table_name"] == "manual_orders"
+      and any("重名" in x for _, x in POPUPS), POPUPS[-1] if POPUPS else "无弹窗")
+rw6.file_table.item(1, 1).setText("  `manual_orders`  ")
+_app.processEvents()
+check("R57 粘贴带反引号/空白的名字被规范成裸表名",
+      rw6.tables[1]["table_name"] == "manual_orders"
+      and rw6.file_table.item(1, 1).text() == "manual_orders",
+      rw6.file_table.item(1, 1).text())
+_real_sd = app_main.StructureDialog
+_opened_sd = []
+
+
+class _ProbeStructure(object):
+    def __init__(self, *a, **k):
+        _opened_sd.append(a)
+
+    def exec(self):
+        return 0
+
+
+app_main.StructureDialog = _ProbeStructure
+try:
+    rw6.on_edit_structure_row(0, 1)
+    _name_col_only = not _opened_sd
+    rw6.on_edit_structure_row(0, 0)
+    _other_col_opens = len(_opened_sd) == 1
+finally:
+    app_main.StructureDialog = _real_sd
+check("R58 双击表名不叠结构窗，双击其他列仍打开这一行的结构",
+      _name_col_only and _other_col_opens, (_name_col_only, len(_opened_sd)))
+
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 
 from core.infer import parse_table_name_and_comment as _PT, _col_to_field as _CF

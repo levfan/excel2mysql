@@ -24,6 +24,7 @@ FIX = sys.argv[2] if len(sys.argv) > 2 else os.path.join(REPO, "java", "verify",
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, REPO)
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QLabel,  # noqa: E402
                                QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
                                QPushButton, QSpinBox, QTableWidget)
@@ -392,6 +393,33 @@ def main():
         else "max=%d" % max(sizes[-1].width(), sizes[-1].height()))
     tip0 = win.file_table.item(0, 0)
     put("file.tooltip.0", tip0.toolTip() if tip0 else "")
+    # 文件表只有「表名」列可编辑；单击改名、非法名恢复原名，两条线逐句话比
+    put("file.rename.editable", "|".join(
+        str(int(bool(win.file_table.item(0, c).flags() & Qt.ItemIsEditable)))
+        for c in (1, 0, 2)))
+    _rename_old = win.tables[0]["table_name"]
+    win.file_table.item(0, 1).setText(_rename_old + "_probe")
+    app.processEvents()
+    _log_lines = [ln for ln in win.log.toPlainText().splitlines() if ln.strip()]
+    put("file.rename.ok", "%s|%s|%s" % (
+        win.tables[0]["table_name"], win.tables[0]["base_table_name"],
+        _log_lines[-1] if _log_lines else ""))
+    POPUPS.clear()
+    win.file_table.item(0, 1).setText("")
+    app.processEvents()
+    put("file.rename.empty", "%s|%s" % (win.tables[0]["table_name"], popup_text()))
+    POPUPS.clear()
+    win.file_table.item(0, 1).setText("bad name")
+    app.processEvents()
+    put("file.rename.bad", "%s|%s" % (win.tables[0]["table_name"], popup_text()))
+    POPUPS.clear()
+    win.file_table.item(0, 1).setText(win.tables[1]["table_name"])
+    app.processEvents()
+    put("file.rename.dupe", "%s|%s" % (win.tables[0]["table_name"], popup_text()))
+    win.file_table.item(0, 1).setText(_rename_old)
+    app.processEvents()
+    put("file.rename.restored", "%s|%s" % (
+        win.tables[0]["table_name"], win.tables[0]["base_table_name"]))
     # 折行规则本身也要跨线比：同一段最坏文案，两边必须折出同一个字符串
     put("wrap.single", m.wrap_popup_text(
         "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"

@@ -245,6 +245,29 @@ public final class GuiDump {
                 put("window.icon", icon == null ? "none"
                         : "max=" + Math.max(icon.getWidth(null), icon.getHeight(null)));
                 put("file.tooltip.0", frame.fileModel().tooltipAt(0));
+                // 文件表只有「表名」列可编辑；单击改名、非法名恢复原名，两条线逐句话比
+                put("file.rename.editable",
+                        (frame.fileModel().isCellEditable(0, 1) ? "1" : "0") + "|"
+                        + (frame.fileModel().isCellEditable(0, 0) ? "1" : "0") + "|"
+                        + (frame.fileModel().isCellEditable(0, 2) ? "1" : "0"));
+                String renameOld = frame.tables().get(0).tableName;
+                frame.fileModel().setValueAt(renameOld + "_probe", 0, 1);
+                put("file.rename.ok", frame.tables().get(0).tableName + "|"
+                        + frame.tables().get(0).baseTableName + "|"
+                        + lastLogLine(frame.logPanel().text()));
+                frame.fileModel().setValueAt("", 0, 1);
+                put("file.rename.empty",
+                        frame.tables().get(0).tableName + "|" + popup());
+                frame.fileModel().setValueAt("bad name", 0, 1);
+                put("file.rename.bad",
+                        frame.tables().get(0).tableName + "|" + popup());
+                String renameDup = frame.tables().get(1).tableName;
+                frame.fileModel().setValueAt(renameDup, 0, 1);
+                put("file.rename.dupe",
+                        frame.tables().get(0).tableName + "|" + popup());
+                frame.fileModel().setValueAt(renameOld, 0, 1);
+                put("file.rename.restored", frame.tables().get(0).tableName + "|"
+                        + frame.tables().get(0).baseTableName);
                 // 折行规则本身也要跨线比：同一段最坏文案，两边必须折出同一个字符串
                 put("wrap.single", com.excel2mysql.gui.PopupText.wrap(
                         "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"
@@ -544,6 +567,18 @@ public final class GuiDump {
     /** 弹窗正文去掉折行引入的换行，只留内容。 */
     private static String popupBody(String text) {
         return text == null ? "" : text.replace("\n", "");
+    }
+
+    /** 日志的最后一条非空行：改名的回执要逐句与 Python 侧对。 */
+    private static String lastLogLine(String text) {
+        String s = text == null ? "" : text.replace("\r", "");
+        String[] lines = s.split("\n");
+        for (int i = lines.length - 1; i >= 0; i--) {
+            if (!lines[i].trim().isEmpty()) {
+                return lines[i];
+            }
+        }
+        return "";
     }
 
     /** 目标库信息条是哪一档颜色：绿色=已选定、红色=没选库，别的写法算 none。 */
