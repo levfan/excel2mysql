@@ -642,7 +642,7 @@ public final class SqlPage extends JPanel {
                     names.add(String.valueOf(t.get("name")));
                 }
                 sink.log("[已加载] " + fname + "：" + tabs.size() + " 个表（"
-                        + (names.isEmpty() ? "（未发现 CREATE TABLE 语句）" : String.join("、", names))
+                        + (names.isEmpty() ? "未发现 CREATE TABLE 语句" : String.join("、", names))
                         + "）");
                 loaded.add(new Entry(p, text, tabs));
                 sink.step(fname);
@@ -711,12 +711,29 @@ public final class SqlPage extends JPanel {
         return drop.size();
     }
 
+    /** 两颗前缀按钮的共同前置检查：没有可处理的表就返回一句说明，让按钮走 warn 弹窗。 */
+    private String prefixBlocker() {
+        if (entries.isEmpty()) {
+            return LogText.NO_SQL_HINT;
+        }
+        for (Entry e : entries) {
+            if (!e.tabs.isEmpty()) {
+                return null;
+            }
+        }
+        return "列表里的脚本没有解析出 CREATE TABLE 表（空脚本或只有注释），没有表名可处理。";
+    }
+
     /**
      * 批量加前缀：只改「当前表名」的显示层，脚本正文不动；已带该前缀的进跳过清单，
      * 重复点不会叠前缀。前缀留空表示撤掉显示层、恢复脚本原名。
      * 返回非 null 表示这次点下去只该弹提示（这条路径现在没有校验失败）。
      */
     public String applyPrefix() {
+        String blocked = prefixBlocker();
+        if (blocked != null) {
+            return blocked;
+        }
         String prefix = Names.pyStrip(prefixField.getText()).replace("`", "").replace("\\", "");
         if (prefix.isEmpty()) {
             clearDisplayPrefix();
@@ -773,6 +790,10 @@ public final class SqlPage extends JPanel {
 
     /** 换首个前缀：清洗与合法性校验走 core 的同一套规则，同样只改显示层。 */
     public String replaceFirstPrefix() {
+        String blocked = prefixBlocker();
+        if (blocked != null) {
+            return blocked;
+        }
         if (Names.pyStrip(prefixField.getText()).isEmpty()) {
             clearDisplayPrefix();
             return null;

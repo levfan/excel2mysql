@@ -609,7 +609,7 @@ def sql_load_task(paths, duplicates, sink):
             sink.step(fname)
             continue
         tabs = extract_create_tables(text)
-        names = "、".join(t["name"] for t in tabs) or "（未发现 CREATE TABLE 语句）"
+        names = "、".join(t["name"] for t in tabs) or "未发现 CREATE TABLE 语句"
         sink.log(f"[已加载] {fname}：{len(tabs)} 个表（{names}）")
         loaded.append({"path": p, "text": text, "modified": False,
                        "rename_map": {}, "display_map": {}, "tabs": tabs})
@@ -1701,8 +1701,22 @@ class MainWindow(QWidget):
         append_log(self.log, "已拦下：" + text)
         popup_box(self, "提示", text, "warning")
 
+    def _sql_prefix_blocker(self):
+        """两颗前缀按钮的共同前置检查：没有可处理的表就弹窗说清楚，不假装成功。"""
+        if not self.sql_files:
+            return "请先添加 SQL 脚本文件。"
+        # 与 _refresh_sql_table 同口径：老记录可能没缓存 tabs，就地从正文补算
+        if not any(s.get("tabs") or extract_create_tables(s["text"]) for s in self.sql_files):
+            return ("列表里的脚本没有解析出 CREATE TABLE 表（空脚本或只有注释），"
+                    "没有表名可处理。")
+        return None
+
     def on_sql_apply_prefix(self):
         """只改页面显示：脚本正文一个字不动，四个动作按钮点下去时才写入。"""
+        why = self._sql_prefix_blocker()
+        if why:
+            self._warn(why)
+            return
         prefix = self.ed_sql_prefix.text().strip().replace("`", "").replace("\\", "")
         if not prefix:
             self._clear_sql_display_prefix()
@@ -1751,6 +1765,10 @@ class MainWindow(QWidget):
 
     def on_sql_replace_prefix(self):
         """首段前缀同样只改显示；空前缀视作撤掉显示层。"""
+        why = self._sql_prefix_blocker()
+        if why:
+            self._warn(why)
+            return
         if not self.ed_sql_prefix.text().strip():
             self._clear_sql_display_prefix()
             return
