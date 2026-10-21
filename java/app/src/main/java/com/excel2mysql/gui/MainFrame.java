@@ -330,7 +330,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             if (!accepted.isEmpty()) {
                 addFilesAsync(accepted);
             }
-        });
+        }, this::chooseFiles);
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
         table.setRowHeight(22);
@@ -397,17 +397,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixEast, BorderLayout.EAST);
 
-        JButton add = new JButton("添加文件");
-        add.addActionListener(e -> chooseFiles());
         JButton clear = new JButton("清空列表");
         clear.addActionListener(e -> clearAll());
         JButton structure = new JButton("生成表结构预览");
         structure.addActionListener(e -> previewStructure());
         preview = new JButton("预览 DDL");
         preview.addActionListener(e -> previewDdl());
-        // Qt 的 QHBoxLayout 会把四颗按钮等宽铺满整行，Swing 的 FlowLayout 只会左对齐按内容宽
-        JPanel btnRow = new JPanel(new java.awt.GridLayout(1, 4, 6, 0));
-        btnRow.add(add);
+        // Qt 的 QHBoxLayout 会把三颗按钮等宽铺满整行，Swing 的 FlowLayout 只会左对齐按内容宽
+        JPanel btnRow = new JPanel(new java.awt.GridLayout(1, 3, 6, 0));
         btnRow.add(clear);
         btnRow.add(structure);
         btnRow.add(preview);

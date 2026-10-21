@@ -3,7 +3,7 @@ Excel -> MySQL 批量导入工具（PySide6 GUI）
 ========================================
 功能：
   - 输入 MySQL 连接信息，选择目标库
-  - 拖拽 / 选择多个 Excel 文件，或直接给 ZIP 压缩包（自动展开包内的多个 Excel）
+  - 拖拽 / 点击虚线区选择多个 Excel 文件，或直接给 ZIP 压缩包（自动展开包内的多个 Excel）
   - 添加完成后弹窗汇总：加了几项、xlsx / xls 各多少、有无失败或重复跳过
   - 含合并单元格的表直接拒绝导入（合并区只有左上角有值，导进去必然错位）
   - 自动推断表结构：文件名形如「注释（table_name）」时表名取括号内英文、
@@ -110,6 +110,9 @@ SQL_RUN_DEFAULT = "SELECT 1 AS 连通检查;"
 # 第三页两栏与示例全文共用的等宽字号：12 号在 1080p 上连字段名都要凑近看，
 # 现场反馈"文字字体太小"；三处同源，改这一处就整页一起变
 SQL_RUN_FONT_SIZE = 16
+
+# 两处日志区共用的字号：默认 9 号字现场反馈"太小"，与第三页的可读档对齐
+LOG_FONT_SIZE = 16
 
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
@@ -977,12 +980,16 @@ def meta_export_task(tables, out_root, with_meta, sink):
 
 class DropArea(QWidget):
     files_dropped = Signal(list)
+    clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("点击选择 Excel / ZIP 文件；也可以直接拖到这里")
         lay = QVBoxLayout(self)
-        self.label = QLabel("将 Excel 文件或 ZIP 压缩包拖到此处\n（支持 .xlsx / .xls / .zip，可多选）")
+        self.label = QLabel("将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n"
+                            "（支持 .xlsx / .xls / .zip，可多选）")
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setFont(QFont("", 12))
         lay.addWidget(self.label)
@@ -991,6 +998,11 @@ class DropArea(QWidget):
             "DropArea { border: 2px dashed #888; border-radius: 8px; background: #f7f9fc; }"
             "DropArea:hover { border-color: #2f6feb; background: #eef4ff; }"
         )
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -1084,6 +1096,7 @@ class MainWindow(QWidget):
         # 2.1 文件拖拽区
         self.drop = DropArea()
         self.drop.files_dropped.connect(self.on_files_dropped)
+        self.drop.clicked.connect(self.on_add_files)
 
         # 3. 文件列表
         file_box = QGroupBox("待导入文件（双击表名/字段可编辑）")
@@ -1154,15 +1167,12 @@ class MainWindow(QWidget):
         fl.addLayout(prefix_row)
 
         btns = QHBoxLayout()
-        self.btn_add = QPushButton("添加文件")
-        self.btn_add.clicked.connect(self.on_add_files)
         self.btn_clear = QPushButton("清空列表")
         self.btn_clear.clicked.connect(self.on_clear)
         self.btn_preview = QPushButton("生成表结构预览")
         self.btn_preview.clicked.connect(self.on_preview_structure)
         self.btn_ddl = QPushButton("预览 DDL")
         self.btn_ddl.clicked.connect(self.on_preview_ddl)
-        btns.addWidget(self.btn_add)
         btns.addWidget(self.btn_clear)
         btns.addWidget(self.btn_preview)
         btns.addWidget(self.btn_ddl)
@@ -1177,6 +1187,7 @@ class MainWindow(QWidget):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(2000)
+        self.log.setFont(QFont("Consolas", LOG_FONT_SIZE))
         log_panel = QWidget()
         lp = QVBoxLayout(log_panel)
         lp.setContentsMargins(0, 0, 0, 0)
@@ -1473,6 +1484,7 @@ class MainWindow(QWidget):
         self.sql_log = QPlainTextEdit()
         self.sql_log.setReadOnly(True)
         self.sql_log.setMaximumBlockCount(2000)
+        self.sql_log.setFont(QFont("Consolas", LOG_FONT_SIZE))
 
         # 上半区 = 待处理文件表格 + 它自己的前缀行与操作行；下半区 = 日志。
         # 两者之间一条可拖拽分隔条：一边变高另一边就变窄，做法与 Excel 导入页一致。

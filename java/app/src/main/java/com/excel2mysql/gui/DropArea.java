@@ -28,26 +28,31 @@ import java.util.List;
  */
 public final class DropArea extends javax.swing.JPanel {
 
-    /** 拖进来的路径列表，与「添加文件」选择器共用同一个入口。 */
+    /** 拖进来的路径列表，与点击虚线区打开的选择器共用同一个入口。 */
     public interface Handler {
         void onFiles(List<String> paths);
     }
 
     private static final String HINT =
-            "将 Excel 文件或 ZIP 压缩包拖到此处\n（支持 .xlsx / .xls / .zip，可多选）";
+            "将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n"
+            + "（支持 .xlsx / .xls / .zip，可多选）";
     private static final Color LINE = new Color(0x88, 0x88, 0x88);
     private static final Color LINE_HOVER = new Color(0x2f, 0x6f, 0xeb);
     private static final Color BG = new Color(0xf7, 0xf9, 0xfc);
     private static final Color BG_HOVER = new Color(0xee, 0xf4, 0xff);
 
     private final Handler handler;
+    private final Runnable onChoose;
     private boolean hover;
     private final DropTarget target;
 
-    public DropArea(Handler handler) {
+    public DropArea(Handler handler, Runnable onChoose) {
         this.handler = handler;
+        this.onChoose = onChoose;
         setPreferredSize(new Dimension(200, 96));
         setMinimumSize(new Dimension(120, 80));
+        setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
+        setToolTipText("点击选择 Excel / ZIP 文件；也可以直接拖到这里");
 
         addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
@@ -58,6 +63,13 @@ public final class DropArea extends javax.swing.JPanel {
             @Override
             public void mouseExited(java.awt.event.MouseEvent e) {
                 setHover(false);
+            }
+
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                    fireClick();
+                }
             }
         });
 
@@ -144,6 +156,17 @@ public final class DropArea extends javax.swing.JPanel {
     public void fireDrop(List<String> paths) {
         if (handler != null) {
             handler.onFiles(paths);
+        }
+    }
+
+    /** 自检用：点击区接没接上选择器，以及点一下是否真的触发。 */
+    public boolean hasClickAction() {
+        return onChoose != null;
+    }
+
+    public void fireClick() {
+        if (onChoose != null) {
+            onChoose.run();
         }
     }
 

@@ -20,8 +20,8 @@ public final class LogPanel extends javax.swing.JTextPane {
     private static final Color ERROR_COLOR = new Color(0xc6, 0x28, 0x28);
     private static final int MAX_LINES = 2000;
     private static final int TRIM_TO = 1500;
-    /** 12 号在 1080p 上中文只有米粒大，现场反馈"基本看不清"；默认 14，SQL 执行器按调用方传入。 */
-    private static final int DEFAULT_FONT_SIZE = 14;
+    /** 12 号与 14 号在 1080p 上都偏小，现场两次反馈看不清；所有日志统一 16。 */
+    private static final int DEFAULT_FONT_SIZE = 16;
 
     private final Deque<Entry> entries = new ArrayDeque<Entry>();
 
