@@ -2117,7 +2117,8 @@ utf-8-sig → utf-8 → gbk 严格试解，没这个问题。
 - 新增 `MessageDialog`（`JDialog`，应用内模态），`MainFrame` 的四类结果弹窗
   （添加结果 / 导入完成 / 执行完成 / 任务异常）与 `StructureDialog` 的主键校验
   警告全部改走它，不再出现 `JOptionPane` 的消息框。
-- 正文是只读、可选中、按词折行的 `JTextArea`，字号 **16**，与主界面日志对齐；
+- 正文是只读、可选中、按词折行的 `JTextArea`，字号 **16**（第 45 节起按 DPI 折算为
+  Python 默认 9pt 对应的 18px），与主界面字体同档；
   外面套 `JScrollPane`，竖滚动条按需出现，横向不滚（长路径在 72 列处折行）。
 - 窗口最小 **820×420**，高度按正文行数估算（上限 640），再经 `Windows.clientSize`
   夹进屏幕可用区；可拖动改大小；ESC 与「关闭」都能退出，回车默认落在「关闭」。
@@ -2136,7 +2137,8 @@ utf-8-sig → utf-8 → gbk 严格试解，没这个问题。
 
 ### 44.3 自检与变异
 
-- Swing 自检新增：正文字号不小于 16（钉字面量，不再跟 `FONT_SIZE` 常量自比）；
+- Swing 自检新增：正文字号按 Python 默认 9pt 折成 18px（钉 18 字面量，不再跟
+  `FONT_SIZE` 常量自比；第 45 节把这一档从 16px 抬到 18px）；
   长报错装进滚动区且滚动条真实可见；文本区行数大于 24 且含第 40 条（"第39批"）；
   `MainFrame.popupMessageComponent` 这条显示路径同样不截断；「复制全部」按钮存在且有
   监听；弹窗不小于 820×420、整窗在屏幕可用区内、可改大小。
@@ -2156,3 +2158,93 @@ utf-8-sig → utf-8 → gbk 严格试解，没这个问题。
   `1dc81e302501dfca2458e5f01dc971d9ad4ffa150b94c444423eb8293771a7b5`、
   `503ccc321c7026fa5a3be49bedc8e139ebf1432dce22fd0533b32e0a9a133f8b`。
 - 未覆盖：打包版上真实鼠标滚动与复制观感；本轮未重新打包，桌面产物仍是旧提交构建的。
+
+## 45. Java 界面按屏幕 DPI 折算字号与窗口
+
+现场反馈"特别是 java 版本的 gui，整个系统的字体都比 python 版本的小不少"。
+
+### 45.1 根因
+
+Python 端（PySide6/Qt）的字号按 pt 写：应用默认 Microsoft YaHei UI 9pt，
+日志、SQL 编辑器与示例全文 16pt。Qt 在这台 150% 缩放（144dpi）的屏上把 1pt
+折成 2 个物理像素：9pt 落到 18px、16pt 落到 32px；`resize(1100, 780)` 说的也是
+逻辑像素，实际客户区 1650×1170。
+
+Java 端（JDK8 Swing）把同一批数字当物理像素用：窗口直接摆 1100×780，只有 Python
+的三分之二；日志与 SQL 区写 16 就画 16px，正好是 Python 的一半。主界面标签虽然是
+Windows 外观自带的 18px，但字族是 SimSun，中文观感比 Microsoft YaHei UI 更小更挤；
+`OptionPane` 又单独吃另一档字体。JDK8 的 Windows 后端不认 `sun.java2d.uiScale`，
+只能在代码里折算。
+
+### 45.2 统一折算层
+
+- 新增 `UiScale`：`factor() = max(1, dpi/96)`（本机 1.5）、`px(design)` 把 Qt
+  逻辑像素折成物理像素、`fontPt(pt) = round(pt*dpi/72)` 把点值折成物理像素
+  （9pt → 18px、16pt → 32px）。
+- `apply()` 装系统外观后遍历全部 `*.font` 键，字族统一成 Microsoft YaHei UI、
+  字号统一成 18px，保留各控件原有的粗体/斜体档；`OptionPane.messageFont` 与
+  `OptionPane.buttonFont` 另补。JDK8 的 `UIDefaults.keySet()` 不含 LAF 自带键，
+  必须走 `keys()` 枚举，否则一条默认字体都改不到。
+- 生产入口、Swing 自检、离屏截图三条路共用 `apply()`，自检量到的字体与真实界面同源。
+
+### 45.3 窗口与控件尺寸
+
+- 设计值仍按 Python 的逻辑像素写（主窗 1100×780、消息弹窗 880×420、进度框
+  480×140 等），只有真正摆窗口时才经 `UiScale.px` 折算一次；`e2mWant` 存设计值
+  不变，双端对撞仍比同一个数。消息弹窗起初把宽度先折成 1320 再交给 `clientSize`，
+  结果被折成 1980、顶到屏幕边缘；自检钉住客户区宽度必须是 1320 后暴露并修正。
+- 实测客户区：主窗 1650×1170、进度框 720×210；`Windows.clientSize`、各弹窗内容面板、
+  间距、行高列宽、拖拽区与分栏都走同一折算层。
+- 各区域最终字号：主界面标签/按钮/表头 18px；日志、SQL 编辑器、示例全文 32px；
+  帮助正文 21px（10.5pt）；消息弹窗正文 18px。
+
+### 45.4 帮助页与告警图标
+
+- Swing HTML 渲染器把 CSS 的 px 当 pt 用，实际放大 4/3：写 21px 会画成 28px。
+  `HelpDialog.swingHtml()` 先把 CSS pt 按 DPI 折成目标物理像素，再乘 3/4 写回 px：
+  10.5pt → 15.75px，渲染结果才是 21px。正文以外的样式与 Python 原 CSS 一致。
+- `bodyLineHeight()` 直接量渲染后的首段行高（21px 字号约 29px），防止"字符串写对、
+  画出来仍不对"。
+- 告警条的 ⚠（U+26A0）在 Microsoft YaHei 里没有字形，JDK8 对物理字体不做逐字回退，
+  直接显示是豆腐块。显示文字改为不带 ⚠，左侧自绘黄色三角与感叹号；`hintText()`
+  仍返回带 ⚠ 的原文，双端对撞键保持不变。
+- 图标留位只能靠空边框：Windows 外观下 `JTextField` 的 margin 在 border 为 null 时
+  不进文字排版区（实测 margin.left=100 仍从 x=0 画），告警态用 `createEmptyBorder`
+  在左侧留出图标宽度。
+
+### 45.5 验证
+
+- `java/构建验证.bat`：十步全过，退出码 0；第 10 步自检断言默认字体族与字号、
+  客户区尺寸、弹窗字号、帮助正文折算与渲染行高、告警条显示文字。
+- `java/界面双端对撞.bat`：248 键逐键一致，退出码 0。
+- `.venv/Scripts/python.exe pack_test.py`：通过 578、失败 0、跳过 6，退出码 0
+  （跳过项仍是真实 .xls、真实语料、冻结提交号与真实 MySQL 凭据）。
+- 离屏截图 `shots/java` 与 `shots/py` 各 10 张，逐张同尺寸（主界面均为 1650×1170）；
+  逐屏比对后，标签 18px、日志/SQL 32px、帮助正文 21px、关于与消息弹窗字号一致。
+- 已知未改的观感差异：连接栏输入框 Java 26px 高、Python 31px（控件高度与边框，
+  不是字号）；页签栏与组框边框是 Windows LAF 与 Qt 样式固有差异；帮助页 HTML 表格
+  最后两列的换行位置不同（Swing 的表格列宽分配所致）。
+- 变异抽查六项，逐项真变红后从备份逐字节还原并重编译：
+  - 帮助正文去掉 3/4 折算 → 「说明正文字号没折成 font-size: 15.75px」与
+    「说明正文渲染行高 37px，应接近 21px 字号的 29px」；
+  - 告警条改回 `setText(message)` / `setBorder(null)` → 「告警条显示文字仍是 ⚠ 原文
+    或丢了正文」；
+  - `fontPt` 不做 DPI 折算 → 主界面默认字体、三处 32px、弹窗 18px 与帮助行高
+    共 10 条同时变红；
+  - `Windows.clientSize` 不折算 → 「客户区没按 DPI 折算到 1650x1170」与进度框
+    「客户区应为 720x210」；
+  - `MessageDialog.FONT_SIZE` 写回 16 → 「结果弹窗正文字号不是 Python 默认 9pt
+    折算的 18px」；
+  - 消息弹窗宽度先折算再交给 `clientSize` → 「结果弹窗客户区宽度被重复折算：
+    1980，应为 1320」。
+- 还原后 SHA-256：
+  `HelpDialog.java d728c25f94c92b685af4bb0d72f61c78c7bcb0fb90dec4ac4945ae80d1456d0`、
+  `HintLabel.java 244f5412c4e14040d2b56b8c41368321b0209021b43de37b8a689d73808a8682`、
+  `UiScale.java 132db805d9c086467f7958453958ce3eac01fceb82199f6ae941bcf68e84f7ac`、
+  `Windows.java adbdafe0837b7fa4c443ba5b169ab4234633e43186dee4d011ffd2ce13232c66`、
+  `MessageDialog.java 4e8c4bf3d6a43494182a3e74ffb240c4f37bc9710c5e9ff0d61ddc28ac8f712b`、
+  `MainFrame.java d7c2d37c88928591ee5bff2a2e9ab7980f4d5755828d2d220fd0310036731970`、
+  `GuiMain.java 9dc7648f3000beda6e7d45c2e096c8f51ebba540608338ecc0e6cc7b08309cce`。
+- 截图脚本同步：Python 离屏截图把 `popup_box` 也打桩，否则添加文件的「添加结果」
+  弹窗会永久等一个没人点的确定键；Java `UiShot` 画布按 `UiScale.px` 放大到 1650×1170。
+- 未覆盖：打包版实机观感；本轮未重新打包，桌面产物仍是旧提交构建的。
