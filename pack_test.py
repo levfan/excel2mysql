@@ -739,6 +739,9 @@ check("F13b 口令编码那句给了可操作的出口（改 ASCII 口令 / 换 
       "latin-1" in _PW_HINT and "ASCII" in _PW_HINT and "Java" in _PW_HINT, _PW_HINT)
 check("F13c UnicodeEncodeError 展开里带着那句指引",
       "多半出在口令上" in _enc_err and "JDBC" in _enc_err, _enc_err)
+_io_err = app_main.describe_db_error(FileNotFoundError(2, "No such file or directory"))
+check("F13d 文件读写异常的 errno 不被冒充成 MySQL 错误码",
+      "MySQL" not in _io_err and "FileNotFoundError" in _io_err, _io_err)
 check("F14 超长语句截断但标注原文长度",
       "已截断" in app_main.format_statement("INSERT INTO t VALUES (" + "1," * 3000 + ")"))
 wk = app_main.ImportWorker({"host": "h", "port": 3306, "user": "u", "password": "",
@@ -2282,6 +2285,11 @@ check("O29b 点「保存修改后ddl脚本」才把显示名写进脚本，并�
       and ow2.sql_files[-1]["modified"] is False
       and any(t == "保存完成" for t, _ in POPUPS),
       (ow2.sql_files[-1]["text"], [t for t, _ in POPUPS]))
+_save_pops = [t for title, t in POPUPS if title == "保存完成"]
+_save_flat = _save_pops[-1].replace("\n", "") if _save_pops else ""
+_out_a = os.path.join(os.path.dirname(sql_a), "a_prefix.sql")
+check("O29c 保存完成弹窗列出副本完整路径",
+      ("[已保存] %s" % _out_a) in _save_flat, _save_flat[:120])
 
 # 未选库/无文件时不该弹框（守卫在起线程之前就返回）
 _FakeProgress.made.clear()
@@ -2714,6 +2722,7 @@ qsql = os.path.join(_tmpdir, "两表脚本.sql")
 open(qsql, "w", encoding="utf-8").write(
     "CREATE TABLE `t_one` (`id` INT);\nCREATE TABLE `t_two` (`id` INT);\n")
 sw2 = app_main.MainWindow()
+POPUPS.clear()
 _orig_gofn = app_main.QFileDialog.getOpenFileNames
 app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([qsql], "SQL 脚本 (*.sql)"))
 try:
@@ -2731,6 +2740,29 @@ check("Q24a 建模语句表首列是连续序号，最后一行就是解析出�
 check("Q25 重复添加同一脚本被拦下并写明原因",
       "[跳过] 已在列表" in sw2.sql_log.toPlainText(),
       [l for l in sw2.sql_log.toPlainText().splitlines() if l.startswith("[跳过]")])
+_add_pops = [t for title, t in POPUPS if title == "添加结果"]
+check("Q25a 添加结果弹窗列出完整路径，重复项也写全路径",
+      len(_add_pops) >= 2 and qsql in _add_pops[0].replace("\n", "")
+      and ("[跳过] %s：已在列表" % qsql) in _add_pops[-1].replace("\n", ""),
+      [x.replace("\n", " ")[:80] for x in _add_pops])
+check("Q25b 添加结束在日志里留一行汇总",
+      ("===== 添加完成：1 个脚本，0 个读取失败，0 个重复 =====" in sw2.sql_log.toPlainText()
+       and "===== 添加完成：0 个脚本，0 个读取失败，1 个重复 =====" in sw2.sql_log.toPlainText()),
+      [l for l in sw2.sql_log.toPlainText().splitlines() if l.startswith("=====")])
+POPUPS.clear()
+_missing_sql = os.path.join(_tmpdir, "不存在的脚本.sql")
+app_main.QFileDialog.getOpenFileNames = staticmethod(
+    lambda *a, **k: ([_missing_sql], "SQL 脚本 (*.sql)"))
+try:
+    sw2.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn)
+_fail_pop = [t for title, t in POPUPS if title == "添加结果"]
+check("Q25c 读取失败也进添加结果弹窗，写明完整路径与原因",
+      _fail_pop and ("[读取失败] %s：" % _missing_sql) in _fail_pop[-1].replace("\n", "")
+      and "读取失败" in sw2.sql_log.toPlainText()
+      and len(sw2.sql_files) == 1,
+      _fail_pop[-1:])
 check("Q26 表名清单随加载缓存（刷新表格不必回扫几十万行）",
       len(sw2.sql_files[0].get("tabs") or []) == 2, sw2.sql_files[0].get("tabs"))
 sw2.ed_sql_prefix.setText("ods_")
@@ -2777,6 +2809,23 @@ sw2.on_sql_remove_selected()
 check("Q28 「移除选中文件」按选中行删除并留痕",
       sw2.sql_files == [] and "[移除] 1 个脚本文件" in sw2.sql_log.toPlainText(),
       sw2.sql_files)
+POPUPS.clear()
+sw2._finish_sql_execute({
+    "conn_failed": False, "ok": 1, "fail": 1, "skipped": 1, "cancelled": False,
+    "target": "testdb@127.0.0.1:3306",
+    "files": [{"path": qsql, "status": "ok", "detail": "2 条语句已提交"},
+              {"path": _missing_sql, "status": "fail",
+               "detail": "第 1/2 条语句报错，本文件事务已回滚"},
+              {"path": os.path.join(_tmpdir, "空脚本.sql"), "status": "skip",
+               "detail": "没有可执行的语句"}]})
+_exec_pop = [t for title, t in POPUPS if title == "执行完成"]
+_exec_flat = _exec_pop[-1].replace("\n", "") if _exec_pop else ""
+check("Q28b 执行结果弹窗列目标库与每个文件的完整路径、结局",
+      _exec_flat.startswith("成功 1 个文件，失败 1 个文件。")
+      and "目标库 testdb@127.0.0.1:3306" in _exec_flat
+      and ("[成功] %s：2 条语句已提交" % qsql) in _exec_flat
+      and ("[失败] %s：" % _missing_sql) in _exec_flat
+      and "[跳过]" in _exec_flat, _exec_flat[:120])
 _ser_sql_a = os.path.join(tempfile.mkdtemp(prefix="pt_oser_"), "a.sql")
 _ser_sql_b = os.path.join(tempfile.mkdtemp(prefix="pt_oser_"), "b.sql")
 open(_ser_sql_a, "w", encoding="utf-8").write(
@@ -3692,18 +3741,18 @@ _TALL_TEXT = "\n".join("第 %d 行：这一行本身就不短，加上中文标�
                        % i for i in range(1, 31))
 _COLS = lambda s: sum(app_main._display_cols(c) for c in s)
 
-check("U1 折行预算与上限钉死在 56 列 / 22 行",
-      app_main.POPUP_WRAP_COLS == 56 and app_main.POPUP_MAX_LINES == 22,
+check("U1 折行预算与上限钉死在 72 列 / 24 行",
+      app_main.POPUP_WRAP_COLS == 72 and app_main.POPUP_MAX_LINES == 24,
       (app_main.POPUP_WRAP_COLS, app_main.POPUP_MAX_LINES))
 _w1 = app_main.wrap_popup_text(_LONG_ONE_LINE)
 check("U2 一条长文被折进列预算里（不再靠控件库横向撑宽）",
-      all(_COLS(ln) <= 56 for ln in _w1.split("\n")) and len(_w1.split("\n")) > 1,
+      all(_COLS(ln) <= 72 for ln in _w1.split("\n")) and len(_w1.split("\n")) > 1,
       [_COLS(ln) for ln in _w1.split("\n")])
 check("U3 折行只加换行、不改字",
       _w1.replace("\n", "") == _LONG_ONE_LINE.replace("\n", ""), _w1[:60])
 _w2 = app_main.wrap_popup_text(_TALL_TEXT)
-check("U4 放不下的正文换成一句『去日志看』，行数不超 22",
-      len(_w2.split("\n")) <= 22 and "完整内容见底部日志" in _w2,
+check("U4 放不下的正文换成一句『去日志看』，行数不超 24",
+      len(_w2.split("\n")) <= 24 and "完整内容见底部日志" in _w2,
       len(_w2.split("\n")))
 check("U5 未截断时原文的分段被保留",
       app_main.wrap_popup_text("第一行\n第二行").replace("\n", "") == "第一行第二行",
@@ -3734,7 +3783,7 @@ POPUPS.clear()
 app_main.popup_box(None, "任务异常", _LONG_ONE_LINE, "critical")
 _shown = POPUPS[-1][1] if POPUPS else ""
 check("U8 消息弹窗真的走了折行那一道（首屏不会横向撑出屏外）",
-      "\n" in _shown and all(_COLS(ln) <= 56 for ln in _shown.split("\n")), _shown[:60])
+      "\n" in _shown and all(_COLS(ln) <= 72 for ln in _shown.split("\n")), _shown[:60])
 check("U9 折行后说的话与原来同一句",
       _shown.replace("\n", "") == _LONG_ONE_LINE, _shown[:60])
 _copy_box = app_main.build_popup_box(
@@ -3749,8 +3798,8 @@ check("U11 结果弹窗正文可用鼠标选中并 Ctrl+C 复制",
       _copy_labels and all(
           bool(x.textInteractionFlags() & _Qt.TextSelectableByMouse) for x in _copy_labels),
       [(x.text()[:12], str(x.textInteractionFlags())) for x in _copy_labels])
-check("U11b 结果弹窗至少 620x220，产物路径不被挤成一小块",
-      _copy_box.width() >= 620 and _copy_box.height() >= 220,
+check("U11b 结果弹窗至少 820x420，产物路径与文件清单看得完整",
+      _copy_box.width() >= 820 and _copy_box.height() >= 420,
       (_copy_box.width(), _copy_box.height()))
 _copy_box.close()
 _copy_box.deleteLater()
