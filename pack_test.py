@@ -1126,8 +1126,8 @@ finally:
 check("H17 文件选择框标题与过滤器都含 zip（运行时实测，非 grep 源码）",
       "ZIP" in dlg_args.get("title", "") and "*.zip" in dlg_args.get("filter", ""),
       f"{dlg_args.get('title')} | {dlg_args.get('filter')}")
-from PySide6.QtCore import Qt as _Qt
-from PySide6.QtTest import QTest
+from PySide6.QtCore import Qt as _Qt, QEvent as _QEvent, QPoint as _QPoint
+from PySide6.QtGui import QMouseEvent as _QMouseEvent
 from PySide6.QtWidgets import QPushButton as _QPushButton
 _click_win = app_main.MainWindow()
 _click_args = {}
@@ -1140,7 +1140,9 @@ def _fake_click_dialog(parent, title, directory, filt, *a, **k):
 
 QFileDialog.getOpenFileNames = staticmethod(_fake_click_dialog)
 try:
-    QTest.mouseClick(_click_win.drop, _Qt.LeftButton)
+    _click_event = _QMouseEvent(_QEvent.MouseButtonRelease, _QPoint(10, 10),
+                                _Qt.LeftButton, _Qt.LeftButton, _Qt.NoModifier)
+    _click_win.drop.mouseReleaseEvent(_click_event)
 finally:
     QFileDialog.getOpenFileNames = staticmethod(_orig_dialog)
 check("H17c 点击虚线区就弹文件选择器（走真实鼠标事件）",
