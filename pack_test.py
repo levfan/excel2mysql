@@ -1099,12 +1099,43 @@ finally:
 check("H17 文件选择框标题与过滤器都含 zip（运行时实测，非 grep 源码）",
       "ZIP" in dlg_args.get("title", "") and "*.zip" in dlg_args.get("filter", ""),
       f"{dlg_args.get('title')} | {dlg_args.get('filter')}")
+from PySide6.QtCore import Qt as _Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QPushButton as _QPushButton
+_click_win = app_main.MainWindow()
+_click_args = {}
+
+
+def _fake_click_dialog(parent, title, directory, filt, *a, **k):
+    _click_args.update(title=title, filter=filt)
+    return [], filt
+
+
+QFileDialog.getOpenFileNames = staticmethod(_fake_click_dialog)
+try:
+    QTest.mouseClick(_click_win.drop, _Qt.LeftButton)
+finally:
+    QFileDialog.getOpenFileNames = staticmethod(_orig_dialog)
+check("H17c 点击虚线区就弹文件选择器（走真实鼠标事件）",
+      "ZIP" in _click_args.get("title", "") and "*.zip" in _click_args.get("filter", ""),
+      _click_args)
+check("H17d 首屏不再有「添加文件」按钮",
+      all(b.text() != "添加文件" for b in _click_win.findChildren(_QPushButton)),
+      [b.text() for b in _click_win.findChildren(_QPushButton)][:8])
 drop = app_main.DropArea()
-check("H17b 拖拽区文案写明支持三种格式（运行时取 QLabel 实际文本）",
-      ".xlsx" in drop.label.text() and ".xls" in drop.label.text()
-      and ".zip" in drop.label.text(), drop.label.text().replace("\n", " / "))
+check("H17b 拖拽区文案写明三种格式且带点击提示（运行时取 QLabel 实际文本）",
+      all(x in drop.label.text() for x in (".xlsx", ".xls", ".zip", "点击选择文件")),
+      drop.label.text().replace("\n", " / "))
 check("H18 IMPORT_EXTS 覆盖三种扩展名",
       app_main.IMPORT_EXTS == (".xlsx", ".xls", ".zip"), app_main.IMPORT_EXTS)
+check("H18b 首屏日志 16 号等宽字体（默认 9 号字现场看不清）",
+      w3.log.font().family() == "Consolas"
+      and w3.log.font().pointSize() == app_main.LOG_FONT_SIZE == 16,
+      (w3.log.font().family(), w3.log.font().pointSize()))
+check("H18c SQL 脚本页日志与首屏同一档字号",
+      w3.sql_log.font().family() == w3.log.font().family()
+      and w3.sql_log.font().pointSize() == w3.log.font().pointSize(),
+      (w3.sql_log.font().family(), w3.sql_log.font().pointSize()))
 
 section("I .xls 老格式支持（xlrd）")
 
@@ -2383,7 +2414,7 @@ app_main.HelpDialog = _real_help
 
 # 文档漂移守卫：说明里写到的按钮名必须是界面上真实存在的文案
 from PySide6.QtWidgets import QPushButton
-_labels = ["添加文件", "批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
+_labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "开始导入", "添加 SQL 文件", "保存修改后脚本", "执行脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
            "示例 (?)", "清空编辑区", "清空结果区"]
@@ -2393,6 +2424,8 @@ check("P15 说明里点名的按钮在界面上确实存在", not _absent, _abse
 _doc_all = "".join(b for _a, _t, b in HELP_SECTIONS)
 _missing_in_doc = [t for t in _labels if t not in _doc_all]
 check("P16 每个按钮都被使用说明覆盖到", not _missing_in_doc, _missing_in_doc)
+check("P16b 说明交代点击虚线区就能选文件",
+      "点击虚线区" in _doc_all or "点一下虚线区" in _doc_all)
 check("P17 进度框章节写清了「后台线程 + 可取消 + 逐项进度」",
       "进度框与耗时" in _doc_all and "模态进度框" in _doc_all
       and "当前这一项做完" in _doc_all)

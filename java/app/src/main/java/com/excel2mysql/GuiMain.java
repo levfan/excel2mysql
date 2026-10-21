@@ -496,13 +496,16 @@ public final class GuiMain {
         for (javax.swing.AbstractButton b : frame.buttons()) {
             texts.add(b.getText());
         }
-        String[] wanted = {"添加文件", "清空列表", "生成表结构预览", "预览 DDL", "清除日志",
+        String[] wanted = {"清空列表", "生成表结构预览", "预览 DDL", "清除日志",
                 "批量应用前缀", "替换首个前缀", "连接并加载库", "开始导入",
                 "生成标准excel文件", "生成简易excel文件"};
         for (String w : wanted) {
             if (!texts.contains(w)) {
                 problems.add("界面缺少按钮：" + w);
             }
+        }
+        if (texts.contains("添加文件")) {
+            problems.add("「添加文件」按钮应已移除，加文件走点击虚线区");
         }
         if (frame.tables().isEmpty()) {
             problems.add("前缀自检没有可改的表");
@@ -803,8 +806,20 @@ public final class GuiMain {
         if (!drop.acceptsDrops()) {
             problems.add("拖拽区没挂上接收器，拖文件进来不会有任何反应");
         }
-        if (!drop.hintText().contains("拖到此处") || !drop.hintText().contains(".zip")) {
-            problems.add("拖拽区提示没交代清楚能拖什么：" + drop.hintText());
+        if (!drop.hintText().contains("拖到此处") || !drop.hintText().contains(".zip")
+                || !drop.hintText().contains("点击选择文件")) {
+            problems.add("拖拽区提示没交代清楚能拖什么/能点：" + drop.hintText());
+        }
+        if (!drop.hasClickAction()) {
+            problems.add("拖拽区没接上点击选择文件的动作");
+        }
+        // 单独造一个接收区验证点击回调真的会响，绕开 JFileChooser 的模态框
+        final int[] probeClicks = {0};
+        com.excel2mysql.gui.DropArea probe = new com.excel2mysql.gui.DropArea(
+                paths -> { }, () -> probeClicks[0]++);
+        probe.fireClick();
+        if (probeClicks[0] != 1) {
+            problems.add("点击拖拽区没有触发选择文件（回调次数 " + probeClicks[0] + "）");
         }
         java.awt.Image icon = frame.getIconImage();
         if (icon == null) {
@@ -1237,8 +1252,8 @@ public final class GuiMain {
     }
 
     /**
-     * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：现场反馈 12 号"基本看不清"，这里钉 14。
-     * 第三页的编辑区与结果区更常盯着看，单独抬到 16，由 sql_run_tab 里那组断言管。
+     * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：12 号、14 号都被现场判过太小，钉 16。
+     * 第三页的编辑区与结果区也在这档，由 sql_run_tab 里那组断言管。
      */
     private static void checkLogFonts(MainFrame frame, List<String> problems) {
         com.excel2mysql.gui.LogPanel[] logs = {
@@ -1249,8 +1264,8 @@ public final class GuiMain {
             if (f == null || !"Monospaced".equals(f.getFamily())) {
                 problems.add(names[i] + "不是等宽字体：" + (f == null ? "无字体" : f.getFamily()));
             }
-            if (f == null || f.getSize() != 14) {
-                problems.add(names[i] + "字号不是 14：" + (f == null ? "无字体" : f.getSize()));
+            if (f == null || f.getSize() != 16) {
+                problems.add(names[i] + "字号不是 16：" + (f == null ? "无字体" : f.getSize()));
             }
         }
         java.awt.Font base = logs[0].getFont();
@@ -1740,7 +1755,7 @@ public final class GuiMain {
             for (javax.swing.AbstractButton b : frame.buttons()) {
                 onUi.add(b.getText());
             }
-            String[] named = {"添加文件", "批量应用前缀", "替换首个前缀", "生成表结构预览",
+            String[] named = {"批量应用前缀", "替换首个前缀", "生成表结构预览",
                     "预览 DDL", "开始导入", "添加 SQL 文件", "保存修改后脚本",
                     "执行脚本到当前库", "连接并加载库",
                     "生成标准excel文件", "生成简易excel文件", "示例 (?)",
@@ -1752,6 +1767,9 @@ public final class GuiMain {
                 if (!doc.contains(n)) {
                     problems.add("按钮没被使用说明覆盖：" + n);
                 }
+            }
+            if (!doc.contains("点击虚线区选文件") && !doc.contains("点一下虚线区")) {
+                problems.add("使用说明没交代点击虚线区就能选文件");
             }
         } finally {
             hd.dispose();
