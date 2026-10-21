@@ -377,6 +377,10 @@ def main():
     win._add_files(files)
     app.processEvents()
     put("loaded.names", names(win))
+    put("file.serial", "%s=%s" % (
+        win.file_table.horizontalHeaderItem(0).text(),
+        ",".join(win.file_table.item(i, 0).text()
+                 for i in range(win.file_table.rowCount()))))
     dump_table("file", win.file_table)
     for t in ("开始导入", "生成标准excel文件", "生成简易excel文件"):
         put("loaded.on.%s" % t, btn_on(win, t))
@@ -391,32 +395,32 @@ def main():
     sizes = sorted(ic.availableSizes(), key=lambda s: max(s.width(), s.height()))
     put("window.icon", "none" if not sizes
         else "max=%d" % max(sizes[-1].width(), sizes[-1].height()))
-    tip0 = win.file_table.item(0, 0)
+    tip0 = win.file_table.item(0, 1)
     put("file.tooltip.0", tip0.toolTip() if tip0 else "")
     # 文件表只有「表名」列可编辑；单击改名、非法名恢复原名，两条线逐句话比
     put("file.rename.editable", "|".join(
         str(int(bool(win.file_table.item(0, c).flags() & Qt.ItemIsEditable)))
-        for c in (1, 0, 2)))
+        for c in (2, 0, 3)))
     _rename_old = win.tables[0]["table_name"]
-    win.file_table.item(0, 1).setText(_rename_old + "_probe")
+    win.file_table.item(0, 2).setText(_rename_old + "_probe")
     app.processEvents()
     _log_lines = [ln for ln in win.log.toPlainText().splitlines() if ln.strip()]
     put("file.rename.ok", "%s|%s|%s" % (
         win.tables[0]["table_name"], win.tables[0]["base_table_name"],
         _log_lines[-1] if _log_lines else ""))
     POPUPS.clear()
-    win.file_table.item(0, 1).setText("")
+    win.file_table.item(0, 2).setText("")
     app.processEvents()
     put("file.rename.empty", "%s|%s" % (win.tables[0]["table_name"], popup_text()))
     POPUPS.clear()
-    win.file_table.item(0, 1).setText("bad name")
+    win.file_table.item(0, 2).setText("bad name")
     app.processEvents()
     put("file.rename.bad", "%s|%s" % (win.tables[0]["table_name"], popup_text()))
     POPUPS.clear()
-    win.file_table.item(0, 1).setText(win.tables[1]["table_name"])
+    win.file_table.item(0, 2).setText(win.tables[1]["table_name"])
     app.processEvents()
     put("file.rename.dupe", "%s|%s" % (win.tables[0]["table_name"], popup_text()))
-    win.file_table.item(0, 1).setText(_rename_old)
+    win.file_table.item(0, 2).setText(_rename_old)
     app.processEvents()
     put("file.rename.restored", "%s|%s" % (
         win.tables[0]["table_name"], win.tables[0]["base_table_name"]))
@@ -487,7 +491,7 @@ def main():
     put("zip.log", win.log.toPlainText()[len(mark):].strip())
     put("zip.popup", popup_text())
     _last = win.file_table.rowCount() - 1
-    _it = win.file_table.item(_last, 0)
+    _it = win.file_table.item(_last, 1)
     put("zip.tooltip", _it.toolTip() if _it else "")
 
     # ---- 前缀两步 ----

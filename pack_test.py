@@ -1097,7 +1097,7 @@ w3 = app_main.MainWindow()
 w3._add_files([zp1])
 check("H11 GUI 层：拖入 zip 后展开成待导入条目", len(w3.tables) == 2,
       [t["table_name"] for t in w3.tables])
-tip = w3.file_table.item(0, 0).toolTip()
+tip = w3.file_table.item(0, 1).toolTip()
 check("H12 文件列表 tooltip 标出来自哪个包的哪个内部路径",
       tip.startswith("one.zip!") and "水库基础信息.xlsx" in tip, tip)
 check("H13 日志报告展开与忽略数量",
@@ -2208,7 +2208,7 @@ check("O19 「添加文件」弹了进度框并等任务收尾",
       d2 is not None and "解析" in d2.title and d2.accepted,
       [d.title for d in _FakeProgress.made])
 check("O20 解析结果照常落到待导入列表",
-      len(ow.tables) == 1 and ow.file_table.item(0, 0).text() == "甲工程.xlsx",
+      len(ow.tables) == 1 and ow.file_table.item(0, 1).text() == "甲工程.xlsx",
       [t["table_name"] for t in ow.tables])
 check("O21 单个散装文件按解析阶段计项，做完正好 100%",
       {u[1] for u in d2.updates} == {5}
@@ -2247,8 +2247,8 @@ check("O25 「批量应用前缀」走模态进度框",
       d4 is not None and "前缀" in d4.title and d4.accepted)
 check("O26 前缀按表计项（2 张表 + 1 次去重）并在完成后刷新列表",
       len(d4.updates) == 4 and d4.updates[-1][0] == d4.updates[-1][1]
-      and ow2.file_table.item(0, 1).text().startswith("dim_"),
-      [ow2.file_table.item(i, 1).text() for i in range(ow2.file_table.rowCount())])
+      and ow2.file_table.item(0, 2).text().startswith("dim_"),
+      [ow2.file_table.item(i, 2).text() for i in range(ow2.file_table.rowCount())])
 
 # SQL 页：保存与改名也走同一套（读盘/写盘这种大 IO 不能在主线程）
 sql_a = os.path.join(tempfile.mkdtemp(prefix="pt_osql_"), "a.sql")
@@ -2269,10 +2269,10 @@ _FakeProgress.made.clear()
 ow2.ed_sql_prefix.setText("ods_")
 ow2.on_sql_apply_prefix()
 check("O29 SQL「批量应用前缀」只改页面显示：不弹进度框、脚本正文一个字不动",
-      _FakeProgress.made == [] and ow2.sql_table.item(0, 3).text() == "ods_t_a"
+      _FakeProgress.made == [] and ow2.sql_table.item(0, 4).text() == "ods_t_a"
       and "`ods_t_a`" not in ow2.sql_files[-1]["text"]
       and ow2.sql_files[-1]["modified"] is False,
-      (_FakeProgress.made, ow2.sql_table.item(0, 3).text()))
+      (_FakeProgress.made, ow2.sql_table.item(0, 4).text()))
 POPUPS.clear()
 _FakeProgress.made.clear()
 ow2.on_sql_save_modified()
@@ -2723,6 +2723,11 @@ finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn)
 check("Q24 「添加 SQL 文件」加载进列表并逐表展示",
       len(sw2.sql_files) == 1 and sw2.sql_table.rowCount() == 2, sw2.sql_table.rowCount())
+_sql_serials = [sw2.sql_table.item(i, 0).text() for i in range(sw2.sql_table.rowCount())]
+check("Q24a 建模语句表首列是连续序号，最后一行就是解析出的表数",
+      sw2.sql_table.horizontalHeaderItem(0).text() == "序号"
+      and _sql_serials == ["1", "2"]
+      and _sql_serials[-1] == str(sw2.sql_table.rowCount()), _sql_serials)
 check("Q25 重复添加同一脚本被拦下并写明原因",
       "[跳过] 已在列表" in sw2.sql_log.toPlainText(),
       [l for l in sw2.sql_log.toPlainText().splitlines() if l.startswith("[跳过]")])
@@ -2730,8 +2735,8 @@ check("Q26 表名清单随加载缓存（刷新表格不必回扫几十万行）
       len(sw2.sql_files[0].get("tabs") or []) == 2, sw2.sql_files[0].get("tabs"))
 sw2.ed_sql_prefix.setText("ods_")
 sw2.on_sql_apply_prefix()
-_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
-_orig = [sw2.sql_table.item(i, 1).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
+_orig = [sw2.sql_table.item(i, 2).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27 加前缀后「当前表名」更新而「原表名」保持原样，脚本未改",
       _cur == ["ods_t_one", "ods_t_two"] and _orig == ["t_one", "t_two"]
       and "`ods_t_one`" not in sw2.sql_files[0]["text"]
@@ -2743,27 +2748,27 @@ check("Q27a 前缀只改显示时，双击行看到的元数据标题也用显�
 if _qmeta is not None:
     _qmeta.close()
 sw2.on_sql_apply_prefix()                     # 同一前缀再点一次
-_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27d 同一前缀重复点不叠加，始终只多一段",
       _cur == ["ods_t_one", "ods_t_two"], _cur)
 sw2.ed_sql_prefix.setText("change")
 sw2.on_sql_replace_prefix()                   # 换首段接在当前显示名之后
-_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27e 换首段基于当前显示名：ods_t_one → change_t_one",
       _cur == ["change_t_one", "change_t_two"]
       and "`change_t_one`" not in sw2.sql_files[0]["text"], _cur)
 sw2.ed_sql_prefix.setText("")
 sw2.on_sql_apply_prefix()
-_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27b 前缀清空后再点一次，表名显示恢复脚本原名且正文仍未改",
       _cur == ["t_one", "t_two"] and "前缀已清空" in sw2.sql_log.toPlainText()
       and sw2.sql_files[0]["modified"] is False, _cur)
 sw2.ed_sql_prefix.setText("ods_")
 sw2.on_sql_apply_prefix()
-sw2.sql_table.item(0, 3).setText("t_one")
+sw2.sql_table.item(0, 4).setText("t_one")
 _app.processEvents()
 check("Q27c 手动把显示名改回脚本里的原名 = 只撤掉这一行的显示前缀",
-      sw2.sql_table.item(0, 3).text() == "t_one"
+      sw2.sql_table.item(0, 4).text() == "t_one"
       and "显示前缀已移除，脚本未改写" in sw2.sql_log.toPlainText()
       and "t_one" not in sw2.sql_files[0].get("display_map", {}), 
       sw2.sql_files[0].get("display_map"))
@@ -2772,6 +2777,22 @@ sw2.on_sql_remove_selected()
 check("Q28 「移除选中文件」按选中行删除并留痕",
       sw2.sql_files == [] and "[移除] 1 个脚本文件" in sw2.sql_log.toPlainText(),
       sw2.sql_files)
+_ser_sql_a = os.path.join(tempfile.mkdtemp(prefix="pt_oser_"), "a.sql")
+_ser_sql_b = os.path.join(tempfile.mkdtemp(prefix="pt_oser_"), "b.sql")
+open(_ser_sql_a, "w", encoding="utf-8").write(
+    "CREATE TABLE `t_a` (`id` INT);\nCREATE TABLE `t_a2` (`id` INT);\n")
+open(_ser_sql_b, "w", encoding="utf-8").write("CREATE TABLE `t_b` (`id` INT);\n")
+for _p in (_ser_sql_a, _ser_sql_b):
+    sw2.sql_files.append({"path": _p, "text": open(_p, encoding="utf-8").read(),
+                          "modified": False, "rename_map": {}})
+sw2._refresh_sql_table()
+_serials = [sw2.sql_table.item(i, 0).text() for i in range(sw2.sql_table.rowCount())]
+check("Q28a 多个脚本文件的建模语句共用一套连续序号，最后一行即总数",
+      _serials == ["1", "2", "3"]
+      and _serials[-1] == str(sw2.sql_table.rowCount()),
+      _serials)
+sw2.sql_files = []
+sw2._refresh_sql_table()
 
 # ---- 空列表时的预览入口：只提示，不弹空窗 ----
 ew = app_main.MainWindow()
@@ -3054,7 +3075,7 @@ rw3._add_files([f1, f2, f3])
 rw3.ed_prefix.setText("change")
 POPUPS.clear()
 rw3.btn_replace_prefix.click()
-_names = [rw3.file_table.item(i, 1).text() for i in range(rw3.file_table.rowCount())]
+_names = [rw3.file_table.item(i, 2).text() for i in range(rw3.file_table.rowCount())]
 check("R20 点「替换首个前缀」后表格里的表名按首段替换",
       _names == ["change_t_order", "change_table2", "users"], _names)
 check("R21 逐条回报旧→新，并单独说明没改的那张",
@@ -3067,8 +3088,8 @@ check("R22 汇总写明改了几张、跳过几张",
 rw3.ed_prefix.setText("dim_")
 rw3.on_apply_prefix()
 check("R23 替换后的表名成为新基础名，再加前缀基于它算",
-      rw3.file_table.item(0, 1).text() == "dim_change_t_order",
-      [rw3.file_table.item(i, 1).text() for i in range(3)])
+      rw3.file_table.item(0, 2).text() == "dim_change_t_order",
+      [rw3.file_table.item(i, 2).text() for i in range(3)])
 
 rw4 = _legacy_naming(app_main.MainWindow())
 rw4._add_files([f1])
@@ -3102,8 +3123,8 @@ finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn2)
 sw3.ed_sql_prefix.setText("change")
 sw3.btn_sql_replace.click()
-_cur = [sw3.sql_table.item(i, 3).text() for i in range(sw3.sql_table.rowCount())]
-_orig = [sw3.sql_table.item(i, 1).text() for i in range(sw3.sql_table.rowCount())]
+_cur = [sw3.sql_table.item(i, 4).text() for i in range(sw3.sql_table.rowCount())]
+_orig = [sw3.sql_table.item(i, 2).text() for i in range(sw3.sql_table.rowCount())]
 check("R27 SQL 页替换后「当前表名」更新、「原表名」仍是最初的名字",
       _cur == ["change_t_order", "change_table2", "users"]
       and _orig == ["ods_t_order", "adb_table2", "users"], (_orig, _cur))
@@ -3149,7 +3170,7 @@ check("R31 「替换首个前缀」走模态进度框，按表计项且跳过的
 _FakeProgress.made.clear()
 sw3.ed_sql_prefix.setText("ods3")
 sw3.btn_sql_replace.click()
-_cur = [sw3.sql_table.item(i, 3).text() for i in range(sw3.sql_table.rowCount())]
+_cur = [sw3.sql_table.item(i, 4).text() for i in range(sw3.sql_table.rowCount())]
 check("R32 SQL 页替换同样只改显示：不弹进度框、脚本正文保持保存时的样子",
       _FakeProgress.made == [] and _cur == ["ods3_t_order", "ods3_table2", "users"]
       and "`change_t_order`" in sw3.sql_files[0]["text"]
@@ -3293,9 +3314,9 @@ try:
 finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn5)
 check("R44 未勾大写时清单沿用脚本原名",
-      nw.sql_table.item(0, 3).text() == "t_case9"
+      nw.sql_table.item(0, 4).text() == "t_case9"
       and nw._sql_rows[0]["actual"] == "t_case9",
-      (nw.sql_table.item(0, 3).text(), nw._sql_rows[0]["actual"]))
+      (nw.sql_table.item(0, 4).text(), nw._sql_rows[0]["actual"]))
 POPUPS.clear()
 nw.chk_sql_upper.setChecked(True)
 _nlog = nw.sql_log.toPlainText()
@@ -3304,9 +3325,9 @@ check("R44b 第二页大小写切换写进日志：清单、元数据、生成�
       "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）" in _nlog,
       _nlog.splitlines()[-1:])
 check("R44c 已加载的行切换大写后立即刷新，实际脚本名仍保持原样",
-      nw.sql_table.item(0, 3).text() == "T_CASE9"
+      nw.sql_table.item(0, 4).text() == "T_CASE9"
       and nw._sql_rows[0]["actual"] == "t_case9",
-      (nw.sql_table.item(0, 3).text(), nw._sql_rows[0]["actual"]))
+      (nw.sql_table.item(0, 4).text(), nw._sql_rows[0]["actual"]))
 _meta = nw._build_sql_metadata_dialog(0)
 check("R45 双击 SQL 行可查看该表元数据，字段随大写开关显示",
       _meta is not None and _meta.tableWidget().rowCount() == 3
@@ -3319,7 +3340,7 @@ from PySide6.QtWidgets import QAbstractItemDelegate as _QDelegate
 
 
 def _edit_sql_name(row, name):
-    cell = nw.sql_table.item(row, 3)
+    cell = nw.sql_table.item(row, 4)
     nw.sql_table.setCurrentItem(cell)
     nw.sql_table.editItem(cell)
     _app.processEvents()
@@ -3328,7 +3349,7 @@ def _edit_sql_name(row, name):
         return False
     nw.sql_table.closeEditor(editor[0], _QDelegate.NoHint)
     _app.processEvents()
-    nw.sql_table.item(row, 3).setText(name)
+    nw.sql_table.item(row, 4).setText(name)
     _app.processEvents()
     return True
 
@@ -3338,8 +3359,8 @@ check("R46 双击当前表名可直接编辑，并同步改写这一行脚本的
       nw.sql_files[0]["text"] != _nrow_text_before
       and "CREATE TABLE `manual_case`" in nw.sql_files[0]["text"]
       and nw._sql_rows[0]["actual"] == "manual_case"
-      and nw.sql_table.item(0, 3).text() == "MANUAL_CASE",
-      (nw._sql_rows[0]["actual"], nw.sql_table.item(0, 3).text()))
+      and nw.sql_table.item(0, 4).text() == "MANUAL_CASE",
+      (nw._sql_rows[0]["actual"], nw.sql_table.item(0, 4).text()))
 _edit_sql_name(0, "t_case9")
 _ntext = _nrow_text_before
 nout = os.path.join(_tmpdir, "sqlgen_name_out")
@@ -3380,11 +3401,16 @@ check("R49b 正文自带 U+FFFD 的 UTF-8 脚本仍按 UTF-8 解码",
 # ---- Excel 导入页：单击表名单独改一张表 ----
 rw6 = _legacy_naming(app_main.MainWindow())
 rw6._add_files([f1, f2, f3])
-_file_flags = [bool(rw6.file_table.item(0, c).flags() & Qt.ItemIsEditable) for c in range(6)]
+_file_serials = [rw6.file_table.item(i, 0).text() for i in range(rw6.file_table.rowCount())]
+check("R49c 文件表首列是连续序号，行数就是当前待导入文件数",
+      rw6.file_table.horizontalHeaderItem(0).text() == "序号"
+      and _file_serials == ["1", "2", "3"]
+      and len(_file_serials) == len(rw6.tables), _file_serials)
+_file_flags = [bool(rw6.file_table.item(0, c).flags() & Qt.ItemIsEditable) for c in range(7)]
 check("R50 文件表只有「表名」列可编辑，其余列仍只读",
-      _file_flags == [False, True, False, False, False, False], _file_flags)
+      _file_flags == [False, False, True, False, False, False, False], _file_flags)
 _enter_old = rw6.tables[0]["table_name"]
-rw6.on_file_table_clicked(0, 1)
+rw6.on_file_table_clicked(0, 2)
 _app.processEvents()
 _editors = rw6.file_table.findChildren(app_main.QLineEdit)
 check("R51 单击「表名」直接进入编辑器", bool(_editors),
@@ -3398,18 +3424,18 @@ if _editors:
     _app.processEvents()
 check("R51c 编辑器里回车提交改名，编辑器随后关闭",
       rw6.tables[0]["table_name"] == "enter_name"
-      and rw6.file_table.item(0, 1).text() == "enter_name"
+      and rw6.file_table.item(0, 2).text() == "enter_name"
       and not rw6.file_table.findChildren(app_main.QLineEdit),
-      (rw6.tables[0]["table_name"], rw6.file_table.item(0, 1).text(),
+      (rw6.tables[0]["table_name"], rw6.file_table.item(0, 2).text(),
        len(rw6.file_table.findChildren(app_main.QLineEdit))))
 _ed_count = len(rw6.file_table.findChildren(app_main.QLineEdit))
-rw6.on_file_table_clicked(0, 2)
+rw6.on_file_table_clicked(0, 3)
 _app.processEvents()
 check("R51b 单击其他列不会弹编辑器",
       len(rw6.file_table.findChildren(app_main.QLineEdit)) == _ed_count)
-rw6.file_table.item(0, 1).setText(_enter_old)
+rw6.file_table.item(0, 2).setText(_enter_old)
 _app.processEvents()
-rw6.file_table.item(1, 1).setText("manual_orders")
+rw6.file_table.item(1, 2).setText("manual_orders")
 _app.processEvents()
 check("R52 改一张表的表名只动这一张，基础表名同步更新",
       [t["table_name"] for t in rw6.tables] == ["ods_t_order", "manual_orders", "users"]
@@ -3432,30 +3458,30 @@ check("R53b 清空前缀恢复基础名（手动名保留）",
       [t["table_name"] for t in rw6.tables] == ["ods_t_order", "manual_orders", "users"],
       [t["table_name"] for t in rw6.tables])
 POPUPS.clear()
-rw6.file_table.item(1, 1).setText("")
+rw6.file_table.item(1, 2).setText("")
 _app.processEvents()
 check("R54 空表名被拦下并恢复原名",
       rw6.tables[1]["table_name"] == "manual_orders"
       and any("表名不能为空" in x and "已恢复原表名「manual_orders」" in x
               for _, x in POPUPS), POPUPS[-1] if POPUPS else "无弹窗")
 POPUPS.clear()
-rw6.file_table.item(1, 1).setText("bad name!")
+rw6.file_table.item(1, 2).setText("bad name!")
 _app.processEvents()
 check("R55 含空格/标点的表名被拦下并恢复",
       rw6.tables[1]["table_name"] == "manual_orders"
       and any("含非法字符" in x for _, x in POPUPS), POPUPS[-1] if POPUPS else "无弹窗")
 POPUPS.clear()
-rw6.file_table.item(1, 1).setText(rw6.tables[0]["table_name"])
+rw6.file_table.item(1, 2).setText(rw6.tables[0]["table_name"])
 _app.processEvents()
 check("R56 与其他表重名被拦下并恢复",
       rw6.tables[1]["table_name"] == "manual_orders"
       and any("重名" in x for _, x in POPUPS), POPUPS[-1] if POPUPS else "无弹窗")
-rw6.file_table.item(1, 1).setText("  `manual_orders`  ")
+rw6.file_table.item(1, 2).setText("  `manual_orders`  ")
 _app.processEvents()
 check("R57 粘贴带反引号/空白的名字被规范成裸表名",
       rw6.tables[1]["table_name"] == "manual_orders"
-      and rw6.file_table.item(1, 1).text() == "manual_orders",
-      rw6.file_table.item(1, 1).text())
+      and rw6.file_table.item(1, 2).text() == "manual_orders",
+      rw6.file_table.item(1, 2).text())
 _real_sd = app_main.StructureDialog
 _opened_sd = []
 
@@ -3470,7 +3496,7 @@ class _ProbeStructure(object):
 
 app_main.StructureDialog = _ProbeStructure
 try:
-    rw6.on_edit_structure_row(0, 1)
+    rw6.on_edit_structure_row(0, 2)
     _name_col_only = not _opened_sd
     rw6.on_edit_structure_row(0, 0)
     _other_col_opens = len(_opened_sd) == 1

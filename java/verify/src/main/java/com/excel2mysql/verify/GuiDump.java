@@ -229,6 +229,14 @@ public final class GuiDump {
             public void run() {
                 frame.addFiles(files);
                 put("loaded.names", names());
+                StringBuilder serial = new StringBuilder();
+                for (int r = 0; r < frame.fileModel().getRowCount(); r++) {
+                    if (r > 0) {
+                        serial.append(',');
+                    }
+                    serial.append(frame.fileModel().getValueAt(r, 0));
+                }
+                put("file.serial", frame.fileModel().getColumnName(0) + "=" + serial);
                 dumpTable("file", frame.fileTable());
                 for (String t : new String[]{"开始导入", "生成标准excel文件", "生成简易excel文件"}) {
                     put("loaded.on." + t, btnOn(t));
@@ -247,25 +255,25 @@ public final class GuiDump {
                 put("file.tooltip.0", frame.fileModel().tooltipAt(0));
                 // 文件表只有「表名」列可编辑；单击改名、非法名恢复原名，两条线逐句话比
                 put("file.rename.editable",
-                        (frame.fileModel().isCellEditable(0, 1) ? "1" : "0") + "|"
+                        (frame.fileModel().isCellEditable(0, 2) ? "1" : "0") + "|"
                         + (frame.fileModel().isCellEditable(0, 0) ? "1" : "0") + "|"
-                        + (frame.fileModel().isCellEditable(0, 2) ? "1" : "0"));
+                        + (frame.fileModel().isCellEditable(0, 3) ? "1" : "0"));
                 String renameOld = frame.tables().get(0).tableName;
-                frame.fileModel().setValueAt(renameOld + "_probe", 0, 1);
+                frame.fileModel().setValueAt(renameOld + "_probe", 0, 2);
                 put("file.rename.ok", frame.tables().get(0).tableName + "|"
                         + frame.tables().get(0).baseTableName + "|"
                         + lastLogLine(frame.logPanel().text()));
-                frame.fileModel().setValueAt("", 0, 1);
+                frame.fileModel().setValueAt("", 0, 2);
                 put("file.rename.empty",
                         frame.tables().get(0).tableName + "|" + popup());
-                frame.fileModel().setValueAt("bad name", 0, 1);
+                frame.fileModel().setValueAt("bad name", 0, 2);
                 put("file.rename.bad",
                         frame.tables().get(0).tableName + "|" + popup());
                 String renameDup = frame.tables().get(1).tableName;
-                frame.fileModel().setValueAt(renameDup, 0, 1);
+                frame.fileModel().setValueAt(renameDup, 0, 2);
                 put("file.rename.dupe",
                         frame.tables().get(0).tableName + "|" + popup());
-                frame.fileModel().setValueAt(renameOld, 0, 1);
+                frame.fileModel().setValueAt(renameOld, 0, 2);
                 put("file.rename.restored", frame.tables().get(0).tableName + "|"
                         + frame.tables().get(0).baseTableName);
                 // 折行规则本身也要跨线比：同一段最坏文案，两边必须折出同一个字符串
