@@ -51,6 +51,7 @@ from core.log_text import describe_db_error
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
     replace_first_segment, sanitize_table_name, _col_to_field, dedup_field,
+    table_name_problem,
 )
 from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
@@ -994,6 +995,7 @@ class MainWindow(QWidget):
         self._sql_rows = []         # 表格每一行对应的实际表名，避免显示大小写与脚本内容混淆
         self._sql_display_names = []  # 上一轮刷新出来的显示值，用来识别"没编辑却提交同名"
         self._refreshing_sql_table = False
+        self._refreshing_file_table = False   # 刷新文件表时压住 itemChanged，避免自己触发改名
         self._zip_tmp = None        # ZIP 展开用的会话级临时目录，惰性创建
         self._zip_origin = {}       # 解压出的路径 → "包名!包内路径"，供文件列表 tooltip
         self.task_dialog = None     # 当前模态进度框，None 表示没有任务在跑
@@ -1067,7 +1069,7 @@ class MainWindow(QWidget):
         self.drop.clicked.connect(self.on_add_files)
 
         # 3. 文件列表
-        file_box = QGroupBox("待导入文件（双击表名/字段可编辑）")
+        file_box = QGroupBox("待导入文件（单击表名改名，双击其他列改字段）")
         fl = QVBoxLayout(file_box)
         self.file_table = QTableWidget(0, 6)
         self.file_table.setHorizontalHeaderLabels(
@@ -1083,9 +1085,11 @@ class MainWindow(QWidget):
         self.file_table.setColumnWidth(4, 90)
         self.file_table.setColumnWidth(5, 160)
         self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        # 组框标题写着"双击表名/字段可编辑"，就得真的接上：
-        # 双击哪一行就只弹那一张表（Swing 那条线一直是这个口径）
+        # 单击「表名」直接进编辑器改这一张表的名字；双击其余列看这一行的结构。
+        # 触发器关掉仍能 editItem，和 SQL 页同一个做法，避免单击别的列也弹编辑框。
+        self.file_table.cellClicked.connect(self.on_file_table_clicked)
         self.file_table.cellDoubleClicked.connect(self.on_edit_structure_row)
+        self.file_table.itemChanged.connect(self.on_file_table_item_changed)
         fl.addWidget(self.file_table)
 
         # 表名前缀（批量应用到全部表）
@@ -2080,18 +2084,33 @@ class MainWindow(QWidget):
         popup_box(self, "添加结果", text)
 
     def _refresh_file_table(self):
-        self.file_table.setRowCount(len(self.tables))
-        for i, t in enumerate(self.tables):
-            item = QTableWidgetItem(os.path.basename(t["filepath"]))
-            # ZIP 展开出来的文件要能看出来自哪个包的哪个内部路径
-            item.setToolTip(self._zip_origin.get(t["filepath"]) or t["filepath"])
-            self.file_table.setItem(i, 0, item)
-            self.file_table.setItem(i, 1, QTableWidgetItem(t["table_name"]))
-            self.file_table.setItem(i, 2, QTableWidgetItem(t["table_comment"]))
-            self.file_table.setItem(i, 3, QTableWidgetItem(str(len(t["columns"]))))
-            self.file_table.setItem(i, 4, QTableWidgetItem(str(len(t["df"]))))
-            pk = ", ".join(c["field"] for c in t["columns"] if c.get("primary_key")) or "无"
-            self.file_table.setItem(i, 5, QTableWidgetItem(pk))
+        # setItem 会发 itemChanged；不压住的话重建表格被当成"用户改了表名"
+        self._refreshing_file_table = True
+        try:
+            self.file_table.setRowCount(len(self.tables))
+
+            def read_only(text):
+                # QTableWidgetItem 默认带可编辑标志，只靠视图触发器挡不住"标志上可改"；
+                # 其余列连标志一起收掉，让"只有表名可改"在数据和界面两处都成立
+                it = QTableWidgetItem(text)
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                return it
+
+            for i, t in enumerate(self.tables):
+                item = read_only(os.path.basename(t["filepath"]))
+                # ZIP 展开出来的文件要能看出来自哪个包的哪个内部路径
+                item.setToolTip(self._zip_origin.get(t["filepath"]) or t["filepath"])
+                self.file_table.setItem(i, 0, item)
+                name_item = QTableWidgetItem(t["table_name"])
+                name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+                self.file_table.setItem(i, 1, name_item)
+                self.file_table.setItem(i, 2, read_only(t["table_comment"]))
+                self.file_table.setItem(i, 3, read_only(str(len(t["columns"]))))
+                self.file_table.setItem(i, 4, read_only(str(len(t["df"]))))
+                pk = ", ".join(c["field"] for c in t["columns"] if c.get("primary_key")) or "无"
+                self.file_table.setItem(i, 5, read_only(pk))
+        finally:
+            self._refreshing_file_table = False
 
     def on_clear(self):
         self.tables.clear()
@@ -2167,11 +2186,50 @@ class MainWindow(QWidget):
             self._refresh_file_table()
             append_log(self.log, "[结构] 已按弹窗确认 %d 张表的字段定义" % len(self.tables))
 
-    def on_edit_structure_row(self, row: int, _col: int = 0) -> None:
+    def on_file_table_clicked(self, row: int, col: int) -> None:
+        """单击「表名」直接进编辑器；其他列保持只读（双击才去看结构）。"""
+        if col != 1 or self.task_dialog is not None:
+            return
+        if not 0 <= row < self.file_table.rowCount():
+            return
+        item = self.file_table.item(row, 1)
+        if item is not None:
+            self.file_table.editItem(item)
+
+    def on_file_table_item_changed(self, item) -> None:
+        """手动改单张表的表名：校验不过就恢复原名，改成了就以新名为基础名。"""
+        if self._refreshing_file_table or item is None or item.column() != 1:
+            return
+        row = item.row()
+        if not 0 <= row < len(self.tables):
+            return
+        t = self.tables[row]
+        old = t["table_name"]
+        # 反引号是 DDL 的引用符，不是名字的一部分；粘贴时最容易带上
+        new = str(item.text() or "").replace("`", "").strip()
+        if new == old:
+            if item.text() != old:
+                self._refresh_file_table()   # 去掉多余空白/反引号后回显规范名
+            return
+        others = [x["table_name"] for x in self.tables if x is not t]
+        why = table_name_problem(new, others)
+        if why:
+            self._warn(why + "已恢复原表名「%s」。" % old)
+            self._refresh_file_table()
+            return
+        t["table_name"] = new
+        t["base_table_name"] = new
+        self._refresh_file_table()
+        append_log(self.log, "[表名] %s → %s（手动修改，后续批量前缀基于新名计算）" % (old, new))
+
+    def on_edit_structure_row(self, row: int, col: int = 0) -> None:
         """双击文件列表某一行：只弹那一张表的结构窗口。
 
         整列表一起弹会让人分不清改的是哪张表，Swing 那条线一直是按行弹的。
+        「表名」列例外——单击/双击都只进改名编辑器，不叠一个结构窗。
         """
+        if col == 1:
+            return
         if not self.tables:
             popup_box(self, "提示", NO_FILE_HINT)
             return

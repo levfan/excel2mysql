@@ -11,7 +11,8 @@ import java.util.List;
  * 文件表：一行一个已添加的文件，不是"一行一个字段"。
  * 对应 Python 侧 main.py:898-909 的 file_table。
  *
- * 就地编辑是关掉的（和 Python 一致）——字段级的改动在双击打开的结构弹窗里做。
+ * 只有「表名」列可就地编辑（单击进入编辑器，单独改这一张表的名字）；
+ * 字段级的改动仍走双击打开的结构弹窗。
  */
 public final class FileRowModel extends AbstractTableModel {
 
@@ -31,7 +32,17 @@ public final class FileRowModel extends AbstractTableModel {
         }
     }
 
+    /** 改单张表名的校验与落库由窗口负责；模型只把编辑值转过去。 */
+    public interface RenameHandler {
+        void rename(Item item, String requested);
+    }
+
     private final List<Item> items = new ArrayList<Item>();
+    private RenameHandler renameHandler;
+
+    public void setRenameHandler(RenameHandler handler) {
+        this.renameHandler = handler;
+    }
 
     public int getRowCount() {
         return items.size();
@@ -46,10 +57,25 @@ public final class FileRowModel extends AbstractTableModel {
         return COLUMNS[col];
     }
 
-    /** 和 Python 侧一致：这张表不允许就地编辑，编辑走结构弹窗。 */
+    /** 只有表名列可编辑：字段改动仍走双击的结构弹窗。 */
     @Override
     public boolean isCellEditable(int row, int col) {
-        return false;
+        return col == 1 && row >= 0 && row < items.size();
+    }
+
+    @Override
+    public void setValueAt(Object value, int row, int col) {
+        if (col != 1 || row < 0 || row >= items.size()) {
+            return;
+        }
+        Item it = items.get(row);
+        String old = it.table.tableName;
+        String requested = value == null ? "" : String.valueOf(value);
+        if (!requested.equals(old) && renameHandler != null) {
+            renameHandler.rename(it, requested);
+        }
+        // 拒绝改名时模型不动，这里重绘一次让编辑器关掉后回显原值
+        fireTableCellUpdated(row, col);
     }
 
     public Object getValueAt(int row, int col) {

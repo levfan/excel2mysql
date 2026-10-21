@@ -134,6 +134,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     public MainFrame() {
         // 标题带版本号：不点开「关于」也能看见现场跑的是哪一版
         super(AppInfo.load().titleText());
+        fileModel.setRenameHandler((item, requested) -> renameFileTable(item, requested));
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         applyWindowIcon();
         setLocationByPlatform(true);
@@ -334,12 +335,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
         table.setRowHeight(22);
-        // 双击进结构弹窗改字段与主键：就地编辑会让"改的是哪张表"变含糊
+        // 表名单击就进编辑器改这一张表；双击其余列进结构弹窗改字段与主键
+        javax.swing.DefaultCellEditor nameEditor =
+                new javax.swing.DefaultCellEditor(new javax.swing.JTextField());
+        nameEditor.setClickCountToStart(1);
+        table.getColumnModel().getColumn(1).setCellEditor(nameEditor);
         table.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() == 2) {
-                    editStructure();
+                    // 「表名」列只改名，不叠一个结构窗
+                    if (table.columnAtPoint(e.getPoint()) != 1) {
+                        editStructure();
+                    }
                 }
             }
         });
@@ -414,7 +422,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         fileRows.add(btnRow, BorderLayout.SOUTH);
         JPanel fileBox = new JPanel(new BorderLayout());
         fileBox.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("待导入文件（双击表名/字段可编辑）"),
+                BorderFactory.createTitledBorder("待导入文件（单击表名改名，双击其他列改字段）"),
                 BorderFactory.createEmptyBorder(2, 6, 4, 6)));
         fileBox.add(tableScroll, BorderLayout.CENTER);
         fileBox.add(fileRows, BorderLayout.SOUTH);
@@ -1403,6 +1411,33 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public FileRowModel fileModel() {
         return fileModel;
+    }
+
+    /** 文件表单击「表名」改名：校验不过就恢复原名，改成了就以新名为基础名。 */
+    private void renameFileTable(FileRowModel.Item item, String typed) {
+        String old = item.table.tableName;
+        String name = Names.pyStrip(String.valueOf(typed == null ? "" : typed).replace("`", ""));
+        if (name.equals(old)) {
+            fileModel.refresh();
+            return;
+        }
+        List<String> others = new ArrayList<String>();
+        for (TableOps.Table t : tables) {
+            if (t != item.table) {
+                others.add(t.tableName);
+            }
+        }
+        String why = TableOps.tableNameProblem(name, others);
+        if (why != null) {
+            warn(why + "已恢复原表名「" + old + "」。");
+            fileModel.refresh();
+            return;
+        }
+        item.table.tableName = name;
+        item.table.baseTableName = name;
+        fileModel.refresh();
+        refreshPreview();
+        log("[表名] " + old + " → " + name + "（手动修改，后续批量前缀基于新名计算）");
     }
 
     /** 双击选中行打开结构弹窗，确认后重算 DDL 预览。 */

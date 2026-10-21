@@ -1258,6 +1258,27 @@ def make_unique_names(tables: list) -> list:
     return tables
 
 
+_TABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def table_name_problem(name, others=()) -> Optional[str]:
+    """手动改单个表名时的校验：返回一句提示，None 表示能用。
+
+    手工名字会原样进 CREATE TABLE 的反引号表名里，所以按 MySQL 标识符的边界拦：
+    非空、不超 64 字符、只含字母数字下划线、不与列表里的其他表重名。
+    """
+    name = str(name or "")
+    if not name:
+        return "表名不能为空。"
+    if len(name) > 64:
+        return f"表名「{name}」超过 64 个字符（MySQL 标识符上限）。"
+    if not _TABLE_NAME_RE.match(name):
+        return f"表名「{name}」含非法字符：只能用字母、数字、下划线。"
+    if name in set(others):
+        return f"表名「{name}」与列表中的另一张表重名。"
+    return None
+
+
 def replace_first_segment(tables: list, new_head: str, on_item=None) -> tuple:
     """把每张表名的首段前缀换成 new_head，返回 (改名列表, 跳过表名列表)。
 

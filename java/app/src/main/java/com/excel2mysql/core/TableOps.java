@@ -1,6 +1,7 @@
 package com.excel2mysql.core;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -67,6 +68,27 @@ public final class TableOps {
             t.tableName = candidate;
             used.add(candidate);
         }
+    }
+
+    /**
+     * 手动改单个表名时的校验：返回一句提示，null 表示能用。
+     * 手工名字会原样进 CREATE TABLE 的反引号表名里，所以按 MySQL 标识符的边界拦：
+     * 非空、不超 64 字符、只含字母数字下划线、不与列表里的其他表重名。
+     */
+    public static String tableNameProblem(String name, Collection<String> others) {
+        if (name == null || name.isEmpty()) {
+            return "表名不能为空。";
+        }
+        if (name.length() > Names.TABLE_MAX_LEN) {
+            return "表名「" + name + "」超过 64 个字符（MySQL 标识符上限）。";
+        }
+        if (!Prefix.isValid(name)) {
+            return "表名「" + name + "」含非法字符：只能用字母、数字、下划线。";
+        }
+        if (others != null && others.contains(name)) {
+            return "表名「" + name + "」与列表中的另一张表重名。";
+        }
+        return null;
     }
 
     public static void applyPrefix(List<Table> tables, String prefix) {
