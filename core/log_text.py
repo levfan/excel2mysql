@@ -27,7 +27,9 @@ def describe_db_error(e):
     if isinstance(e, UnicodeEncodeError):
         return "%s：%s\n    %s" % (type(e).__name__, e, PASSWORD_ENCODING_HINT)
     args = getattr(e, "args", ())
-    if args and isinstance(args[0], int):
+    # OSError（读写脚本文件）的 args[0] 是 errno，不是 MySQL 错误码；
+    # 当成数据库错误写出来会把人引到库上去查一个不存在的 2 号错误。
+    if args and isinstance(args[0], int) and not isinstance(e, OSError):
         detail = args[1] if len(args) > 1 else ""
         return "%s（MySQL 错误码 %s）：%s" % (type(e).__name__, args[0], detail)
     return "%s：%s" % (type(e).__name__, e)
