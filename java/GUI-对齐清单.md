@@ -129,8 +129,8 @@ Python 线是否修，另议。
 | 建表失败/导入失败附「失败的建表语句」原文与 ROLLBACK_NOTE | `main.py:737-740`、`765-768` | 已做（真库实测第 4 条语句报错，前 2 行 INSERT 被回滚、建表因隐式提交保留） |
 | SQL 执行按语句计项，每文件最多刷约 100 次，收尾补齐余数 | `main.py:587`、`607`、`666` | 已做（StatementHook + chunk = max(1, 条数/100)） |
 | SQL 执行在两条语句之间检查取消，取消的文件整文件回滚 | `main.py:614`、`642-646` | 已做（Python 把取消的文件计进"成功"一侧，这里照抄不自行改正） |
-| 文件表第一列 tooltip = 完整路径，包内文件为"包名!包内路径" | `main.py:1444-1446` | 已做（zipOrigin 一路带到 FileRowModel，之前算过却没地方用） |
-| SQL 表第一列 tooltip = 脚本完整路径 | `main.py:1215` | 已做 |
+| 文件表「文件」列 tooltip = 完整路径，包内文件为"包名!包内路径"（第 42 节加序号列后在第 2 列） | `main.py:1444-1446` | 已做（zipOrigin 一路带到 FileRowModel，之前算过却没地方用） |
+| SQL 表「文件」列 tooltip = 脚本完整路径（第 42 节加序号列后在第 2 列） | `main.py:1215` | 已做 |
 | 窗口尺寸 1100×780 | `main.py:819` | 已做（之前是 1080×700） |
 | 文件选择框四档过滤器（Excel/ZIP、仅 Excel、仅 ZIP、所有文件）与对话框标题 | `main.py:1358-1361`、`1220` | 已做（SQL 页同样补"所有文件"一档） |
 | 文件区组框标题「待导入文件（单击表名改名，双击其他列改字段）」 | `main.py:1072` | 已做（第 41 节改了交互与文案，单击表名进编辑器、双击其余列开结构弹窗） |
@@ -1963,22 +1963,22 @@ utf-8-sig → utf-8 → gbk 严格试解，没这个问题。
   `TableOps.java:78` 的 `tableNameProblem`。空名、超过 64 字符、含字母数字下划线以外的字符、
   与列表中其他表重名四类都拒绝，弹一句原因并恢复原名。粘贴带反引号或首尾空白时先剥掉再校验，
   校验通过的名字成为新的 `base_table_name`，后续「批量应用前缀」基于它计算。
-- Java 侧 `FileRowModel` 只让第 1 列可编辑（`isCellEditable`），`setValueAt` 把输入交给
+- Java 侧 `FileRowModel` 只让「表名」列可编辑（第 41 节落地时是第 1 列，第 42 节加序号列后为第 2 列；`isCellEditable`），`setValueAt` 把输入交给
   `RenameHandler`；`MainFrame.renameFileTable` 负责校验、回写与日志。表名列的
-  `DefaultCellEditor` 设 `setClickCountToStart(1)`，双击监听跳过第 1 列。
-- Python 侧视图仍是 `NoEditTriggers`，`cellClicked` 只对第 1 列调 `editItem`；
+  `DefaultCellEditor` 设 `setClickCountToStart(1)`，双击监听跳过该列。
+- Python 侧视图仍是 `NoEditTriggers`，`cellClicked` 只对「表名」列调 `editItem`；
   `itemChanged` 用 `_refreshing_file_table` 压住整表重建，非表名列的 item 标志也去掉可编辑位，
   让"只有表名可改"在数据与界面两处同时成立。
 
 ### 41.2 守卫
 
-- Python：R50 只允许第 1 列的 item 带可编辑标志；R51/R51b 单击表名真的出现编辑器、
+- Python：R50 只允许「表名」列的 item 带可编辑标志；R51/R51b 单击表名真的出现编辑器、
   单击其他列不出现；R52/R52b 只改这一张表且日志逐字为
   `[表名] 旧 → 新（手动修改，后续批量前缀基于新名计算）`；R53/R53b 手动名参与前缀计算、
   清空前缀恢复手动名；R54–R56 空名、非法字符、重名三类拒绝并恢复；R57 反引号与空白被规范化；
   R58 双击表名不叠结构窗、双击其他列仍打开这一行。
 - Java：`GuiMain.fileRename` 断改名同时写 `tableName`/`baseTableName`、日志原文、三类拒绝恢复、
-  改回原名；`isCellEditable(0, 1)` 为真且第 0/3 列为假。
+  改回原名；`isCellEditable(0, 2)` 为真且第 0/3 列为假。
 - 对撞器新增 6 个键：`file.rename.editable`、`file.rename.ok`、`file.rename.empty`、
   `file.rename.bad`、`file.rename.dupe`、`file.rename.restored`；枚举项由 239 升到 245。
 
@@ -1999,3 +1999,59 @@ utf-8-sig → utf-8 → gbk 严格试解，没这个问题。
 - 未覆盖：真实鼠标在打包版表格上的单击命中与编辑器手感；自动化已覆盖
   `cellClicked`/`editItem`、Java 模型可编辑性与 `setValueAt` 链路，实机双击与单击的
   焦点差异仍需现场确认。G 组真实 MySQL 用例本轮无凭据，显式跳过。
+
+## 42. 两页表格加序号列
+
+现场要求："tab页1、tab页2，表格中都需要要有序号字段，我需要知道当前有多少个文件，
+或者知道解析出了多少个建模语句"。两栈同口径：序号是表格第一列，从 1 起连续编到最后一行；
+第一个页签的行数等于待导入表数，第二个页签最后一个序号等于这批脚本解析出的建模语句总数。
+
+### 42.1 两栈怎么改
+
+- Python：`main.py` 的 `_refresh_file_table` 给文件表加 `str(i + 1)` 只读单元格，
+  `_refresh_sql_table` 给建模语句表加 `str(i + 1)`。两个表头都改成
+  `序号 | 文件 | …`，序号列宽 54；SQL 页的建模语句跨文件共用一套编号，
+  不按文件重新从 1 数。
+- Java：`FileRowModel.COLUMNS` 与 `SqlPage.COLUMNS` 同序加「序号」；
+  `FileRowModel.getValueAt` 的 `case 0` 返回 `row + 1`，`SqlPage.refreshTable` 用
+  `rowPath.size() + 1`（`rowPath` 是全部脚本的行，不是单文件）。`MainFrame` 的
+  `widths` 与 `SqlPage` 的 `setPreferredWidth` 都补 54。
+- 加列把原来的下标整体右移一位：Python 的单击改名列 `2`、双击结构判断、`itemChanged`
+  守卫与 SQL 页的编辑列 `4`；Java 的 `FileRowModel.isCellEditable`/`setValueAt`
+  列 `2`、`MainFrame` 的表名编辑器与双击跳过列 `2`、`SqlPage` 的编辑列 `4`、
+  元数据双击判定 `0..3`，以及所有校验断言、对撞探针一起改。序号列本身不可编辑。
+- 两栈表格的序号都随每次刷新重算：改名、加前缀、移除文件、清空列表后都不会留下空洞，
+  也不会因为中途删过一行而从 2 开始。
+
+### 42.2 守卫
+
+- Python：R49c 断文件表表头与 `["1","2","3"]`，并断行数等于待导入表数；
+  R50 的可编辑位改成七列，白名单只有第 2 列；R58 双击表名不叠结构窗。
+  Q24a 断建模语句表表头与 `["1","2"]`；Q28a 用两个脚本文件三张表断
+  `["1","2","3"]`，跨文件不重新计数。
+- Java：`GuiMain.selftest` 断文件表行数等于最后一行的序号、文件表恰有 7 列且宽度为
+  `{54,320,200,280,80,90,160}`；`sql_page` 断第一行 `"1"`、第三行 `"3"`。
+- 对撞器：两个表的 `table.*.cols` 与 `table.sql.rows` 自动带上序号；另加
+  `file.serial` 断表头与 16 个夹具的连续编号。枚举项由 245 升到 246。
+
+### 42.3 验证
+
+- `pack_test.py`：通过 572、失败 0、跳过 6，退出码 0。
+- `java/构建验证.bat`：十步全过，退出码 0。
+- `界面双端对撞.bat`：246 键逐键一致，退出码 0；两份 dump 的
+  `table.sql.rows` 均为 `1;a.sql;… / 2;a.sql;… / 3;b.sql;…`，
+  `file.serial` 均为 `序号=1,2,…,16`。
+- 变异抽查：
+  - Python 文件表序号改成恒 `1` → R49c 变红（`['1','1','1']`），退出码 1；
+  - Python 建模语句表序号改成恒 `1` → Q24a 与 Q28a 同时变红，退出码 1；
+  - Java `FileRowModel` 的 `case 0` 改成 `row`（0 起）→ 自检报
+    `文件表序号列没按行号连续编号`，退出码 1；
+  - Java `SqlPage.refreshTable` 的序号改成恒 `"1"` → 自检报
+    `SQL 表序号列没按行号连续编号：1/1`，退出码 1。
+  - 全部逐字节还原后，`main.py`、`FileRowModel.java`、`SqlPage.java` 的 SHA-256
+    分别为 `9f08b3add5a3abc71bfcbf39c0d7aba0c8b79f338fe8153e63c4bd20bde192f0`、
+    `ad51e3d2ac02b77f700bf67e28bd7aae804e9333bb196ad962e4566fb3937982`、
+    `867918f3db5a11a0db2a1b73d3acf3c1b66aad52767e65c44d3719e8289525cd`。
+- 未覆盖：真实鼠标在打包版上的列宽观感（54px 能否完整显示三位数序号）；
+  序号列在超高 DPI 下的字体裁切。自动化只证明数据、表头、可编辑性与跨文件连续性。
+  G 组真实 MySQL 用例本轮无凭据，显式跳过。
