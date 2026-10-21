@@ -34,7 +34,7 @@ public final class Main {
     static final int EXIT_IMPORT = 4;
     static final int EXIT_SCRIPT = 5;
 
-    private static final String VERSION = "1.0.1";
+    private static final String VERSION = "1.0.2";
 
     public static void main(String[] argv) {
         // 图形界面不能走 System.exit：窗口刚立起来就被退出码 0 关掉
