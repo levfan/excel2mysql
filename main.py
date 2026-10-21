@@ -54,10 +54,10 @@ from core.infer import (
 )
 from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
-    extract_create_tables, apply_table_prefix_sql, split_sql_statements,
-    replace_first_segment_sql, parse_create_tables, rename_table_sql,
+    extract_create_tables, split_sql_statements,
+    parse_create_tables, rename_table_sql, apply_display_renames,
 )
-from core.naming import clean_prefix, is_valid_prefix
+from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES
 from core.mysql_io import (
     build_ddl, connect, list_databases, create_table, insert_data,
@@ -570,32 +570,6 @@ def table_replace_task(tables, new_head, sink):
     return {"renamed": renamed, "skipped": skipped, "cancelled": sink.cancelled}
 
 
-def sql_replace_prefix_task(items, new_head, sink):
-    """逐个脚本替换表名首段前缀；入参是快照，改完由主线程写回。"""
-    sink.set_total(len(items))
-    updates, total = {}, 0
-    for path, text, rename_map in items:
-        fname = os.path.basename(path)
-        if sink.cancelled:
-            break
-        new_text, renamed, skipped = replace_first_segment_sql(text, new_head)
-        if renamed:
-            rev = {v: k for k, v in rename_map.items()}
-            updates[path] = {"text": new_text, "tabs": extract_create_tables(new_text),
-                             "rename_map": {rev.get(r["old"], r["old"]): r["new"]
-                                            for r in renamed}}
-            sink.log(f"[换前缀] {fname}："
-                     + "、".join(f"{r['old']} → {r['new']}（{r['n']} 处）" for r in renamed))
-            total += len(renamed)
-        if skipped:
-            sink.log(f"[跳过] {fname}：未改写 {'、'.join(skipped)}"
-                     f"（表名里没有下划线，或脚本中找不到引用）")
-        sink.step(fname)
-    sink.log(f"[换前缀完成] 共改写 {total} 个表名"
-             f"（修改在内存中，可点「保存修改后ddl脚本」落盘）")
-    return {"updates": updates, "cancelled": sink.cancelled}
-
-
 def read_sql_text(path):
     """按 utf-8-sig → utf-8 → gbk 依次尝试解码，全失败则替换非法字节而不是报错。"""
     with open(path, "rb") as fh:
@@ -631,39 +605,9 @@ def sql_load_task(paths, sink):
         names = "、".join(t["name"] for t in tabs) or "（未发现 CREATE TABLE 语句）"
         sink.log(f"[已加载] {fname}：{len(tabs)} 个表（{names}）")
         loaded.append({"path": p, "text": text, "modified": False,
-                       "rename_map": {}, "tabs": tabs})
+                       "rename_map": {}, "display_map": {}, "tabs": tabs})
         sink.step(fname)
     return {"loaded": loaded, "cancelled": sink.cancelled}
-
-
-def sql_prefix_task(items, prefix, sink):
-    """逐个脚本改写 CREATE TABLE 表名。
-
-    入参是 [(path, text, rename_map), ...] 快照，返回按 path 索引的改写结果，
-    由主线程统一写回 —— 子线程不碰 self.sql_files，界面和数据各改各的不会打架。
-    """
-    sink.set_total(len(items))
-    updates, total = {}, 0
-    for path, text, rename_map in items:
-        fname = os.path.basename(path)
-        if sink.cancelled:
-            break
-        new_text, renamed, skipped = apply_table_prefix_sql(text, prefix)
-        if renamed:
-            rev = {v: k for k, v in rename_map.items()}
-            # 顺手在工作线程重算表名清单：几十万行的脚本不必再回主线程扫一遍
-            updates[path] = {"text": new_text, "tabs": extract_create_tables(new_text),
-                             "rename_map": {rev.get(r["old"], r["old"]): r["new"]
-                                            for r in renamed}}
-            sink.log(f"[前缀] {fname}："
-                     + "、".join(f"{r['old']} → {r['new']}（{r['n']} 处）" for r in renamed))
-            total += len(renamed)
-        if skipped:
-            sink.log(f"[跳过] {fname}：已带前缀 {'、'.join(skipped)}")
-        sink.step(fname)
-    sink.log(f"[前缀完成] 共改写 {total} 个表名"
-             f"（修改在内存中，可点「保存修改后ddl脚本」落盘）")
-    return {"updates": updates, "cancelled": sink.cancelled}
 
 
 def sql_save_task(items, sink):
@@ -1446,14 +1390,18 @@ class MainWindow(QWidget):
         self.ed_sql_prefix = QLineEdit()
         self.ed_sql_prefix.setPlaceholderText(
             "如 dim_（加前缀，已带该前缀的表自动跳过）；填 change 再点"
-            "「替换首个前缀」则把 ods_t_order 换成 change_t_order")
+            "「替换首个前缀」则把 ods_t_order 换成 change_t_order。"
+            "清空后再点一次可恢复原表名")
         self.btn_sql_prefix = QPushButton("批量应用前缀")
+        self.btn_sql_prefix.setToolTip(
+            "只改「当前表名」列的显示（双击看的元数据表名同步），脚本正文不动；\n"
+            "点保存/执行/生成时才把显示名写进脚本。前缀留空再点一次，显示恢复为脚本原名。")
         self.btn_sql_prefix.clicked.connect(self.on_sql_apply_prefix)
         self.btn_sql_replace = QPushButton("替换首个前缀")
         self.btn_sql_replace.setToolTip(
-            "把脚本里每个表名第一个下划线之前的部分换成上面填的内容，\n"
-            "并同步改写 CREATE/DROP/INSERT/ALTER/TRUNCATE 中的引用；\n"
-            "表名里没有下划线的不动。末尾下划线不用写")
+            "把每个表名第一个下划线之前的部分换成上面填的内容，只改页面显示；\n"
+            "点保存/执行/生成时才写进脚本并把 CREATE/DROP/INSERT/ALTER/TRUNCATE 的引用一起改掉；\n"
+            "表名里没有下划线的不动。末尾下划线不用写，留空再点一次恢复原表名")
         self.btn_sql_replace.clicked.connect(self.on_sql_replace_prefix)
         prefix_row.addWidget(self.ed_sql_prefix, 1)
         prefix_row.addWidget(self.btn_sql_prefix)
@@ -1536,18 +1484,22 @@ class MainWindow(QWidget):
             for s in self.sql_files:
                 base = os.path.basename(s["path"])
                 rev = {v: k for k, v in s["rename_map"].items()}
+                display_map = s.get("display_map") or {}
                 # 表名清单在读取/改写时就已算好，几十万行的脚本不再回扫一遍
                 for t in s.get("tabs") or extract_create_tables(s["text"]):
                     rows.append({"path": s["path"], "base": base,
                                  "orig": rev.get(t["name"], t["name"]),
-                                 "actual": t["name"], "count": str(t["count"])})
+                                 "actual": t["name"],
+                                 "display": self._sql_display_name(
+                                     display_map.get(t["name"], t["name"])),
+                                 "count": str(t["count"])})
             self._sql_rows = rows
-            self._sql_display_names = [self._sql_display_name(r["actual"]) for r in rows]
+            self._sql_display_names = [r["display"] for r in rows]
             self.sql_table.setRowCount(len(rows))
             for i, row in enumerate(rows):
                 items = [QTableWidgetItem(row["base"]), QTableWidgetItem(row["orig"]),
                          QTableWidgetItem(row["count"]),
-                         QTableWidgetItem(self._sql_display_name(row["actual"]))]
+                         QTableWidgetItem(row["display"])]
                 items[0].setData(Qt.UserRole, row["path"])
                 items[0].setToolTip(row["path"])
                 for j, it in enumerate(items):
@@ -1589,7 +1541,7 @@ class MainWindow(QWidget):
             self.sql_log.appendPlainText(
                 "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
             return None
-        return SqlMetadataDialog(table, self._sql_display_name(row["actual"]),
+        return SqlMetadataDialog(table, row["display"],
                                  self.chk_sql_upper.isChecked(), self)
 
     def on_sql_table_item_changed(self, item):
@@ -1600,12 +1552,13 @@ class MainWindow(QWidget):
         if row_index >= len(self._sql_rows):
             return
         row = self._sql_rows[row_index]
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return
         new = item.text().strip().strip("`")
         old = row["actual"]
-        old_display = self._sql_display_names[row_index]
+        old_display = row["display"]
         if new == old_display:
-            if new == old:
-                self.sql_log.appendPlainText("[表名] %s 未发生变化，脚本未改写" % old)
             self._refresh_sql_table()
             return
         if not new:
@@ -1613,11 +1566,15 @@ class MainWindow(QWidget):
             self._refresh_sql_table()
             return
         if new == old:
-            self.sql_log.appendPlainText("[表名] %s 未发生变化，脚本未改写" % old)
-            self._refresh_sql_table()
-            return
-        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
-        if record is None:
+            # 手填脚本里的原名 = 只撤掉这一行的显示前缀，正文和修改标记都不动
+            record.setdefault("display_map", {})
+            if record["display_map"].pop(old, None) is not None:
+                self._refresh_sql_table()
+                self.sql_log.appendPlainText(
+                    "[表名] %s 的显示前缀已移除，脚本未改写" % old)
+            else:
+                self.sql_log.appendPlainText("[表名] %s 未发生变化，脚本未改写" % old)
+                self._refresh_sql_table()
             return
         new_text, changed = rename_table_sql(record["text"], old, new)
         if not changed:
@@ -1628,6 +1585,9 @@ class MainWindow(QWidget):
         record["tabs"] = extract_create_tables(new_text)
         record["modified"] = True
         record["rename_map"][row["orig"]] = new
+        record.setdefault("display_map", {})
+        record["display_map"].pop(old, None)
+        record["display_map"].pop(new, None)
         self._refresh_sql_table()
         self.sql_log.appendPlainText(
             "[表名] %s → %s（已同步改写 %d 处引用；未落盘）" % (old, new, changed))
@@ -1683,38 +1643,126 @@ class MainWindow(QWidget):
         popup_box(self, "提示", text, "warning")
 
     def on_sql_apply_prefix(self):
-        prefix = self.ed_sql_prefix.text().strip()
+        """只改页面显示：脚本正文一个字不动，四个动作按钮点下去时才写入。"""
+        prefix = self.ed_sql_prefix.text().strip().replace("`", "").replace("\\", "")
         if not prefix:
-            self._warn("请先输入表名前缀（如 dim_）。")
+            self._clear_sql_display_prefix()
             return
-        items = [(s["path"], s["text"], dict(s["rename_map"])) for s in self.sql_files]
-        self._run_modal("正在改写脚本中的表名…", sql_prefix_task, (items, prefix),
-                        on_done=self._finish_sql_prefix, log_view=self.sql_log)
-
-    def _finish_sql_prefix(self, res):
+        total = 0
         for s in self.sql_files:
-            upd = res["updates"].get(s["path"])
-            if not upd:
-                continue
-            s["text"] = upd["text"]
-            s["tabs"] = upd["tabs"]
-            s["modified"] = True
-            s["rename_map"].update(upd["rename_map"])
+            fname = os.path.basename(s["path"])
+            current = s.get("display_map") or {}
+            plan, skipped = {}, []
+            for t in s.get("tabs") or extract_create_tables(s["text"]):
+                old = t["name"]
+                shown = current.get(old, old)      # 接在页面上当前显示名之后，不从头计算
+                if shown.startswith(prefix):
+                    if shown != old:
+                        plan[old] = shown          # 已带前缀：保留原显示，不叠也不丢
+                    skipped.append(shown)
+                    continue
+                plan[old] = prefix + shown
+            s["display_map"] = plan
+            total += len(plan)
+            if plan:
+                self.sql_log.appendPlainText(
+                    f"[前缀] {fname}："
+                    + "、".join(f"{o} → {n}（显示）" for o, n in plan.items()))
+            if skipped:
+                self.sql_log.appendPlainText(
+                    f"[跳过] {fname}：已带前缀 {'、'.join(skipped)}")
         self._refresh_sql_table()
+        self.sql_log.appendPlainText(
+            f"[前缀完成] 共 {total} 个表名改为显示前缀「{prefix}」"
+            f"（脚本正文未改，点保存/执行/生成时才写入）")
+
+    def _clear_sql_display_prefix(self):
+        """空前缀再点一次：只撤掉显示层，表名回到脚本里的原名。"""
+        n = 0
+        for s in self.sql_files:
+            n += len(s.get("display_map") or {})
+            s["display_map"] = {}
+        self._refresh_sql_table()
+        if n:
+            self.sql_log.appendPlainText(
+                f"[前缀完成] 前缀已清空，{n} 个表名的显示恢复为脚本中的原名（脚本正文未改）")
+        else:
+            self.sql_log.appendPlainText(
+                "[前缀完成] 前缀为空，表名显示本来就是脚本原名，无需恢复")
 
     def on_sql_replace_prefix(self):
+        """首段前缀同样只改显示；空前缀视作撤掉显示层。"""
+        if not self.ed_sql_prefix.text().strip():
+            self._clear_sql_display_prefix()
+            return
         head, why = self._clean_head(self.ed_sql_prefix.text())
         if head is None:
             self._warn(why)
             return
-        items = [(r["path"], r["text"], dict(r["rename_map"])) for r in self.sql_files]
-        self._run_modal("正在替换脚本中的表名前缀…", sql_replace_prefix_task, (items, head),
-                        on_done=self._finish_sql_prefix, log_view=self.sql_log)
+        total = 0
+        for s in self.sql_files:
+            fname = os.path.basename(s["path"])
+            current = s.get("display_map") or {}
+            plan, skipped = {}, []
+            for t in s.get("tabs") or extract_create_tables(s["text"]):
+                old = t["name"]
+                shown = current.get(old, old)      # 与加前缀同一口径：基于当前显示名换首段
+                new = swap_first_segment(shown, head)
+                if new is None:
+                    if shown != old:
+                        plan[old] = shown          # 没换成（如首段本来就是这个）：保留原显示
+                    skipped.append(shown)
+                    continue
+                plan[old] = new
+            s["display_map"] = plan
+            total += len(plan)
+            if plan:
+                self.sql_log.appendPlainText(
+                    f"[换前缀] {fname}："
+                    + "、".join(f"{o} → {n}（显示）" for o, n in plan.items()))
+            if skipped:
+                self.sql_log.appendPlainText(
+                    f"[跳过] {fname}：未改写 {'、'.join(skipped)}（表名里没有下划线）")
+        self._refresh_sql_table()
+        self.sql_log.appendPlainText(
+            f"[换前缀完成] 共 {total} 个表名改为显示名"
+            f"（脚本正文未改，点保存/执行/生成时才写入）")
+
+    def _materialize_sql_display(self):
+        """把页面显示的表名写进脚本；保存/执行/生成三个动作共用这一道。"""
+        pending = any(s.get("display_map") for s in self.sql_files)
+        if not pending:
+            return False
+        for s in self.sql_files:
+            plan = s.get("display_map") or {}
+            if not plan:
+                continue
+            new_text, renamed, nohit = apply_display_renames(s["text"], plan)
+            rev = {v: k for k, v in s["rename_map"].items()}
+            for r in renamed:
+                s["rename_map"][rev.get(r["old"], r["old"])] = r["new"]
+            if renamed:
+                s["text"] = new_text
+                s["tabs"] = extract_create_tables(new_text)
+                s["modified"] = True
+                self.sql_log.appendPlainText(
+                    f"[生效] {os.path.basename(s['path'])}："
+                    + "、".join(f"{r['old']} → {r['new']}（{r['n']} 处）" for r in renamed)
+                    + " 已写入脚本")
+            if nohit:
+                self.sql_log.appendPlainText(
+                    f"[跳过] {os.path.basename(s['path'])}：脚本里找不到 "
+                    + "、".join(nohit) + " 的引用，未改写")
+            s["display_map"] = {}
+        self._refresh_sql_table()
+        return True
 
     def on_sql_save_modified(self):
+        self._materialize_sql_display()
         items = [(s["path"], s["text"]) for s in self.sql_files if s["modified"]]
         if not items:
             self.sql_log.appendPlainText("[保存] 没有修改过的脚本文件")
+            popup_box(self, "保存完成", "没有修改过的脚本文件，无需保存。")
             return
         self._run_modal("正在保存修改后的脚本…", sql_save_task, (items,),
                         on_done=self._finish_sql_save, log_view=self.sql_log)
@@ -1724,6 +1772,14 @@ class MainWindow(QWidget):
         for s in self.sql_files:
             if s["path"] in done:
                 s["modified"] = False
+        n = len(done)
+        note = "（已取消，剩余脚本未保存）" if res["cancelled"] else ""
+        if n:
+            append_log(self.sql_log, f"===== 保存完成：{n} 个脚本副本{note} =====")
+            popup_box(self, "保存完成", f"已保存 {n} 个脚本副本{note}。\n详见日志。")
+        else:
+            append_log(self.sql_log, f"===== 保存完成：没有文件写出{note} =====", error=True)
+            popup_box(self, "保存完成", f"没有文件写出{note}，详见日志。", "warning")
 
     def on_sql_execute(self):
         cfg = self._conn_cfg()
@@ -1734,6 +1790,7 @@ class MainWindow(QWidget):
         if not self.sql_files:
             self._warn("请先添加 SQL 脚本文件。")
             return
+        self._materialize_sql_display()
         self.sql_log.appendPlainText(
             f"===== 开始执行脚本（目标库 {db}，每个文件一个事务）=====")
         items = [(s["path"], s["text"]) for s in self.sql_files]
@@ -1755,6 +1812,7 @@ class MainWindow(QWidget):
         if not self.sql_files:
             self._warn("请先添加 SQL 脚本文件。")
             return
+        self._materialize_sql_display()
         out_root = program_dir()
         append_log(self.sql_log,
                    f"===== 开始生成{label}excel文件（脚本 %d 个，输出根目录 {out_root}）====="

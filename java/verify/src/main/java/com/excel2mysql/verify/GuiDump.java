@@ -662,11 +662,14 @@ public final class GuiDump {
                 put("sql.hint", frame.sqlPage().hintText());
                 frame.sqlPage().setPrefixText("");
                 // 走按钮监听器同一条路：拿提示再交给 host.warn，不自己拼弹窗文案
+                String beforeDialog = frame.lastDialogTitle() + "|" + frame.lastDialogText();
                 String hint = frame.sqlPage().applyPrefix();
                 if (hint != null) {
                     frame.warn(hint);
                 }
-                put("guard.sql.empty_prefix", popup());
+                String afterDialog = frame.lastDialogTitle() + "|" + frame.lastDialogText();
+                put("guard.sql.empty_prefix",
+                        beforeDialog.equals(afterDialog) ? "" : popup());
 
                 String smark = frame.sqlPage().logPanel().text();
                 frame.sqlPage().selectRow(0);

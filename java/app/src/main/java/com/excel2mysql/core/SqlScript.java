@@ -163,6 +163,21 @@ public final class SqlScript {
         return rewriteNames(text, plan);
     }
 
+    /** 把页面显示名一次性写进脚本：{脚本当前表名: 显示名}，空名与没变化的条目跳过。 */
+    public static Rewrite applyDisplayRenames(String text, Map<String, String> displayMap) {
+        Map<String, String> plan = new LinkedHashMap<String, String>();
+        if (displayMap != null) {
+            for (Map.Entry<String, String> e : displayMap.entrySet()) {
+                String old = e.getKey() == null ? "" : e.getKey().trim();
+                String rep = e.getValue() == null ? "" : e.getValue().trim();
+                if (!old.isEmpty() && !rep.isEmpty() && !old.equals(rep)) {
+                    plan.put(old, rep);
+                }
+            }
+        }
+        return rewriteNames(text, plan);
+    }
+
     private static String trimIdentifier(String name) {
         return name == null ? "" : name.trim().replace("`", "");
     }

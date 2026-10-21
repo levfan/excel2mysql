@@ -2268,9 +2268,20 @@ check("O28 保存后 modified 复位", ow2.sql_files[-1]["modified"] is False)
 _FakeProgress.made.clear()
 ow2.ed_sql_prefix.setText("ods_")
 ow2.on_sql_apply_prefix()
+check("O29 SQL「批量应用前缀」只改页面显示：不弹进度框、脚本正文一个字不动",
+      _FakeProgress.made == [] and ow2.sql_table.item(0, 3).text() == "ods_t_a"
+      and "`ods_t_a`" not in ow2.sql_files[-1]["text"]
+      and ow2.sql_files[-1]["modified"] is False,
+      (_FakeProgress.made, ow2.sql_table.item(0, 3).text()))
+POPUPS.clear()
+_FakeProgress.made.clear()
+ow2.on_sql_save_modified()
 d6 = _last_dialog()
-check("O29 SQL「批量应用前缀」逐文件报进度并改写文本",
-      len(d6.updates) == 2 and "`ods_t_a`" in ow2.sql_files[-1]["text"], d6.updates)
+check("O29b 点「保存修改后ddl脚本」才把显示名写进脚本，并给出进度与结果",
+      d6 is not None and d6.accepted and "`ods_t_a`" in ow2.sql_files[-1]["text"]
+      and ow2.sql_files[-1]["modified"] is False
+      and any(t == "保存完成" for t, _ in POPUPS),
+      (ow2.sql_files[-1]["text"], [t for t, _ in POPUPS]))
 
 # 未选库/无文件时不该弹框（守卫在起线程之前就返回）
 _FakeProgress.made.clear()
@@ -2721,8 +2732,41 @@ sw2.ed_sql_prefix.setText("ods_")
 sw2.on_sql_apply_prefix()
 _cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
 _orig = [sw2.sql_table.item(i, 1).text() for i in range(sw2.sql_table.rowCount())]
-check("Q27 加前缀后「当前表名」更新而「原表名」保持原样",
-      _cur == ["ods_t_one", "ods_t_two"] and _orig == ["t_one", "t_two"], (_orig, _cur))
+check("Q27 加前缀后「当前表名」更新而「原表名」保持原样，脚本未改",
+      _cur == ["ods_t_one", "ods_t_two"] and _orig == ["t_one", "t_two"]
+      and "`ods_t_one`" not in sw2.sql_files[0]["text"]
+      and sw2.sql_files[0]["modified"] is False, (_orig, _cur))
+_qmeta = sw2._build_sql_metadata_dialog(0)
+check("Q27a 前缀只改显示时，双击行看到的元数据标题也用显示名",
+      _qmeta is not None and _qmeta.windowTitle() == "表元数据（ods_t_one）",
+      None if _qmeta is None else _qmeta.windowTitle())
+if _qmeta is not None:
+    _qmeta.close()
+sw2.on_sql_apply_prefix()                     # 同一前缀再点一次
+_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
+check("Q27d 同一前缀重复点不叠加，始终只多一段",
+      _cur == ["ods_t_one", "ods_t_two"], _cur)
+sw2.ed_sql_prefix.setText("change")
+sw2.on_sql_replace_prefix()                   # 换首段接在当前显示名之后
+_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
+check("Q27e 换首段基于当前显示名：ods_t_one → change_t_one",
+      _cur == ["change_t_one", "change_t_two"]
+      and "`change_t_one`" not in sw2.sql_files[0]["text"], _cur)
+sw2.ed_sql_prefix.setText("")
+sw2.on_sql_apply_prefix()
+_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
+check("Q27b 前缀清空后再点一次，表名显示恢复脚本原名且正文仍未改",
+      _cur == ["t_one", "t_two"] and "前缀已清空" in sw2.sql_log.toPlainText()
+      and sw2.sql_files[0]["modified"] is False, _cur)
+sw2.ed_sql_prefix.setText("ods_")
+sw2.on_sql_apply_prefix()
+sw2.sql_table.item(0, 3).setText("t_one")
+_app.processEvents()
+check("Q27c 手动把显示名改回脚本里的原名 = 只撤掉这一行的显示前缀",
+      sw2.sql_table.item(0, 3).text() == "t_one"
+      and "显示前缀已移除，脚本未改写" in sw2.sql_log.toPlainText()
+      and "t_one" not in sw2.sql_files[0].get("display_map", {}), 
+      sw2.sql_files[0].get("display_map"))
 sw2.sql_table.selectRow(0)
 sw2.on_sql_remove_selected()
 check("Q28 「移除选中文件」按选中行删除并留痕",
@@ -3063,19 +3107,27 @@ _orig = [sw3.sql_table.item(i, 1).text() for i in range(sw3.sql_table.rowCount()
 check("R27 SQL 页替换后「当前表名」更新、「原表名」仍是最初的名字",
       _cur == ["change_t_order", "change_table2", "users"]
       and _orig == ["ods_t_order", "adb_table2", "users"], (_orig, _cur))
-check("R28 脚本正文被改写且标记为已修改",
-      "`change_t_order`" in sw3.sql_files[0]["text"]
-      and sw3.sql_files[0]["modified"] is True)
-check("R29 日志逐条回报改写处数与跳过原因",
-      "[换前缀] 换前缀样本.sql：ods_t_order → change_t_order（3 处）"
-      in sw3.sql_log.toPlainText()
-      and "users" in sw3.sql_log.toPlainText(),
-      [l for l in sw3.sql_log.toPlainText().splitlines() if l.startswith("[换前缀]")])
+check("R28 替换只落在显示层：脚本正文与修改标记都没动",
+      "`change_t_order`" not in sw3.sql_files[0]["text"]
+      and sw3.sql_files[0]["modified"] is False
+      and sw3.sql_files[0].get("display_map")
+      == {"ods_t_order": "change_t_order", "adb_table2": "change_table2"},
+      sw3.sql_files[0].get("display_map"))
+check("R29 日志逐条回报显示名与跳过原因，并写明正文未改",
+      "[换前缀] 换前缀样本.sql：ods_t_order → change_t_order（显示）、"
+      "adb_table2 → change_table2（显示）" in sw3.sql_log.toPlainText()
+      and "users" in sw3.sql_log.toPlainText()
+      and "脚本正文未改，点保存/执行/生成时才写入" in sw3.sql_log.toPlainText(),
+      [l for l in sw3.sql_log.toPlainText().splitlines() if l.startswith("[换前缀")])
+POPUPS.clear()
 sw3.btn_sql_save.click()
 saved = os.path.join(_tmpdir, "换前缀样本_prefix.sql")
-check("R30 保存后落盘的脚本用的是新表名",
-      os.path.isfile(saved) and "`change_t_order`" in open(saved, encoding="utf-8").read(),
-      saved)
+check("R30 点保存才把替换后的表名写进脚本并落盘",
+      os.path.isfile(saved) and "`change_t_order`" in open(saved, encoding="utf-8").read()
+      and "`change_t_order`" in sw3.sql_files[0]["text"]
+      and sw3.sql_files[0]["modified"] is False
+      and any(t == "保存完成" for t, _ in POPUPS),
+      (saved, [t for t, _ in POPUPS]))
 
 # ---- 进度框：与「批量应用前缀」同一套机制 ----
 # O 组末尾把 ProgressDialog 换成了真类（端到端取证用），这里换回替身才能记到刷新
@@ -3097,10 +3149,25 @@ check("R31 「替换首个前缀」走模态进度框，按表计项且跳过的
 _FakeProgress.made.clear()
 sw3.ed_sql_prefix.setText("ods3")
 sw3.btn_sql_replace.click()
-dlg2 = _last_dialog()
-check("R32 SQL 页替换同样走模态进度框，按文件计项",
-      dlg2 is not None and dlg2.accepted and dlg2.updates[-1] == (1, 1, "换前缀样本.sql"),
-      dlg2.updates if dlg2 else None)
+_cur = [sw3.sql_table.item(i, 3).text() for i in range(sw3.sql_table.rowCount())]
+check("R32 SQL 页替换同样只改显示：不弹进度框、脚本正文保持保存时的样子",
+      _FakeProgress.made == [] and _cur == ["ods3_t_order", "ods3_table2", "users"]
+      and "`change_t_order`" in sw3.sql_files[0]["text"]
+      and sw3.sql_files[0]["modified"] is False,
+      (_FakeProgress.made, _cur))
+# 执行按钮：动作用的是脚本正文，所以点下去也必须先把显示名写进脚本；
+# 目标库故意指向必然拒绝连接的端口，验证"先落名、再连库"的顺序。
+sw3.cb_db.addItem("alpha", "alpha")
+sw3.ed_host.setText("127.0.0.1")
+sw3.ed_port.setValue(1)
+_FakeProgress.made.clear()
+sw3.btn_sql_run.click()
+_dlg3 = _last_dialog()
+check("R32b 点「执行修改后ddl脚本到当前库」时显示名先写进脚本，连库失败也不回退",
+      _dlg3 is not None and "`ods3_t_order`" in sw3.sql_files[0]["text"]
+      and "[生效]" in sw3.sql_log.toPlainText()
+      and "[连接失败]" in sw3.sql_log.toPlainText(),
+      (sw3.sql_files[0]["text"][:60], _FakeProgress.made))
 app_main.MODAL_PROGRESS = False
 
 # ---- 第二个页签的「生成标准/简易excel文件」：表定义来自脚本正文，不是来自 Excel ----

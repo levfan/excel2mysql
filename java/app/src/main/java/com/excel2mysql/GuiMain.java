@@ -1648,67 +1648,100 @@ public final class GuiMain {
         if (page.entryCount() != 2) {
             problems.add("重复添加把文件加了两遍");
         }
-        if (page.applyPrefix() == null) {
-            problems.add("空前缀没被拦下");
+        // 空前缀不是错误：两个前缀按钮都把它当作"撤掉显示层、恢复脚本原名"
+        if (page.applyPrefix() != null) {
+            problems.add("空前缀应视作撤掉显示层，而不是拦下");
+        }
+        if (!page.logPanel().contains("前缀为空，表名显示本来就是脚本原名")) {
+            problems.add("空前缀没有说明表名保持脚本原名");
         }
 
         page.setPrefixText("ods_");
         if (page.applyPrefix() != null) {
             problems.add("合法前缀被拦住了");
         }
-        if (!"正在改写脚本中的表名…".equals(frame.lastTaskTitle())) {
-            problems.add("加前缀任务标题不对：" + frame.lastTaskTitle());
-        }
         String text = page.textOf(a);
-        if (!text.contains("ods_t_order") || !text.contains("ods_plain")) {
-            problems.add("加前缀没改到表名：" + text);
+        if (text.contains("ods_t_order") || text.contains("ods_plain")) {
+            problems.add("「批量应用前缀」不该改脚本正文：" + text);
         }
-        if (!page.isModified(a)) {
-            problems.add("改过却没标记成已修改，「保存修改后ddl脚本」会漏掉它");
-        }
-        int rowsBefore = page.rowCount();
-        page.setPrefixText("ods_");
-        page.applyPrefix();
-        if (page.rowCount() != rowsBefore || page.textOf(a).contains("ods_ods_")) {
-            problems.add("重复加同一个前缀叠了一层");
-        }
-        if (!page.logPanel().contains("[前缀完成] 共改写 3 个表名")) {
-            problems.add("前缀完成没有汇总改写了几个表名");
+        if (page.isModified(a)) {
+            problems.add("只改显示的前缀不该把脚本标记成已修改");
         }
         if (!page.cellText(0, 3).equals("ods_t_order")) {
-            problems.add("「当前表名」列没跟着改写走：" + page.cellText(0, 3));
+            problems.add("「当前表名」列没跟着显示前缀走：" + page.cellText(0, 3));
         }
         if (!page.cellText(0, 1).equals("t_order")) {
             problems.add("「原表名」列显示的不是最初的表名：" + page.cellText(0, 1));
         }
+        if (!"ods_t_order".equals(page.metadataShownName(0))) {
+            problems.add("元数据弹窗没跟着显示前缀：" + page.metadataShownName(0));
+        }
+        if (!page.logPanel().contains("[前缀完成] 共 3 个表名改为显示前缀「ods_」")) {
+            problems.add("前缀完成没有汇总几个表名改了显示");
+        }
+        int rowsBefore = page.rowCount();
+        page.setPrefixText("ods_");
+        page.applyPrefix();
+        if (page.rowCount() != rowsBefore || page.cellText(0, 3).contains("ods_ods_")) {
+            problems.add("重复加同一个前缀叠了一层");
+        }
+        page.setPrefixText("");
+        page.applyPrefix();
+        if (!page.cellText(0, 3).equals("t_order") || !page.cellText(2, 3).equals("dim_x")) {
+            problems.add("清空前缀再点一次没恢复脚本原名：" + page.cellText(0, 3)
+                    + "/" + page.cellText(2, 3));
+        }
+        if (!page.logPanel().contains("前缀已清空")) {
+            problems.add("清空前缀没有留下恢复原名的日志");
+        }
+        if (page.textOf(a).contains("ods_t_order")) {
+            problems.add("清空前缀不该动脚本正文：" + page.textOf(a));
+        }
 
+        page.setPrefixText("ods_");
+        page.applyPrefix();
         page.setPrefixText("change");
         if (page.replaceFirstPrefix() != null) {
             problems.add("替换首个前缀被拦住");
         }
-        if (!"正在替换脚本中的表名前缀…".equals(frame.lastTaskTitle())) {
-            problems.add("换前缀任务标题不对：" + frame.lastTaskTitle());
-        }
         String after = page.textOf(a);
-        if (!after.contains("change_t_order") || !after.contains("change_plain")) {
-            problems.add("替换首段没改到表名：" + after);
+        if (after.contains("change_t_order") || after.contains("change_plain")) {
+            problems.add("「替换首个前缀」不该改脚本正文：" + after);
         }
-        if (!after.contains("INSERT INTO `change_t_order`")) {
-            problems.add("INSERT 里的引用没跟着改写：" + after);
+        if (!page.cellText(0, 3).equals("change_t_order")
+                || !page.cellText(1, 3).equals("change_plain")) {
+            problems.add("替换首段没改到显示名：" + page.cellText(0, 3)
+                    + "/" + page.cellText(1, 3));
+        }
+        if (!page.cellText(2, 3).equals("change_dim_x")) {
+            problems.add("ods_dim_x 的首段在显示层没被换掉：" + page.cellText(2, 3));
+        }
+        if (page.isModified(a) || page.isModified(b)) {
+            problems.add("只改显示的换前缀不该标记成已修改");
+        }
+
+        page.saveModified();
+        if (!page.textOf(a).contains("CREATE TABLE change_t_order")
+                || !page.textOf(a).contains("INSERT INTO `change_t_order`")) {
+            problems.add("保存时没把显示名写进脚本：" + page.textOf(a));
         }
         if (!page.textOf(b).contains("change_dim_x")) {
             problems.add("ods_dim_x 的首段没被换掉：" + page.textOf(b));
         }
-
-        page.saveModified();
         if (page.isModified(a) || page.isModified(b)) {
             problems.add("两个改过的脚本都该落盘并清掉已修改标记");
         }
         if (!"正在保存修改后的脚本…".equals(frame.lastTaskTitle())) {
             problems.add("保存任务标题不对：" + frame.lastTaskTitle());
         }
+        if (!page.logPanel().contains("[生效] ")) {
+            problems.add("显示名写入脚本没有留下日志");
+        }
         if (!page.logPanel().contains("[已保存] ")) {
             problems.add("落盘成功没有报出写了哪个文件");
+        }
+        if (!"保存完成".equals(frame.lastDialogTitle())) {
+            problems.add("保存后没有结果弹窗：" + frame.lastDialogTitle());
         }
         String outA = com.excel2mysql.gui.SqlPage.modifiedPath(a);
         if (!new java.io.File(outA).isFile()) {
@@ -2567,7 +2600,7 @@ public final class GuiMain {
         List<com.excel2mysql.gui.SqlPage.Src> items =
                 new ArrayList<com.excel2mysql.gui.SqlPage.Src>();
         items.add(new com.excel2mysql.gui.SqlPage.Src("x/a.sql",
-                "CREATE TABLE a (id INT);" + nl + "INSERT INTO a VALUES (1);" + nl, null));
+                "CREATE TABLE a (id INT);" + nl + "INSERT INTO a VALUES (1);" + nl));
         Recorder rec = new Recorder();
         com.excel2mysql.gui.SqlPage.RunResult res;
         try {

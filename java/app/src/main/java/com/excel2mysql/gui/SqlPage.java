@@ -77,6 +77,8 @@ public final class SqlPage extends JPanel {
         public List<Map<String, Object>> tabs;
         /** 最初的表名 → 现在脚本里写的表名，多轮改写累计；"原表名"列靠它回显。 */
         public final Map<String, String> renameMap = new LinkedHashMap<String, String>();
+        /** 脚本里的当前表名 → 页面显示名：前缀两个按钮只动这一层，动作按钮才写进 text。 */
+        public final Map<String, String> displayMap = new LinkedHashMap<String, String>();
 
         Entry(String path, String text, List<Map<String, Object>> tabs) {
             this.path = path;
@@ -89,18 +91,15 @@ public final class SqlPage extends JPanel {
 
     /**
      * 交给子线程的输入快照：改写期间主线程可能继续动列表，子线程只读这份拷贝。
-     * 保存/执行这两条路径只用 path/text，renameMap 留空。
+     * 保存/执行/生成三条路径只用到 path/text。
      */
     public static final class Src {
         public final String path;
         public final String text;
-        final Map<String, String> renameMap;
 
-        public Src(String path, String text, Map<String, String> renameMap) {
+        public Src(String path, String text) {
             this.path = path;
             this.text = text;
-            this.renameMap = renameMap == null
-                    ? new LinkedHashMap<String, String>() : renameMap;
         }
     }
 
@@ -122,19 +121,13 @@ public final class SqlPage extends JPanel {
         }
     }
 
-    /** 子线程算好的改写结果，按脚本路径索引；写回 Entries 一律回事件分发线程做。 */
-    private static final class Update {
-        String text;
-        List<Map<String, Object>> tabs;
-        final Map<String, String> renameMap = new LinkedHashMap<String, String>();
-    }
     private static final String PREFIX_HINT =
             "如 dim_（加前缀，已带该前缀的表自动跳过）；填 change 再点「替换首个前缀」"
-            + "则把 ods_t_order 换成 change_t_order";
+            + "则把 ods_t_order 换成 change_t_order。清空后再点一次可恢复原表名";
     private static final String REPLACE_TIP =
-            "把脚本里每个表名第一个下划线之前的部分换成上面填的内容，"
-            + "并同步改写 CREATE/DROP/INSERT/ALTER/TRUNCATE 中的引用；"
-            + "表名里没有下划线的不动。末尾下划线不用写";
+            "把每个表名第一个下划线之前的部分换成上面填的内容，只改页面显示；\n"
+            + "点保存/执行/生成时才写进脚本并把 CREATE/DROP/INSERT/ALTER/TRUNCATE 的引用一起改掉；\n"
+            + "表名里没有下划线的不动。末尾下划线不用写，留空再点一次恢复原表名";
     private static final Charset UTF8 = Charset.forName("UTF-8");
 
     private final Host host;
@@ -226,6 +219,8 @@ public final class SqlPage extends JPanel {
         });
         prefixField = new HintTextField(18, PREFIX_HINT);
         JButton apply = new JButton("批量应用前缀");
+        apply.setToolTipText("只改「当前表名」列的显示（双击看的元数据表名同步），脚本正文不动；"
+                + "点保存/执行/生成时才把显示名写进脚本。前缀留空再点一次，显示恢复为脚本原名。");
         apply.addActionListener(e -> {
             String hint = applyPrefix();
             if (hint != null) {
@@ -532,6 +527,14 @@ public final class SqlPage extends JPanel {
         }
         return null;
     }
+
+    /** 自检入口：双击元数据弹窗里显示的表名（前缀/大写都算上）。 */
+    public String metadataShownName(int row) {
+        if (row < 0 || row >= rowActual.size()) {
+            return null;
+        }
+        return displayName(displayBase(entryOfRow(row), rowActual.get(row)));
+    }
     /**
      * 读盘与提取表名都在子线程跑（几十万行的脚本不能压在事件分发线程上），
      * 只有"并入列表 + 刷新表格"回到事件分发线程；日志全程留在 SQL 页。
@@ -614,49 +617,71 @@ public final class SqlPage extends JPanel {
     }
 
     /**
-     * 批量加前缀：已带该前缀与脚本里找不到引用的都进跳过清单，重复点不会叠前缀。
-     * 返回非 null 表示这次点下去只该弹提示。改写跑在子线程，表名清单也在工作线程重算。
+     * 批量加前缀：只改「当前表名」的显示层，脚本正文不动；已带该前缀的进跳过清单，
+     * 重复点不会叠前缀。前缀留空表示撤掉显示层、恢复脚本原名。
+     * 返回非 null 表示这次点下去只该弹提示（这条路径现在没有校验失败）。
      */
     public String applyPrefix() {
-        String prefix = Names.pyStrip(prefixField.getText());
+        String prefix = Names.pyStrip(prefixField.getText()).replace("`", "").replace("\\", "");
         if (prefix.isEmpty()) {
-            return "请先输入表名前缀（如 dim_）。";
+            clearDisplayPrefix();
+            return null;
         }
-        final List<Src> items = snapshot();
-        final String p = prefix;
-        host.runSqlTask("正在改写脚本中的表名…", sink -> {
-            sink.setTotal(items.size());
-            Map<String, Update> updates = new LinkedHashMap<String, Update>();
-            int total = 0;
-            for (Src s : items) {
-                String fname = baseName(s.path);
-                if (sink.cancelled()) {
-                    break;
+        int total = 0;
+        for (Entry e : entries) {
+            Map<String, String> plan = new LinkedHashMap<String, String>();
+            Map<String, String> current =
+                    new LinkedHashMap<String, String>(e.displayMap);
+            List<String> skipped = new ArrayList<String>();
+            for (Map<String, Object> t : e.tabs) {
+                String old = String.valueOf(t.get("name"));
+                String shown = current.containsKey(old) ? current.get(old) : old;
+                if (shown.startsWith(prefix)) {
+                    if (!shown.equals(old)) {
+                        plan.put(old, shown);     // 已带前缀：保留原显示，不叠也不丢
+                    }
+                    skipped.add(shown);
+                    continue;
                 }
-                SqlScript.Rewrite rw = SqlScript.applyPrefix(s.text, p);
-                if (!rw.renamed.isEmpty()) {
-                    Update u = new Update();
-                    u.text = rw.text;
-                    u.tabs = SqlScript.extractCreateTables(rw.text);
-                    u.renameMap.putAll(reverseRename(s.renameMap, rw));
-                    updates.put(s.path, u);
-                    sink.log("[前缀] " + fname + "：" + describeRenamed(rw.renamed));
-                    total += rw.renamed.size();
-                }
-                if (!rw.skipped.isEmpty()) {
-                    sink.log("[跳过] " + fname + "：已带前缀 " + String.join("、", rw.skipped));
-                }
-                sink.step(fname);
+                plan.put(old, prefix + shown);
             }
-            sink.log("[前缀完成] 共改写 " + total
-                    + " 个表名（修改在内存中，可点「保存修改后ddl脚本」落盘）");
-            return updates;
-        }, out -> applyUpdates(out));
+            e.displayMap.clear();
+            e.displayMap.putAll(plan);
+            total += plan.size();
+            if (!plan.isEmpty()) {
+                log("[前缀] " + baseName(e.path) + "：" + describeDisplayPlan(plan));
+            }
+            if (!skipped.isEmpty()) {
+                log("[跳过] " + baseName(e.path) + "：已带前缀 " + String.join("、", skipped));
+            }
+        }
+        refreshTable();
+        log("[前缀完成] 共 " + total + " 个表名改为显示前缀「" + prefix
+                + "」（脚本正文未改，点保存/执行/生成时才写入）");
         return null;
     }
 
-    /** 换首个前缀：清洗与合法性校验走 core 的同一套规则，改写同样在子线程。 */
+    /** 空前缀再点一次：只撤掉显示层，表名回到脚本里的原名。 */
+    private void clearDisplayPrefix() {
+        int n = 0;
+        for (Entry e : entries) {
+            n += e.displayMap.size();
+            e.displayMap.clear();
+        }
+        refreshTable();
+        if (n > 0) {
+            log("[前缀完成] 前缀已清空，" + n + " 个表名的显示恢复为脚本中的原名（脚本正文未改）");
+        } else {
+            log("[前缀完成] 前缀为空，表名显示本来就是脚本原名，无需恢复");
+        }
+    }
+
+    /** 换首个前缀：清洗与合法性校验走 core 的同一套规则，同样只改显示层。 */
     public String replaceFirstPrefix() {
+        if (Names.pyStrip(prefixField.getText()).isEmpty()) {
+            clearDisplayPrefix();
+            return null;
+        }
         String head = Prefix.clean(prefixField.getText());
         if (head.isEmpty()) {
             return "请先输入新的前缀（如 change）。";
@@ -665,64 +690,80 @@ public final class SqlPage extends JPanel {
             return "前缀「" + head + "」含非法字符：只能用字母、数字、下划线；"
                     + "末尾的下划线不用写，原表名自带。";
         }
-        final List<Src> items = snapshot();
-        final String h = head;
-        host.runSqlTask("正在替换脚本中的表名前缀…", sink -> {
-            sink.setTotal(items.size());
-            Map<String, Update> updates = new LinkedHashMap<String, Update>();
-            int total = 0;
-            for (Src s : items) {
-                String fname = baseName(s.path);
-                if (sink.cancelled()) {
-                    break;
+        int total = 0;
+        for (Entry e : entries) {
+            Map<String, String> plan = new LinkedHashMap<String, String>();
+            Map<String, String> current =
+                    new LinkedHashMap<String, String>(e.displayMap);
+            List<String> skipped = new ArrayList<String>();
+            for (Map<String, Object> t : e.tabs) {
+                String old = String.valueOf(t.get("name"));
+                String shown = current.containsKey(old) ? current.get(old) : old;
+                String rep = Prefix.swapFirstSegment(shown, head);
+                if (rep == null) {
+                    if (!shown.equals(old)) {
+                        plan.put(old, shown);     // 没换成：保留原显示
+                    }
+                    skipped.add(shown);
+                    continue;
                 }
-                SqlScript.Rewrite rw = SqlScript.replaceFirstSegment(s.text, h);
-                if (!rw.renamed.isEmpty()) {
-                    Update u = new Update();
-                    u.text = rw.text;
-                    u.tabs = SqlScript.extractCreateTables(rw.text);
-                    u.renameMap.putAll(reverseRename(s.renameMap, rw));
-                    updates.put(s.path, u);
-                    sink.log("[换前缀] " + fname + "：" + describeRenamed(rw.renamed));
-                    total += rw.renamed.size();
-                }
-                if (!rw.skipped.isEmpty()) {
-                    sink.log("[跳过] " + fname + "：未改写 " + String.join("、", rw.skipped)
-                            + "（表名里没有下划线，或脚本中找不到引用）");
-                }
-                sink.step(fname);
+                plan.put(old, rep);
             }
-            sink.log("[换前缀完成] 共改写 " + total
-                    + " 个表名（修改在内存中，可点「保存修改后ddl脚本」落盘）");
-            return updates;
-        }, out -> applyUpdates(out));
+            e.displayMap.clear();
+            e.displayMap.putAll(plan);
+            total += plan.size();
+            if (!plan.isEmpty()) {
+                log("[换前缀] " + baseName(e.path) + "：" + describeDisplayPlan(plan));
+            }
+            if (!skipped.isEmpty()) {
+                log("[跳过] " + baseName(e.path) + "：未改写 " + String.join("、", skipped)
+                        + "（表名里没有下划线）");
+            }
+        }
+        refreshTable();
+        log("[换前缀完成] 共 " + total + " 个表名改为显示名"
+                + "（脚本正文未改，点保存/执行/生成时才写入）");
         return null;
     }
 
-    /** 快照：子线程只读这份拷贝，不跟主线程的列表共用同一个 Entry。 */
-    private List<Src> snapshot() {
-        List<Src> out = new ArrayList<Src>();
-        for (Entry e : entries) {
-            out.add(new Src(e.path, e.text, new LinkedHashMap<String, String>(e.renameMap)));
+    private static String describeDisplayPlan(Map<String, String> plan) {
+        List<String> parts = new ArrayList<String>();
+        for (Map.Entry<String, String> en : plan.entrySet()) {
+            parts.add(en.getKey() + " → " + en.getValue() + "（显示）");
         }
-        return out;
+        return String.join("、", parts);
     }
 
-    /** 按路径把改写结果写回列表：这一步在事件分发线程上，改完才刷新表格。 */
-    @SuppressWarnings("unchecked")
-    private void applyUpdates(Object out) {
-        Map<String, Update> updates = (Map<String, Update>) out;
+    /**
+     * 把页面显示的表名写进脚本；保存/执行/生成三个动作共用这一道。
+     * 只在动作按钮点下去时调用，前缀两个按钮本身不碰 text。
+     */
+    private boolean materializeDisplayNames() {
+        boolean pending = false;
         for (Entry e : entries) {
-            Update u = updates.get(e.path);
-            if (u == null) {
+            if (e.displayMap.isEmpty()) {
                 continue;
             }
-            e.text = u.text;
-            e.tabs = u.tabs;
-            e.modified = true;
-            e.renameMap.putAll(u.renameMap);
+            pending = true;
+            SqlScript.Rewrite rw = SqlScript.applyDisplayRenames(e.text, e.displayMap);
+            e.renameMap.putAll(reverseRename(e.renameMap, rw));
+            if (!rw.renamed.isEmpty()) {
+                e.text = rw.text;
+                e.tabs = SqlScript.extractCreateTables(rw.text);
+                e.modified = true;
+                log("[生效] " + baseName(e.path) + "：" + describeRenamed(rw.renamed)
+                        + " 已写入脚本");
+            }
+            if (!rw.noHit.isEmpty()) {
+                log("[跳过] " + baseName(e.path) + "：脚本里找不到 "
+                        + String.join("、", rw.noHit) + " 的引用，未改写");
+            }
+            e.displayMap.clear();
         }
-        refreshTable();
+        if (pending) {
+            refreshTable();
+        }
+        return pending;
     }
 
     /** 落盘文件名固定为 原 stem + "_prefix" + 原扩展名，不覆盖原脚本。 */
@@ -739,14 +780,16 @@ public final class SqlPage extends JPanel {
     /** 几十万行的脚本写盘也放子线程；哪些算"已落盘"要回到事件分发线程才清 modified 标记。 */
     @SuppressWarnings("unchecked")
     public void saveModified() {
+        materializeDisplayNames();
         List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
             if (e.modified) {
-                items.add(new Src(e.path, e.text, null));
+                items.add(new Src(e.path, e.text));
             }
         }
         if (items.isEmpty()) {
             log("[保存] 没有修改过的脚本文件");
+            host.inform2("保存完成", "没有修改过的脚本文件，无需保存。");
             return;
         }
         final List<Src> todo = items;
@@ -778,6 +821,14 @@ public final class SqlPage extends JPanel {
                     e.modified = false;
                 }
             }
+            int n = done.size();
+            if (n > 0) {
+                log("===== 保存完成：" + n + " 个脚本副本 =====");
+                host.inform2("保存完成", "已保存 " + n + " 个脚本副本。" + LogText.NL + "详见日志。");
+            } else {
+                error("===== 保存完成：没有文件写出 =====");
+                host.inform2("保存完成", "没有文件写出，详见日志。");
+            }
         });
     }
 
@@ -793,11 +844,12 @@ public final class SqlPage extends JPanel {
         if (entries.isEmpty()) {
             return LogText.NO_SQL_HINT;
         }
+        materializeDisplayNames();
         final String target = cfg.database + "@" + cfg.host + ":" + cfg.port;
         log("===== 开始执行脚本（目标库 " + cfg.database + "，每个文件一个事务）=====");
         List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
-            items.add(new Src(e.path, e.text, null));
+            items.add(new Src(e.path, e.text));
         }
         final List<Src> todo = items;
         final Config conf = cfg;
@@ -966,7 +1018,7 @@ public final class SqlPage extends JPanel {
                         }
                     }
                     model.addRow(new Object[]{baseName(e.path), origin,
-                            String.valueOf(t.get("count")), displayName(name)});
+                            String.valueOf(t.get("count")), displayName(displayBase(e, name))});
                     rowPath.add(e.path);
                     rowOrigin.add(origin);
                     rowActual.add(name);
@@ -986,33 +1038,56 @@ public final class SqlPage extends JPanel {
         return upperBox.isSelected() ? actual.toUpperCase(java.util.Locale.ROOT) : actual;
     }
 
+    /** 显示层：前缀按钮只改 displayMap，小写名原样存着，勾大写时再套一层。 */
+    private static String displayBase(Entry e, String actual) {
+        String shown = e == null ? null : e.displayMap.get(actual);
+        return shown == null ? actual : shown;
+    }
+
+    private Entry entryOfRow(int row) {
+        if (row < 0 || row >= rowPath.size()) {
+            return null;
+        }
+        String path = rowPath.get(row);
+        for (Entry e : entries) {
+            if (e.path.equals(path)) {
+                return e;
+            }
+        }
+        return null;
+    }
+
     /** 手改「当前表名」：只重写这一行所在脚本里的这个表名及引用，脚本先留在内存。 */
     private void renameRow(int row, String typedName) {
         if (row < 0 || row >= rowActual.size()) {
             return;
         }
-        String path = rowPath.get(row);
         String oldName = rowActual.get(row);
         String origin = rowOrigin.get(row);
+        String shown = displayName(displayBase(entryOfRow(row), oldName));
         String newName = typedName == null ? "" : typedName.trim().replace("`", "");
         if (newName.isEmpty()) {
             host.warn("表名不能为空，已恢复原表名「" + oldName + "」。");
             refreshTable();
             return;
         }
-        if (newName.equals(oldName)) {
-            log("[表名] " + oldName + " 未发生变化，脚本未改写");
+        Entry entry = entryOfRow(row);
+        if (entry == null) {
+            return;
+        }
+        if (newName.equals(shown)) {
             refreshTable();
             return;
         }
-        Entry entry = null;
-        for (Entry e : entries) {
-            if (e.path.equals(path)) {
-                entry = e;
-                break;
+        if (newName.equals(oldName)) {
+            // 手填脚本里的原名 = 只撤掉这一行的显示前缀，正文和修改标记都不动
+            if (entry.displayMap.remove(oldName) != null) {
+                refreshTable();
+                log("[表名] " + oldName + " 的显示前缀已移除，脚本未改写");
+            } else {
+                log("[表名] " + oldName + " 未发生变化，脚本未改写");
+                refreshTable();
             }
-        }
-        if (entry == null) {
             return;
         }
         SqlScript.Rewrite rw = SqlScript.renameTable(entry.text, oldName, newName);
@@ -1026,6 +1101,8 @@ public final class SqlPage extends JPanel {
         entry.tabs = SqlScript.extractCreateTables(entry.text);
         entry.modified = true;
         entry.renameMap.put(origin, newName);
+        entry.displayMap.remove(oldName);
+        entry.displayMap.remove(newName);
         refreshTable();
         Object count = rw.renamed.get(0).get("n");
         log("[表名] " + oldName + " → " + newName + "（已同步改写 " + count
@@ -1059,7 +1136,7 @@ public final class SqlPage extends JPanel {
             log("[元数据] 未找到表 " + actual + " 的定义（可能被后续语句改写）");
             return;
         }
-        new SqlMetadataDialog(host.owner(), parsed, displayName(actual),
+        new SqlMetadataDialog(host.owner(), parsed, metadataShownName(row),
                 upperBox.isSelected()).setVisible(true);
     }
 
@@ -1093,9 +1170,10 @@ public final class SqlPage extends JPanel {
             host.warn(LogText.NO_SQL_HINT);
             return;
         }
+        materializeDisplayNames();
         final List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
-            items.add(new Src(e.path, e.text, null));
+            items.add(new Src(e.path, e.text));
         }
         log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（脚本 " + items.size()
                 + " 个，输出根目录 " + outRoot + "）=====");

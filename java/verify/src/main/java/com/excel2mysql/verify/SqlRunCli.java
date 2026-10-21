@@ -113,9 +113,9 @@ public final class SqlRunCli {
         try {
             List<SqlPage.Src> items = new ArrayList<SqlPage.Src>();
             items.add(new SqlPage.Src(good.getPath(), new String(
-                    Files.readAllBytes(good.toPath()), UTF8), null));
+                    Files.readAllBytes(good.toPath()), UTF8)));
             items.add(new SqlPage.Src(bad.getPath(), new String(
-                    Files.readAllBytes(bad.toPath()), UTF8), null));
+                    Files.readAllBytes(bad.toPath()), UTF8)));
 
             Recorder sink = new Recorder();
             SqlPage.RunResult res = SqlPage.runScripts(items, cfg, sink);

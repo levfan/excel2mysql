@@ -120,6 +120,19 @@ def rename_table_sql(text: str, old: str, new: str) -> tuple:
     return text, 0
 
 
+def apply_display_renames(text: str, display_map: dict) -> tuple:
+    """把页面上显示的表名一次性写进脚本文本（点保存/执行/生成时才调用）。
+
+    display_map 是 {脚本里的当前表名: 页面显示名}；空名与没变化的条目跳过。
+    返回 (新文本, 改写列表, 未命中列表)，与 _rewrite_names 同一口径。
+    """
+    plan = {str(old): str(new) for old, new in (display_map or {}).items()
+            if old and new and str(old) != str(new)}
+    if not plan:
+        return text, [], []
+    return _rewrite_names(text, plan)
+
+
 def split_sql_statements(text: str) -> list:
     """
     按分号切分 SQL 语句，正确跳过以下内容中的分号：
