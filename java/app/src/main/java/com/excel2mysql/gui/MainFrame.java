@@ -2051,6 +2051,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         area.setBackground(new java.awt.Color(0, 0, 0, 0));
         java.awt.Font font = javax.swing.UIManager.getFont("OptionPane.messageFont");
         area.setFont(font == null ? area.getFont() : font);
+        java.awt.FontMetrics fm = area.getFontMetrics(area.getFont());
+        String[] lines = body.split("\n", -1);
+        int textWidth = 0;
+        for (String line : lines) {
+            textWidth = Math.max(textWidth, fm.stringWidth(line));
+        }
+        // JTextArea 默认只按 20 列报首选尺寸；结果弹窗里的产物路径会被挤成一团。
+        // 正文已按 56 显示列折行，这里至少给到 620x220，长路径才看得完整。
+        int width = Math.max(620, Math.min(820, textWidth + 44));
+        int height = Math.max(220, Math.min(420, lines.length * fm.getHeight() + 70));
+        java.awt.Dimension size = new java.awt.Dimension(width, height);
+        area.setPreferredSize(size);
+        area.setMinimumSize(size);
         return area;
     }
 

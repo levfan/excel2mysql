@@ -158,7 +158,15 @@ def wrap_popup_text(text: str) -> str:
     return "\n".join(kept)
 
 
-_POPUP_MESSAGE_BOX = QMessageBox
+class PopupMessageBox(QMessageBox):
+    def showEvent(self, event):
+        super().showEvent(event)
+        # QMessageBox 显示时会按正文重算尺寸，把外部设的最小值一并丢掉
+        self.setMinimumSize(620, 220)
+        self.resize(max(self.width(), 620), max(self.height(), 220))
+
+
+_POPUP_MESSAGE_BOX = PopupMessageBox
 _POPUP_ICONS = {"information": QMessageBox.Information,
                 "warning": QMessageBox.Warning,
                 "critical": QMessageBox.Critical}
@@ -173,6 +181,10 @@ def build_popup_box(parent, title: str, text: str, kind: str = "information",
     box.setText(wrap_popup_text(text))
     box.setIcon(_POPUP_ICONS[kind])
     box.setStandardButtons(_POPUP_OK)
+    # 结果里常带产物目录；默认按正文折行只有 400 多像素宽，长路径看着像被截掉。
+    # 这里给一个与 56 显示列相称的下限，小屏（1024）仍放得下。
+    box.setMinimumWidth(620)
+    box.setMinimumHeight(220)
     return box
 
 
