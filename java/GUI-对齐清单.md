@@ -133,7 +133,7 @@ Python 线是否修，另议。
 | SQL 表第一列 tooltip = 脚本完整路径 | `main.py:1215` | 已做 |
 | 窗口尺寸 1100×780 | `main.py:819` | 已做（之前是 1080×700） |
 | 文件选择框四档过滤器（Excel/ZIP、仅 Excel、仅 ZIP、所有文件）与对话框标题 | `main.py:1358-1361`、`1220` | 已做（SQL 页同样补"所有文件"一档） |
-| 文件区组框标题「待导入文件（双击表名/字段可编辑）」 | `main.py:895` | 已做 |
+| 文件区组框标题「待导入文件（单击表名改名，双击其他列改字段）」 | `main.py:1072` | 已做（第 41 节改了交互与文案，单击表名进编辑器、双击其余列开结构弹窗） |
 | 窗口图标 | `main.py:1722` | 已做（源图仍只有 assets/app_icon.ico 一份，tools/export_icon_png.py 取其中 256×256 那张 PNG 随包） |
 
 真库回归（MySQL 8.0.46，口令只走命令行环境变量）：
@@ -182,9 +182,9 @@ Python 线是否修，另议。
 
 另外两条事实澄清，避免下一轮再猜：
 
-- 文件表的**双击就地编辑** Python 也没有实现（`main.py:910` 关了编辑触发器，全文没有
-  `cellDoubleClicked`），组框标题那句"双击表名/字段可编辑"是它自己没落地的文案。
-  Java 现在的"双击开结构弹窗"是多做的一步，不算差距。
+- 这里的"双击"后来改成了第 41 节的交互：Python 关掉编辑触发器后，**单击「表名」**用
+  `editItem` 进编辑器单独改名，**双击其余列**开这一行的结构弹窗；Java 同口径。
+  本轮当时成立的"Python 没有就地编辑"不再是现状。
 - Python 侧**没有状态栏、没有菜单、没有右键菜单**，快捷键只有 F1 与 Esc；
   Java 原来那条 `status` JLabel 是自造的，第 20 轮已删干净，连接状态只由提示条说。
 
@@ -1948,3 +1948,54 @@ utf-8-sig → utf-8 → gbk 严格试解，没这个问题。
   `GuiMain.java` = `6d7aea84c4f4ee843d175c787f59c4f860832382d1b93aec5d7f48d3560b0571`。
 - 未覆盖：真实 MySQL 执行后的字符集是否仍保持中文（G 组需现场凭据）；
   用户实际双击打包版的手感。自动化只证明事件入口、数据落点与文案一致。
+
+## 41. 第一页签：单击表名单独改一张表
+
+现场要求："tab页1，点击表名，可以单独修改单个表名"。两栈同口径：单击「表名」直接进
+单元格编辑器，回车生效；批量前缀仍只管全部表，两者互不替代。
+
+### 41.1 交互与校验
+
+- 组框标题改为「待导入文件（单击表名改名，双击其他列改字段）」。单击「表名」进编辑器，
+  其余列保持只读；双击「文件 / 表注释 / 字段数 / 数据行数 / 主键」仍打开该行的结构弹窗，
+  双击「表名」不再叠加一个结构窗。
+- 校验放进共享层：Python `core/infer.py:1264` 的 `table_name_problem`，Java
+  `TableOps.java:78` 的 `tableNameProblem`。空名、超过 64 字符、含字母数字下划线以外的字符、
+  与列表中其他表重名四类都拒绝，弹一句原因并恢复原名。粘贴带反引号或首尾空白时先剥掉再校验，
+  校验通过的名字成为新的 `base_table_name`，后续「批量应用前缀」基于它计算。
+- Java 侧 `FileRowModel` 只让第 1 列可编辑（`isCellEditable`），`setValueAt` 把输入交给
+  `RenameHandler`；`MainFrame.renameFileTable` 负责校验、回写与日志。表名列的
+  `DefaultCellEditor` 设 `setClickCountToStart(1)`，双击监听跳过第 1 列。
+- Python 侧视图仍是 `NoEditTriggers`，`cellClicked` 只对第 1 列调 `editItem`；
+  `itemChanged` 用 `_refreshing_file_table` 压住整表重建，非表名列的 item 标志也去掉可编辑位，
+  让"只有表名可改"在数据与界面两处同时成立。
+
+### 41.2 守卫
+
+- Python：R50 只允许第 1 列的 item 带可编辑标志；R51/R51b 单击表名真的出现编辑器、
+  单击其他列不出现；R52/R52b 只改这一张表且日志逐字为
+  `[表名] 旧 → 新（手动修改，后续批量前缀基于新名计算）`；R53/R53b 手动名参与前缀计算、
+  清空前缀恢复手动名；R54–R56 空名、非法字符、重名三类拒绝并恢复；R57 反引号与空白被规范化；
+  R58 双击表名不叠结构窗、双击其他列仍打开这一行。
+- Java：`GuiMain.fileRename` 断改名同时写 `tableName`/`baseTableName`、日志原文、三类拒绝恢复、
+  改回原名；`isCellEditable(0, 1)` 为真且第 0/3 列为假。
+- 对撞器新增 6 个键：`file.rename.editable`、`file.rename.ok`、`file.rename.empty`、
+  `file.rename.bad`、`file.rename.dupe`、`file.rename.restored`；枚举项由 239 升到 245。
+
+### 41.3 验证
+
+- `pack_test.py`：通过 569、失败 0、跳过 6，退出码 0；R50–R58 全绿，
+  其中 R51c 走真实编辑器回车提交，确认刷新表格后编辑器正常关闭。
+- `java/构建验证.bat`：十步全过，退出码 0。
+- `界面双端对撞.bat`：245 键逐键一致，退出码 0。
+- 变异抽查：
+  - Python 去掉「表名」item 的 `ItemIsEditable` 标志 → R50/R51 两条变红，退出码 1；
+  - Python 去掉改名时的 `base_table_name` 回写 → R52/R53/R53b/R54/R55/R56 六条变红，
+    退出码 1；
+  - Java `FileRowModel.isCellEditable` 改成恒 `false` → 自检报
+    `文件表应只有表名列可就地编辑`，退出码 1。
+  - 全部逐字节还原后，`main.py` = `c354d7d26e18b2d486cfc7318632b2b3bc1070ab6941767878f9c1ac4781b130`，
+    `FileRowModel.java` = `d79352826de0bb8dbc416b796246586ef06bb44e80eec7bae2829ef231dffcb8`。
+- 未覆盖：真实鼠标在打包版表格上的单击命中与编辑器手感；自动化已覆盖
+  `cellClicked`/`editItem`、Java 模型可编辑性与 `setValueAt` 链路，实机双击与单击的
+  焦点差异仍需现场确认。G 组真实 MySQL 用例本轮无凭据，显式跳过。
