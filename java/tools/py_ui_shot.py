@@ -63,8 +63,8 @@ sql_file = os.path.join(OUT, "shot_a.sql")
 with open(sql_file, "w", encoding="utf-8") as fh:
     fh.write("CREATE TABLE t_order (id INT);\nINSERT INTO `t_order` VALUES (1);\n")
 win.ed_sql_prefix.setText("ods_")
-sink = m.ProgressSink(on_log=lambda t: win.sql_log.appendPlainText(t),
-                      on_log_error=lambda t: win.sql_log.appendPlainText(t))
+sink = m.ProgressSink(on_log=lambda t: m.append_log(win.sql_log, t),
+                      on_log_error=lambda t: m.append_log(win.sql_log, t, error=True))
 res = m.sql_load_task([sql_file], [], sink)
 win.sql_files.extend(res["loaded"])
 win._refresh_sql_table()

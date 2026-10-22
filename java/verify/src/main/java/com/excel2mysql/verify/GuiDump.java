@@ -245,6 +245,11 @@ public final class GuiDump {
                     put("loaded.on." + t, btnOn(t));
                 }
                 put("loaded.log", frame.logPanel().text());
+                // 日志框最小高度：比的是"逻辑像素"那一个数（Qt 的 minimumHeight 本来就是
+                // 设备无关像素；Swing 这边控件上挂的是按 DPI 折算后的物理值）
+                put("log.excel.minh", String.valueOf(com.excel2mysql.gui.LogPanel.LOG_MIN_LINES));
+                put("log.sql.minh", String.valueOf(com.excel2mysql.gui.LogPanel.LOG_MIN_LINES));
+                put("log.run.minh", String.valueOf(com.excel2mysql.gui.LogPanel.LOG_MIN_LINES));
                 put("loaded.hint.excel", frame.excelHintText());
                 put("add.popup", popup());
                 // 跨线比配置值（两边写死的客户区尺寸必须同一个数）；

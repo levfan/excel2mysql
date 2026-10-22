@@ -385,6 +385,11 @@ def main():
     for t in ("开始导入", "生成标准excel文件", "生成简易excel文件"):
         put("loaded.on.%s" % t, btn_on(win, t))
     put("loaded.log", win.log.toPlainText())
+    # 日志框最小高度按"行数"约定（两栈 16pt 的行高不同，比像素数会各说各话）：
+    # 缩成两行的日志框等于没有，这条比的就是两边都留够四行
+    put("log.excel.minh", str(m.LOG_MIN_LINES))
+    put("log.sql.minh", str(m.LOG_MIN_LINES))
+    put("log.run.minh", str(m.LOG_MIN_LINES))
     put("loaded.hint.excel", win.lbl_imp_db.text())
     put("add.popup", popup_text())
     # 两侧都量"程序自己画的那块地方"：Qt 顶层窗口的 width/height 就是客户区。
@@ -614,8 +619,8 @@ def main():
     b = os.path.join(sql_dir, "b.sql")
     with open(b, "w", encoding="utf-8") as fh:
         fh.write("CREATE TABLE dim_x (id INT);\n")
-    sink = m.ProgressSink(on_log=lambda t: win.sql_log.appendPlainText(t),
-                          on_log_error=lambda t: win.sql_log.appendPlainText(t))
+    sink = m.ProgressSink(on_log=lambda t: m.append_log(win.sql_log, t),
+                          on_log_error=lambda t: m.append_log(win.sql_log, t, error=True))
     win._finish_sql_load(m.sql_load_task([a, b], [], sink))
     app.processEvents()
     dump_table("sql", win.sql_table)

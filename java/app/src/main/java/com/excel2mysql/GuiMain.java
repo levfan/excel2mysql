@@ -142,6 +142,14 @@ public final class GuiMain {
                 if (!frame.logPanel().contains("[添加结果] 已取消，只完成了部分解析")) {
                     problems.add("取消后的汇总没同时写进日志");
                 }
+                // 有拒绝的「添加结果」必须算告警级：那句"另有 …"写在续行上，
+                // 定级只看首行就会把一批被拒绝的添加报成绿色成功（截图复核抓到的）
+                frame.log("[添加结果] 自检续行定级" + com.excel2mysql.core.LogText.NL
+                        + "另有 1 项解析失败，详见日志");
+                if (!"warn".equals(frame.logPanel().levelOfLine("自检续行定级"))) {
+                    problems.add("有拒绝的「添加结果」没按告警级定级："
+                            + frame.logPanel().levelOfLine("自检续行定级"));
+                }
                 if (tables != files.size()) {
                     problems.add("表数期望 " + files.size() + "，实际 " + tables
                             + "（有文件解析失败，看日志）");
@@ -328,6 +336,8 @@ public final class GuiMain {
                 if (frame.logPanel().isErrorLine("自检普通行")) {
                     problems.add("普通日志被误标成错误级");
                 }
+                log_line_shape(frame, problems);
+                log_pane_height(frame, problems);
                 for (int i = 0; i < frame.logPanel().maxLines() + 50; i++) {
                     frame.log("灌行 " + i);
                 }
@@ -627,6 +637,97 @@ public final class GuiMain {
      * 命名开关两颗复选框 + 空列按字段名定类型，走的是界面添加文件那条真实入口。
      * Python 侧对应 M21/M22 与 B22：名字规则写在开关上，不在代码里各写一份。
      */
+    /**
+     * 日志一行的形状：[时:分:秒] + 符号 + 大写分级标签，级别由中文标签定，续行不另打时间戳。
+     *
+     * 这一道必须咬住：三条线同一套标签（cli.py / core.log_text / 这里），图形界面只是多了钟点。
+     * 时间戳丢了、级别定错了、命令行搬来的那句叠出两个标签，都会在这里变红。
+     */
+    private static void log_line_shape(MainFrame frame, List<String> problems) {
+        java.util.regex.Pattern head = java.util.regex.Pattern.compile(
+                "^\\[(\\d{2}:\\d{2}:\\d{2})\\] ([+\\-!x]) \\[(OK|INFO|WARN|ERROR)\\] (.*)$");
+        frame.log("[跳过] 形状A");
+        frame.log("[已解析] 形状B");
+        frame.logError("[建表失败] 形状C");
+        frame.log("! [WARN] 说明 | 形状D");
+        frame.log("      | 1 | 2 |");
+        String[] want = {"形状A", "形状B", "形状C", "形状D", "| 1 | 2 |"};
+        String[] wantLevel = {"WARN", "OK", "ERROR", "WARN", null};
+        String[] wantMark = {"!", "+", "x", "!", null};
+        java.util.Map<String, String> seen = new java.util.HashMap<String, String>();
+        for (String ln : frame.logPanel().text().split("\n")) {
+            for (String w : want) {
+                if (ln.contains(w) && !seen.containsKey(w)) {
+                    seen.put(w, ln);
+                }
+            }
+        }
+        for (int i = 0; i < want.length; i++) {
+            String ln = seen.get(want[i]);
+            if (ln == null) {
+                problems.add("日志里没有形状用例那一行：" + want[i]);
+                continue;
+            }
+            if (wantLevel[i] == null) {
+                // 缩进的续行（结果表格那几行）归上一条记录，打上时间戳会把等宽表格顶歪
+                if (!ln.equals("      | 1 | 2 |")) {
+                    problems.add("缩进的续行被改写了：" + ln);
+                }
+                continue;
+            }
+            java.util.regex.Matcher m = head.matcher(ln);
+            if (!m.matches()) {
+                problems.add("日志行首不是「[时:分:秒] 符号 [级别] 」：" + ln);
+                continue;
+            }
+            if (!wantLevel[i].equals(m.group(3)) || !wantMark[i].equals(m.group(2))) {
+                problems.add("定级不对：" + ln + "（期望 " + wantMark[i] + " " + wantLevel[i] + "）");
+            }
+        }
+        if (seen.get("形状D") != null && countOf(seen.get("形状D"), "[WARN]") != 1) {
+            problems.add("本来就带大写标签的那句被叠了两个标签：" + seen.get("形状D"));
+        }
+        // 整页日志都要合这规矩（缩进行与空行除外）：漏一处就有一页的日志没有钟点
+        for (String ln : frame.logPanel().text().split("\n")) {
+            if (ln.trim().isEmpty() || Character.isWhitespace(ln.charAt(0))) {
+                continue;
+            }
+            if (!head.matcher(ln).matches()) {
+                problems.add("日志里有不合形状的一行：" + ln);
+                break;
+            }
+        }
+    }
+
+    /**
+     * 三个日志框的最小高度：不给最小高度，分栏按比例一缩，默认窗口里实测只剩两行
+     * （截图复核抓到的）。这一条断"至少装得下 4 行 16 号字"。
+     */
+    private static void log_pane_height(MainFrame frame, List<String> problems) {
+        com.excel2mysql.gui.LogPanel[] panes = {
+                frame.logPanel(), frame.sqlPage().logPanel(), frame.sqlRunLogPanel()};
+        String[] names = {"Excel 页", "SQL 脚本页", "SQL 执行器页"};
+        java.awt.FontMetrics fm = frame.getGraphics() == null ? null
+                : frame.getFontMetrics(panes[0].getFont());
+        for (int i = 0; i < panes.length; i++) {
+            int min = panes[i].getMinimumSize().height;
+            if (fm != null && min < 4 * fm.getHeight()) {
+                problems.add(names[i] + "的日志框装不下 4 行：" + min + " < "
+                        + (4 * fm.getHeight()));
+            }
+        }
+    }
+
+    private static int countOf(String text, String needle) {
+        int n = 0;
+        int i = text.indexOf(needle);
+        while (i >= 0) {
+            n++;
+            i = text.indexOf(needle, i + needle.length());
+        }
+        return n;
+    }
+
     private static void naming_switches(MainFrame frame, List<String> problems) {
         if (frame.initialsBox() == null || frame.upperBox() == null) {
             problems.add("界面上缺少命名开关（取拼音首字母 / 转大写）");
@@ -1801,15 +1902,15 @@ public final class GuiMain {
             problems.add("界面上没有「SQL 脚本改名入库」页");
             return;
         }
-        // 分栏配置照 Python：把手 6px、余量 1:3 给日志、初始 260（设计值按 DPI 折算）
+        // 分栏配置照 Python：把手 6px、余量 1:3 给日志、初始 230（设计值按 DPI 折算）
         if (page.splitDividerSize() != wantPx(6)) {
             problems.add("SQL 页分栏把手宽度不是 " + wantPx(6) + "px：" + page.splitDividerSize());
         }
         if (Math.abs(page.splitResizeWeight() - 0.25) > 0.001) {
             problems.add("SQL 页分栏拉伸比例不对，应为 1:3：" + page.splitResizeWeight());
         }
-        if (page.splitDividerLocation() != wantPx(260)) {
-            problems.add("SQL 页分栏初始位置不是 " + wantPx(260) + "："
+        if (page.splitDividerLocation() != wantPx(230)) {
+            problems.add("SQL 页分栏初始位置不是 " + wantPx(230) + "："
                     + page.splitDividerLocation());
         }
         java.io.File dir;

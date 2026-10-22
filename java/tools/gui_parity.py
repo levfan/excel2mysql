@@ -28,6 +28,10 @@ OUT_DIR = os.path.join(JAVA_DIR, "verify", "target", "parity")
 
 TAG_RE = re.compile(r"<[^>]+>")
 BREAK_RE = re.compile(r"\s*\n\s*")
+# 只抹钟点，不抹级别：两边跑的时刻必然不同，可比的是同一条日志在两条线上
+# 是不是同一级（+ [OK] / ! [WARN] / x [ERROR]），把整段前缀一起剥掉就等于放弃了这条契约。
+# 有的键把"旧名|新名|那一条日志"拼在一格里，所以行首和 "| " 之后都要认
+CLOCK_RE = re.compile(r"(?:^|\|)\s*\[\d{2}:\d{2}:\d{2}\] ", re.M)
 
 # 控件类别：两边的类名必然不同（QLineEdit vs JTextField/HintTextField），
 # 归一到同一词表后才谈得上比"是不是同一类控件"，具体类名留在 json 里可查。
@@ -111,7 +115,7 @@ def canon(value):
         s = s.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
         s = TAG_RE.sub("", s)
     s = s.replace("\r", "").replace(" ", " ").replace(" ", " ")
-    s = "\n".join(line.strip() for line in s.split("\n"))
+    s = "\n".join(CLOCK_RE.sub("", line.strip()) for line in s.split("\n"))
     return s.strip()
 
 

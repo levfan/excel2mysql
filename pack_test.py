@@ -701,6 +701,14 @@ check("F8 预览页每行有主键勾选框",
 ddl_dlg = app_main.DDLDialog(w.tables, True, w)
 check("F9 DDL 预览对话框可构造", ddl_dlg.tabs.count() == 1)
 check("F10 拖拽区已启用拖放", w.drop.acceptDrops())
+check("F10b 三个日志框的最小高度都至少装得下 4 行（截图复核抓到的：没最小高度时实测只剩两行）",
+      all(v.minimumHeight() >= 4 * v.fontMetrics().height()
+          for v in (w.log, w.sql_log, w.sql_run_log)),
+      [(v.minimumHeight(), v.fontMetrics().height())
+       for v in (w.log, w.sql_log, w.sql_run_log)])
+check("F10c 默认分栏把日志段给到不小于拖拽区那一段（110:200:330）",
+      w.excel_split.sizes()[2] >= w.excel_split.sizes()[0],
+      w.excel_split.sizes())
 
 from PySide6.QtWidgets import QPlainTextEdit
 from PySide6.QtGui import QTextCursor, QColor
@@ -726,6 +734,85 @@ check("F12 普通日志不残留红色",
       line_color(v, 0) != app_main.LOG_ERROR_COLOR
       and line_color(v, 3) != app_main.LOG_ERROR_COLOR,
       f"{line_color(v,0)} / {line_color(v,3)}")
+
+# ---- 日志一行的形状：钟点 + 符号 + 大写分级标签（三个页签的日志框共用这一套） ----
+import re as _re_log
+LOG_HEAD_RE = _re_log.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\] ([+\-!x]) \[(OK|INFO|WARN|ERROR)\] ")
+
+
+def log_body(view_or_text):
+    """把日志里的行还原成正文：抹掉行首的钟点+分级前缀，再退掉续行补上的 4 格缩进。
+
+    断言"日志与弹窗是同一句话"要用这一份——带前缀的那一行比的是排版不是文案，
+    而排版（几点几分）本来就不可能和弹窗一致。
+    """
+    text = (view_or_text.toPlainText()
+            if hasattr(view_or_text, "toPlainText") else view_or_text)
+    out = []
+    for ln in (text or "").splitlines():
+        ln = LOG_HEAD_RE.sub("", ln)
+        out.append(ln[4:] if ln.startswith("    ") else ln)
+    return "\n".join(out)
+
+
+def log_lines(view_or_text, prefix):
+    """按正文开头挑日志行。行首多了 [时:分:秒] 与分级标签，直接 startswith 会全挑空。"""
+    return [ln for ln in log_body(view_or_text).splitlines() if ln.startswith(prefix)]
+
+
+def log_block(view, prefix):
+    """按正文开头找日志块的行号（颜色要按块号取），找不到返回 -1。"""
+    doc = view.document()
+    for i in range(doc.blockCount()):
+        if log_body(doc.findBlockByNumber(i).text()).startswith(prefix):
+            return i
+    return -1
+
+
+v2 = QPlainTextEdit()
+app_main.append_log(v2, "[跳过] 已在列表：a.xlsx")
+app_main.append_log(v2, "[已解析] b.xlsx → 表名预置 b")
+app_main.append_log(v2, "! [WARN] 说明 | 近似掉的列")
+app_main.append_log(v2, "      | 1 | 2 |")
+def log_head(line):
+    """取一行的 (符号, 级别)；没带前缀就返回哨兵值，别让守卫自己抛异常把整轮打断。"""
+    m = LOG_HEAD_RE.match(line)
+    return (m.group(4), m.group(5)) if m else ("<无前缀>", "<无前缀>")
+
+
+_lines = v2.toPlainText().splitlines()
+check("F12b 每条记录首行带 [时:分:秒] 与符号+大写分级标签",
+      all(LOG_HEAD_RE.match(l) for l in _lines[:3]),
+      _lines[:3])
+check("F12c 级别由标签定：跳过是警告、已解析是成功",
+      log_head(_lines[0])[1] == "WARN" and log_head(_lines[1])[1] == "OK",
+      [log_head(l) for l in _lines[:2]])
+check("F12d 符号跟级别走（! 配 WARN、+ 配 OK），不出现 ! [OK] 这种自相矛盾的行",
+      log_head(_lines[0]) == ("!", "WARN") and log_head(_lines[1]) == ("+", "OK"),
+      [log_head(l) for l in _lines[:2]])
+check("F12e 命令行搬来的那句本来就带大写标签，行首不会叠出第二个标签",
+      _lines[2].endswith("! [WARN] 说明 | 近似掉的列")
+      and _lines[2].count("[WARN]") == 1, _lines[2])
+check("F12f 缩进的续行（结果表格那几行）不另起一条，也不补时间戳",
+      _lines[3] == "      | 1 | 2 |", _lines[3])
+check("F12g 告警级琥珀加粗、成功级绿色、错误级仍是那支红",
+      line_color(v2, 0) == app_main.LOG_WARN_COLOR
+      and line_color(v2, 1) == app_main.LOG_OK_COLOR
+      and line_color(v2, 2) == app_main.LOG_WARN_COLOR,
+      [line_color(v2, i) for i in range(3)])
+_fmt_multi = app_main.format_log_entry("[添加结果] 第一行\n第二行")[0]
+check("F12h 多行记录只有首行带前缀，其余行缩进 4 格挂在同一条下面",
+      len(_fmt_multi.splitlines()) == 2
+      and bool(LOG_HEAD_RE.match(_fmt_multi.splitlines()[0]))
+      and _fmt_multi.splitlines()[1] == "    第二行", repr(_fmt_multi))
+check("F12i 添加结果里有拒绝时那一行算警告，不是成功",
+      app_main.log_level("[添加结果] 添加 1 项文件\n另有 1 项解析失败") == "warn"
+      and app_main.log_level("[添加结果] 添加 1 项文件") == "ok",
+      [app_main.log_level("[添加结果] 添加 1 项文件\n另有 1 项解析失败"),
+       app_main.log_level("[添加结果] 添加 1 项文件")])
+check("F12j 定级看整条记录，不是只看首行（「另有」就写在续行上）",
+      app_main.format_log_entry("[添加结果] 添加 1 项文件\n另有 1 项解析失败")[1] == "warn",
+      app_main.format_log_entry("[添加结果] 添加 1 项文件\n另有 1 项解析失败"))
 check("F13 数据库异常展开为错误码+原文",
       "MySQL 错误码 1064" in app_main.describe_db_error(
           pymysql.err.ProgrammingError(1064, "syntax error near 'x'")),
@@ -874,6 +961,11 @@ check("F25 落到库上的语句序列与提交次序正确",
 check("F26 逐条进度与汇总都写进结果区",
       "第 1/2 条" in _run_log and "第 2/2 条" in _run_log
       and "全部完成 | 2 条语句已提交" in _run_log, _run_log)
+check("F26b 结果区每条记录首行带钟点（缩进的表格行归上一条，不另打时间戳）",
+      all(LOG_HEAD_RE.match(l) for l in _run_log.splitlines()
+          if l.strip() and not l.startswith("      ")),
+      [l for l in _run_log.splitlines()
+       if l.strip() and not l.startswith("      ") and not LOG_HEAD_RE.match(l)][:4])
 _conn2 = _RunConn(fail_on="INSERT INTO t_a VALUES (2)")
 app_main.connect = lambda cfg: _conn2
 w.sql_run_log.clear()
@@ -1107,7 +1199,7 @@ check("H13 日志报告展开与忽略数量",
       "[压缩包] one.zip：展开 2 个 Excel" in w3.log.toPlainText()
       and "忽略 3 个非 Excel 文件" in w3.log.toPlainText()
       and "跳过 1 个嵌套 zip" in w3.log.toPlainText(),
-      [l for l in w3.log.toPlainText().splitlines() if l.startswith("[压缩包]")])
+      log_lines(w3.log.toPlainText(), "[压缩包]"))
 w3._add_files([zempty])
 check("H14 空包给出红色告警而不是静默", "压缩包为空" in w3.log.toPlainText())
 w3._add_files([fake])
@@ -1263,7 +1355,7 @@ title, text = last_popup()
 check("J6 重复添加报出跳过数", "另有 2 项重复已跳过，详见日志" in text, text)
 check("J6b 重复跳过在日志里有对应行（数字可追溯）",
       w.log.toPlainText().count("[重复跳过]") == 2,
-      [l for l in w.log.toPlainText().splitlines() if l.startswith("[重复跳过]")])
+      log_lines(w.log.toPlainText(), "[重复跳过]"))
 check("J6c 重复时不谎报新增", text.startswith("添加 2 项文件") or "另有" in text, text)
 
 w = new_win()
@@ -1298,7 +1390,7 @@ w = new_win()
 w._add_files([jx1, jx2, jzip, bad])
 title, text = last_popup()
 log_text = w.log.toPlainText()
-check("J13 弹窗那句话同时打进日志", f"[添加结果] {text}" in log_text,
+check("J13 弹窗那句话同时打进日志", f"[添加结果] {text}" in log_body(log_text),
       log_text.splitlines()[-3:] if log_text else "")
 check("J13b 日志里的汇总行位于逐条 [已解析] 之后",
       "[添加结果]" in log_text and "[已解析]" in log_text
@@ -1311,6 +1403,11 @@ first_log_line = (log_text.split("[添加结果] ", 1)[1].splitlines()[0]
                   if "[添加结果] " in log_text else None)
 check("J13d 日志与弹窗文本逐字一致（只差 [添加结果] 前缀）",
       first_log_line == text.splitlines()[0], f"{first_log_line!r} vs {text.splitlines()[0]!r}")
+check("J13e 日志里每条记录的首行都带钟点（缩进的明细行除外）",
+      all(LOG_HEAD_RE.match(l) for l in log_text.splitlines()
+          if l.strip() and not l.startswith("    ")),
+      [l for l in log_text.splitlines()
+       if l.strip() and not l.startswith("    ") and not LOG_HEAD_RE.match(l)][:3])
 
 w = new_win()
 w._add_files([zempty])
@@ -1498,7 +1595,7 @@ POPUPS.clear()
 w._add_files([xm])
 check("L12 日志出现 [类型修正] 且点明列名",
       "[类型修正]" in w.log.toPlainText() and "订单金额" in w.log.toPlainText(),
-      [l for l in w.log.toPlainText().splitlines() if l.startswith("[类型修正]")])
+      log_lines(w.log.toPlainText(), "[类型修正]"))
 
 w = app_main.MainWindow()
 POPUPS.clear()
@@ -1825,13 +1922,19 @@ check("N6 含合并的文件不进待导入列表",
 title, text = last_popup()
 check("N7 汇总计入合并拒绝数", "另有 3 项含合并单元格已拒绝，详见日志" in text, text)
 check("N7b 干净文件仍正常统计", text.startswith("添加 1 项文件，包含 1 项 xlsx 文件"), text)
+check("N7c 有拒绝的「添加结果」在日志里按告警级上色（截图复核抓到的那条：只看首行会报成绿色成功）",
+      "另有" in text
+      and line_color(w.log, log_block(w.log, "[添加结果]")) == app_main.LOG_WARN_COLOR,
+      [line_color(w.log, log_block(w.log, "[添加结果]")), text.replace("\n", " / ")])
 lg = w.log.toPlainText()
 check("N8 日志逐条说明原因并给出合并区位置",
       lg.count("[合并单元格]") == 3 and "「字段定义」1 处（A1:G1）" in lg
       and "「数据」2 处（A1:B1、A2:B2）" in lg and "取消合并" in lg,
-      [l for l in lg.splitlines() if l.startswith("[合并单元格]")])
+      log_lines(lg, "[合并单元格]"))
 merge_lines = [i for i in range(w.log.document().blockCount())
-               if w.log.document().findBlockByNumber(i).text().startswith("[合并单元格]")]
+               if LOG_HEAD_RE.sub("",
+                                  w.log.document().findBlockByNumber(i).text())
+                   .startswith("[合并单元格]")]
 check("N8b 合并拒绝日志整条标红",
       merge_lines and all(line_color(w.log, i) == app_main.LOG_ERROR_COLOR
                           for i in merge_lines),
@@ -2012,7 +2115,7 @@ check("N19 合并表头文件进入待导入列表",
 lg = w.log.toPlainText()
 check("N19b [已解析] 行说明表头按几行展开",
       "[已解析]" in lg and "合并表头按 2 行展开" in lg,
-      [l for l in lg.splitlines() if l.startswith("[已解析]")])
+      log_lines(lg, "[已解析]"))
 
 zip_raw = os.path.join(mdir, "合并表头包.zip")
 with zipfile.ZipFile(zip_raw, "w") as z:
@@ -2739,7 +2842,7 @@ check("Q24a 建模语句表首列是连续序号，最后一行就是解析出�
       and _sql_serials[-1] == str(sw2.sql_table.rowCount()), _sql_serials)
 check("Q25 重复添加同一脚本被拦下并写明原因",
       "[跳过] 已在列表" in sw2.sql_log.toPlainText(),
-      [l for l in sw2.sql_log.toPlainText().splitlines() if l.startswith("[跳过]")])
+      log_lines(sw2.sql_log.toPlainText(), "[跳过]"))
 _add_pops = [t for title, t in POPUPS if title == "添加结果"]
 check("Q25a 添加结果弹窗列出完整路径，重复项也写全路径",
       len(_add_pops) >= 2 and qsql in _add_pops[0].replace("\n", "")
@@ -2748,7 +2851,12 @@ check("Q25a 添加结果弹窗列出完整路径，重复项也写全路径",
 check("Q25b 添加结束在日志里留一行汇总",
       ("===== 添加完成：1 个脚本，0 个读取失败，0 个重复 =====" in sw2.sql_log.toPlainText()
        and "===== 添加完成：0 个脚本，0 个读取失败，1 个重复 =====" in sw2.sql_log.toPlainText()),
-      [l for l in sw2.sql_log.toPlainText().splitlines() if l.startswith("=====")])
+      log_lines(sw2.sql_log.toPlainText(), "====="))
+check("Q25c2 第二页的日志框也每条带钟点、按级别打标",
+      all(LOG_HEAD_RE.match(l) for l in sw2.sql_log.toPlainText().splitlines()
+          if l.strip() and not l.startswith("    "))
+      and any("] ! [WARN] [跳过]" in l for l in sw2.sql_log.toPlainText().splitlines()),
+      sw2.sql_log.toPlainText().splitlines()[:4])
 POPUPS.clear()
 _missing_sql = os.path.join(_tmpdir, "不存在的脚本.sql")
 app_main.QFileDialog.getOpenFileNames = staticmethod(
@@ -2856,7 +2964,7 @@ finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn)
 check("Q29 空脚本加载日志不再套两层括号",
       "[已加载] 空脚本.sql：0 个表（未发现 CREATE TABLE 语句）" in ew2.sql_log.toPlainText(),
-      [l for l in ew2.sql_log.toPlainText().splitlines() if l.startswith("[已加载]")])
+      log_lines(ew2.sql_log.toPlainText(), "[已加载]"))
 POPUPS.clear()
 ew2.ed_sql_prefix.setText("dim_")
 ew2.on_sql_apply_prefix()
@@ -3165,7 +3273,7 @@ check("R20 点「替换首个前缀」后表格里的表名按首段替换",
 check("R21 逐条回报旧→新，并单独说明没改的那张",
       "[换前缀] ods_t_order → change_t_order" in rw3.log.toPlainText()
       and "表名里没有下划线，未改动：users" in rw3.log.toPlainText(),
-      [l for l in rw3.log.toPlainText().splitlines() if l.startswith("[换前缀]")])
+      log_lines(rw3.log.toPlainText(), "[换前缀]"))
 check("R22 汇总写明改了几张、跳过几张",
       "共改 2 张表，跳过 1 张" in rw3.log.toPlainText(),
       [l for l in rw3.log.toPlainText().splitlines() if "换前缀完成" in l])
@@ -3223,7 +3331,7 @@ check("R29 日志逐条回报显示名与跳过原因，并写明正文未改",
       "adb_table2 → change_table2（显示）" in sw3.sql_log.toPlainText()
       and "users" in sw3.sql_log.toPlainText()
       and "脚本正文未改，点保存/执行/生成时才写入" in sw3.sql_log.toPlainText(),
-      [l for l in sw3.sql_log.toPlainText().splitlines() if l.startswith("[换前缀")])
+      log_lines(sw3.sql_log.toPlainText(), "[换前缀"))
 POPUPS.clear()
 sw3.btn_sql_save.click()
 saved = os.path.join(_tmpdir, "换前缀样本_prefix.sql")
