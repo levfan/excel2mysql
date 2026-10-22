@@ -543,6 +543,13 @@ public final class HelpDoc {
                     "<tr><td>双击「当前表名」</td><td>直接编辑这一行的表名，并同步改写该脚本里的" + NL +
                     "<code>CREATE / DROP / INSERT / ALTER / TRUNCATE</code> 引用；改动先留在内存，" + NL +
                     "点「保存修改后ddl脚本」才落副本</td></tr>" + NL +
+                    "<tr><td>双击「表注释」</td><td>直接编辑这一张表的表注释：把那句" + NL +
+                    "<code>CREATE TABLE</code> 的表选项 <code>COMMENT='…'</code> 换成新内容（原本没写" + NL +
+                    "<code>COMMENT</code> 的，在列定义右括号后补一句）。里面带的单引号按 MySQL 口径翻倍写出，" + NL +
+                    "再读回来就是原话；清空写的是 <code>COMMENT=''</code>。改完清单、元数据弹窗和两份生成件" + NL +
+                    "立刻跟着变（标准件的文件名就是「表注释（表名）.xlsx」），脚本正文同样先留在内存，" + NL +
+                    "点「保存修改后ddl脚本」才落副本。<code>CREATE TABLE x LIKE y</code> 与" + NL +
+                    "<code>... AS SELECT</code> 不带表选项，改不动会当场说明原因</td></tr>" + NL +
                     "</table>" + NL +
                     "<ul>" + NL +
                     "<li><b>两个前缀按钮只改显示</b>：不弹进度框、也不写脚本；「保存修改后ddl脚本」" + NL +
@@ -720,7 +727,8 @@ public final class HelpDoc {
                     "建模语句总数（多个文件共用一套编号）；清单从左到右是" + NL +
                     "<b>序号 / 文件 / 原表名 / 当前表名 / 表注释</b>，最后一列取脚本里" + NL +
                     "<code>CREATE TABLE ... COMMENT='…'</code> 那句，与「Excel 导入」那页的「表注释」同一含义，" + NL +
-                    "脚本里没写就没有（不留一个空占位）；双击<b>当前表名</b>编辑，双击其余列查看该表元数据</li>" + NL +
+                    "脚本里没写就没有（不留一个空占位）；双击<b>当前表名</b>或<b>表注释</b>编辑，" + NL +
+                    "双击其余列查看该表元数据</li>" + NL +
                     "<li>来自 ZIP 的文件，鼠标悬停「文件」列会显示完整来源，形如" + NL +
                     "<code>数据打包.zip!北京/水库基础信息.xlsx</code></li>" + NL +
                     "<li>导入成功的文件会自动从待导入列表移除，<b>失败的文件保留</b>，可以调整后重试；" + NL +
