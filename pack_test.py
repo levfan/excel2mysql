@@ -2702,6 +2702,11 @@ check("P17b 进度框章节交代了各页可以并行、互斥按占用的东�
 check("P17c 说明交代了两个进度框错开摆、两颗生成按钮不必互相等",
       "往右下错开一格" in _doc_all and "两颗按钮也不必互相等" in _doc_all,
       [t for t in ("往右下错开一格", "两颗按钮也不必互相等") if t not in _doc_all])
+check("P17d 快速上手交代了 conn.ini 预填、优先级与三种说法",
+      "程序所在目录" in _doc_all and "E2M_PASS" in _doc_all
+      and "找到了但读不了" in _doc_all and "内置默认值" in _doc_all,
+      [t for t in ("程序所在目录", "E2M_PASS", "找到了但读不了", "内置默认值")
+       if t not in _doc_all])
 
 section("Q 入口全覆盖（每个按钮点下去都要有可见痕迹）")
 
@@ -2827,6 +2832,60 @@ check("Q6 连不上库的详情进日志并写明库列表未加载",
       [l for l in qw2.log.toPlainText().splitlines() if "连接失败" in l][:1])
 check("Q7 失败后下拉框保持不可用，不留半个可用状态", qw2.cb_db.isEnabled() is False)
 app_main.connect = _fake_connect
+
+# ---- 程序同级 conn.ini 预填连接信息：现场配一次，不用每次手填 ----
+_cdir = os.path.join(_tmpdir, "conn预填")
+os.makedirs(_cdir, exist_ok=True)
+with io.open(os.path.join(_cdir, "conn.ini"), "w", encoding="utf-8") as _cf:
+    _cf.write("[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
+              "password = pw-file\ndatabase = alpha\n")
+_pdir0 = app_main.program_dir
+app_main.program_dir = lambda: _cdir
+cw = app_main.MainWindow()
+_cwlog = cw.log.toPlainText()
+check("Q53 有 conn.ini 时连接信息按它预填，日志说得出来源",
+      cw.ed_host.text() == "10.0.0.8" and cw.ed_port.value() == 3307
+      and cw.ed_user.text() == "ops" and cw.ed_pass.text() == "pw-file"
+      and "连接信息预填 ops@10.0.0.8:3307/alpha" in _cwlog
+      and "自动发现" in _cwlog,
+      [l for l in _cwlog.splitlines() if "连接信息" in l][:1])
+check("Q53g 密码不回显也不写进日志正文",
+      "pw-file" not in _cwlog and cw.ed_pass.echoMode() != 0,
+      [l for l in _cwlog.splitlines() if "密码" in l][:1])
+cw.on_load_databases()
+check("Q53b 库列表出来后按配置预选目标库",
+      cw.cb_db.currentText() == "alpha"
+      and "目标库按 conn.ini 选中" in cw.log.toPlainText(),
+      (cw.cb_db.currentText(), cw.cb_db.count()))
+os.environ["E2M_HOST"] = "192.168.9.9"
+cw2 = app_main.MainWindow()
+del os.environ["E2M_HOST"]
+check("Q53c 环境变量 E2M_* 盖过 conn.ini，来源里点名是哪个变量",
+      cw2.ed_host.text() == "192.168.9.9"
+      and "环境变量 E2M_HOST" in cw2.log.toPlainText(),
+      [l for l in cw2.log.toPlainText().splitlines() if "连接信息" in l][:1])
+_bdir = os.path.join(_tmpdir, "conn写坏")
+os.makedirs(_bdir, exist_ok=True)
+with io.open(os.path.join(_bdir, "conn.ini"), "w", encoding="utf-8") as _bf:
+    _bf.write("host = 1.2.3.4\n")          # 没有小节名，读不了
+app_main.program_dir = lambda: _bdir
+cw3 = app_main.MainWindow()
+_log3 = cw3.log.toPlainText()
+check("Q53d conn.ini 读不了时按默认值起界面，并说清是「找到了但读不了」",
+      cw3.ed_host.text() == "127.0.0.1" and "但读不了" in _log3
+      and "没找到 conn.ini" not in _log3,
+      [l for l in _log3.splitlines() if "conn.ini" in l][:1])
+_edir = os.path.join(_tmpdir, "conn没有")
+os.makedirs(_edir, exist_ok=True)
+app_main.program_dir = lambda: _edir
+cw4 = app_main.MainWindow()
+check("Q53e 没有 conn.ini 时照旧用内置默认值起界面，并说一句怎么预填",
+      cw4.ed_host.text() == "127.0.0.1" and cw4.ed_user.text() == "root"
+      and "没找到 conn.ini" in cw4.log.toPlainText(),
+      [l for l in cw4.log.toPlainText().splitlines() if "conn.ini" in l][:1])
+app_main.program_dir = _pdir0
+for _w in (cw, cw2, cw3, cw4):
+    _w.close()
 
 # ---- 开始导入：成功路径 ----
 iw = app_main.MainWindow()

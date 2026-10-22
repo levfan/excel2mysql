@@ -262,6 +262,8 @@ public final class GuiMain {
                 sql_gen_excel(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
+                // 程序同级 conn.ini 预填连接信息：读到 / 读不了 / 没有，三种说法各验一条
+                conn_ini(frame, problems);
                 // 并发护栏按资源位判：不同页可以一起跑，同一页与共用产物的仍然互斥
                 task_slots(frame, files, problems);
                 // 进度框文案与收尾
@@ -3333,6 +3335,67 @@ public final class GuiMain {
     }
 
     /**
+     * conn.ini 预填连接信息：三种读法各验一条（读到了 / 找到了但读不了 / 压根没有）。
+     *
+     * 前两条各另起一个窗口——预填发生在建窗那一刻，改了候选路径要重新建窗才走得到那段代码。
+     * 第三条不另起窗口：主窗口自己就是在没有 conn.ini 的目录下建起来的，
+     * 直接看它启动那一句。一个 MainFrame 连着表格、字体与日志面板，
+     * 这里多起三个曾把 JVM 顶到 native OOM（malloc 失败，闸门整步崩）。
+     */
+    private static void conn_ini(MainFrame frame, List<String> problems) {
+        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"), "e2m-conn");
+        deleteTree(dir);
+        dir.mkdirs();
+        java.io.File good = new java.io.File(dir, "conn.ini");
+        writeText(good.getPath(), "[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
+                + "password = pw-file\ndatabase = alpha\n");
+        java.io.File bad = new java.io.File(dir, "bad.ini");
+        writeText(bad.getPath(), "host = 1.2.3.4\n");      // 没有小节名，读不了
+        List<String> keep = MainFrame.connCandidates;
+        try {
+            MainFrame.connCandidates = java.util.Collections.singletonList(good.getPath());
+            MainFrame f1 = new MainFrame();
+            com.excel2mysql.core.Config c = f1.currentConfig();
+            String log1 = f1.logPanel().text();
+            // 目标库不在连接栏那四个输入框里（它是库列表加载出来之后的下拉框），
+            // 所以这里只比四个框；配置里的库有没有被记住，看下面那句日志
+            if (!"10.0.0.8".equals(c.host) || c.port != 3307 || !"ops".equals(c.user)
+                    || !"pw-file".equals(c.password)) {
+                problems.add("conn.ini 没把连接信息预填进去：" + c);
+            }
+            if (!log1.contains("连接信息预填 ops@10.0.0.8:3307/alpha")
+                    || !log1.contains("自动发现")) {
+                problems.add("预填成功了却没说清来源：" + tail(log1));
+            }
+            if (log1.contains("pw-file")) {
+                problems.add("口令被写进日志正文了：日志里不许出现配置文件里的密码");
+            }
+            f1.dispose();
+
+            MainFrame.connCandidates = java.util.Collections.singletonList(bad.getPath());
+            MainFrame f2 = new MainFrame();
+            String log2 = f2.logPanel().text();
+            if (!log2.contains("但读不了") || log2.contains("没找到 conn.ini")) {
+                problems.add("文件读不了却报成没找到，用户会去找那个并不存在的文件："
+                        + tail(log2));
+            }
+            if (!"127.0.0.1".equals(f2.currentConfig().host)) {
+                problems.add("读不了的文件没退回内置默认值：" + f2.currentConfig().host);
+            }
+            f2.dispose();
+
+            // 没有配置文件那一条看主窗口的启动句：它就是在没有 conn.ini 的目录下建起来的
+            String log0 = frame.logPanel().text();
+            if (!log0.contains("没找到 conn.ini") || !"127.0.0.1".equals(frame.currentConfig().host)
+                    || !"root".equals(frame.currentConfig().user)) {
+                problems.add("没有配置文件时没说清是按默认值起界面：" + tail(log0));
+            }
+        } finally {
+            MainFrame.connCandidates = keep;
+        }
+    }
+
+    /**
      * 按资源占位：同一页互斥、不同页可以一起跑；两页的「生成」各写各的目录，也能一起跑。
      *
      * 上一轮是一个布尔量锁住三页——执行器跑上千条语句时另外两页连点都点不动，
@@ -3649,7 +3712,10 @@ public final class GuiMain {
                 problems.add("两条任务不是都在推进：" + pa + "→" + pa2 + " / "
                         + pb + "→" + pb2);
             }
-            if (pingMs > 500) {
+            // 上限 800 毫秒：这台机器健康时是 200 毫秒上下，但同一支自检里还有别的场景
+            // 在排队，实测采到 527 / 537 / 540 毫秒（不是缺陷，是噪声带）。真回归是另一个
+            // 数量级——进度框退回模态量出 5221 毫秒、把抓屏塞进这个时间窗量出 10181 毫秒
+            if (pingMs > 800) {
                 problems.add("两条任务在跑时事件分发线程回应一次要 " + pingMs
                         + " 毫秒（界面等于没转）");
             }
@@ -3795,13 +3861,13 @@ public final class GuiMain {
                 problems.add("示例清单开着时事件分发线程回应一次要 " + pingMs
                         + " 毫秒（界面等于没转）");
             }
-            // 抓屏只到内存这一层，写 PNG 推到任务收尾之后：写一张 2560x1600 要一两秒，
-            // 压在这里就等于把"任务还在跑"的时间窗自己吃掉
-            java.awt.image.BufferedImage img = captureNow();
-            invokeUi(() -> frame.closeSqlSamples());
+            // 先确认那条任务还在：抓屏要抬窗口、拍 2560x1600，前后得花一秒多，
+            // 把这条断言放在抓完之后就会采到"任务自己跑完了"，红得莫名其妙
             if (!frame.runningTasks().contains(busy)) {
                 problems.add("点一下另一页的按钮就把那条任务弄没了：" + taskLine(frame));
             }
+            java.awt.image.BufferedImage img = captureNow();
+            invokeUi(() -> frame.closeSqlSamples());
             if (!waitTasks(frame, 0, 90)) {
                 problems.add("那条任务没能自己跑完：" + taskLine(frame));
             }

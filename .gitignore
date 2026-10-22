@@ -253,6 +253,10 @@ build_stamp.py
 # 填了真实口令的本地连接配置永不入库（模板是 assets/conn.ini，那份要提交）
 /conn.ini
 
+# JVM 崩一次就在当前目录留一对日志，不该进库（内存吃紧时闸门会崩，见清单第 52 节）
+hs_err_pid*.log
+replay_pid*.log
+
 # 本机测试库的口令与连接参数（G 组真 MySQL 用例读它），同样永不入库：
 # 远端是公开仓库，口令一旦进 commit 就永久留在历史里，删文件也撤不掉。
 # 口径与用法写在 .agents/skills/git-commit/SKILL.md 的「本机测试库」一节。
