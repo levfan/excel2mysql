@@ -2437,3 +2437,57 @@ Windows 外观自带的 18px，但字族是 SimSun，中文观感比 Microsoft Y
   起了一个窗口但在这个非交互 shell 里零输出、被超时杀掉，没改到能出图。这一路的视觉
   证据目前只有 `isShowing()`、`isModal()` 为假、事件循环 tick 在涨这三样实测，
   加两条线的对撞键，没有人工看过图。
+
+## 50. 两页的「生成」写两个目录：`export` 资源位撤掉
+
+用户："两页的「生成标准/简易excel文件」，改为写2个不同的输出目录。"
+
+- 第 48 轮给两颗生成按钮加的是"共占一个 `export` 位"，那是症状不是病根：真正会撞车的
+  是两页都往 `meta_data_file_年月日` 这一个日期目录里写，同名表后一次盖掉前一次。
+  目录一分开，互斥的理由就消失了，那把锁也就跟着撤——本轮做的是把根因消掉，
+  而不是在根因上再挂一条规则。
+- 命名规则仍旧只写一处，加一个可选的目录前缀，不在界面里拼路径：
+  - Python：`core/meta_export.py` 新增 `SQL_DIR_TAG = "sql_"`，`output_dir()` 与
+    `export_tables()` 各多一个 `dir_tag=""`；`main.py` 的 `sql_meta_export_task` 传
+    `SQL_DIR_TAG`，Excel 页那条不传。
+  - Java：`core/MetaExport.java` 同名常量，`outputDir` / `exportTables` 各加一档带
+    `dirTag` 的重载（旧签名原样留给 Excel 页），`SqlPage.exportFromScripts` 传
+    `MetaExport.SQL_DIR_TAG`。
+  - 落点：Excel 页仍是 `meta_data_file_年月日` / `simple_meta_data_file_年月日`；
+    SQL 页改成 `sql_meta_data_file_年月日` / `sql_simple_meta_data_file_年月日`。
+- 资源位从四个收成三个：`RES_EXPORT` 和它在 `RES_LABEL` 里那句"程序同级的生成输出目录"
+  两栈一起删；`_resources_for` / `resourcesFor` 不再收 `extra`；
+  `SqlPage.Host.runSqlTask` 尾部的 `String... extra` 一并删掉——只有那一处生成在传，
+  留着就是个没人用的参数。一个任务从此只登记自己那一页的位。
+- 界面提示跟着产物口径改：SQL 页两颗按钮的 tooltip 写出带 `sql_` 的目录名，
+  并补一句"目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖"（两条线同文）。
+- 文档四处：`help_doc.py` 进度章节把"两页的生成共用产物目录"换成"各写自己的目录"、
+  交付件章节补上 SQL 页那档目录名；`HelpDoc.java` 用导出脚本重生成；README 的资源位、
+  交付件、SQL 页三条各自改掉。
+- 守卫：
+  - `pack_test.py` Q51e 改成断 `_resources_for` 只返回自己那一位（`("excel",)` / `("sql",)`）；
+    新增 Q51f 断三档目录名（不带前缀、`sql_` 标准、`sql_` 简易）；R 组四处按 `sql_` 前缀
+    取 SQL 页那次的产物目录；P17b 的文案断言从"程序同级的生成输出目录"换成
+    "各写自己的目录"加 `sql_meta_data_file_年月日`。
+  - Java `task_slots` 新增两档：`outputDir` 三档目录名互不相等且等于
+    `sql_meta_data_file_20261022` 这类字面值；以及"Excel 页占着位时 SQL 页的位照样抢得到"。
+  - 对撞器两条线（`GuiDump.java` / `gui_dump_py.py`）把 `sqlgen.*` 的取目录筛选改成
+    `sql_` 前缀：这两键是两条线各真点一次生成、再读回产物逐格比，前缀没落到盘上就取不到目录。
+- 变异抽查四处，都逐字节还原并核过 sha256：
+  1. Python `main.py` 生成时不传 `dir_tag` → R37/R38/R39/R41/R47/R48 六条红，
+     报出来的是两页产物同名同目录（`['meta_data_file_20261022', …]` 两份一模一样）。
+  2. Python `core/meta_export.py` 的 `output_dir` 忽略 `dir_tag` → Q51f 红加同样六条 R 组红。
+  3. Python `_resources_for` 把 `export` 位加回去 → Q51e 红，Y 组跟着红四条
+     （两个真任务同时在跑 / 各自推进 / 两个框同屏 / SQL 页第二个被挡下），
+     等于把第 48 轮那把全局锁的现场复现了一遍。
+  4. Java `MetaExport.SQL_DIR_TAG` 置空 → 自检报"两页的生成目录没分开"，另外
+     标准件与简易件两条读不回来（`FileNotFoundException: …\sql_meta_data_file_20261022\…`）。
+  5. Java `resourcesFor` 让 SQL 页任务也占 `excel` 位 → 第 10 步红一条
+     "两个真任务没能同时在跑（这一条就是「不互相阻塞」本身）"。这一条咬的是
+     `concurrent_tasks` 那条真路径：`task_slots` 直接调 `startTask(资源名)`，不经过
+     `resourcesFor`，所以只改映射时它不动——两条守卫各管一层，正好一层红一层不红。
+- 本轮实测：`pack_test.py` 623 / 0 / 6；`pack_test38.py` 3.12 线 236 / 0 / 17、
+  3.8 线 245 / 0 / 14；Java 十步全过；对撞 251 键逐键一致。
+- 影响面：老目录里的历史产物不动；同一张表在两页各生成一次会得到两份文件，
+  而不是后一次盖掉前一次。第 48 轮那条"两页的生成共占 `export`"在本节作废，
+  那一节按当轮实况保留不改。
