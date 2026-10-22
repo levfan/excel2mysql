@@ -28,7 +28,7 @@ from core.naming import clean_prefix, is_valid_prefix, swap_first_segment  # noq
 from core.sql_execute import render_table  # noqa: E402
 from core.sql_script import (  # noqa: E402
     apply_table_prefix_sql, extract_create_tables, replace_first_segment_sql,
-    parse_create_tables, split_sql_statements,
+    parse_create_tables, set_table_comment, split_sql_statements,
 )
 
 OUT_DIR = os.path.join(ROOT, "java", "verify", "golden")
@@ -50,6 +50,24 @@ SCRIPTS = [
 
 PREFIXES = ["ods", "ods_", "`ods`\\", "", "dim", "odsods"]
 HEADS = ["change", "change_", "", "`x`", "ods"]
+
+# 表注释改写（set_table_comment）的形状覆盖：两条线各写一份正则与括号配对，
+# 少对一处就会写出跑不了的 DDL，所以逐个形状对字节比
+COMMENT_SCRIPTS = [
+    "CREATE TABLE `t_a` (`id` INT) ENGINE=InnoDB COMMENT='原注释';",
+    "CREATE TABLE t_b (`id` INT) ENGINE=InnoDB;",
+    'CREATE TABLE t_c (`id` INT) COMMENT="双引号写法" ENGINE=InnoDB;',
+    "CREATE TABLE t_d LIKE t_b;",
+    "CREATE TABLE t_e (`id` INT COMMENT '列注释', `n` VARCHAR(8)) COMMENT='表注释';",
+    "CREATE TABLE t_f (`id` INT) COMMENT='第一处';\n"
+    "CREATE TABLE t_f (`x` INT) COMMENT='第二处';",
+    "CREATE TABLE `t_g` (`id` INT) COMMENT='带''翻倍引号''的';",
+    "CREATE TABLE t_h (`c` VARCHAR(10) DEFAULT 'a;b') COMMENT='带分号';\n"
+    "INSERT INTO t_h VALUES ('x;y');",
+    "CREATE TABLE t_i (`id` INT) /* COMMENT='块注释里的不算' */;",
+    "CREATE TABLE t_j (`id` INT);\nINSERT INTO t_j VALUES (1);",
+]
+COMMENT_VALUES = ["新注释", "带'单引号'", "", "  两端空格要削掉  ", "换行\n也可以放", "含;分号"]
 
 CONVERT_TYPES = ["INT", "BIGINT", "DECIMAL(10,2)", "VARCHAR(64)", "TEXT", "DATE", "DATETIME"]
 CONVERT_VALUES = [None, "", "  ", "7", "7.0", "-007", "1,234", "abc", "2023-01-02",
@@ -145,6 +163,12 @@ def sql_cases():
         yield {"op": "clean", "in": raw, "out": clean_prefix(raw),
                "valid": is_valid_prefix(clean_prefix(raw))}
         yield {"op": "swap", "in": raw, "out": swap_first_segment(raw, "ch")}
+    for text in COMMENT_SCRIPTS:
+        for t in extract_create_tables(text):
+            for c in COMMENT_VALUES:
+                new_text, changed = set_table_comment(text, t["name"], c)
+                yield {"op": "comment", "in": text, "table": t["name"], "comment": c,
+                       "out": new_text, "changed": changed}
 
 
 def ddl_cases():

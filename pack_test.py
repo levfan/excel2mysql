@@ -3999,18 +3999,18 @@ check("R45c 脚本一导入就把表注释摆在清单里，取的是 CREATE TAB
       nw.sql_table.item(0, 4).text())
 _sql_flags = [bool(nw.sql_table.item(0, c).flags() & Qt.ItemIsEditable)
               for c in range(nw.sql_table.columnCount())]
-check("R45d 第二页只有「当前表名」一列可直接编辑",
-      _sql_flags == [False, False, False, True, False], _sql_flags)
-# 表注释这格不可编辑，双击必须走"看这一行的元数据"，不能点了什么都没发生
+check("R45d 第二页可编辑的是「当前表名」与「表注释」两列",
+      _sql_flags == [False, False, False, True, True], _sql_flags)
+# 表注释这格双击进编辑器；双击其余列才是"看这一行的元数据"
 _seen_meta = []
 _orig_show_meta = nw.show_sql_table_metadata
 nw.show_sql_table_metadata = lambda r: _seen_meta.append(r)
 try:
-    nw.on_sql_table_double_clicked(nw.sql_table.item(0, 4))
     nw.on_sql_table_double_clicked(nw.sql_table.item(0, 2))
+    nw.on_sql_table_double_clicked(nw.sql_table.item(0, 1))
 finally:
     nw.show_sql_table_metadata = _orig_show_meta
-check("R45e 双击表注释与双击原表名一样打开这一行的元数据", _seen_meta == [0, 0], _seen_meta)
+check("R45e 双击原表名与文件名仍然只打开这一行的元数据", _seen_meta == [0, 0], _seen_meta)
 # 表注释这一列在没有 COMMENT 的脚本上必须是空的：sw2 那份表名被前面的用例改过，另起一份
 cw9 = app_main.MainWindow()
 app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([qsql], "SQL (*.sql)"))
@@ -4021,6 +4021,77 @@ finally:
 check("R45f 没有表注释的脚本这一列是空的，不编一个占位文字出来",
       cw9.sql_table.item(0, 4).text() == "" and cw9._sql_rows[0]["comment"] == "",
       repr(cw9.sql_table.item(0, 4).text()))
+
+# ---- 表注释手动改：写回那句 CREATE TABLE 的表选项 ----
+csql = os.path.join(_tmpdir, "注释改写.sql")
+with io.open(csql, "w", encoding="utf-8") as _cfh:
+    _cfh.write("CREATE TABLE `t_cm1` (`id` INT) ENGINE=InnoDB COMMENT='原注释';\n"
+               "CREATE TABLE t_cm2 (`id` INT);\n"
+               "CREATE TABLE t_cm3 LIKE t_cm2;\n")
+cmw = app_main.MainWindow()
+_orig_gofn8 = app_main.QFileDialog.getOpenFileNames
+app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([csql], "SQL (*.sql)"))
+try:
+    cmw.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn8)
+_crcm = cmw.sql_files[0]
+check("R45g 三种写法都读到位：已有注释、没有注释、LIKE 那句",
+      [r["comment"] for r in cmw._sql_rows] == ["原注释", "", ""],
+      [r["comment"] for r in cmw._sql_rows])
+POPUPS.clear()
+cmw.sql_table.item(0, 4).setText("改过的注释")
+check("R45h 改表注释写进那句 CREATE TABLE 的表选项，脚本先留在内存",
+      "COMMENT='改过的注释'" in _crcm["text"] and "COMMENT='原注释'" not in _crcm["text"]
+      and _crcm["modified"] is True and cmw.sql_table.item(0, 4).text() == "改过的注释",
+      _crcm["text"].splitlines()[0])
+_cdlg = cmw._build_sql_metadata_dialog(0)
+check("R45i 改完立刻能在元数据弹窗里看到新注释（读的是同一份缓存）",
+      _cdlg is not None and "改过的注释" in _cdlg.findChild(app_main.QLabel).text()
+      and "[表注释] t_cm1 → 改过的注释（已写进脚本；未落盘）" in cmw.sql_log.toPlainText(),
+      log_lines(cmw.sql_log.toPlainText(), "[表注释]"))
+cmw.sql_table.item(1, 4).setText("补上的注释")
+check("R45j 原本没有 COMMENT 的，在列定义右括号后补一句，读回来就是它",
+      "CREATE TABLE t_cm2 (`id` INT) COMMENT='补上的注释';" in _crcm["text"]
+      and cmw.sql_table.item(1, 4).text() == "补上的注释", _crcm["text"].splitlines()[1])
+cmw.sql_table.item(0, 4).setText("带'单引号'的")
+check("R45k 注释里的单引号按 MySQL 口径翻倍写，再读回来一模一样",
+      "COMMENT='带''单引号''的'" in _crcm["text"]
+      and cmw.sql_table.item(0, 4).text() == "带'单引号'的",
+      (_crcm["text"].splitlines()[0], cmw.sql_table.item(0, 4).text()))
+cmw.sql_table.item(0, 4).setText("")
+check("R45l 清空注释写的是 COMMENT=''，清单这一格跟着变空",
+      "COMMENT=''" in _crcm["text"] and cmw.sql_table.item(0, 4).text() == ""
+      and "[表注释] t_cm1 → （空）（已写进脚本；未落盘）" in cmw.sql_log.toPlainText(),
+      (_crcm["text"].splitlines()[0], cmw.sql_table.item(0, 4).text()))
+_text_before_like = _crcm["text"]
+POPUPS.clear()
+cmw.sql_table.item(2, 4).setText("LIKE 那句改不动")
+check("R45m LIKE 写法没有表选项可挂：弹窗明说、脚本一个字不动、日志不记假成功",
+      _crcm["text"] == _text_before_like
+      and any(t == "提示" and "没有可改写的表选项" in b for t, b in POPUPS)
+      and "[表注释] t_cm3" not in cmw.sql_log.toPlainText(),
+      (POPUPS, log_lines(cmw.sql_log.toPlainText(), "[表注释]")))
+# 只多打了一个空格：Qt 看得到文本变了会发 itemChanged，去空格后内容其实没变——
+# 这条路必须有回执，且刷回清单时把多打的空格去掉（静默 no-op 等于界面在骗人）
+cmw.sql_table.item(0, 4).setText(" ")
+check("R45n 注释实际没变化也留一句回执并原样刷回清单（不静默 no-op）",
+      cmw.sql_log.toPlainText().count("[表注释] t_cm1 未发生变化，脚本未改写") == 1
+      and cmw.sql_table.item(0, 4).text() == "",
+      log_lines(cmw.sql_log.toPlainText(), "[表注释]"))
+# 改过的注释一路走到产物文件名：文件名是"表注释（表名）.xlsx"这一路读的就是脚本正文
+cmw.sql_table.item(0, 4).setText("改过的注释")
+cout = os.path.join(_tmpdir, "sqlgen_comment_out")
+app_main.program_dir = lambda: cout
+try:
+    cmw.btn_sql_gen_std.click()
+finally:
+    app_main.program_dir = _pdir
+_cd = [d for d in _lsd(cout) if d.startswith("sql_meta_data_file_")]
+_cfiles = _lsd(os.path.join(cout, _cd[0])) if _cd else []
+check("R45o 手改的表注释一路带到标准件文件名（产物读的是改写后的脚本正文）",
+      "改过的注释（t_cm1）.xlsx" in _cfiles and "补上的注释（t_cm2）.xlsx" in _cfiles,
+      (_cd, _cfiles))
 from PySide6.QtWidgets import QAbstractItemDelegate as _QDelegate
 
 

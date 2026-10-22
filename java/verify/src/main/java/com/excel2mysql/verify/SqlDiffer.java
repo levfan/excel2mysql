@@ -101,6 +101,17 @@ public final class SqlDiffer {
                 }
                 report(op + "(" + arg + ")", in, same, abbrev(got.text) + " skipped=" + got.skipped,
                         abbrev(want) + " skipped=" + wantSkipped);
+            } else if ("comment".equals(op)) {
+                checked++;
+                String table = (String) rec.get("table");
+                String cmt = (String) rec.get("comment");
+                SqlScript.CommentEdit got = SqlScript.setTableComment(in, table, cmt);
+                String want = (String) rec.get("out");
+                int wantChanged = ((Number) rec.get("changed")).intValue();
+                boolean same = got.text.equals(want) && (got.changed ? 1 : 0) == wantChanged;
+                report("comment(" + table + ")", in, same,
+                        abbrev(got.text) + " changed=" + (got.changed ? 1 : 0),
+                        abbrev(want) + " changed=" + wantChanged);
             } else if ("clean".equals(op)) {
                 checked++;
                 String got = Prefix.clean(in);

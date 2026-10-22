@@ -262,6 +262,8 @@ public final class GuiMain {
                 sql_gen_excel(frame, problems);
                 // 双击一行的耗时：读入时缓存字段定义，点开只取那一张（含改表名后的重挂）
                 sql_metadata_cache(frame, problems);
+                // 表注释手动改：写回 CREATE TABLE 的表选项，并一路带到弹窗与日志回执
+                sql_comment_edit(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
                 // 程序同级 conn.ini 预填连接信息：读到 / 读不了 / 没有，三种说法各验一条
@@ -2144,8 +2146,8 @@ public final class GuiMain {
         for (int c = 0; c < cache.columnCount(); c++) {
             edit.append(c == 0 ? "" : ",").append(cache.cellEditable(7, c));
         }
-        if (!"false,false,false,true,false".equals(edit.toString())) {
-            problems.add("SQL 页可编辑的列不对（应只有「当前表名」）：" + edit);
+        if (!"false,false,false,true,true".equals(edit.toString())) {
+            problems.add("SQL 页可编辑的列不对（应是「当前表名」与「表注释」）：" + edit);
         }
 
         long full0 = System.nanoTime();
@@ -2258,6 +2260,100 @@ public final class GuiMain {
                 w.dispose();
             }
         }
+    }
+
+    /**
+     * 表注释手动改：双击那一格要写回那句 CREATE TABLE 的表选项，
+     * 一路带到元数据弹窗、清单与标准件文件名（两条线各自实现了一遍这套文本改写）。
+     */
+    private static void sql_comment_edit(MainFrame frame, List<String> problems) {
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-ccomment").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建表注释改写检查的临时目录失败：" + e);
+            return;
+        }
+        String nl = String.valueOf((char) 10);
+        java.io.File script = new java.io.File(dir, "注释改写.sql");
+        writeText(script.getPath(),
+                "CREATE TABLE `t_cm1` (`id` INT) ENGINE=InnoDB COMMENT='原注释';" + nl
+                        + "CREATE TABLE t_cm2 (`id` INT);" + nl
+                        + "CREATE TABLE t_cm3 LIKE t_cm2;" + nl);
+        com.excel2mysql.gui.SqlPage cpage = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> paths = new ArrayList<String>();
+        paths.add(script.getPath());
+        cpage.addFiles(paths);
+        if (!"原注释".equals(cpage.sqlRowComment(0))
+                || !cpage.sqlRowComment(1).isEmpty() || !cpage.sqlRowComment(2).isEmpty()) {
+            problems.add("三种写法的表注释没读到位：" + cpage.sqlRowComment(0) + " / "
+                    + cpage.sqlRowComment(1) + " / " + cpage.sqlRowComment(2));
+        }
+
+        cpage.setSqlRowComment(0, "改过的注释");
+        String text = cpage.textOf(script.getPath());
+        if (!text.contains("COMMENT='改过的注释'") || text.contains("COMMENT='原注释'")
+                || !cpage.isModified(script.getPath())
+                || !"改过的注释".equals(cpage.sqlRowComment(0))) {
+            problems.add("改表注释没写进那句 CREATE TABLE 的表选项：" + firstLine(text));
+        }
+        com.excel2mysql.core.SqlScript.ParsedTable cm1 = cpage.metadataAtRow(0);
+        if (cm1 == null || !"改过的注释".equals(cm1.tableComment)) {
+            problems.add("元数据弹窗读的还不是改过的注释："
+                    + (cm1 == null ? "无表" : cm1.tableComment));
+        }
+        if (!cpage.logPanel().contains("[表注释] t_cm1 → 改过的注释（已写进脚本；未落盘）")) {
+            problems.add("改表注释没在日志里留回执：" + tailOf(cpage.logPanel().text()));
+        }
+
+        cpage.setSqlRowComment(1, "补上的注释");
+        text = cpage.textOf(script.getPath());
+        if (!text.contains("CREATE TABLE t_cm2 (`id` INT) COMMENT='补上的注释';")) {
+            problems.add("原本没有 COMMENT 的没在右括号后补上：" + secondLine(text));
+        }
+        cpage.setSqlRowComment(0, "带'单引号'的");
+        text = cpage.textOf(script.getPath());
+        if (!text.contains("COMMENT='带''单引号''的'")) {
+            problems.add("注释里的单引号没按 MySQL 口径翻倍：" + firstLine(text));
+        }
+        if (cpage.metadataAtRow(0) == null
+                || !"带'单引号'的".equals(cpage.metadataAtRow(0).tableComment)) {
+            problems.add("翻倍写法读回来不是原话：" + cpage.sqlRowComment(0));
+        }
+        cpage.setSqlRowComment(0, "");
+        text = cpage.textOf(script.getPath());
+        if (!text.contains("COMMENT=''") || !cpage.sqlRowComment(0).isEmpty()) {
+            problems.add("清空注释没写成 COMMENT='' 或清单没跟着变：" + firstLine(text));
+        }
+        if (!cpage.logPanel().contains("[表注释] t_cm1 → （空）（已写进脚本；未落盘）")) {
+            problems.add("清空注释的回执没写清是空：" + tailOf(cpage.logPanel().text()));
+        }
+
+        String beforeLike = text;
+        cpage.setSqlRowComment(2, "LIKE 那句改不动");
+        if (!beforeLike.equals(cpage.textOf(script.getPath()))
+                || !frame.lastDialogText().contains("没有可改写的表选项")
+                || cpage.logPanel().contains("[表注释] t_cm3")) {
+            problems.add("LIKE 写法该被拦下并说清原因，实际正文：" + tailOf(
+                    cpage.textOf(script.getPath())));
+        }
+        // 只多打了一个空格：内容其实没变，但这一条也必须有回执，且刷回清单时把空格去掉
+        cpage.setSqlRowComment(1, "补上的注释 ");
+        if (!cpage.logPanel().contains("[表注释] t_cm2 未发生变化，脚本未改写")
+                || !"补上的注释".equals(cpage.sqlRowComment(1))) {
+            problems.add("填回一模一样的注释没有任何回执，或空格没被刷掉："
+                    + cpage.sqlRowComment(1));
+        }
+    }
+
+    private static String firstLine(String text) {
+        int at = text.indexOf((char) 10);
+        return at < 0 ? text : text.substring(0, at);
+    }
+
+    private static String secondLine(String text) {
+        String[] lines = text.split(String.valueOf((char) 10));
+        return lines.length > 1 ? lines[1] : "";
     }
 
     private static void sql_page(MainFrame frame, List<String> problems) {
