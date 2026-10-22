@@ -1096,6 +1096,22 @@ check("F34 每条示例都能切成至少一句可执行语句",
 _dlg.list.setCurrentRow(7)
 check("F35 切换选中行，右侧全文跟着换",
       _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[7][2], _dlg.list.currentRow())
+# 换一条要把右侧滚回开头。先人为把预览弄成"能滚且已经滚走"，
+# 否则这条断言在内容本来就放得下时是恒真的（量不到复位这件事）。
+# 只要求横向滚得动：预览不折行，示例里有比可视区宽的行；纵向放得下是常态，
+# 拿它当前提会让用例在一台分辨率更高的机器上假红
+_dlg.preview.setLineWrapMode(type(_dlg.preview).NoWrap)
+_dlg.preview.verticalScrollBar().setValue(9999)
+_dlg.preview.horizontalScrollBar().setValue(9999)
+_v0 = _dlg.preview.verticalScrollBar().value()
+_h0 = _dlg.preview.horizontalScrollBar().value()
+_dlg.list.setCurrentRow(2)
+check("F35b 换一条时右侧滚回开头，上一行留下的滚动位置不许留着",
+      _h0 > 0 and _dlg.preview.horizontalScrollBar().value() == 0
+      and _dlg.preview.verticalScrollBar().value() == 0,
+      (_h0, _v0, _dlg.preview.horizontalScrollBar().value(),
+       _dlg.preview.verticalScrollBar().value()))
+_dlg.preview.setLineWrapMode(type(_dlg.preview).WidgetWidth)
 _dlg.show()
 w.sql_run_input.setPlainText(app_main.SQL_RUN_DEFAULT)
 _dlg.list.setCurrentRow(3)
@@ -1332,6 +1348,14 @@ check("H18c SQL 脚本页日志与首屏同一档字号",
       w3.sql_log.font().family() == w3.log.font().family()
       and w3.sql_log.font().pointSize() == w3.log.font().pointSize(),
       (w3.sql_log.font().family(), w3.sql_log.font().pointSize()))
+check("H18d 表格内容与表头的字号不小于日志（日志比内容大是用户点名的毛病）",
+      w3.file_table.font().pointSize() >= w3.log.font().pointSize()
+      and w3.file_table.horizontalHeader().font().pointSize()
+      >= w3.log.font().pointSize()
+      and w3.sql_table.font().pointSize() >= w3.log.font().pointSize(),
+      (w3.file_table.font().pointSize(),
+       w3.file_table.horizontalHeader().font().pointSize(),
+       w3.sql_table.font().pointSize(), w3.log.font().pointSize()))
 
 section("I .xls 老格式支持（xlrd）")
 
@@ -2590,7 +2614,7 @@ section("P 使用说明（? 按钮 / F1 / 排版 / 文档不漂移）")
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtCore import QEvent
 from help_doc import SECTIONS as HELP_SECTIONS
-from ui_help import HelpDialog, build_html
+from ui_help import HelpDialog, build_html, AUTHOR
 
 import re as _re
 
@@ -4230,8 +4254,8 @@ check("T5 点「i」打开关于框", len(_opened_about) == 1 and _opened_about[
 app_main.AboutDialog = _real_about
 ad = _real_about(tw)
 _labels = [x.text() for x in ad.findChildren(QLabel)]
-check("T6 关于框三行标签齐备（版本/提交/构建日期）",
-      all(t in _labels for t in ("版本", "提交", "构建日期")), _labels[:5])
+check("T6 关于框四行标签齐备（版本/提交/构建日期/作者）",
+      all(t in _labels for t in ("版本", "提交", "构建日期", "作者")), _labels[:6])
 _be = None
 _i = _ai.build_info()
 
@@ -4250,6 +4274,9 @@ check("T7 三行的值来自 appinfo，不是写死的字符串",
       and ad.rows["commit"].text() == _ai.commit_display(_i)
       and ad.rows["built"].text() == _i["built_at"],
       {k: v.text() for k, v in ad.rows.items()})
+check("T7b 作者这一行有署名，取的是 ui_help.AUTHOR（Java 侧同一常量，对撞比行名）",
+      ad.rows["author"].text() == AUTHOR and bool(AUTHOR.strip()),
+      (ad.rows["author"].text(), AUTHOR))
 check("T8 提交号可鼠标选中复制（要贴给别人时不用手抄）",
       bool(ad.rows["commit"].textInteractionFlags()))
 ad.deleteLater()
@@ -4335,7 +4362,7 @@ check("U6 短文案原样不动（不给正常提示加多余换行）",
 _geo = _app.primaryScreen().availableGeometry()
 _suites = [("主窗口", app_main.MainWindow(), "1100x780"),
            ("使用说明", app_main.HelpDialog(), "960x700"),
-           ("关于", app_main.AboutDialog(), "380x168"),
+           ("关于", app_main.AboutDialog(), "380x190"),
            ("进度框", REAL_PROGRESS("正在解析文件…"), "480x140"),
            ("表结构预览", app_main.StructureDialog([]), "980x640"),
            ("DDL 预览", app_main.DDLDialog([], False), "900x600")]

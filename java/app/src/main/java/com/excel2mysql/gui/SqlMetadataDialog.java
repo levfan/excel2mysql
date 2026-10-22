@@ -67,7 +67,7 @@ public final class SqlMetadataDialog extends JDialog {
                     Boolean.FALSE.equals(c.nullable) ? "否" : "是"});
         }
         JTable fieldTable = new JTable(model);
-        fieldTable.setRowHeight(UiScale.px(22));
+        Tables.style(fieldTable);
         fieldTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         fieldTable.getTableHeader().setReorderingAllowed(false);
         fieldTable.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(230));

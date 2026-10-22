@@ -25,6 +25,9 @@ import java.util.Map;
  */
 public final class AboutDialog extends JDialog {
 
+    /** 「关于」里那一行作者，与 Python 侧 ui_help.AUTHOR 同一份（对撞键 dlg.about.rows 比行名）。 */
+    public static final String AUTHOR = "刘帆";
+
     private final Map<String, HintLabel> rows = new LinkedHashMap<String, HintLabel>();
     private final List<String> captions = new ArrayList<String>();
 
@@ -46,7 +49,8 @@ public final class AboutDialog extends JDialog {
         JPanel grid = new JPanel(new java.awt.GridBagLayout());
         addRow(grid, "version", "版本", "v" + info.versionText(), false);
         addRow(grid, "commit", "提交", info.commitDisplay(), false);
-        addRow(grid, "built", "构建日期", info.builtAt, true);
+        addRow(grid, "built", "构建日期", info.builtAt, false);
+        addRow(grid, "author", "作者", AUTHOR, true);
 
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
@@ -77,7 +81,7 @@ public final class AboutDialog extends JDialog {
             }
         });
         // 尺寸要等组件都摆好再算：pack 之前设尺寸等于跟布局抢活
-        Windows.clientSize(getContentPane(), this, 380, 168);
+        Windows.clientSize(getContentPane(), this, 380, 190);
     }
 
     private void addRow(JPanel grid, String key, String label, String value, boolean last) {

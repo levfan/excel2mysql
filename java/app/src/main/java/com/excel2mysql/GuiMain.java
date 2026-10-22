@@ -1630,6 +1630,18 @@ public final class GuiMain {
                         + f.getSize());
             }
         }
+        // 日志不许比表格内容大：表格与日志同一档（gui/Tables），这里断"表格 ≥ 日志"，
+        // 顺带盯行高跟着字号走——行高写死的话放大字号会把字裁掉一半
+        java.awt.Font tf = frame.fileTable().getFont();
+        java.awt.Font hf = frame.fileTable().getTableHeader().getFont();
+        if (tf.getSize() < want16 || hf.getSize() < want16) {
+            problems.add("表格内容/表头字号比日志还小：内容 " + tf.getSize()
+                    + "、表头 " + hf.getSize() + "，日志 " + want16 + "px");
+        }
+        if (frame.fileTable().getRowHeight() <= tf.getSize()) {
+            problems.add("表格行高没跟着字号走：行高 " + frame.fileTable().getRowHeight()
+                    + "，字号 " + tf.getSize());
+        }
     }
 
     /**
@@ -3852,6 +3864,44 @@ public final class GuiMain {
                         + taskLine(frame));
             } else if (!frame.sqlSamplesTitle().contains("SQL 示例")) {
                 problems.add("开出来的不是那份示例清单：" + frame.sqlSamplesTitle());
+            }
+            // 换一条要把右侧滚回开头：预览不折行，上一行留下的横向位置会切掉新语句的开头。
+            // 先把最长那条滚到最右，再切到别条，等事件分发线程把复位做完再看读数
+            final javax.swing.JScrollPane spane = frame.sqlSamplesPane();
+            if (spane == null) {
+                problems.add("示例预览没有滚动容器，验不了换条后的滚动复位");
+            } else {
+                int longest = 0;
+                for (int i = 1; i < frame.sqlSamplesCount(); i++) {
+                    if (frame.sqlSampleSql(i).length() > frame.sqlSampleSql(longest).length()) {
+                        longest = i;
+                    }
+                }
+                final int li = longest;
+                invokeUi(() -> frame.setSqlSamplesRow(li));
+                invokeUi(() -> {
+                    spane.getHorizontalScrollBar().setValue(
+                            spane.getHorizontalScrollBar().getMaximum());
+                    spane.getVerticalScrollBar().setValue(
+                            spane.getVerticalScrollBar().getMaximum());
+                });
+                final int h0 = spane.getHorizontalScrollBar().getValue();
+                invokeUi(() -> frame.setSqlSamplesRow(2));
+                long resetUntil = System.currentTimeMillis() + 2000;
+                while (System.currentTimeMillis() < resetUntil
+                        && (spane.getHorizontalScrollBar().getValue() != 0
+                        || spane.getVerticalScrollBar().getValue() != 0)) {
+                    Thread.sleep(20);
+                }
+                if (h0 <= 0) {
+                    problems.add("示例里找不到一条宽到要横向滚动的（最长那条第 "
+                            + (li + 1) + " 条），这条复位没量到");
+                } else if (spane.getHorizontalScrollBar().getValue() != 0
+                        || spane.getVerticalScrollBar().getValue() != 0) {
+                    problems.add("换一条示例后右侧没滚回开头：横 "
+                            + spane.getHorizontalScrollBar().getValue() + " 纵 "
+                            + spane.getVerticalScrollBar().getValue());
+                }
             }
             // 清单开着、任务还在跑：这时候回一次事件分发线程，"点得动"才算数
             long p0 = System.currentTimeMillis();

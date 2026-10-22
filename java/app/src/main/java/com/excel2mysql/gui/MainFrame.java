@@ -138,6 +138,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JDialog sqlRunSamples;
     private javax.swing.JList<String> sqlRunSamplesList;
     private javax.swing.JTextArea sqlRunPreview;
+    private javax.swing.JScrollPane sqlRunPreviewScroll;
     private javax.swing.JButton sqlRunCopyBtn;
     private javax.swing.JButton sqlRunInsertBtn;
     private DropArea drop;
@@ -364,7 +365,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }, this::chooseFiles);
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
-        table.setRowHeight(UiScale.px(22));
+        Tables.style(table);
         // 表名单击就进编辑器改这一张表；双击其余列进结构弹窗改字段与主键
         javax.swing.DefaultCellEditor nameEditor =
                 new javax.swing.DefaultCellEditor(new javax.swing.JTextField());
@@ -2064,10 +2065,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 UiScale.fontPt(SQL_RUN_FONT_SIZE)));
         sqlRunPreview.setText(SqlSamples.ALL[0].sql);
         final javax.swing.JTextArea preview = sqlRunPreview;
+        final javax.swing.JScrollPane previewScroll = new javax.swing.JScrollPane(preview);
+        sqlRunPreviewScroll = previewScroll;
         list.addListSelectionListener(e -> {
             int i = list.getSelectedIndex();
             if (i >= 0) {
                 preview.setText(SqlSamples.ALL[i].sql);
+                // 换一条就把右侧滚回开头：预览不折行，上一行留下的横向位置会停在原处，
+                // 新语句的开头被推到可视区左边外面，看着像"少了半句"
+                SwingUtilities.invokeLater(() -> {
+                    previewScroll.getHorizontalScrollBar().setValue(0);
+                    previewScroll.getVerticalScrollBar().setValue(0);
+                });
             }
         });
 
@@ -2108,7 +2117,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(
                 0, UiScale.px(4)));
         right.add(new javax.swing.JLabel("语句全文（可全选复制）"), java.awt.BorderLayout.NORTH);
-        right.add(new javax.swing.JScrollPane(preview), java.awt.BorderLayout.CENTER);
+        right.add(previewScroll, java.awt.BorderLayout.CENTER);
         right.add(buttons, java.awt.BorderLayout.SOUTH);
 
         javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(
@@ -2201,6 +2210,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public String sqlSamplesPreviewText() {
         return sqlRunPreview == null ? "" : sqlRunPreview.getText();
+    }
+
+    /** 示例预览那个滚动容器：自检要先把滚动位置弄走、再断"换一条回到开头"。 */
+    public javax.swing.JScrollPane sqlSamplesPane() {
+        return sqlRunPreviewScroll;
     }
 
     public void setSqlSamplesRow(int index) {

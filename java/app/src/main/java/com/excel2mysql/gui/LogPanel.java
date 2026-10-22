@@ -23,8 +23,9 @@ public final class LogPanel extends javax.swing.JTextPane {
     private static final Color OK_COLOR = new Color(0x1a, 0x7f, 0x37);
     private static final int MAX_LINES = 2000;
     private static final int TRIM_TO = 1500;
-    /** 12 与 14 在 1080p 上都偏小，现场两次反馈看不清；所有日志统一 16pt（同 Python）。 */
-    private static final int DEFAULT_FONT_SIZE = 16;
+    /** 12 与 14 在 1080p 上都偏小，现场两次反馈看不清；所有日志统一 16pt（同 Python）。
+     *  表格那一档（gui/Tables）引用同一个数，两处不许各写一份 16。 */
+    static final int DEFAULT_FONT_SIZE = 16;
     /**
      * 日志框至少看得见 4 行它自己的字。按"行数"而不是像素约定：
      * 两栈的 16pt 行高不同（Qt 实测 24px、Swing 实测 28.7px），写同一个像素数

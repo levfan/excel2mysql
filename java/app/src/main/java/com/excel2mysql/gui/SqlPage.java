@@ -230,7 +230,7 @@ public final class SqlPage extends JPanel {
             }
         };
         table = new JTable(model);
-        table.setRowHeight(UiScale.px(22));
+        Tables.style(table);
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
         table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(54));

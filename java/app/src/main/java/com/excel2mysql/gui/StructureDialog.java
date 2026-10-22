@@ -99,7 +99,7 @@ public final class StructureDialog extends JDialog {
             editors.add(ed);
             JTable table = new JTable(ed.model);
             table.setFillsViewportHeight(true);
-            table.setRowHeight(UiScale.px(22));
+            Tables.style(table);
             // 主键列窄、其余列分摊剩余宽度：对应 Qt 的 ResizeToContents(0) + Stretch(1,2)，
             // Swing 没有"按内容自适应"这一档，用固定窄列 + 后续列均分来贴
             table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);

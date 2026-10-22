@@ -123,6 +123,9 @@ SQL_RUN_FONT_SIZE = 16
 
 # 两处日志区共用的字号：默认 9 号字现场反馈"太小"，与第三页的可读档对齐
 LOG_FONT_SIZE = 16
+# 表格内容与表头的字号：日志放大到 16 之后表格还是系统默认（9pt），
+# 看上去就是"日志比内容还大"。用户点名不许这样，这里把表格提到同一档
+TABLE_FONT_SIZE = LOG_FONT_SIZE
 
 # 日志框的最小高度按"看得见的行数"约定，不按像素：两栈的 16pt 行高本来就不一样
 # （Qt 实测 24px、Swing 实测 28.7px），写同一个像素数会变成"两边各自满足同一个数、
@@ -135,6 +138,18 @@ LOG_MIN_LINES = 4
 def log_min_height(view) -> int:
     """这个日志控件的最小高度：够放下 LOG_MIN_LINES 行它自己的字。"""
     return LOG_MIN_LINES * view.fontMetrics().height()
+
+def style_table_font(view):
+    """表格内容与表头一起设成同一档字号：只设单元格不设表头，表头会小一圈。
+
+    两栈同一口径（Java 侧 gui.Tables.style），字号关系由用例钉住：日志不许比表格大。
+    """
+    font = QFont("", TABLE_FONT_SIZE)
+    view.setFont(font)
+    view.horizontalHeader().setFont(font)
+    view.verticalHeader().setFont(font)
+    return view
+
 
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
@@ -1240,6 +1255,7 @@ class MainWindow(QWidget):
         file_box = QGroupBox("待导入文件（单击表名改名，双击其他列改字段）")
         fl = QVBoxLayout(file_box)
         self.file_table = QTableWidget(0, 7)
+        style_table_font(self.file_table)
         self.file_table.setHorizontalHeaderLabels(
             ["序号", "文件", "表名", "表注释", "字段数", "数据行数", "主键"])
         # 列宽可自由拖动调节；最后一列自动填满剩余空间
@@ -1594,6 +1610,7 @@ class MainWindow(QWidget):
         lay.addLayout(btn_row)
 
         self.sql_table = QTableWidget(0, 5)
+        style_table_font(self.sql_table)
         self.sql_table.setHorizontalHeaderLabels(
             ["序号", "文件", "原表名", "CREATE 出现次数", "当前表名"])
         header = self.sql_table.horizontalHeader()
@@ -2728,6 +2745,7 @@ class StructureDialog(QDialog):
         self.tabs = QTabWidget()
         for t in tables:
             tw = QTableWidget(len(t["columns"]), 5)
+            style_table_font(tw)
             tw.setHorizontalHeaderLabels(
                 ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "类型", "最大字节长度"])
             for i, c in enumerate(t["columns"]):
@@ -2810,6 +2828,7 @@ class SqlMetadataDialog(QDialog):
                              "勾选「表名与字段名转大写」只切换显示，不回写脚本正文。"))
         cols = table.get("columns") or []
         tw = QTableWidget(len(cols), 6)
+        style_table_font(tw)
         tw.setHorizontalHeaderLabels(["字段名", "字段注释", "数据类型", "长度", "主键", "可空"])
         tw.setEditTriggers(QAbstractItemView.NoEditTriggers)
         tw.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -2928,6 +2947,11 @@ class SqlSamplesDialog(QDialog):
     def _on_pick(self, row):
         if 0 <= row < len(SQL_SAMPLES):
             self.preview.setPlainText(SQL_SAMPLES[row][2])
+            # 换一条就把右侧滚回开头：上一条长文留下的滚动位置会让新语句
+            # 看着像"缺了上半截"（与 Java 侧 openSqlSamples 的复位同一处理）
+            for bar in (self.preview.verticalScrollBar(),
+                        self.preview.horizontalScrollBar()):
+                bar.setValue(bar.minimum())
 
     def on_copy(self):
         QApplication.clipboard().setText(self.preview.toPlainText())

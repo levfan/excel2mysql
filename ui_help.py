@@ -1,4 +1,4 @@
-"""信息类对话框：使用说明（左目录 + 右正文）与「关于」（版本/提交/构建日期）。
+"""信息类对话框：使用说明（左目录 + 右正文）与「关于」（版本/提交/构建日期/作者）。
 
 单独成模块是因为主窗口已经够挤，而这些对话框只服务于"看"，不参与任何导入逻辑。
 """
@@ -11,6 +11,10 @@ from PySide6.QtWidgets import (
 
 from appinfo import build_info, commit_display
 from help_doc import SECTIONS
+
+# 「关于」里那一行作者。Java 侧镜像在 gui/AboutDialog.java 的 AUTHOR 常量，
+# 两条线的关于框由对撞键 dlg.about.rows 逐行比，改一处不改另一处就会红
+AUTHOR = "刘帆"
 
 # Qt 的 Rich Text 只支持 CSS 的一个子集，这里只写 QTextBrowser 认得的属性
 # （写多了不报错，但静默不生效，所以行高用段落间距撑，不用 line-height）
@@ -123,7 +127,7 @@ class HelpDialog(QDialog):
 
 
 class AboutDialog(QDialog):
-    """「关于」小框：版本 / 提交 / 构建日期三行，值全部来自 appinfo。
+    """「关于」小框：版本 / 提交 / 构建日期 / 作者四行，前三行的值全部来自 appinfo。
 
     提交号与构建日期是打包时烧进产物的（exe 所在机器没有 .git），
     开发态则现场问 git；取不到就显示"开发态（未打包）"，不会编造。
@@ -133,7 +137,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("关于")
         self.setModal(True)
-        fit_client(self, 380, 168)
+        fit_client(self, 380, 190)
         info = build_info()
 
         title = QLabel(f"Excel → MySQL 批量导入工具")
@@ -149,7 +153,8 @@ class AboutDialog(QDialog):
         for i, (key, label, value) in enumerate((
                 ("version", "版本", f"v{info['version']}"),
                 ("commit", "提交", commit_display(info)),
-                ("built", "构建日期", info["built_at"]))):
+                ("built", "构建日期", info["built_at"]),
+                ("author", "作者", AUTHOR))):
             head = QLabel(label)
             head.setStyleSheet("color: #666;")
             body = QLabel(value)
