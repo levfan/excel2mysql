@@ -75,6 +75,13 @@ public final class SqlPage extends JPanel {
         public String text;
         public boolean modified;
         public List<Map<String, Object>> tabs;
+        /**
+         * 当前表名 → 那一张表的字段定义，读入时整份解析一次存下来。
+         * 双击一行只要其中一张：10MB 脚本整份重解析要 1.8 秒（实测），
+         * 放在点开那一刻就是"点一下卡一下"，放在读入的子线程里只是进度条多走一格。
+         * 脚本正文改了表名后按新名重挂（见 rekeyParsed），对不上号就置空回退现解析。
+         */
+        public Map<String, SqlScript.ParsedTable> parsed;
         /** 最初的表名 → 现在脚本里写的表名，多轮改写累计；"原表名"列靠它回显。 */
         public final Map<String, String> renameMap = new LinkedHashMap<String, String>();
         /** 脚本里的当前表名 → 页面显示名：前缀两个按钮只动这一层，动作按钮才写进 text。 */
@@ -84,6 +91,12 @@ public final class SqlPage extends JPanel {
             this.path = path;
             this.text = text;
             this.tabs = tabs;
+        }
+
+        Entry(String path, String text, List<Map<String, Object>> tabs,
+              Map<String, SqlScript.ParsedTable> parsed) {
+            this(path, text, tabs);
+            this.parsed = parsed;
         }
     }
 
@@ -419,6 +432,16 @@ public final class SqlPage extends JPanel {
         return null;
     }
 
+    /** 自检用：某份脚本当前的字段定义缓存；改名撞车后被丢掉就是 null。 */
+    public Map<String, SqlScript.ParsedTable> parsedCacheOf(String path) {
+        for (Entry e : entries) {
+            if (e.path.equals(path)) {
+                return e.parsed;
+            }
+        }
+        return null;
+    }
+
     public boolean isModified(String path) {
         for (Entry e : entries) {
             if (e.path.equals(path)) {
@@ -570,18 +593,58 @@ public final class SqlPage extends JPanel {
         if (row < 0 || row >= rowActual.size()) {
             return null;
         }
-        String actual = rowActual.get(row);
         for (Entry e : entries) {
-            if (!e.path.equals(rowPath.get(row))) {
-                continue;
-            }
-            for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(e.text)) {
-                if (actual.equals(t.tableName)) {
-                    return t;
-                }
+            if (e.path.equals(rowPath.get(row))) {
+                return parsedOf(e, rowActual.get(row));
             }
         }
         return null;
+    }
+
+    /**
+     * 一张表的字段定义：先取读入时缓存的那一份，取不到才现解析一次并补回缓存。
+     *
+     * 补回去这一步让"第二次点同一份脚本"不用再等 1.8 秒——缓存被改名撞车丢掉时，
+     * 慢的只有点开的那一次。
+     */
+    private SqlScript.ParsedTable parsedOf(Entry e, String name) {
+        if (e.parsed == null) {
+            Map<String, SqlScript.ParsedTable> map =
+                    new LinkedHashMap<String, SqlScript.ParsedTable>();
+            for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(e.text)) {
+                map.put(t.tableName, t);
+            }
+            e.parsed = map;
+        }
+        return e.parsed.get(name);
+    }
+
+    /**
+     * 脚本正文里改了表名，把解析缓存按新名重挂。
+     *
+     * 改表名不动列定义，缓存里那一格换个键还是对的；只要有一种情况成立就返回 null
+     * 丢掉整份：要改的名字不在缓存里、新名字和缓存里另一张表撞车。
+     * 宁可下次点开慢那一次，也不能让元数据弹窗显示旧表名下的字段。
+     */
+    public static Map<String, SqlScript.ParsedTable> rekeyParsed(
+            Map<String, SqlScript.ParsedTable> parsed, Map<String, String> renames) {        if (parsed == null || !parsed.keySet().containsAll(renames.keySet())) {
+            return null;
+        }
+        Map<String, SqlScript.ParsedTable> out =
+                new LinkedHashMap<String, SqlScript.ParsedTable>();
+        for (Map.Entry<String, SqlScript.ParsedTable> en : parsed.entrySet()) {
+            String name = renames.get(en.getKey());
+            if (name == null) {
+                name = en.getKey();
+            } else {
+                en.getValue().tableName = name;
+            }
+            if (out.containsKey(name)) {
+                return null;
+            }
+            out.put(name, en.getValue());
+        }
+        return out;
     }
 
     /** 自检入口：双击元数据弹窗里显示的表名（前缀/大写都算上）。 */
@@ -643,6 +706,11 @@ public final class SqlPage extends JPanel {
                     continue;
                 }
                 List<Map<String, Object>> tabs = SqlScript.extractCreateTables(text);
+                Map<String, SqlScript.ParsedTable> parsed =
+                        new LinkedHashMap<String, SqlScript.ParsedTable>();
+                for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(text)) {
+                    parsed.put(t.tableName, t);
+                }
                 List<String> names = new ArrayList<String>();
                 for (Map<String, Object> t : tabs) {
                     names.add(String.valueOf(t.get("name")));
@@ -650,7 +718,7 @@ public final class SqlPage extends JPanel {
                 sink.log("[已加载] " + fname + "：" + tabs.size() + " 个表（"
                         + (names.isEmpty() ? "未发现 CREATE TABLE 语句" : String.join("、", names))
                         + "）");
-                loaded.add(new Entry(p, text, tabs));
+                loaded.add(new Entry(p, text, tabs, parsed));
                 sink.step(fname);
             }
             return new LoadResult(loaded, failed, duplicates, sink.cancelled());
@@ -872,6 +940,11 @@ public final class SqlPage extends JPanel {
             if (!rw.renamed.isEmpty()) {
                 e.text = rw.text;
                 e.tabs = SqlScript.extractCreateTables(rw.text);
+                Map<String, String> renames = new LinkedHashMap<String, String>();
+                for (Map<String, Object> r : rw.renamed) {
+                    renames.put(String.valueOf(r.get("old")), String.valueOf(r.get("new")));
+                }
+                e.parsed = rekeyParsed(e.parsed, renames);
                 e.modified = true;
                 log("[生效] " + baseName(e.path) + "：" + describeRenamed(rw.renamed)
                         + " 已写入脚本");
@@ -1283,6 +1356,9 @@ public final class SqlPage extends JPanel {
         }
         entry.text = rw.text;
         entry.tabs = SqlScript.extractCreateTables(entry.text);
+        Map<String, String> renames = new LinkedHashMap<String, String>();
+        renames.put(oldName, newName);
+        entry.parsed = rekeyParsed(entry.parsed, renames);
         entry.modified = true;
         entry.renameMap.put(origin, newName);
         entry.displayMap.remove(oldName);
@@ -1297,27 +1373,9 @@ public final class SqlPage extends JPanel {
         if (row < 0 || row >= rowActual.size()) {
             return;
         }
-        String path = rowPath.get(row);
-        String actual = rowActual.get(row);
-        Entry entry = null;
-        for (Entry e : entries) {
-            if (e.path.equals(path)) {
-                entry = e;
-                break;
-            }
-        }
-        if (entry == null) {
-            return;
-        }
-        SqlScript.ParsedTable parsed = null;
-        for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(entry.text)) {
-            if (actual.equals(t.tableName)) {
-                parsed = t;
-                break;
-            }
-        }
+        SqlScript.ParsedTable parsed = metadataAtRow(row);
         if (parsed == null) {
-            log("[元数据] 未找到表 " + actual + " 的定义（可能被后续语句改写）");
+            log("[元数据] 未找到表 " + rowActual.get(row) + " 的定义（可能被后续语句改写）");
             return;
         }
         new SqlMetadataDialog(host.owner(), parsed, metadataShownName(row),

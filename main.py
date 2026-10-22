@@ -750,13 +750,39 @@ def sql_load_task(paths, duplicates, sink):
             sink.step(fname)
             continue
         tabs = extract_create_tables(text)
+        # 字段定义也在这条子线程里一次解析完，按"原表名"存着：
+        # 双击一行要的是其中一张表，整份重解析在 10MB 脚本上是 1.8 秒（实测），
+        # 放在建对话框那一刻就是"点一下卡一下"，放在这里只是进度条多走一格
+        parsed = {t["table_name"]: t for t in parse_create_tables(text)}
         names = "、".join(t["name"] for t in tabs) or "未发现 CREATE TABLE 语句"
         sink.log(f"[已加载] {fname}：{len(tabs)} 个表（{names}）")
         loaded.append({"path": p, "text": text, "modified": False,
-                       "rename_map": {}, "display_map": {}, "tabs": tabs})
+                       "rename_map": {}, "display_map": {}, "tabs": tabs,
+                       "parsed": parsed})
         sink.step(fname)
     return {"loaded": loaded, "failed": failed, "duplicates": list(duplicates),
             "cancelled": sink.cancelled}
+
+
+def rekey_parsed(parsed, renames):
+    """脚本正文里改了表名，把 sql_load_task 存的解析缓存按新名重挂。
+
+    改表名不动列定义，缓存里那一格换个键还是对的；只要有一种情况成立就
+    返回 None 丢掉整份（下次点开元数据时现解析一次）：要改的名字不在缓存里、
+    新名字和缓存里另一张表撞车。宁可慢那一次，也不能显示旧表名下的字段。
+    """
+    if parsed is None or not set(renames) <= set(parsed):
+        return None
+    out = {}
+    for name, table in parsed.items():
+        new = renames.get(name, name)
+        if new in out:
+            return None
+        if new != name:
+            table = dict(table)
+            table["table_name"] = new
+        out[new] = table
+    return out
 
 
 def sql_save_task(items, sink):
@@ -1779,8 +1805,14 @@ class MainWindow(QWidget):
         record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
         if record is None:
             return None
-        table = next((t for t in parse_create_tables(record["text"])
-                      if t["table_name"] == row["actual"]), None)
+        # 读入时已经整份解析过（sql_load_task），这里只按脚本里现在这个名字取那一张；
+        # 缓存不在（手工塞进列表的记录、改名撞车后被丢掉的）才现解析一次并补回去，
+        # 补回去这一步让"第二次点同一份脚本"不用再等 1.8 秒
+        parsed = record.get("parsed")
+        if parsed is None:
+            parsed = {t["table_name"]: t for t in parse_create_tables(record["text"])}
+            record["parsed"] = parsed
+        table = parsed.get(row["actual"])
         if table is None:
             append_log(self.sql_log, 
                 "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
@@ -1827,6 +1859,7 @@ class MainWindow(QWidget):
             return
         record["text"] = new_text
         record["tabs"] = extract_create_tables(new_text)
+        record["parsed"] = rekey_parsed(record.get("parsed"), {old: new})
         record["modified"] = True
         record["rename_map"][row["orig"]] = new
         record.setdefault("display_map", {})
@@ -2031,6 +2064,8 @@ class MainWindow(QWidget):
             if renamed:
                 s["text"] = new_text
                 s["tabs"] = extract_create_tables(new_text)
+                s["parsed"] = rekey_parsed(
+                    s.get("parsed"), {r["old"]: r["new"] for r in renamed})
                 s["modified"] = True
                 append_log(self.sql_log, 
                     f"[生效] {os.path.basename(s['path'])}："
