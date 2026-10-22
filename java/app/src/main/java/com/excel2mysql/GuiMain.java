@@ -256,6 +256,8 @@ public final class GuiMain {
                 sql_gen_excel(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
+                // 并发护栏按资源位判：不同页可以一起跑，同一页与共用产物的仍然互斥
+                task_slots(frame, files, problems);
                 // 进度框文案与收尾
                 progress_copy(problems);
                 // DDL 逐表分页、文件表列宽、端口范围
@@ -3219,6 +3221,18 @@ public final class GuiMain {
             if (pd.percentShown() != 100) {
                 problems.add("跑完最后一项进度条没拉满：" + pd.percentShown());
             }
+            // 进度框必须是非模态的：模态框挡在中间时另外两页根本点不动，用户只能干等
+            // 或者强关窗口（现场投诉的就是这个）
+            if (pd.isModal()) {
+                problems.add("进度框还是模态的，任务在跑时别的页点不动");
+            }
+            // 台账按绝对值刷框：非模态之后框可能还没建好、也可能已经被关掉，
+            // 只会被 step 一格推着走的框报不出"现在是 i/N"
+            pd.setTotal(10);
+            pd.setProgress(4, 10, "第 4/10 条");
+            if (pd.getDone() != 4 || !"进度 4/10 项 · 第 4/10 条".equals(pd.statusText())) {
+                problems.add("按绝对值刷进度没生效：" + pd.getDone() + " " + pd.statusText());
+            }
             pd.setCancelText("停止（当前表完成后中止）");
             if (!"停止（当前表完成后中止）".equals(pd.cancelText())) {
                 problems.add("取消按钮改字没生效：" + pd.cancelText());
@@ -3287,6 +3301,72 @@ public final class GuiMain {
         }
         if (!frame.logPanel().contains("没有正在执行的任务")) {
             problems.add("空点「停止」的提示语不对");
+        }
+    }
+
+    /**
+     * 按资源占位：同一页互斥、不同页可以一起跑，两页的「生成」因为写同一个输出目录也互斥。
+     *
+     * 上一轮是一个布尔量锁住三页——执行器跑上千条语句时另外两页连点都点不动，
+     * 而被挡下的人只看到一句"请稍等"。这里断的是"别的页在跑，这一页照样起得来"这件事本身。
+     */
+    private static void task_slots(MainFrame frame, List<String> files, List<String> problems) {
+        if (!frame.runningTasks().isEmpty()) {
+            problems.add("进到这里还留着上一项的任务，后面的判断全废了："
+                    + frame.runningTasks().size());
+            return;
+        }
+        if (!frame.startTask(MainFrame.RES_EXCEL)) {
+            problems.add("空窗口占不住 Excel 页的资源位");
+            return;
+        }
+        if (!frame.startTask(MainFrame.RES_SQL)) {
+            problems.add("Excel 页在跑时 SQL 页的任务被挡下了，三页还是共用一个任务位");
+        }
+        if (frame.runningTasks().size() != 2) {
+            problems.add("两个不同页的任务没能同时在跑：" + frame.runningTasks().size());
+        }
+        if (!frame.taskBusy(MainFrame.RES_EXCEL) || !frame.taskBusy(MainFrame.RES_SQL)) {
+            problems.add("占了资源位却查不出它在跑");
+        }
+        if (frame.taskBusy(MainFrame.RES_RUN) || frame.taskBusy(MainFrame.RES_EXPORT)) {
+            problems.add("没被占用的资源位也报成在跑，等于又变回全局一把锁");
+        }
+        // 同一页的第二个任务必须被挡下，而且要说得出共用的是哪一份数据
+        frame.startTask(MainFrame.RES_SQL);
+        if (frame.runningTasks().size() != 2) {
+            problems.add("同一页的第二个任务挤进来了：" + frame.runningTasks().size());
+        }
+        if (!frame.lastDialogText().contains("Excel 导入页的待导入列表、程序同级的生成输出目录")
+                && !frame.lastDialogText().contains("SQL 脚本改名入库页的脚本列表")) {
+            problems.add("被挡下时没点名共用的是哪一份数据：" + frame.lastDialogText());
+        }
+        frame.endTask();
+        frame.endTask();
+
+        // 两页的「生成」往同一个输出目录里写，所以共占一个位：
+        // SQL 页那边占住 export，Excel 页点生成必须被挡下，而不是两个任务同时写同一个目录
+        frame.clearAll();
+        frame.addFiles(files);
+        if (frame.tables().isEmpty()) {
+            problems.add("资源位自检没有可生成的表");
+            return;
+        }
+        frame.startTask(MainFrame.RES_SQL, MainFrame.RES_EXPORT);
+        frame.generateExcel(true);
+        if (!frame.lastDialogText().contains("已有任务在跑")) {
+            problems.add("两页的生成共用同一个输出目录，却谁也没挡谁："
+                    + frame.lastDialogText());
+        }
+        if (!frame.lastDialogText().contains("程序同级的生成输出目录")) {
+            problems.add("生成被挡下时没说要等的是产物目录：" + frame.lastDialogText());
+        }
+        if (frame.runningTasks().size() != 1) {
+            problems.add("被挡下的生成不该再占一个位：" + frame.runningTasks().size());
+        }
+        frame.endTask();
+        if (frame.taskBusy()) {
+            problems.add("endTask 没能把资源位还回去");
         }
     }
 

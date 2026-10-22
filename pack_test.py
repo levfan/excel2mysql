@@ -2300,7 +2300,12 @@ class _FakeProgress:
     def finish(self):
         self.accepted = True
 
-    def exec(self):
+    def show(self):
+        """非模态框的入口。用例里由它代用户等这一轮跑完：边泵主循环边看框有没有被关闭。
+
+        真程序里 show() 立刻返回，等待的是用户；这里必须等，否则后面的断言读到的
+        是"任务还在跑"的中间态。等不到就是任务把主循环挡住了，照样判失败。
+        """
         timer = QTimer()
         timer.setInterval(1)
         timer.timeout.connect(lambda: self.__setattr__("ui_ticks", self.ui_ticks + 1))
@@ -2317,6 +2322,15 @@ class _FakeProgress:
             raise AssertionError(f"进度框没被关闭，任务把主线程挡住了：{self.title}")
         timer.stop()
         self.threads.append(threading.current_thread().name)
+
+    def raise_(self):
+        pass
+
+    def activateWindow(self):
+        pass
+
+    def isVisible(self):
+        return not self.accepted
         return 1
 
 
@@ -2521,15 +2535,28 @@ def _watchdog():
             d.finish()
 
 
+def wait_idle(win, seconds=8.0):
+    """非模态之后由用例自己等这一轮跑完：主循环照常泵，超时就是任务把界面挡住了。"""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        QApplication.processEvents()
+        if not win._tasks:
+            return True
+        time.sleep(0.002)
+    raise AssertionError("任务超时没收尾：" + " | ".join(t.describe() for t in win._tasks))
+
+
 _wd = QTimer()
 _wd.setInterval(6000)
 _wd.setSingleShot(True)
 _wd.timeout.connect(_watchdog)
 _wd.start()
 rw._add_files([jx1, ozip])
+wait_idle(rw)
 rw._add_files([jx2])                      # 同一轮里起第二个任务，验证状态被正确复位
+wait_idle(rw)
 _wd.stop()
-check("O36 真模态进度框：exec() 自己返回，没靠看门狗救场",
+check("O36 真进度框：任务自己收尾，没靠看门狗救场",
       watchdog_fired[0] is False and len(_close_shots) == 2,
       f"看门狗触发={watchdog_fired[0]} 关框次数={len(_close_shots)}")
 shot = _close_shots[-1] if _close_shots else {}
@@ -2538,7 +2565,7 @@ check("O38 关框那一刻当前项文字停在最后一项", "乙工程" in (sh
 check("O39 关框后框确实不可见（不会残留半个模态窗）", shot.get("visible") is False, shot)
 check("O40 两轮任务的结果都落到界面", len(rw.tables) == 4,
       [t["table_name"] for t in rw.tables])
-check("O41 任务结束后窗口回到空闲态，能再起任务", rw.task_dialog is None)
+check("O41 任务结束后窗口回到空闲态，能再起任务", rw.task_dialog is None and rw._tasks == [])
 
 app_main.MODAL_PROGRESS = False
 _FakeProgress.made.clear()
@@ -2650,8 +2677,13 @@ check("P16 每个按钮都被使用说明覆盖到", not _missing_in_doc, _missi
 check("P16b 说明交代点击虚线区就能选文件",
       "点击虚线区" in _doc_all or "点一下虚线区" in _doc_all)
 check("P17 进度框章节写清了「后台线程 + 可取消 + 逐项进度」",
-      "进度框与耗时" in _doc_all and "模态进度框" in _doc_all
+      "进度框与耗时" in _doc_all and "非模态" in _doc_all
       and "当前这一项做完" in _doc_all)
+check("P17b 进度框章节交代了各页可以并行、互斥按占用的东西判",
+      "另外两个页照常能用" in _doc_all and "互斥按占用的东西判" in _doc_all
+      and "程序同级的生成输出目录" in _doc_all,
+      [t for t in ("另外两个页照常能用", "互斥按占用的东西判", "程序同级的生成输出目录")
+       if t not in _doc_all])
 
 section("Q 入口全覆盖（每个按钮点下去都要有可见痕迹）")
 
@@ -3072,7 +3104,7 @@ app_main.DDLDialog = _NoDialog
 ew.on_preview_structure()
 ew.on_preview_ddl()
 app_main.StructureDialog, app_main.DDLDialog = _real_sd, _real_dd
-check("Q29 无文件时预览入口只提示，不构造空对话框",
+check("Q52 无文件时预览入口只提示，不构造空对话框",
       not _built and sum(1 for t, _ in POPUPS if t == "提示") == 2, (_built, POPUPS))
 check("Q30 提示文案指向「添加 Excel 文件或 ZIP 压缩包」",
       all("ZIP" in x for t, x in POPUPS if t == "提示"), POPUPS[:1])
@@ -3131,28 +3163,66 @@ check("Q37 取消添加的弹窗首行写明只完成了部分解析",
 app_main.MODAL_PROGRESS = True
 _FakeProgress.made.clear()
 rw2 = app_main.MainWindow()
-rw2.task_dialog = _FakeProgress("占位")
+_ph = app_main.TaskInfo(rw2, (app_main.MainWindow.RES_EXCEL,), "占位任务",
+                        rw2.log, None)
+_ph.total = 121
+_ph.done = 45
+_ph.label = "第 45/121 条"
+_ph.started = time.time() - 7
+rw2._tasks.append(_ph)
 res_box.clear()
 rw2._run_modal("不该起任务", _slow_task, (3,), on_done=lambda x: res_box.append(x))
 check("Q38 已有任务在跑时再起任务被忽略，不叠第二个框",
-      len(_FakeProgress.made) == 1 and res_box == [], (len(_FakeProgress.made), res_box))
-rw2.task_title = "正在执行 SQL…"
-rw2.task_started = _t_busy.time() - 7
-rw2.task_done = 45
-rw2.task_total = 121
-rw2.task_label = "第 45/121 条"
+      _FakeProgress.made == [] and res_box == [], (_FakeProgress.made, res_box))
 POPUPS.clear()
 rw2._run_modal("不该起任务2", _slow_task, (3,), on_done=lambda x: res_box.append(x))
 _busy = [x for _t, x in POPUPS if "已有任务在跑" in x]
 check("Q38b 被挡下时说得出谁在跑、跑到几成、跑了多久（不是只回一句请稍等）",
-      _busy and "正在执行 SQL…" in _busy[0] and "37%" in _busy[0]
+      _busy and "占位任务" in _busy[0] and "37%" in _busy[0]
       and "（45/121）" in _busy[0] and "已 7 秒" in _busy[0]
       and "第 45/121 条" in _busy[0],
       _busy[:1])
 check("Q38c 挡下这件事同时写进日志（弹窗会被关掉，日志要留痕）",
       "已有任务在跑" in rw2.log.toPlainText(),
       log_lines(rw2.log.toPlainText(), "已拦下")[:2])
-rw2.task_dialog = None
+
+# ---- 并发：不同页可以一起跑，同一页仍然互斥 ----
+_MW = app_main.MainWindow
+app_main.MODAL_PROGRESS = True
+cwin2 = app_main.MainWindow()
+t_excel = app_main.TaskInfo(cwin2, (_MW.RES_EXCEL,), "正在解析文件…", cwin2.log, None)
+cwin2._tasks.append(t_excel)
+cwin2._run_modal("正在读取 SQL 脚本…", _slow_task, (3,), log_view=cwin2.sql_log)
+check("Q51 别的页在跑不挡这一页：SQL 页的任务照样起得来",
+      len(cwin2._tasks) == 2 and any(t.title.startswith("正在读取") for t in cwin2._tasks),
+      [t.title for t in cwin2._tasks])
+POPUPS.clear()
+cwin2._run_modal("第二个 SQL 页任务", _slow_task, (3,), log_view=cwin2.sql_log)
+check("Q51b 同一页的第二个任务仍然被挡，且说得出共用的是哪一份数据",
+      len(cwin2._tasks) == 2 and any("SQL 脚本改名入库页的脚本列表" in x
+                                     for _t, x in POPUPS),
+      [x.replace("\n", " ")[:120] for _t, x in POPUPS])
+check("Q51c 非模态：起任务这一句立刻返回，不等框关闭",
+      cwin2._tasks and cwin2.task_dialog is not None
+      and cwin2.task_dialog.isVisible() is True, len(cwin2._tasks))
+t_run = app_main.TaskInfo(cwin2, (_MW.RES_RUN,), "正在执行 SQL…", cwin2.sql_run_log, None)
+cwin2._tasks.append(t_run)
+check("Q51d 三个资源各自被占：查谁挡了就报谁，没被占的资源不挡路",
+      cwin2.task_busy((_MW.RES_EXCEL,)) and cwin2.task_busy((_MW.RES_SQL,))
+      and cwin2.task_busy((_MW.RES_RUN,)) and not cwin2.task_busy((_MW.RES_EXPORT,))
+      and cwin2._conflict((_MW.RES_RUN,)).title == "正在执行 SQL…",
+      [t.title for t in cwin2._tasks])
+check("Q51e 两页的「生成」共用同一个输出目录，因此互相排斥",
+      app_main.MainWindow._resources_for(cwin2, cwin2.log,
+                                         extra=(_MW.RES_EXPORT,)) == ("excel", "export")
+      and app_main.MainWindow._resources_for(cwin2, cwin2.sql_log,
+                                             extra=(_MW.RES_EXPORT,)) == ("sql", "export"),
+      "资源名不对")
+for _t in list(cwin2._tasks):
+    cwin2._tasks.remove(_t)
+cwin2.close()
+app_main.MODAL_PROGRESS = False
+rw2._tasks.remove(_ph)
 app_main.MODAL_PROGRESS = False
 
 # ---- 结构预览保存：主键校验不过要挡在写回之前 ----
@@ -3212,11 +3282,12 @@ check("Q44 有表之后两颗生成按钮自动可点",
 check("Q45 两颗按钮与「开始导入」在同一个容器里（同一行动作条）",
       _ew.btn_gen_std.parentWidget() is _ew.btn_import.parentWidget()
       and _ew.btn_gen_simple.parentWidget() is _ew.btn_import.parentWidget())
-_ew.task_dialog = object()          # 假装有个任务在跑
+_ew._tasks.append(app_main.TaskInfo(_ew, (app_main.MainWindow.RES_EXCEL,),
+                                    "占位", _ew.log, None))   # 假装有个任务在跑
 _ew._sync_gen_buttons()
 check("Q46 任务在跑时两颗生成按钮变灰，不会两个任务踩同一份表列表",
       _ew.btn_gen_std.isEnabled() is False and _ew.btn_gen_simple.isEnabled() is False)
-_ew.task_dialog = None
+_ew._tasks.pop()
 _ew._sync_gen_buttons()
 
 _out_root = tempfile.mkdtemp(prefix="pack-meta-out-")
