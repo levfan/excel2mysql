@@ -129,28 +129,32 @@ def write_table(table, path, with_meta):
 
 STD_PREFIX = "meta_data_file"
 SIMPLE_PREFIX = "simple_meta_data_file"
+# 「SQL 脚本改名入库」那一页的生成物另起一个目录：两页都往程序同级的同一个日期目录里写时，
+# 同名表会互相覆盖，两颗按钮也只好互相等。加一个目录前缀，两边就各写各的。
+SQL_DIR_TAG = "sql_"
 
 
-def output_dir(out_root, with_meta, day=None):
+def output_dir(out_root, with_meta, day=None, dir_tag=""):
     """日期目录名收在这里生成：标准件 meta_data_file_年月日、简易件 simple_meta_data_file_年月日。
 
     命名规则只写一处，界面那边就不可能拼错成两层目录。
+    `dir_tag` 只用来把不同页的产物分开（SQL 页传 sql_），日期口径两边共用。
     """
     import datetime
 
     day = day or datetime.date.today().strftime("%Y%m%d")
     prefix = STD_PREFIX if with_meta else SIMPLE_PREFIX
-    return os.path.join(out_root, "%s_%s" % (prefix, day))
+    return os.path.join(out_root, "%s%s_%s" % (dir_tag, prefix, day))
 
 
-def export_tables(tables, out_root, with_meta, sink=None):
+def export_tables(tables, out_root, with_meta, sink=None, dir_tag=""):
     """一批表 -> `out_root/<前缀>_<年月日>/` 下的若干 xlsx。返回 (目录, 写成的文件列表)。
 
     进度按文件计项；写失败只记错误不中断其余，
     与导入那条路同一口径。取消在两个文件之间生效：正在写的这个写完，剩下的不再开工，
     不然收尾那句"已取消，剩余文件未生成"就是假话。
     """
-    target = output_dir(out_root, with_meta)
+    target = output_dir(out_root, with_meta, dir_tag=dir_tag)
     os.makedirs(target, exist_ok=True)
     if sink:
         sink.set_total(len(tables))

@@ -44,6 +44,8 @@ public final class MetaExport {
 
     public static final String STD_PREFIX = "meta_data_file";
     public static final String SIMPLE_PREFIX = "simple_meta_data_file";
+    /** 「SQL 脚本改名入库」那页的生成物目录前缀，见 {@link #outputDir(String, boolean, String, String)}。 */
+    public static final String SQL_DIR_TAG = "sql_";
 
     private static final Pattern TYPE_WITH_LEN =
             Pattern.compile("^([A-Z][A-Z0-9_]*)\\s*\\((.*)\\)$");
@@ -125,11 +127,19 @@ public final class MetaExport {
     /**
      * 日期目录名收在这里生成：标准件 meta_data_file_年月日、简易件 simple_meta_data_file_年月日。
      * 命名规则只写一处，界面那边就不可能拼错成两层目录。
+     *
+     * `dirTag` 只用来把不同页的产物分开（「SQL 脚本改名入库」那页传 sql_）：
+     * 两页都往同一个日期目录里写时，同名表会互相覆盖，两颗按钮也只好互相等。
      */
     public static String outputDir(String outRoot, boolean withMeta, String day) {
+        return outputDir(outRoot, withMeta, day, "");
+    }
+
+    public static String outputDir(String outRoot, boolean withMeta, String day, String dirTag) {
         String d = day == null || day.isEmpty()
                 ? LocalDateTime.now().format(DAY) : day;
-        return new File(outRoot, (withMeta ? STD_PREFIX : SIMPLE_PREFIX) + "_" + d).getPath();
+        String tag = dirTag == null ? "" : dirTag;
+        return new File(outRoot, tag + (withMeta ? STD_PREFIX : SIMPLE_PREFIX) + "_" + d).getPath();
     }
 
     /**
@@ -313,8 +323,14 @@ public final class MetaExport {
      */
     public static Outcome exportTables(List<Source> sources, String outRoot,
                                        boolean withMeta, ImportParse.Sink sink) {
+        return exportTables(sources, outRoot, withMeta, sink, "");
+    }
+
+    /** 带目录前缀的那一档：SQL 页传 {@link #SQL_DIR_TAG}，与 Excel 页的产物各写各的目录。 */
+    public static Outcome exportTables(List<Source> sources, String outRoot, boolean withMeta,
+                                       ImportParse.Sink sink, String dirTag) {
         Outcome out = new Outcome();
-        out.dir = outputDir(outRoot, withMeta, null);
+        out.dir = outputDir(outRoot, withMeta, null, dirTag);
         mkdirs(new File(out.dir));
         out.total = sources == null ? 0 : sources.size();
         if (sink != null) {

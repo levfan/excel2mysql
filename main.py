@@ -943,7 +943,7 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink):
     给下游当可填模板用，不假装里面有数据。
     第二页的大小写开关只作用在清单、元数据视图和生成物上；脚本正文一个字不动。
     """
-    from core.meta_export import export_tables
+    from core.meta_export import export_tables, SQL_DIR_TAG
 
     if upper:
         sink.log("[命名] 生成物表名与字段名：转大写")
@@ -981,7 +981,9 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink):
         return {"dir": None, "written": [], "total": 0, "cancelled": sink.cancelled}
     if sink.cancelled:
         return {"dir": None, "written": [], "total": len(tables), "cancelled": True}
-    target, written = export_tables(tables, out_root, with_meta, sink)
+    # 这一页的产物落 sql_ 前缀的目录，不与 Excel 页那份抢同一个日期目录
+    target, written = export_tables(tables, out_root, with_meta, sink,
+                                    dir_tag=SQL_DIR_TAG)
     return {"dir": target, "written": written, "total": len(tables),
             "cancelled": sink.cancelled}
 
@@ -1431,24 +1433,22 @@ class MainWindow(QWidget):
             return
         super().keyPressEvent(e)
 
-    # -------------------- 长任务：子线程干活 + 模态进度框 --------------------
     # -------------------- 长任务：按资源占用，一个任务一个非模态框 --------------------
     RES_EXCEL = "excel"
     RES_SQL = "sql"
     RES_RUN = "run"
-    RES_EXPORT = "export"
     RES_LABEL = {
         "excel": "Excel 导入页的待导入列表",
         "sql": "SQL 脚本改名入库页的脚本列表",
         "run": "SQL 执行器编辑区里那段文本",
-        "export": "程序同级的生成输出目录",
     }
 
-    def _resources_for(self, log_view, extra=()):
+    def _resources_for(self, log_view):
         """任务占哪些资源：按日志去向认出是哪一页发起的。
 
-        拆资源而不是拆页面：Excel 页与 SQL 页的「生成标准/简易excel文件」都往程序同级
-        同一个日期目录里写，这两个必须互斥；而执行器跑上千条语句不该锁住另外两页。
+        拆资源而不是拆页面：一页的两个任务会踩同一份列表或同一段编辑区，所以互斥；
+        两页的「生成标准/简易excel文件」现在各写自己的目录（Excel 页 meta_data_file_…、
+        SQL 页 sql_meta_data_file_…），不再抢同一个目录，也就可以并行。
         """
         if log_view is self.sql_log:
             base = self.RES_SQL
@@ -1456,7 +1456,7 @@ class MainWindow(QWidget):
             base = self.RES_RUN
         else:
             base = self.RES_EXCEL
-        return tuple([base] + [r for r in extra if r != base])
+        return (base,)
 
     def _conflict(self, resources):
         for task in self._tasks:
@@ -1481,16 +1481,16 @@ class MainWindow(QWidget):
         return ("已有任务在跑：" + other.describe()
                 + "。这一步没执行——它和那个任务共用「%s」，等它跑完或点进度框「取消」。" % shared)
 
-    def _run_modal(self, title, work, args=(), on_done=None, log_view=None, extra=()):
+    def _run_modal(self, title, work, args=(), on_done=None, log_view=None):
         """统一入口：把纯工作函数 work(sink, *args) 放到子线程跑，弹一个非模态进度框。
 
-        非模态是这一轮的目的：框挡在中间时另外两页根本点不动，用户只能等或者强关窗口。
-        现在同一页的任务互斥、不同页可以并行，每个任务自己的框显示自己的进度。
+        非模态是为了不挡窗口：框挡在中间时另外两页根本点不动，用户只能等或者强关窗口。
+        同一页的任务互斥、不同页可以并行，每个任务自己的框显示自己的进度。
         MODAL_PROGRESS=False（离屏用例）时不起线程、不弹框，原地跑完再回调，
         两条路径共用同一个 work 和同一个 TaskInfo，测试跑到的就是线上那段逻辑。
         """
         view = log_view if log_view is not None else self.log
-        resources = self._resources_for(view, extra)
+        resources = self._resources_for(view)
         other = self._conflict(resources)
         if other is not None:
             # 静默 return 是最坏的写法：用户点了没反应，也不知道在等谁
@@ -1632,15 +1632,17 @@ class MainWindow(QWidget):
         # 数据源换成了脚本里的 CREATE TABLE，产物形状不变
         self.btn_sql_gen_std = QPushButton("生成标准excel文件")
         self.btn_sql_gen_std.setToolTip(
-            "在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+            "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
             "Sheet1「元数据」是脚本里解析出的字段定义，Sheet2「数据」只有表头\n"
-            "（脚本里不含数据行，这一张是给下游填数据的模板）")
+            "（脚本里不含数据行，这一张是给下游填数据的模板）\n"
+            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖")
         self.btn_sql_gen_std.setEnabled(False)
         self.btn_sql_gen_std.clicked.connect(lambda: self.on_sql_gen_excel("标准", True))
         self.btn_sql_gen_simple = QPushButton("生成简易excel文件")
         self.btn_sql_gen_simple.setToolTip(
-            "在程序同级建 simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-            "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头")
+            "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+            "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头\n"
+            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖")
         self.btn_sql_gen_simple.setEnabled(False)
         self.btn_sql_gen_simple.clicked.connect(lambda: self.on_sql_gen_excel("简易", False))
         act_row.addWidget(self.btn_sql_save)
@@ -2082,8 +2084,7 @@ class MainWindow(QWidget):
         items = [(s["path"], s["text"]) for s in self.sql_files]
         self._run_modal("正在生成%sexcel文件…" % label, sql_meta_export_task,
                         (items, out_root, with_meta, self.chk_sql_upper.isChecked()),
-                        on_done=self._finish_sql_gen_excel, log_view=self.sql_log,
-                        extra=(self.RES_EXPORT,))
+                        on_done=self._finish_sql_gen_excel, log_view=self.sql_log)
 
     def _finish_sql_gen_excel(self, res):
         if not res:
@@ -2527,8 +2528,7 @@ class MainWindow(QWidget):
         title = ("正在生成标准excel文件…" if with_meta else "正在生成简易excel文件…")
         append_log(self.log, f"===== 开始生成{label}excel文件（输出根目录 {out_root}）=====")
         self._run_modal(title, meta_export_task, (list(self.tables), out_root, with_meta),
-                        on_done=self._finish_meta_export, log_view=self.log,
-                        extra=(self.RES_EXPORT,))
+                        on_done=self._finish_meta_export, log_view=self.log)
 
     def _finish_meta_export(self, res):
         if not res:

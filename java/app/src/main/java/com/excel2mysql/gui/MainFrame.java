@@ -78,14 +78,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JButton genStd;
     private JButton genSimple;
     /**
-     * 资源位：三页各占自己的位，再加一个两页「生成」共用的产物目录。
+     * 资源位：三页各占自己的位，一个任务只登记一位。
      * 抢同一个位才互斥，不同位可以并行——原来是一个布尔量把三页一起锁住，
-     * 执行器跑上千条语句时另外两页连点都点不动。
+     * 执行器跑上千条语句时另外两页连点都点不动。两页的「生成」曾经共用一个
+     * 产物目录位，现在各写自己的目录（sql_ 前缀那一档见 MetaExport.SQL_DIR_TAG），
+     * 落点不重叠，也就不必再占同一个位。
      */
     public static final String RES_EXCEL = "excel";
     public static final String RES_SQL = "sql";
     public static final String RES_RUN = "run";
-    public static final String RES_EXPORT = "export";
     /** 资源位的人话名字：被挡下的那句要说清楚在等的是哪一样东西。 */
     private static final Map<String, String> RES_LABEL =
             new java.util.LinkedHashMap<String, String>();
@@ -94,7 +95,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         RES_LABEL.put(RES_EXCEL, "Excel 导入页的待导入列表");
         RES_LABEL.put(RES_SQL, "SQL 脚本改名入库页的脚本列表");
         RES_LABEL.put(RES_RUN, "SQL 执行器编辑区里那段文本");
-        RES_LABEL.put(RES_EXPORT, "程序同级的生成输出目录");
     }
 
     /**
@@ -912,8 +912,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 + outRoot + "）=====");
         runTask(withMeta ? "正在生成标准excel文件…" : "正在生成简易excel文件…",
                 sink -> MetaExport.exportTables(work, outRoot, withMeta, sink),
-                out -> finishMetaExport((MetaExport.Outcome) out),
-                null, new String[]{RES_EXPORT});
+                out -> finishMetaExport((MetaExport.Outcome) out));
     }
 
     /**
@@ -1104,7 +1103,27 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private void runTask(String title,
                          java.util.function.Function<ImportParse.Sink, Object> work,
                          java.util.function.Consumer<Object> onUi) {
-        runTask(title, work, onUi, null, new String[0]);
+        runTask(title, work, onUi, null);
+    }
+
+    /**
+     * 任务占哪些资源：按日志去向认出是哪一页发起的。
+     *
+     * 拆资源而不是拆页面：同一页的两个任务会踩同一份列表或同一段编辑区，所以互斥；
+     * 两页的「生成标准/简易excel文件」各写自己的目录（SQL 页那份带 sql_ 前缀，
+     * 见 MetaExport.SQL_DIR_TAG），不抢同一个目录也就可以并行。
+     */
+    private String[] resourcesFor(LogPanel logView) {
+        if (logView == null) {
+            return new String[]{RES_EXCEL};
+        }
+        if (logView == sqlRunLog) {
+            return new String[]{RES_RUN};
+        }
+        if (sqlPage != null && logView == sqlPage.logPanel()) {
+            return new String[]{RES_SQL};
+        }
+        return new String[]{RES_EXCEL};
     }
 
     /**
@@ -1115,47 +1134,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                          java.util.function.Function<ImportParse.Sink, Object> work,
                          java.util.function.Consumer<Object> onUi,
                          LogPanel logView) {
-        runTask(title, work, onUi, logView, new String[0]);
-    }
-
-    /** 任务占哪些资源：按日志去向认出是哪一页发起的，extra 再补共用的产物资源。 */
-    private String[] resourcesFor(LogPanel logView, String[] extra) {
-        String base;
-        if (logView == null) {
-            base = RES_EXCEL;
-        } else if (logView == sqlRunLog) {
-            base = RES_RUN;
-        } else if (sqlPage != null && logView == sqlPage.logPanel()) {
-            base = RES_SQL;
-        } else {
-            base = RES_EXCEL;
-        }
-        List<String> all = new ArrayList<String>();
-        all.add(base);
-        for (String r : extra) {
-            if (!all.contains(r)) {
-                all.add(r);
-            }
-        }
-        return all.toArray(new String[0]);
-    }
-
-    /**
-     * 任务入口：按资源抢位 -> 子线程算 + 非模态框报进度 -> 回事件分发线程落界面。
-     *
-     * 非模态是这一轮的目的：框挡在中间时另外两页根本点不动，用户只能等或者强关窗口。
-     * 现在同一页互斥、不同页可以并行，每个任务自己的框显示自己的进度。
-     * modalProgress 关掉时同一个 work 原地跑完，只是不弹框。
-     */
-    private void runTask(String title,
-                         java.util.function.Function<ImportParse.Sink, Object> work,
-                         java.util.function.Consumer<Object> onUi,
-                         LogPanel logView, String[] extra) {
         lastTaskTitle = title;
         LogPanel previous = taskLogView;
         // 先认下面板再抢资源位：抢输的那句"已有任务在跑"要落在用户刚点的那一页
         taskLogView = logView;
-        if (!startTask(resourcesFor(logView, extra))) {
+        if (!startTask(resourcesFor(logView))) {
             taskLogView = previous;
             return;
         }
@@ -1215,15 +1198,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * SQL 页的耗时操作（读取 / 保存 / 执行 / 生成交付件）走主窗口同一套任务框架，
      * 差别只在日志要去 SQL 页那块面板——否则切回 Excel 页才看得见刚才那步做了什么。
      *
-     * extra 用来补共用的资源位：这一页的「生成」和 Excel 页的「生成」写同一个输出目录，
-     * 它们得互斥，而"读脚本"和"执行脚本"各占自己那一位，可以并行。
+     * 这一页的每一步只占自己那一位：读脚本、改表名、保存、执行、生成可以并行，
+     * 只有同一页的下一步会被挡下（两页的「生成」也各写各的目录，见 MetaExport.SQL_DIR_TAG）。
      */
     @Override
     public void runSqlTask(String title,
                            java.util.function.Function<ImportParse.Sink, Object> work,
-                           java.util.function.Consumer<Object> onUi,
-                           String... extra) {
-        runTask(title, work, onUi, sqlPage == null ? null : sqlPage.logPanel(), extra);
+                           java.util.function.Consumer<Object> onUi) {
+        runTask(title, work, onUi, sqlPage == null ? null : sqlPage.logPanel());
     }
 
     /**

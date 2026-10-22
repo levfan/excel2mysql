@@ -58,16 +58,10 @@ public final class SqlPage extends JPanel {
 
         void informError(String title, String text);
 
-        /**
-         * 耗时操作交给主窗口的任务位跑：子线程算 + 进度框 + 回事件分发线程落界面。
-         *
-         * extra 传主窗口的资源代号，用来声明"这一步还占着别的东西"：这一页的「生成」
-         * 与 Excel 页的「生成」往同一个输出目录里写，得占同一个位才互斥。
-         */
+        /** 耗时操作交给主窗口的任务位跑：子线程算 + 进度框 + 回事件分发线程落界面。 */
         void runSqlTask(String title,
                         java.util.function.Function<com.excel2mysql.core.ImportParse.Sink, Object> work,
-                        java.util.function.Consumer<Object> onUi,
-                        String... extra);
+                        java.util.function.Consumer<Object> onUi);
 
         /** 交付件落在哪儿：界面里是程序同级，自检指到临时目录。 */
         String exportRoot();
@@ -189,12 +183,14 @@ public final class SqlPage extends JPanel {
 
     /** 两颗生成按钮的说明与「Excel 导入」页那两颗同一口径，只是数据源换成了脚本正文。 */
     private static final String GEN_STD_TIP =
-            "在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+            "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
                     + "Sheet1「元数据」是脚本里解析出的字段定义，Sheet2「数据」只有表头\n"
-                    + "（脚本里不含数据行，这一张是给下游填数据的模板）";
+                    + "（脚本里不含数据行，这一张是给下游填数据的模板）\n"
+                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖";
     private static final String GEN_SIMPLE_TIP =
-            "在程序同级建 simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-                    + "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头";
+            "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
+                    + "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头\n"
+                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖";
     private JButton genStd;
     private JButton genSimple;
     /** 这一页有没有任务在跑：只用来管两颗生成按钮，由主窗口每次改动任务清单时回来说一句。 */
@@ -1368,8 +1364,7 @@ public final class SqlPage extends JPanel {
         final boolean upper = upperBox.isSelected();
         host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
                 sink -> exportFromScripts(items, outRoot, withMeta, upper, sink),
-                out -> finishGenerate((GenResult) out),
-                MainFrame.RES_EXPORT);
+                out -> finishGenerate((GenResult) out));
     }
 
     /** 生成结果：目录、写成数、应写数与取消标志。 */
@@ -1434,7 +1429,9 @@ public final class SqlPage extends JPanel {
             res.cancelled = true;
             return res;
         }
-        MetaExport.Outcome oc = MetaExport.exportTables(work, outRoot, withMeta, sink);
+        // 带 sql_ 前缀：与「Excel 导入」页那两颗按钮各写各的目录，两边互不覆盖也不必互等
+        MetaExport.Outcome oc = MetaExport.exportTables(work, outRoot, withMeta, sink,
+                MetaExport.SQL_DIR_TAG);
         res.dir = oc.dir;
         res.written = oc.written.size();
         res.cancelled = oc.cancelled;
