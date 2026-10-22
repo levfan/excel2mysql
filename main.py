@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QTabWidget, QSplitter, QListWidget,
 )
 
+from core import conn_config
 from core.log_text import (
     describe_db_error, format_log_entry, log_level, LOG_LEVEL_MARK, LOG_TIME_FORMAT,
 )
@@ -1167,8 +1168,10 @@ class MainWindow(QWidget):
         # 在跑的任务清单：一个任务一份账，资源冲突才互斥（不再是一个全局开关锁三页）
         self._tasks = []
         self._import_task = None   # 导入这条长任务单独留一份引用，收尾收它自己的框
+        self._cfg_db = ""          # conn.ini 里写的目标库，库列表加载出来后按它预选
 
         self._build_ui()
+        self._load_default_conn()
 
     # -------------------- UI --------------------
     def _build_ui(self):
@@ -2236,6 +2239,47 @@ class MainWindow(QWidget):
             "database": self.cb_db.currentData() or self.cb_db.currentText().strip(),
         }
 
+    def _load_default_conn(self):
+        """启动时先读程序同级的 conn.ini 预填连接信息：现场配一次，不用每次手填。
+
+        读法与命令行那条线是同一份实现（core/conn_config.py）：程序同级 → 当前目录，
+        环境变量 E2M_* 再盖过文件。找不到文件不算错，照旧手填，但必须说一句——
+        静默用内置默认值会让人以为自己的配置已经生效。
+        """
+        cfg, src, path, err = conn_config.discover(program_dir())
+        cfg, from_env = conn_config.apply_env(cfg)
+        if from_env:
+            src += "、环境变量 " + "/".join(from_env)
+        port = cfg["port"]
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            append_log(self.log, "[跳过] 配置里的端口 %r 不是数字，这一项按内置默认值 3306"
+                       % (cfg["port"],))
+            port = 3306
+        self.ed_host.setText(str(cfg["host"]))
+        self.ed_port.setValue(port)
+        self.ed_user.setText(str(cfg["user"]))
+        if cfg["password"]:
+            self.ed_pass.setText(str(cfg["password"]))
+        self._cfg_db = str(cfg["database"] or "").strip()
+        shown = "%s@%s:%s/%s" % (cfg["user"], cfg["host"], port,
+                                 self._cfg_db or "(未填库)")
+        if err is not None:
+            # "有这份文件但读不了"和"压根没有"要分开说：前一种用户会去改文件，
+            # 后一种要新建，混成一句"没找到"人就去找那个并不存在的文件
+            append_log(self.log,
+                       "[跳过] 找到 %s 但读不了，连接信息按内置默认值 %s：%s"
+                       % (path, shown, err))
+        elif path is None and not from_env:
+            append_log(self.log,
+                       "[连接信息] 没找到 conn.ini，按内置默认值 %s；"
+                       "要预填就在程序同级放一份（写法见《使用说明》）" % shown)
+        else:
+            append_log(self.log,
+                       "[已加载] 连接信息预填 %s | 来源：%s | 密码%s"
+                       % (shown, src, "已读入（不回显）" if cfg["password"] else "未配置"))
+
     def on_load_databases(self):
         try:
             cfg = self._conn_cfg()
@@ -2248,6 +2292,10 @@ class MainWindow(QWidget):
                 self.cb_db.addItem(d, d)
             self.cb_db.blockSignals(False)
             self.cb_db.setEnabled(True)
+            if self._cfg_db and self.cb_db.findText(self._cfg_db) >= 0:
+                # 配置里写了目标库就别让人再选一遍；库里没有这个名字就照旧让人手选
+                self.cb_db.setCurrentText(self._cfg_db)
+                append_log(self.log, "[已加载] 目标库按 conn.ini 选中：%s" % self._cfg_db)
             self._refresh_db_labels()
             append_log(self.log, f"[已加载] 可用数据库：{', '.join(dbs)}")
         except Exception as e:

@@ -28,7 +28,6 @@ GUI 版（main.py）要求 Windows 10 1809+，两者共用推断/建表/导入�
 开发态：python cli.py ...      打包：双击 一键打包38.bat
 """
 import argparse
-import configparser
 import os
 import shutil
 import sys
@@ -45,6 +44,12 @@ warnings.filterwarnings("ignore", message=".*no default style.*", append=True)
 warnings.filterwarnings("ignore", message=".*no longer supported by the Python core team.*",
                         append=True)
 
+# 这几个名字是从 core/conn_config 转出来的：Win7 线的配置用例按 cli.CONFIG_SECTIONS /
+# cli.CONFIG_KEYS / cli.read_config_file 取，实现搬走后出口得留着
+from core.conn_config import (  # noqa: E402
+    CONFIG_KEYS, CONFIG_SECTIONS, DEFAULTS, ENV_KEYS, read_config_file,
+)
+from core.conn_config import default_config_paths as conn_config_paths
 from core.infer import (  # noqa: E402
     build_table_def, make_unique_names, apply_table_prefix, replace_first_segment,
 )
@@ -68,12 +73,8 @@ EXIT_CONNECT = 3
 EXIT_IMPORT = 4
 EXIT_SCRIPT = 5
 
-# 配置文件里允许的段名，按顺序取第一个存在的
-CONFIG_SECTIONS = ("mysql", "connection")
-CONFIG_KEYS = {"host": "host", "port": "port", "user": "user",
-               "password": "password", "database": "database"}
-ENV_KEYS = {"host": "E2M_HOST", "port": "E2M_PORT", "user": "E2M_USER",
-            "password": "E2M_PASS", "database": "E2M_DB"}
+# 连接配置的段名 / 键名 / 环境变量名与内置默认值都在 core/conn_config.py，
+# 图形界面读的是同一份，两处不许各写一套
 
 
 # ---------------------------------------------------------------------------
@@ -190,28 +191,6 @@ def build_parser():
     return p
 
 
-def read_config_file(path):
-    """读 INI 连接配置，返回 dict；文件缺失/格式错直接抛给用户。"""
-    if not os.path.isfile(path):
-        raise ValueError("配置文件不存在：%s" % path)
-    cp = configparser.ConfigParser()
-    try:
-        with open(path, encoding="utf-8") as fh:
-            cp.read_file(fh)
-    except UnicodeDecodeError:
-        # Win7 上记事本另存为默认 ANSI，中文注释会让 utf-8 解析炸掉，退回 GBK 再试
-        cp = configparser.ConfigParser()
-        with open(path, encoding="gbk", errors="replace") as fh:
-            cp.read_file(fh)
-    except configparser.Error as e:
-        raise ValueError("配置文件格式错误（%s）：%s" % (path, e))
-    section = next((s for s in CONFIG_SECTIONS if cp.has_section(s)), None)
-    if section is None:
-        raise ValueError("配置文件缺少 [%s] 段：%s" % ("|".join(CONFIG_SECTIONS), path))
-    return {CONFIG_KEYS[k]: cp.get(section, k) for k in CONFIG_KEYS
-            if cp.has_option(section, k)}
-
-
 def default_config_paths():
     """不带 `-c` 时会自动尝试读取的位置：程序所在目录优先，其次当前工作目录。
 
@@ -219,12 +198,13 @@ def default_config_paths():
     （源文件是 assets/conn.ini），拷走整个文件夹就能直接跑。
     开发态这个目录是仓库根，只有 `assets/conn.ini` 模板、没有根级 conn.ini，
     所以不会把模板误当成用户填好的配置读进来，用例里的默认值断言仍然是确定的。
+    读法本身在 core/conn_config.py，与两个图形界面共用一份。
     """
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
     else:
         base = os.path.dirname(os.path.abspath(__file__))
-    return [os.path.join(base, "conn.ini"), os.path.join(os.getcwd(), "conn.ini")]
+    return conn_config_paths(base)
 
 
 def resolve_cfg(args, log):
@@ -232,8 +212,7 @@ def resolve_cfg(args, log):
 
     没给 `-c` 时会自动找随包带的 conn.ini（见 default_config_paths），日志里写明来源。
     """
-    cfg = {"host": "127.0.0.1", "port": 3306, "user": "root",
-           "password": "", "database": ""}
+    cfg = dict(DEFAULTS)
     used = []
     cfg_path = args.config
     auto = False

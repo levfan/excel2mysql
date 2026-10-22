@@ -151,6 +151,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             new java.util.LinkedHashMap<TableOps.Table, TableBuilder.Result>();
     private Config config;
     private boolean connected;
+    /** conn.ini 里写的目标库：库列表加载出来之后按它预选。 */
+    private String cfgDb = "";
     private String zipSessionDir;
     private int zipDestSeq;
     private final Names names = new Names(PinyinLoader.get());
@@ -181,6 +183,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tabs.addChangeListener(e -> refreshDbLabels());
         bindHelpKey();
         refreshDbLabels();
+        loadDefaultConn();
         // Qt 的 resize(1100,780) 说的是客户区，Swing 的 setSize 说的是整个外框：
         // 照抄数字会让这边的内容区比 Python 小掉一条标题栏加边框，
         // 表格与日志就那么被挤矮了。客户区尺寸、屏幕夹取与居中统一走 Windows.clientSize。
@@ -606,6 +609,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             dbCombo.setEnabled(true);
             if (!previous.isEmpty() && dbs.contains(previous)) {
                 dbCombo.setSelectedItem(previous);
+            } else if (!cfgDb.isEmpty() && dbs.contains(cfgDb)) {
+                // 连接信息是 conn.ini 预填的，库列表出来就顺手选上，别再让人点一遍
+                dbCombo.setSelectedItem(cfgDb);
+                log("[已加载] 目标库按 conn.ini 选中：" + cfgDb);
             }
             config = cfg;
             connected = true;
@@ -886,6 +893,42 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 定位失败就退回当前工作目录：不能因为取不到程序目录就不生成
         }
         return new File("").getAbsolutePath();
+    }
+
+    /**
+     * 自检用：把连接配置的候选路径换掉，好在没有 conn.ini 的机器上验三种读法。
+     * 现场不碰这个，留 null 就是默认那两条（jar 同级 → 当前目录）。
+     */
+    public static List<String> connCandidates;
+
+    /**
+     * 启动时先读程序同级的 conn.ini 预填连接信息：现场使用者配一次，不用每次手填。
+     *
+     * 读法与命令行那条线是同一份实现（core/Config）：jar 同级 → 当前目录，
+     * 环境变量 E2M_* 再盖过文件。找不到文件不算错，照旧手填，但必须说一句——
+     * 静默用内置默认值会让人以为自己的配置已经生效。"有这份文件但读不了"与
+     * "压根没有"要分开说：前一种用户会去改文件，后一种要新建。
+     */
+    private void loadDefaultConn() {
+        Config c = Config.discover(connCandidates == null
+                ? Config.defaultConfigPaths() : connCandidates);
+        hostField.setText(c.host);
+        portField.setValue(c.port);
+        userField.setText(c.user);
+        passField.setText(c.password);
+        cfgDb = c.database == null ? "" : c.database.trim();
+        String shown = c.user + "@" + c.host + ":" + c.port + "/"
+                + (cfgDb.isEmpty() ? "(未填库)" : cfgDb);
+        String pwd = (c.password == null || c.password.isEmpty()) ? "未配置" : "已读入（不回显）";
+        if (c.errorFile != null) {
+            log("[跳过] 找到 " + c.errorFile + " 但读不了，连接信息按内置默认值 " + shown
+                    + "：" + c.errorReason);
+        } else if ("内置默认值".equals(c.source)) {
+            log("[连接信息] 没找到 conn.ini，按内置默认值 " + shown
+                    + "；要预填就在程序同级放一份（写法见《使用说明》）");
+        } else {
+            log("[已加载] 连接信息预填 " + shown + " | 来源：" + c.source + " | 密码" + pwd);
+        }
     }
 
     /** 界面点出来的入口：输出根目录就是可执行程序同级。 */

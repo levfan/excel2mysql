@@ -26,6 +26,15 @@ public final class Config {
     /** 只记录来源，报错时能指出是哪个文件被写坏了。 */
     public String source = "内置默认值";
 
+    /**
+     * 自动发现的那份文件读不了时的路径与原因，没这回事时两个都是 null。
+     *
+     * 命令行自己会打一行告警；图形界面看不见标准输出，得靠这两个字段把话写进日志区，
+     * 而且要说清是"找到了但读不了"——报成"没找到"会让人去找一个并不存在的文件。
+     */
+    public String errorFile;
+    public String errorReason;
+
     private static final Map<String, String> ENV_KEYS = new LinkedHashMap<String, String>();
 
     static {
@@ -55,11 +64,16 @@ public final class Config {
             File f = new File(path);
             if (f.isFile()) {
                 try {
-                    return fromFile(path);
+                    Config c = fromFile(path);
+                    c.source = "配置文件 " + path + "（自动发现）";
+                    return c;
                 } catch (Exception e) {
+                    Config fallback = defaults();
+                    fallback.errorFile = path;
+                    fallback.errorReason = e.getMessage();
                     System.out.println("! [WARN] CONFIG | 自动发现的配置读不了，改用默认值："
                             + path + " — " + e.getMessage());
-                    return defaults();
+                    return fallback;
                 }
             }
         }
@@ -139,6 +153,32 @@ public final class Config {
         String v = System.getenv(env);
         if (v != null && !v.isEmpty()) {
             assign(key, v);
+        }
+    }
+
+    /**
+     * 自动尝试读取的位置：程序同级（jar 所在目录）优先，其次当前工作目录。
+     *
+     * 命令行与两个图形界面都从这里取候选路径，一份规则两处用。
+     */
+    public static List<String> defaultConfigPaths() {
+        List<String> out = new java.util.ArrayList<String>();
+        String jarDir = jarDirectory();
+        if (jarDir != null) {
+            out.add(jarDir + File.separator + "conn.ini");
+        }
+        out.add(new File(System.getProperty("user.dir"), "conn.ini").getPath());
+        return out;
+    }
+
+    /** 随包 conn.ini 放在 jar 同级；从 classpath 反推目录，取不到就只找当前目录。 */
+    public static String jarDirectory() {
+        try {
+            String p = Config.class.getProtectionDomain().getCodeSource().getLocation().getPath();
+            File f = new File(java.net.URLDecoder.decode(p, "UTF-8"));
+            return f.getParentFile() == null ? null : f.getParentFile().getPath();
+        } catch (Exception e) {
+            return null;
         }
     }
 

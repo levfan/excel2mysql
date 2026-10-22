@@ -191,28 +191,7 @@ public final class Main {
                 return null;
             }
         }
-        return Config.discover(defaultConfigPaths());
-    }
-
-    private static List<String> defaultConfigPaths() {
-        List<String> out = new ArrayList<String>();
-        String jarDir = jarDirectory();
-        if (jarDir != null) {
-            out.add(jarDir + File.separator + "conn.ini");
-        }
-        out.add(new File(System.getProperty("user.dir"), "conn.ini").getPath());
-        return out;
-    }
-
-    /** 随包 conn.ini 放在 jar 同级；从 classpath 反推目录，取不到就只找当前目录。 */
-    private static String jarDirectory() {
-        try {
-            String p = Main.class.getProtectionDomain().getCodeSource().getLocation().getPath();
-            File f = new File(java.net.URLDecoder.decode(p, "UTF-8"));
-            return f.getParentFile() == null ? null : f.getParentFile().getPath();
-        } catch (Exception e) {
-            return null;
-        }
+        return Config.discover(Config.defaultConfigPaths());
     }
 
     private static int check(Config cfg) {
