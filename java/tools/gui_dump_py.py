@@ -695,9 +695,9 @@ def main():
                                r"\1meta_data_file_日期",
                                popup_text().replace(gdir, u"根目录")))
     std = os.path.join(std_root, [x for x in sorted(os.listdir(std_root))
-                                  if x.startswith("meta_data_file_")][0])
+                                  if x.startswith("sql_meta_data_file_")][0])
     smp = os.path.join(smp_root, [x for x in sorted(os.listdir(smp_root))
-                                  if x.startswith("simple_meta_data_file_")][0])
+                                  if x.startswith("sql_simple_meta_data_file_")][0])
     put("sqlgen.std.content", dump_xlsx(std))
     put("sqlgen.simple.content", dump_xlsx(smp))
     # 用本条线自己的读取器把标准件读回来，渲染成一行给对撞器比（读不回就是缺陷）

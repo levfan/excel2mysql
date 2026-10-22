@@ -761,8 +761,8 @@ public final class GuiDump {
             }
         });
         // 落盘产物只能在界面无任务后再读：读 xlsx 与"能不能被本条线原样读回"都不碰 UI 线程
-        File stdDir = firstDir(new File(gdir, "std"), "meta_data_file_");
-        File smpDir = firstDir(new File(gdir, "smp"), "simple_meta_data_file_");
+        File stdDir = firstDir(new File(gdir, "std"), "sql_meta_data_file_");
+        File smpDir = firstDir(new File(gdir, "smp"), "sql_simple_meta_data_file_");
         put("sqlgen.std.content", stdDir == null ? "" : dumpFolder(stdDir));
         put("sqlgen.simple.content", smpDir == null ? "" : dumpFolder(smpDir));
         String genFile = pickProduced(new File(gdir, "std"), "t_gen");

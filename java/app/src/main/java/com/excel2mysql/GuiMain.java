@@ -1698,7 +1698,7 @@ public final class GuiMain {
         javax.swing.JComponent copyBody = frame.popupMessageComponent(
                 "已生成 124 个文件（共 124 张表）。\n目录：\n"
                 + "C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物\\"
-                + "03-Java-图形与命令行-带JRE\\meta_data_file_20261022");
+                + "03-Java-图形与命令行-带JRE\\sql_meta_data_file_20261022");
         java.awt.Dimension popupSize = copyBody.getPreferredSize();
         if (!(copyBody instanceof javax.swing.JTextArea)
                 || ((javax.swing.JTextArea) copyBody).isEditable()) {
@@ -1766,7 +1766,7 @@ public final class GuiMain {
         }
         md.dispose();
 
-        java.io.File stdDir = new java.io.File(outRoot, "meta_data_file_" + today());
+        java.io.File stdDir = new java.io.File(outRoot, "sql_meta_data_file_" + today());
         String[] produced = stdDir.list();
         java.util.Arrays.sort(produced == null ? new String[0] : produced);
         // 只比"是哪两个文件"不比排序后的先后：文件名里带中文，
@@ -1819,7 +1819,7 @@ public final class GuiMain {
         }
 
         page.generateExcel(false, outRoot);
-        java.io.File simpleDir = new java.io.File(outRoot, "simple_meta_data_file_" + today());
+        java.io.File simpleDir = new java.io.File(outRoot, "sql_simple_meta_data_file_" + today());
         String simplePath = new java.io.File(simpleDir, "生成检查表（t_gen）.xlsx").getPath();
         try {
             List<com.excel2mysql.core.MetaExport.Dump> dumps =
@@ -1948,7 +1948,7 @@ public final class GuiMain {
 
         java.io.File namedRoot = new java.io.File(dir, "named");
         named.generateExcel(true, namedRoot.getPath());
-        java.io.File namedStd = new java.io.File(namedRoot, "meta_data_file_" + today());
+        java.io.File namedStd = new java.io.File(namedRoot, "sql_meta_data_file_" + today());
         String namedFile = "大小写检查表（T_CASE9）.xlsx";
         java.io.File namedPath = new java.io.File(namedStd, namedFile);
         // 文件名大小写要按目录清单比：Windows 文件系统不区分大小写，isFile() 会把
@@ -3324,7 +3324,7 @@ public final class GuiMain {
     }
 
     /**
-     * 按资源占位：同一页互斥、不同页可以一起跑，两页的「生成」因为写同一个输出目录也互斥。
+     * 按资源占位：同一页互斥、不同页可以一起跑；两页的「生成」各写各的目录，也能一起跑。
      *
      * 上一轮是一个布尔量锁住三页——执行器跑上千条语句时另外两页连点都点不动，
      * 而被挡下的人只看到一句"请稍等"。这里断的是"别的页在跑，这一页照样起得来"这件事本身。
@@ -3348,7 +3348,7 @@ public final class GuiMain {
         if (!frame.taskBusy(MainFrame.RES_EXCEL) || !frame.taskBusy(MainFrame.RES_SQL)) {
             problems.add("占了资源位却查不出它在跑");
         }
-        if (frame.taskBusy(MainFrame.RES_RUN) || frame.taskBusy(MainFrame.RES_EXPORT)) {
+        if (frame.taskBusy(MainFrame.RES_RUN)) {
             problems.add("没被占用的资源位也报成在跑，等于又变回全局一把锁");
         }
         // 同一页的第二个任务必须被挡下，而且要说得出共用的是哪一份数据
@@ -3356,33 +3356,39 @@ public final class GuiMain {
         if (frame.runningTasks().size() != 2) {
             problems.add("同一页的第二个任务挤进来了：" + frame.runningTasks().size());
         }
-        if (!frame.lastDialogText().contains("Excel 导入页的待导入列表、程序同级的生成输出目录")
-                && !frame.lastDialogText().contains("SQL 脚本改名入库页的脚本列表")) {
+        if (!frame.lastDialogText().contains("SQL 脚本改名入库页的脚本列表")) {
             problems.add("被挡下时没点名共用的是哪一份数据：" + frame.lastDialogText());
         }
         frame.endTask();
         frame.endTask();
 
-        // 两页的「生成」往同一个输出目录里写，所以共占一个位：
-        // SQL 页那边占住 export，Excel 页点生成必须被挡下，而不是两个任务同时写同一个目录
+        // 两页的「生成」各写各的目录：Excel 页 meta_data_file_年月日、
+        // SQL 页 sql_meta_data_file_年月日。目录分开了才谈得上并行——以前同名表会写进
+        // 同一个日期目录互相覆盖，那才是两颗按钮必须互斥的真正理由，不是资源位。
+        String plainDir = com.excel2mysql.core.MetaExport.outputDir(
+                "root", true, "20261022");
+        String sqlDir = com.excel2mysql.core.MetaExport.outputDir(
+                "root", true, "20261022", com.excel2mysql.core.MetaExport.SQL_DIR_TAG);
+        String sqlSimple = com.excel2mysql.core.MetaExport.outputDir(
+                "root", false, "20261022", com.excel2mysql.core.MetaExport.SQL_DIR_TAG);
+        if (new java.io.File(plainDir).getName().equals(new java.io.File(sqlDir).getName())
+                || !new java.io.File(sqlDir).getName().equals("sql_meta_data_file_20261022")
+                || !new java.io.File(sqlSimple).getName()
+                        .equals("sql_simple_meta_data_file_20261022")) {
+            problems.add("两页的生成目录没分开：" + plainDir + " / " + sqlDir + " / " + sqlSimple);
+        }
         frame.clearAll();
         frame.addFiles(files);
         if (frame.tables().isEmpty()) {
             problems.add("资源位自检没有可生成的表");
             return;
         }
-        frame.startTask(MainFrame.RES_SQL, MainFrame.RES_EXPORT);
-        frame.generateExcel(true);
-        if (!frame.lastDialogText().contains("已有任务在跑")) {
-            problems.add("两页的生成共用同一个输出目录，却谁也没挡谁："
-                    + frame.lastDialogText());
+        // Excel 页占着位的时候，SQL 页的生成照样起得来（两页各写各的目录，不再共用产物位）
+        frame.startTask(MainFrame.RES_EXCEL);
+        if (!frame.startTask(MainFrame.RES_SQL)) {
+            problems.add("两页的生成还在互斥：目录已经分开了，就该能并行");
         }
-        if (!frame.lastDialogText().contains("程序同级的生成输出目录")) {
-            problems.add("生成被挡下时没说要等的是产物目录：" + frame.lastDialogText());
-        }
-        if (frame.runningTasks().size() != 1) {
-            problems.add("被挡下的生成不该再占一个位：" + frame.runningTasks().size());
-        }
+        frame.endTask();
         frame.endTask();
         if (frame.taskBusy()) {
             problems.add("endTask 没能把资源位还回去");

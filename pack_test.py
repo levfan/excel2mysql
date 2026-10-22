@@ -2681,9 +2681,9 @@ check("P17 进度框章节写清了「后台线程 + 可取消 + 逐项进度」
       and "当前这一项做完" in _doc_all)
 check("P17b 进度框章节交代了各页可以并行、互斥按占用的东西判",
       "另外两个页照常能用" in _doc_all and "互斥按占用的东西判" in _doc_all
-      and "程序同级的生成输出目录" in _doc_all,
-      [t for t in ("另外两个页照常能用", "互斥按占用的东西判", "程序同级的生成输出目录")
-       if t not in _doc_all])
+      and "各写自己的目录" in _doc_all and "sql_meta_data_file_年月日" in _doc_all,
+      [t for t in ("另外两个页照常能用", "互斥按占用的东西判", "各写自己的目录",
+                   "sql_meta_data_file_年月日") if t not in _doc_all])
 
 section("Q 入口全覆盖（每个按钮点下去都要有可见痕迹）")
 
@@ -3209,15 +3209,24 @@ t_run = app_main.TaskInfo(cwin2, (_MW.RES_RUN,), "正在执行 SQL…", cwin2.sq
 cwin2._tasks.append(t_run)
 check("Q51d 三个资源各自被占：查谁挡了就报谁，没被占的资源不挡路",
       cwin2.task_busy((_MW.RES_EXCEL,)) and cwin2.task_busy((_MW.RES_SQL,))
-      and cwin2.task_busy((_MW.RES_RUN,)) and not cwin2.task_busy((_MW.RES_EXPORT,))
+      and cwin2.task_busy((_MW.RES_RUN,))
       and cwin2._conflict((_MW.RES_RUN,)).title == "正在执行 SQL…",
       [t.title for t in cwin2._tasks])
-check("Q51e 两页的「生成」共用同一个输出目录，因此互相排斥",
-      app_main.MainWindow._resources_for(cwin2, cwin2.log,
-                                         extra=(_MW.RES_EXPORT,)) == ("excel", "export")
-      and app_main.MainWindow._resources_for(cwin2, cwin2.sql_log,
-                                             extra=(_MW.RES_EXPORT,)) == ("sql", "export"),
-      "资源名不对")
+check("Q51e 两页各占自己那一位：两页的「生成」不再共用产物目录，可以并行",
+      app_main.MainWindow._resources_for(cwin2, cwin2.log) == ("excel",)
+      and app_main.MainWindow._resources_for(cwin2, cwin2.sql_log) == ("sql",)
+      and cwin2._conflict((_MW.RES_SQL,)) is not None
+      and cwin2._conflict((_MW.RES_EXCEL,)) is not None,
+      [t.resources for t in cwin2._tasks])
+from core import meta_export as _mx
+check("Q51f 两页的生成件确实落在两个不同目录（sql_ 前缀那档）",
+      os.path.basename(_mx.output_dir("R", True)) == _mx.STD_PREFIX + "_"
+      + _time.strftime("%Y%m%d")
+      and os.path.basename(_mx.output_dir("R", True, dir_tag=_mx.SQL_DIR_TAG))
+      == "sql_meta_data_file_" + _time.strftime("%Y%m%d")
+      and os.path.basename(_mx.output_dir("R", False, dir_tag=_mx.SQL_DIR_TAG))
+      == "sql_simple_meta_data_file_" + _time.strftime("%Y%m%d"),
+      [_mx.output_dir("R", True), _mx.output_dir("R", True, dir_tag=_mx.SQL_DIR_TAG)])
 for _t in list(cwin2._tasks):
     cwin2._tasks.remove(_t)
 cwin2.close()
@@ -3749,8 +3758,8 @@ def _lsd(p):
     return sorted(os.listdir(p)) if os.path.isdir(p) else []
 
 
-_std = [d for d in _lsd(gout) if d.startswith("meta_data_file_")]
-_sim = [d for d in _lsd(gout) if d.startswith("simple_meta_data_file_")]
+_std = [d for d in _lsd(gout) if d.startswith("sql_meta_data_file_")]
+_sim = [d for d in _lsd(gout) if d.startswith("sql_simple_meta_data_file_")]
 _std0 = _std[0] if _std else ""
 _sim0 = _sim[0] if _sim else ""
 _want_files = {"t_dup9.xlsx", "生成检查表（t_gen）.xlsx"}
@@ -3790,7 +3799,7 @@ try:
 finally:
     app_main.program_dir = _pdir
 _g2 = os.path.join(_tmpdir, "sqlgen_out2")
-_std2 = [d for d in _lsd(_g2) if d.startswith("meta_data_file_")]
+_std2 = [d for d in _lsd(_g2) if d.startswith("sql_meta_data_file_")]
 _std20 = _std2[0] if _std2 else ""
 check("R41 先改前缀再生成：产物里的表名是改过之后的",
       len(_std2) == 1 and set(_lsd(os.path.join(_g2, _std20)))
@@ -3879,7 +3888,7 @@ try:
     nw.btn_sql_gen_std.click()
 finally:
     app_main.program_dir = _pdir
-_nd = [d for d in _lsd(nout) if d.startswith("meta_data_file_")]
+_nd = [d for d in _lsd(nout) if d.startswith("sql_meta_data_file_")]
 _nd0 = _nd[0] if _nd else ""
 _nfiles = _lsd(os.path.join(nout, _nd0))
 check("R47 只勾大写：生成物表名转大写、中文列名原样保留，脚本正文一个字不动",
@@ -4251,7 +4260,7 @@ check("U9 折行后说的话与原来同一句",
 _copy_box = app_main.build_popup_box(
     None, "生成结果",
     "已生成 124 个文件（共 124 张表）。\n目录：\n"
-    "C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物\\03-Java-图形与命令行-带JRE\\meta_data_file_20261022",
+    "C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物\\03-Java-图形与命令行-带JRE\\sql_meta_data_file_20261022",
     "information", box_class=_REAL_POPUP_BOX)
 _copy_box.show()
 _app.processEvents()
