@@ -395,12 +395,21 @@ public final class GuiMain {
                 problems.add("真线程并发自检意外中止：" + e.getClass().getName()
                         + " " + e.getMessage());
             }
+            try {
+                click_other_page_while_busy(holder[0], problems);
+            } catch (Throwable e) {
+                problems.add("另一页点击取证意外中止：" + e.getClass().getName()
+                        + " " + e.getMessage());
+            }
         }
         if (problems.isEmpty()) {
             System.out.println("+ [OK] GUI-SELFTEST | 窗口构造成功，文件表 " + metrics[0]
                     + " 行 / 字段合计 " + metrics[1]
                     + " 个，DDL 预览含建表语句与主键，改类型能反映到预览；"
                     + "两条真任务同时在跑、界面照旧响应");
+            for (String s : SHOTS) {
+                System.out.println("- [INFO] GUI-SELFTEST | 并发留影 " + s);
+            }
         } else {
             for (String p : problems) {
                 System.out.println("x [ERROR] GUI-SELFTEST | " + p);
@@ -3395,6 +3404,82 @@ public final class GuiMain {
         }
     }
 
+    /** 自检顺手留下的图：只报路径，不参与判定（锁屏时抓到的是锁屏图，判不了）。 */
+    private static final List<String> SHOTS = new ArrayList<String>();
+    private static volatile int SHOT_WINDOWS;
+
+    /**
+     * 抓一张整屏到内存（不落盘）：写 PNG 要一两秒，不能压在"两条任务都还在跑"那个窗口里。
+     * 无显示设备或抓屏被拒时返回 null。
+     *
+     * 抓之前先把本程序那几个顶层窗口抬到最前：自检不抢焦点，不抬的话拍出来是
+     * 桌面上那个聊天窗口（实测踩过一张，颜色数照样过 60，看着像"抓到了"其实没拍到界面）。
+     */
+    private static java.awt.image.BufferedImage captureNow() {
+        if (java.awt.GraphicsEnvironment.isHeadless()) {
+            return null;
+        }
+        try {
+            invokeUi(() -> raiseOwnWindows());
+            Thread.sleep(400);
+            SHOT_WINDOWS = showingWindows();
+            return grabScreen();
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    private static void raiseOwnWindows() {
+        for (java.awt.Frame f : java.awt.Frame.getFrames()) {
+            if (f.isShowing()) {
+                f.toFront();
+            }
+        }
+        for (java.awt.Window w : java.awt.Window.getWindows()) {
+            if (w.isShowing()) {
+                w.toFront();
+            }
+        }
+    }
+
+    private static java.awt.image.BufferedImage grabScreen() throws Exception {
+        java.awt.Rectangle bounds = java.awt.GraphicsEnvironment
+                .getLocalGraphicsEnvironment().getDefaultScreenDevice()
+                .getDefaultConfiguration().getBounds();
+        return new java.awt.Robot().createScreenCapture(bounds);
+    }
+
+    /**
+     * 把内存里那张落盘，返回"路径 + 尺寸 + 抽样颜色数"；空帧（全黑全白）当没抓到。
+     *
+     * 用例本身跑在无显示设备上也照样绿（进度框那些断言读的是控件状态，不是像素），
+     * 所以这一张只是给人眼复核用的，别拿一张白图当"看过了"。
+     */
+    private static String saveShot(java.awt.image.BufferedImage img, String tag) {
+        if (img == null) {
+            return null;
+        }
+        try {
+            java.util.Set<Integer> colors = new java.util.HashSet<Integer>();
+            for (int y = 0; y < img.getHeight() && colors.size() <= 400; y += 23) {
+                for (int x = 0; x < img.getWidth(); x += 23) {
+                    colors.add(Integer.valueOf(img.getRGB(x, y)));
+                }
+            }
+            if (colors.size() < 60) {
+                return null;
+            }
+            java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"), "e2m-shots");
+            dir.mkdirs();
+            java.io.File f = new java.io.File(dir, "java-" + tag + ".png");
+            javax.imageio.ImageIO.write(img, "png", f);
+            return f.getPath() + "（" + img.getWidth() + "x" + img.getHeight()
+                    + "，抽样 " + colors.size() + " 色）";
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     /**
      * 真线程那一支：打开进度框那条路，两条真任务同时在跑。
      *
@@ -3412,6 +3497,9 @@ public final class GuiMain {
                 "e2m-concurrent");
         deleteTree(dir);
         dir.mkdirs();
+        // 前面有一支场景会打开示例清单又不会自己收（那颗对话框是 HIDE_ON_CLOSE，
+        // forceCloseDialogs 只管消息弹窗），不收的话抓屏拍到的是它、不是两个进度框
+        invokeUi(() -> frame.closeSqlSamples());
         List<String> xlsx = new ArrayList<String>();
         // 解析这条要当两格里最长的那个（八个两万行，实测约六秒）：取消、推进取样、
         // 同页拒绝这三步都得在它还没做完的时候做，夹具一旦快过用例就只能报"没验到取消"
@@ -3532,6 +3620,21 @@ public final class GuiMain {
                     problems.add("任务在跑时它那个进度框不在屏上、或是模态的：" + t.describe());
                 }
             }
+            // 两颗框不许叠在一起：叠了后面那颗的「取消」就点不到，非模态等于白改。
+            // 这一步只读边界不抓屏：抓一张 2560x1600 要和桌面窗口管理器抢时间，
+            // 实测把下面那颗"界面照旧回应"从 200 毫秒顶到 537 毫秒（上限 500），
+            // 取证本身改变被测行为。像素那一路交给 click_other_page_while_busy
+            java.awt.Rectangle ra = a.dialog == null ? null : a.dialog.getBounds();
+            java.awt.Rectangle rb = b.dialog == null ? null : b.dialog.getBounds();
+            if (ra != null && rb != null) {
+                java.awt.Rectangle overlap = ra.intersection(rb);
+                if (!overlap.isEmpty()) {
+                    problems.add("两个进度框叠在一起，后面那颗的「取消」点不到："
+                            + ra + " / " + rb + "，主窗口在 ("
+                            + frame.getX() + "," + frame.getY() + ")，框尺寸 "
+                            + ra.width + "x" + ra.height);
+                }
+            }
             int pa = a.getDone();
             int pb = b.getDone();
             long p0 = System.currentTimeMillis();
@@ -3630,6 +3733,103 @@ public final class GuiMain {
             MainFrame.modalProgress = false;
             forceCloseDialogs();
         }
+    }
+
+    /**
+     * 任务在跑时，另外的页真点得动：起一条解析任务，切到第三页点「示例 (?)」，
+     * 清单要开出来、事件分发线程要照常回应，那条任务也不能因为这点事被带走。
+     *
+     * 为什么单开一条而不塞进 concurrent_tasks：并发那一支里两条任务一共只有两三秒，
+     * 而建一份 100 条的清单要在事件分发线程上摆一堆控件。实测塞进去之后
+     * "界面照旧回应"那一步从 200 毫秒涨到 5.2 秒、解析那条也提前跑完了——
+     * 那时候用例量的就成了建窗速度，不是"点得动点不动"。
+     */
+    private static void click_other_page_while_busy(MainFrame frame, List<String> problems)
+            throws Exception {
+        if (!frame.runningTasks().isEmpty()) {
+            problems.add("进到这里还留着上一场景的任务：" + frame.runningTasks().size());
+            return;
+        }
+        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"), "e2m-click");
+        deleteTree(dir);
+        dir.mkdirs();
+        List<String> xlsx = new ArrayList<String>();
+        // 四张两万行：解析约三秒，够把"点按钮 + 建清单 + 抓屏"整段压在任务还在跑的时候做
+        for (int k = 0; k < 4; k++) {
+            xlsx.add(bigFixture(new java.io.File(dir, "点击取证" + (char) ('A' + k) + ".xlsx"),
+                    20000));
+        }
+        invokeUi(() -> frame.clearAll());
+        MainFrame.modalProgress = true;
+        try {
+            fireUi(() -> frame.addFilesAsync(xlsx));
+            if (!waitTasks(frame, 1, 20)) {
+                problems.add("前置：解析任务没起来，后面那一步点了也不作数："
+                        + taskLine(frame));
+                return;
+            }
+            MainFrame.Task busy = frame.runningTasks().get(0);
+            int before = busy.getDone();
+            invokeUi(() -> frame.tabs().setSelectedIndex(2));
+            fireUi(() -> frame.sqlRunHelpButton().doClick());
+            boolean open = false;
+            long until = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < until) {
+                open = frame.sqlSamplesShowing();
+                if (open) {
+                    break;
+                }
+                Thread.sleep(30);
+            }
+            if (!open) {
+                problems.add("任务在跑时第三页「示例 (?)」点不开——进度框还挡着窗口："
+                        + taskLine(frame));
+            } else if (!frame.sqlSamplesTitle().contains("SQL 示例")) {
+                problems.add("开出来的不是那份示例清单：" + frame.sqlSamplesTitle());
+            }
+            // 清单开着、任务还在跑：这时候回一次事件分发线程，"点得动"才算数
+            long p0 = System.currentTimeMillis();
+            invokeUi(() -> { });
+            long pingMs = System.currentTimeMillis() - p0;
+            if (pingMs > 800) {
+                problems.add("示例清单开着时事件分发线程回应一次要 " + pingMs
+                        + " 毫秒（界面等于没转）");
+            }
+            // 抓屏只到内存这一层，写 PNG 推到任务收尾之后：写一张 2560x1600 要一两秒，
+            // 压在这里就等于把"任务还在跑"的时间窗自己吃掉
+            java.awt.image.BufferedImage img = captureNow();
+            invokeUi(() -> frame.closeSqlSamples());
+            if (!frame.runningTasks().contains(busy)) {
+                problems.add("点一下另一页的按钮就把那条任务弄没了：" + taskLine(frame));
+            }
+            if (!waitTasks(frame, 0, 90)) {
+                problems.add("那条任务没能自己跑完：" + taskLine(frame));
+            }
+            if (busy.getDone() < busy.getTotal() && busy.getDone() <= before) {
+                problems.add("任务在被点按钮之后一步没动：" + busy.describe());
+            }
+            SHOTS.add("另一页清单在屏 " + orNull(saveShot(img, "click-while-busy"))
+                    + "，拍时本程序在屏窗口 " + SHOT_WINDOWS + " 个");
+        } finally {
+            MainFrame.modalProgress = false;
+            forceCloseDialogs();
+        }
+    }
+
+    /** 抓不到图的时候别把 null 打进日志，说人话。 */
+    private static String orNull(String shot) {
+        return shot == null ? "那张没抓到（无显示设备或空帧）" : shot;
+    }
+
+    /** 在屏的顶层窗口数：留影那条报的是"拍到几个窗口"，比抽样颜色数更能说明拍没拍到界面。 */
+    private static int showingWindows() {
+        int n = 0;
+        for (java.awt.Window w : java.awt.Window.getWindows()) {
+            if (w.isShowing()) {
+                n++;
+            }
+        }
+        return n;
     }
 
     /** 丢给事件分发线程执行但不等它：起任务那一步必须"点下去就返回"才叫不互相阻塞。 */

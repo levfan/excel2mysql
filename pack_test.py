@@ -2290,9 +2290,24 @@ class _FakeProgress:
         self.ui_ticks = 0
         self.threads = []
         self.btn_cancel = _FakeBtn()
+        self.moved = None              # _place_task_dialog 落的位置
         _FakeProgress.made.append(self)
 
     cancel_after = None        # 设成 N 就模拟"主循环第 N 拍时用户点了取消"
+
+    # 产品会按"此刻有几个框在屏"错开摆放，替身得把这些控件接口一并顶上：
+    # 少一个就是 AttributeError，红成"用例坏了"而不是"布局错了"
+    def move(self, x, y):
+        self.moved = (x, y)
+
+    def width(self):
+        return 480
+
+    def height(self):
+        return 140
+
+    def isVisible(self):
+        return True
 
     def set_progress(self, done, total, label):
         self.updates.append((done, total, label))
@@ -2684,6 +2699,9 @@ check("P17b 进度框章节交代了各页可以并行、互斥按占用的东�
       and "各写自己的目录" in _doc_all and "sql_meta_data_file_年月日" in _doc_all,
       [t for t in ("另外两个页照常能用", "互斥按占用的东西判", "各写自己的目录",
                    "sql_meta_data_file_年月日") if t not in _doc_all])
+check("P17c 说明交代了两个进度框错开摆、两颗生成按钮不必互相等",
+      "往右下错开一格" in _doc_all and "两颗按钮也不必互相等" in _doc_all,
+      [t for t in ("往右下错开一格", "两颗按钮也不必互相等") if t not in _doc_all])
 
 section("Q 入口全覆盖（每个按钮点下去都要有可见痕迹）")
 
@@ -3348,6 +3366,28 @@ check("Y1f SQL 页的第二个任务被挡下，Excel 页那个照常活着",
       any("已有任务在跑" in x for _t, x in POPUPS)
       and len(xwin._tasks) == 2 and _a[0] in xwin._tasks,
       [x.replace("\n", " ")[:90] for _t, x in POPUPS][:1])
+
+# 光看事件循环在转不够：真点一下第三页的按钮，看不看得到东西冒出来
+xwin.main_tabs.setCurrentIndex(2)
+POPUPS.clear()
+xwin.btn_sql_run_samples.click()
+_app.processEvents()
+_samp = xwin.sql_run_samples
+check("Y1l 两条任务在跑时切到第三页点「示例 (?)」，非模态清单照样开得出来",
+      xwin.main_tabs.currentIndex() == 2 and len(xwin._tasks) == 2
+      and _samp is not None and _samp.isVisible() and _samp.isModal() is False
+      and _samp.list.count() == len(app_main.SQL_SAMPLES),
+      (xwin.main_tabs.currentIndex(), len(xwin._tasks),
+       None if _samp is None else (_samp.isVisible(), _samp.isModal(),
+                                   _samp.list.count())))
+if _samp is not None:
+    _samp.close()
+_r1 = dialogs[0].geometry() if len(dialogs) == 2 else None
+_r2 = dialogs[1].geometry() if len(dialogs) == 2 else None
+_ov = _r1.intersected(_r2) if _r1 is not None and _r2 is not None else None
+check("Y1m 两个进度框不叠在一起（叠了后面那颗的「取消」就点不到）",
+      _ov is not None and _ov.isEmpty(),
+      None if len(dialogs) != 2 else [d.geometry().getRect() for d in dialogs])
 
 
 def _gen_count():
