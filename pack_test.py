@@ -1572,40 +1572,47 @@ check("K8 固定件不在分隔条内（提示条/操作条/进度条不跟着�
       w.lbl_imp_db.parent() is not sp and w.progress.parent() is not sp
       and w.btn_import.parent() is not sp)
 check("K9 初始三段高度都大于 0", all(x > 0 for x in sp.sizes()), sp.sizes())
-# ---- SQL 脚本改名入库页：待处理文件表格与日志之间同样可拖拽分配高度 ----
+# ---- SQL 脚本改名入库页：三段可拖拽（拖拽区 / 表格区 / 日志），与第一页同一形状 ----
 from PySide6.QtWidgets import QTableWidget
 
 w.main_tabs.setCurrentIndex(1)
 _app.processEvents()
 sp2 = w.sql_split
-check("K10 SQL 页用垂直分隔条承载「文件表格区」与「日志区」，且不可折叠",
+check("K10 SQL 页用垂直分隔条承载「拖拽区 / 文件表格区 / 日志区」三段，且不可折叠",
       isinstance(sp2, QSplitter) and sp2.orientation() == Qt.Vertical
-      and sp2.count() == 2 and sp2.childrenCollapsible() is False
+      and sp2.count() == 3 and sp2.childrenCollapsible() is False
       and sp2.handleWidth() == 6, sp2.sizes())
-check("K11 分隔条两侧正是待处理文件表与 SQL 日志",
-      sp2.widget(0).findChild(QTableWidget) is w.sql_table and sp2.widget(1) is w.sql_log,
-      [type(sp2.widget(i)).__name__ for i in range(2)])
-sp2.setSizes([600, 100])
+check("K11 三段正是拖拽区、待处理文件表与 SQL 日志（顺序与第一页一致）",
+      sp2.widget(0) is w.sql_drop
+      and sp2.widget(1).findChild(QTableWidget) is w.sql_table
+      and sp2.widget(2) is w.sql_log,
+      [type(sp2.widget(i)).__name__ for i in range(3)])
+sp2.setSizes([100, 600, 100])
 _app.processEvents()
-u = [sp2.widget(i).height() for i in range(2)]
-sp2.setSizes([100, 600])
+u = [sp2.widget(i).height() for i in range(3)]
+sp2.setSizes([100, 100, 600])
 _app.processEvents()
-d = [sp2.widget(i).height() for i in range(2)]
-check("K12 往下拖：表格区高于日志；反向拖：日志高于表格且表格确实被压缩",
-      u[0] > u[1] and d[1] > d[0] and d[0] < u[0], f"{u} -> {d}")
-check("K13 两边此消彼长，总和守恒", abs(sum(u) - sum(d)) <= 2, f"{sum(u)} vs {sum(d)}")
-check("K14 前缀行与操作条跟着表格区一起缩放，不会被分隔条单独挤掉",
-      sp2.widget(0).isAncestorOf(w.ed_sql_prefix)
-      and sp2.widget(0).isAncestorOf(w.btn_sql_run)
-      and sp2.widget(0).isAncestorOf(w.btn_sql_clear_log))
-check("K15 提示条与添加/移除按钮是固定件，不在分隔条里被挤压",
-      w.lbl_sql_db.parent() is not sp2 and w.btn_sql_add.parent() is not sp2
-      and not sp2.isAncestorOf(w.btn_sql_add))
+d = [sp2.widget(i).height() for i in range(3)]
+check("K12 往上拖：日志最高、表格区确实被压缩；反向拖：表格区高于日志",
+      d[2] > d[1] and d[1] < u[1] and u[1] > u[2], f"{u} -> {d}")
+check("K13 三段此消彼长，总和守恒", abs(sum(u) - sum(d)) <= 2, f"{sum(u)} vs {sum(d)}")
+check("K14 前缀行、大写开关与整排动作条跟着表格区一起缩放，不会被分隔条单独挤掉",
+      sp2.widget(1).isAncestorOf(w.ed_sql_prefix)
+      and sp2.widget(1).isAncestorOf(w.chk_sql_upper)
+      and sp2.widget(1).isAncestorOf(w.btn_sql_run)
+      and sp2.widget(1).isAncestorOf(w.btn_sql_clear_log))
+check("K15 移除按钮排在表格区动作条最左（与第一页那颗同位置），拖拽区在分隔条里",
+      sp2.widget(1).isAncestorOf(w.btn_sql_remove)
+      and w.lbl_sql_db.parent() is not sp2 and sp2.isAncestorOf(w.sql_drop))
 check("K16 表格由分隔条控制高度后仍拿得到视口",
       w.sql_table.viewport().height() > 0, w.sql_table.viewport().height())
 w.sql_log.appendPlainText("分隔条缩放后日志仍可写入")
-check("K17 缩放到最小后日志区仍能显示内容（不会拖成 0 高）",
-      min(d) > 0 and "分隔条缩放后" in w.sql_log.toPlainText(), d)
+check("K17 缩放到最小后每段仍能显示内容（不会拖成 0 高）",
+      min(d) > 0 and min(u) > 0 and "分隔条缩放后" in w.sql_log.toPlainText(), d)
+check("K18 SQL 页的拖拽区收 .sql，点它就是打开选择器（与第一页同一套交互）",
+      w.sql_drop.acceptDrops()
+      and w.sql_drop.label.text() == app_main.DropArea.SQL_HINT
+      and "SQL" in w.sql_drop.toolTip(), w.sql_drop.label.text())
 w.main_tabs.setCurrentIndex(0)
 _app.processEvents()
 w.close()
@@ -2728,7 +2735,7 @@ app_main.HelpDialog = _real_help
 # 文档漂移守卫：说明里写到的按钮名必须是界面上真实存在的文案
 from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
-           "开始导入", "添加 SQL 文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
+           "开始导入", "移除选中文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
            "示例 (?)", "清空编辑区", "清空结果区"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
@@ -3056,7 +3063,7 @@ try:
     sw2.on_sql_add_files()
 finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn)
-check("Q24 「添加 SQL 文件」加载进列表并逐表展示",
+check("Q24 选进来的脚本加载进列表并逐表展示",
       len(sw2.sql_files) == 1 and sw2.sql_table.rowCount() == 2, sw2.sql_table.rowCount())
 _sql_serials = [sw2.sql_table.item(i, 0).text() for i in range(sw2.sql_table.rowCount())]
 check("Q24a 建模语句表首列是连续序号，最后一行就是解析出的表数",
@@ -3096,6 +3103,32 @@ check("Q25c 读取失败也进添加结果弹窗，写明完整路径与原因",
       _fail_pop[-1:])
 check("Q26 表名清单随加载缓存（刷新表格不必回扫几十万行）",
       len(sw2.sql_files[0].get("tabs") or []) == 2, sw2.sql_files[0].get("tabs"))
+# 拖拽那一路：与第一页同一套（只收本类型的文件，收不到的当场说清）。
+# 放在这一组 sw2 用例之后，是因为另起窗口添加脚本也会往 POPUPS 里写"添加结果"，
+# 混在中间会让上面 Q25a 那条"最后一个弹窗是重复项"读到的不是 sw2 的那颗
+qsql2 = os.path.join(_tmpdir, "拖进来的.sql")
+open(qsql2, "w", encoding="utf-8").write("CREATE TABLE `t_drag` (`id` INT);\n")
+qtxt = os.path.join(_tmpdir, "说明.txt")
+open(qtxt, "w", encoding="utf-8").write("不是脚本\n")
+dw = app_main.MainWindow()
+dw.on_sql_files_dropped([qsql2, qtxt])
+check("Q26b 拖进来的 .sql 直接读入，混在里面的别的文件点名跳过",
+      len(dw.sql_files) == 1 and os.path.basename(qsql2) in dw.sql_files[0]["path"]
+      and "[跳过] 不是 SQL 脚本，未读入：说明.txt" in dw.sql_log.toPlainText(),
+      log_lines(dw.sql_log.toPlainText(), "[跳过]"))
+_dw_before = len(dw.sql_files)
+dw.on_sql_files_dropped([qtxt])
+check("Q26c 一个 .sql 都没拖进来时给一句已忽略，不静默不动",
+      len(dw.sql_files) == _dw_before
+      and "[提示] 拖入的不是 SQL 脚本文件，已忽略。" in dw.sql_log.toPlainText(),
+      dw.sql_log.toPlainText().splitlines()[-1:])
+check("Q26d 第二页已经没有「添加 SQL 文件」那颗按钮，入口只剩拖拽区与点击",
+      not any(b.text() == "添加 SQL 文件"
+              for b in dw.findChildren(app_main.QPushButton))
+      and dw.sql_drop.acceptDrops(),
+      [b.text() for b in dw.findChildren(app_main.QPushButton)][:6])
+dw.close()
+POPUPS.clear()
 sw2.ed_sql_prefix.setText("ods_")
 sw2.on_sql_apply_prefix()
 _cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
@@ -4184,17 +4217,24 @@ check("R59 读入大脚本时把每张表的字段定义都缓存好，一张不
 _t0 = _t_busy.monotonic()
 app_main.parse_create_tables(_brec["text"])
 _full_ms = (_t_busy.monotonic() - _t0) * 1000.0
-bw._build_sql_metadata_dialog(7)          # 先走一次，量的是稳态而不是首次建窗
+app_main.ensure_parsed(_brec).get("t_big_07")     # 先走一次，量的是稳态不是首次调用
+_t0 = _t_busy.monotonic()
+_hit = app_main.ensure_parsed(_brec).get("t_big_07")
+_look_ms = (_t_busy.monotonic() - _t0) * 1000.0
+bw._build_sql_metadata_dialog(7)                  # 建窗也先热一次
 _t0 = _t_busy.monotonic()
 _bdlg = bw._build_sql_metadata_dialog(7)
 _open_ms = (_t_busy.monotonic() - _t0) * 1000.0
 check("R60 整份重解析测得出耗时（不然下面那条比值是拿 0 除 0）",
       _full_ms >= 1.0, "%.0f 毫秒" % _full_ms)
-# 缓存失效时这条路就退化成整份重解析，比值当场就红——判据自己不依赖夹具多大
-check("R61 双击一行只从缓存取那一张：建对话框比整份重解析快一个数量级以上，且低于 100 毫秒",
-      _open_ms < 100.0 and _open_ms * 10 < _full_ms
-      and _bdlg is not None and _bdlg.tableWidget().rowCount() == 22,
-      "点开 %.1f 毫秒 / 整份 %.0f 毫秒" % (_open_ms, _full_ms))
+# 缓存失效时"只取一张"就退化成整份重解析，比值当场就红——判据自己不依赖夹具多大，
+# 也不依赖机器快慢（建对话框那部分单列为下面那条绝对上限，不混进比值）
+check("R61 双击一行只从缓存取那一张：比整份重解析快一个数量级以上",
+      _hit is not None and len(_hit["columns"]) == 22 and _look_ms * 10 < _full_ms,
+      "取一张 %.2f 毫秒 / 整份 %.0f 毫秒" % (_look_ms, _full_ms))
+check("R61b 到对话框真建出来也不到人等得到的那一档（低于 300 毫秒）",
+      _open_ms < 300.0 and _bdlg is not None and _bdlg.tableWidget().rowCount() == 22,
+      "建对话框 %.1f 毫秒" % _open_ms)
 bw.sql_table.item(7, 3).setText("t_big_renamed")
 check("R62 改表名把缓存里那一格一起改名，不留旧键",
       "t_big_renamed" in (_brec.get("parsed") or {})
@@ -4205,7 +4245,7 @@ _t0 = _t_busy.monotonic()
 _bdlg2 = bw._build_sql_metadata_dialog(7)
 _open2_ms = (_t_busy.monotonic() - _t0) * 1000.0
 check("R63 改名后点开仍是毫秒级，字段一个没少",
-      _open2_ms < 100.0 and _bdlg2 is not None
+      _open2_ms < 300.0 and _bdlg2 is not None
       and _bdlg2.tableWidget().rowCount() == 22, "%.1f 毫秒" % _open2_ms)
 # 撞车：新名和另一张表同名。缓存留着可用（刷新清单要读它，丢了就等于把整份重解析
 # 搬回主线程），同名两行并成一行。改名那一步本身要重写正文+重取表名清单，

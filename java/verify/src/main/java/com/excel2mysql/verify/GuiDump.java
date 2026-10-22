@@ -113,6 +113,10 @@ public final class GuiDump {
                 put("hint.excel", frame.excelHintText());
                 put("hint.sql", frame.sqlPage().hintText());
                 put("drop.hint", frame.dropArea().hintText());
+                put("drop.sql.hint", frame.sqlPage().sqlDropArea().hintText());
+                put("drop.sql.accepts",
+                        frame.sqlPage().sqlDropArea().acceptsDrops() ? "true" : "false");
+                put("split.sql.order", frame.sqlPage().segmentOrder());
 
                 // ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
                 put("hint.sqlrun", norm(frame.sqlRunHintText()));
@@ -976,6 +980,44 @@ public final class GuiDump {
             }
         }
         put("bar.excel.order", join(order, "|"));
+        dumpSqlRows();
+    }
+
+    /**
+     * 第二页每一行从左到右是哪几颗按钮——位置也是界面事实，与 Python 侧 dump_sql_rows 同判据。
+     *
+     * 按钮文案早就在逐颗比，但"移除选中文件排在开关那一行、还是排在保存/执行那一行"
+     * 只有看真正的行结构才比得出来。按像素量不行：这一页没被切到前面时子控件还没排过版，
+     * 量出来全是 0（Python 侧第一版就是这么全落在第 0 带），所以直接读三行的容器。
+     */
+    private static void dumpSqlRows() {
+        java.awt.Container[] rows = frame.sqlPage().sqlRows();
+        List<String> out = new ArrayList<String>();
+        int band = 0;
+        for (java.awt.Container row : rows) {
+            if (row == null) {
+                continue;
+            }
+            List<String> names = new ArrayList<String>();
+            collectRowButtons(row, names);
+            if (!names.isEmpty()) {
+                out.add(band + ":" + join(names, ","));
+                band++;
+            }
+        }
+        put("bar.sql.rows", join(out, "|"));
+    }
+
+    /** 一行之内的按钮顺序就是加进去的顺序：FlowLayout 从左到右、BorderLayout 先 WEST 后 EAST。 */
+    private static void collectRowButtons(java.awt.Container root, List<String> names) {
+        for (java.awt.Component c : root.getComponents()) {
+            if (c instanceof JButton && !norm(((JButton) c).getText()).isEmpty()) {
+                names.add(norm(((JButton) c).getText()));
+            }
+            if (c instanceof java.awt.Container) {
+                collectRowButtons((java.awt.Container) c, names);
+            }
+        }
     }
 
     private static String btnOn(String text) {

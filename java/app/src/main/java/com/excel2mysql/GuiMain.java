@@ -2377,6 +2377,49 @@ public final class GuiMain {
             problems.add("SQL 页分栏初始位置不是 " + wantPx(230) + "："
                     + page.splitDividerLocation());
         }
+        // 三段结构与「Excel 导入」那页一致：拖拽区在最上、表格区在中、日志在下
+        if (!"拖拽区|表格区|日志区".equals(page.segmentOrder())) {
+            problems.add("SQL 页的三段分栏顺序不对：" + page.segmentOrder());
+        }
+        com.excel2mysql.gui.DropArea sqlDrop = page.sqlDropArea();
+        if (sqlDrop == null || !sqlDrop.acceptsDrops() || !sqlDrop.hasClickAction()) {
+            problems.add("SQL 页的拖拽区没接上拖放或点击选文件");
+        }
+        if (!com.excel2mysql.gui.DropArea.SQL_HINT.equals(sqlDrop.hintText())) {
+            problems.add("SQL 页的拖拽区文案不是这一页那句：" + sqlDrop.hintText());
+        }
+        if (buttonIn(frame, "添加 SQL 文件") != null) {
+            problems.add("第二页还留着「添加 SQL 文件」那颗按钮，入口没统一");
+        }
+        // 拖进来的路径只收 .sql：混着的点名跳过，一个都没收到时也得说一句
+        java.io.File dropDir;
+        try {
+            dropDir = java.nio.file.Files.createTempDirectory("e2m-sqldrop").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建拖拽检查的临时目录失败：" + e);
+            return;
+        }
+        String dropped = new java.io.File(dropDir, "拖进来的.sql").getPath();
+        writeText(dropped, "CREATE TABLE t_drag (id INT);" + String.valueOf((char) 10));
+        String notSql = new java.io.File(dropDir, "说明.txt").getPath();
+        writeText(notSql, "不是脚本");
+        com.excel2mysql.gui.SqlPage dpage = new com.excel2mysql.gui.SqlPage(frame);
+        int before = dpage.entryCount();
+        dpage.sqlDropArea().fireDrop(java.util.Arrays.asList(dropped, notSql));
+        if (dpage.entryCount() != before + 1
+                || !dpage.logPanel().contains("[跳过] 不是 SQL 脚本，未读入：说明.txt")) {
+            problems.add("拖进来的 .sql 没读入，或混着的别的文件没点名跳过："
+                    + dpage.entryCount() + " 个");
+        }
+        String dropLog = dpage.logPanel().text();
+        dpage.sqlDropArea().fireDrop(java.util.Collections.singletonList(notSql));
+        if (dpage.entryCount() != before + 1
+                || dropLog.equals(dpage.logPanel().text())) {
+            problems.add("一个 .sql 都没拖进来时没有任何回执");
+        }
+        if (!dpage.logPanel().contains("[提示] 拖入的不是 SQL 脚本文件，已忽略。")) {
+            problems.add("全是非脚本时的说法与第一页不同：" + dpage.logPanel().text());
+        }
         java.io.File dir;
         try {
             dir = java.nio.file.Files.createTempDirectory("e2m-sql-selftest").toFile();
@@ -2662,7 +2705,7 @@ public final class GuiMain {
                 onUi.add(b.getText());
             }
             String[] named = {"批量应用前缀", "替换首个前缀", "生成表结构预览",
-                    "预览 DDL", "开始导入", "添加 SQL 文件", "保存修改后ddl脚本",
+                    "预览 DDL", "开始导入", "移除选中文件", "保存修改后ddl脚本",
                     "执行修改后ddl脚本到当前库", "连接并加载库",
                     "生成标准excel文件", "生成简易excel文件", "示例 (?)",
                     "清空编辑区", "清空结果区"};
@@ -3946,7 +3989,7 @@ public final class GuiMain {
             // 同一页再点一次该被挡下——这一步要趁两条都还在跑就做，而且排在取样之前：
             // 写盘那条两秒就完了，晚一步点下去资源位已经空出来，"挡下"这件事就根本不会发生
             //（上一轮 flat 空成 "" 就是这个原因）。点的也不是那颗生成按钮——任务在跑时
-            // 它本来就是灰的，doClick 空转；「添加 SQL 文件」才是用户真会做的动作。
+            // 它本来就是灰的，doClick 空转；再读一份脚本才是用户真会做的动作。
             // 弹窗是模态的，会把事件分发线程按在嵌套循环里，所以这一步用 invokeLater 丢过去，
             // 由这边轮那句话写出来没有，一看到就抄下来，再替用户把弹窗点掉。
             SwingUtilities.invokeLater(() -> frame.sqlPage().addFiles(

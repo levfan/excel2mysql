@@ -185,6 +185,39 @@ def dump_buttons(win):
             if wd is not None and isinstance(wd, QPushButton) and norm(wd.text()):
                 order.append(norm(wd.text()))
     put("bar.excel.order", "|".join(order))
+    dump_sql_rows(win)
+
+
+def dump_sql_rows(win):
+    """第二页每一行从左到右是哪几颗按钮——位置也是界面事实，与 Java 侧同判据。
+
+    按钮文案早就在逐颗比，但"移除选中文件排在开关那一行、还是排在保存/执行那一行"
+    只有看真正的行结构才比得出来。按像素量不行：这一页在没被切到前面时子控件还没排过版，
+    量出来全是 0，所以直接读布局——表格区那层布局里的每一条 QHBoxLayout 就是一行。
+    """
+    upper = None
+    for i in range(win.sql_split.count()):
+        w = win.sql_split.widget(i)
+        if w is not win.sql_drop and w is not win.sql_log:
+            upper = w
+    if upper is None or upper.layout() is None:
+        return
+    out = []
+    band = 0
+    for j in range(upper.layout().count()):
+        item = upper.layout().itemAt(j)
+        lay = item.layout()
+        if lay is None:          # 第一个 item 是表格本身，不是行
+            continue
+        names = []
+        for k in range(lay.count()):
+            wd = lay.itemAt(k).widget()
+            if isinstance(wd, QPushButton) and norm(wd.text()):
+                names.append(norm(wd.text()))
+        if names:
+            out.append("%d:%s" % (band, ",".join(names)))
+            band += 1
+    put("bar.sql.rows", "|".join(out))
 
 
 def dump_table(role, tw):
@@ -291,6 +324,20 @@ def main():
     put("hint.excel", win.lbl_imp_db.text())
     put("hint.sql", win.lbl_sql_db.text())
     put("drop.hint", win.drop.label.text())
+    put("drop.sql.hint", win.sql_drop.label.text())
+    put("drop.sql.accepts", "true" if win.sql_drop.acceptDrops() else "false")
+
+    def _sql_segment(w):
+        if w is win.sql_drop:
+            return u"拖拽区"
+        if w.findChild(QTableWidget) is win.sql_table:
+            return u"表格区"
+        if w is win.sql_log:
+            return u"日志区"
+        return type(w).__name__
+
+    put("split.sql.order", "|".join(_sql_segment(win.sql_split.widget(i))
+                                    for i in range(win.sql_split.count())))
 
     # ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
     put("hint.sqlrun", norm(win.sql_run_hint.text()))
