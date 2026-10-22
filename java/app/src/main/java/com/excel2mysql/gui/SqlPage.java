@@ -235,15 +235,20 @@ public final class SqlPage extends JPanel {
         model = new DefaultTableModel(COLUMNS, 0) {
             @Override
             public boolean isCellEditable(int row, int col) {
-                return col == 3;
+                return col == 3 || col == 4;
             }
 
             @Override
             public void setValueAt(Object value, int row, int col) {
-                Object old = col == 3 && row >= 0 && row < getRowCount() ? getValueAt(row, col) : null;
+                boolean watch = (col == 3 || col == 4) && row >= 0 && row < getRowCount();
+                Object old = watch ? getValueAt(row, col) : null;
                 super.setValueAt(value, row, col);
-                if (col == 3 && !editingRowName && !String.valueOf(old).equals(String.valueOf(value))) {
-                    renameRow(row, String.valueOf(value));
+                if (watch && !editingRowName && !String.valueOf(old).equals(String.valueOf(value))) {
+                    if (col == 3) {
+                        renameRow(row, String.valueOf(value));
+                    } else {
+                        editRowComment(row, String.valueOf(value));
+                    }
                 }
             }
         };
@@ -271,8 +276,8 @@ public final class SqlPage extends JPanel {
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() == 2) {
                     int column = table.columnAtPoint(e.getPoint());
-                    // 「当前表名」那列交给表格自带的编辑器；其余列（含表注释）只是看这一行的元数据
-                    if (column >= 0 && column != 3) {
+                    // 「当前表名」与「表注释」两列交给表格自带的编辑器；其余列只是看这一行的元数据
+                    if (column >= 0 && column != 3 && column != 4) {
                         showMetadataAtRow(table.rowAtPoint(e.getPoint()));
                     }
                 }
@@ -595,6 +600,10 @@ public final class SqlPage extends JPanel {
     /** 表注释那一列现在显示的是什么（脚本里那张表的 CREATE TABLE ... COMMENT）。 */
     public String sqlRowComment(int row) {
         return row < 0 || row >= model.getRowCount() ? null : String.valueOf(model.getValueAt(row, 4));
+    }
+
+    public void setSqlRowComment(int row, String comment) {
+        model.setValueAt(comment, row, 4);
     }
 
     /** 自检用：某一格能不能直接编辑。 */
@@ -1393,6 +1402,46 @@ public final class SqlPage extends JPanel {
         Object count = rw.renamed.get(0).get("n");
         log("[表名] " + oldName + " → " + newName + "（已同步改写 " + count
                 + " 处引用；未落盘）");
+    }
+
+    /**
+     * 手改「表注释」：把这一行那张表的 CREATE TABLE 表选项 COMMENT 换掉，脚本先留在内存。
+     *
+     * 改完同步缓存里那一张的注释，清单与元数据弹窗立刻跟着变；
+     * 那句没有表选项可挂（LIKE / AS SELECT）时明说没改动，不静默吞掉这一次操作。
+     */
+    private void editRowComment(int row, String typed) {
+        if (row < 0 || row >= rowActual.size()) {
+            return;
+        }
+        Entry entry = entryOfRow(row);
+        if (entry == null) {
+            return;
+        }
+        String name = rowActual.get(row);
+        String next = typed == null ? "" : typed.trim();
+        SqlScript.ParsedTable table = tableOf(entry, name);
+        String before = table == null || table.tableComment == null ? "" : table.tableComment;
+        if (next.equals(before)) {
+            log("[表注释] " + name + " 未发生变化，脚本未改写");
+            refreshTable();
+            return;
+        }
+        SqlScript.CommentEdit ed = SqlScript.setTableComment(entry.text, name, next);
+        if (!ed.changed) {
+            host.warn("表「" + name + "」那句 CREATE TABLE 没有可改写的表选项"
+                    + "（LIKE / AS SELECT 写法不带表选项），脚本未改。");
+            refreshTable();
+            return;
+        }
+        entry.text = ed.text;
+        entry.modified = true;
+        if (table != null) {
+            table.tableComment = next;
+        }
+        refreshTable();
+        log("[表注释] " + name + " → " + (next.isEmpty() ? "（空）" : next)
+                + "（已写进脚本；未落盘）");
     }
 
     private void showMetadataAtRow(int row) {

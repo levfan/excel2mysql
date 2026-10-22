@@ -178,6 +178,75 @@ public final class SqlScript {
         return rewriteNames(text, plan);
     }
 
+    /** 一次表注释改写的结局：新正文，以及有没有真的改动。 */
+    public static final class CommentEdit {
+        public String text = "";
+        public boolean changed;
+    }
+
+    /**
+     * 改一张表的表注释：把那句 CREATE TABLE 的表选项 COMMENT='…' 换成新内容。
+     *
+     * 找不到这张表的 CREATE TABLE、或那句压根没有列定义（LIKE / AS SELECT 写法没有
+     * 表选项可挂）时 changed=false 并原样返回，由界面明说为什么没落盘，不静默吞掉
+     * 一次操作。同名表被写两遍只改第一处，与元数据导出「同名表只按第一处」同一条规则。
+     * 写法统一成 MySQL 的标准形：单引号包住、里面的单引号翻倍，原来用双引号的一起换过来；
+     * 原本没有 COMMENT 的在列定义右括号后补一句（表选项不分先后）。
+     * 清空注释写的是 COMMENT=''，读回来就是空串，不在脚本里留看不见的占位词。
+     */
+    public static CommentEdit setTableComment(String text, String tableName, String comment) {
+        CommentEdit out = new CommentEdit();
+        out.text = text;
+        String name = trimIdentifier(tableName);
+        if (name.isEmpty()) {
+            return out;
+        }
+        String body = (comment == null ? "" : comment.trim());
+        String literal = "'" + body.replace("'", "''") + "'";
+        String maskedAll = maskComments(text);
+        Matcher m = CREATE_TABLE.matcher(maskedAll);
+        while (m.find()) {
+            if (!name.equals(m.group(1))) {
+                continue;
+            }
+            int semi = m.end() + firstTopLevel(maskedAll.substring(m.end()), ';');
+            Matcher nx = CREATE_TABLE.matcher(maskedAll);
+            boolean hasNext = nx.find(m.end());
+            int limit = hasNext ? Math.min(semi, nx.start()) : semi;
+            int openAt = maskedAll.indexOf('(', m.end());
+            if (openAt < 0 || openAt >= limit) {
+                return out;       // LIKE / AS SELECT：没有表选项这段可改
+            }
+            int close = matchParen(maskedAll, openAt);
+            if (close < 0) {
+                return out;
+            }
+            int stop = close + 1 + firstTopLevel(maskedAll.substring(close + 1), ';');
+            Matcher m2 = CREATE_TABLE.matcher(maskedAll);
+            if (m2.find(close + 1)) {
+                stop = Math.min(stop, m2.start());
+            }
+            String options = text.substring(close + 1, stop);
+            String optionsMasked = maskedAll.substring(close + 1, stop);
+            Matcher cm = TABLE_COMMENT_OPT.matcher(optionsMasked);
+            if (!cm.find()) {
+                out.text = text.substring(0, close + 1) + " COMMENT=" + literal
+                        + text.substring(close + 1);
+                out.changed = true;
+                return out;
+            }
+            int at = close + 1 + cm.start();
+            int end = close + 1 + cm.end();
+            // 整段重写而不是只换字面量：等号有无、单双引号、翻倍引号这些写法差异一次抹平，
+            // 改完再读回来一定是刚输入的内容
+            String next = text.substring(0, at) + "COMMENT=" + literal + text.substring(end);
+            out.text = next;
+            out.changed = !next.equals(text);
+            return out;
+        }
+        return out;
+    }
+
     private static String trimIdentifier(String name) {
         return name == null ? "" : name.trim().replace("`", "");
     }

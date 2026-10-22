@@ -133,6 +133,56 @@ def apply_display_renames(text: str, display_map: dict) -> tuple:
     return _rewrite_names(text, plan)
 
 
+def set_table_comment(text: str, table_name: str, comment: str) -> tuple:
+    """改一张表的表注释：把那句 CREATE TABLE 的表选项 COMMENT='…' 换成新内容。
+
+    返回 (新文本, 改写处数)。找不到这张表的 CREATE TABLE、或那句压根没有列定义
+    （LIKE / AS SELECT 写法没有表选项可挂）时返回原文和 0，由界面明说为什么没落盘，
+    不静默吞掉一次操作。同名表被写两遍只改**第一处**，与元数据导出「同名表只按第一处」
+    是同一条规则。
+
+    写法统一成 MySQL 的标准形：单引号包住、里面的单引号翻倍；原来用双引号的也换成这个
+    口径。原本没有 COMMENT 的，在列定义右括号后面补一句 COMMENT='…'——表选项不分先后。
+    清空注释写的是 COMMENT=''，读回来就是空串，不在脚本里留一个看不见的占位词。
+    """
+    name = str(table_name or "").strip().strip("`")
+    if not name:
+        return text, 0
+    body = str(comment if comment is not None else "").strip()
+    literal = "'" + body.replace("'", "''") + "'"
+    masked = _mask_comments(text)
+    for m in _CREATE_TABLE_RE.finditer(masked):
+        if m.group(1) != name:
+            continue
+        nxt = _CREATE_TABLE_RE.search(masked, m.end())
+        limit = min(m.end() + _first_top_level(masked[m.end():], ";"),
+                    nxt.start() if nxt else len(masked))
+        open_at = masked.find("(", m.end())
+        if open_at == -1 or open_at >= limit:
+            return text, 0            # LIKE / AS SELECT：没有表选项这段可改
+        close = _match_paren(masked, open_at)
+        if close == -1:
+            return text, 0
+        stop = close + 1 + _first_top_level(masked[close + 1:], ";")
+        if nxt is not None:
+            stop = min(stop, nxt.start())
+        options = text[close + 1:stop]
+        options_masked = masked[close + 1:stop]
+        cm = _TABLE_COMMENT_RE.search(options_masked)
+        if cm is None:
+            new_text = text[:close + 1] + " COMMENT=" + literal + text[close + 1:]
+            return new_text, 1
+        at = close + 1 + cm.start()
+        end = close + 1 + cm.end()
+        # 只换 COMMENT 关键字后面那个字面量的值？不，整段重写：等号有没有、单双引号、
+        # 翻倍引号这些写法差异一次抹平，改完的脚本再读回来一定是刚输入的内容
+        new_text = text[:at] + "COMMENT=" + literal + text[end:]
+        if new_text == text:
+            return text, 0
+        return new_text, 1
+    return text, 0
+
+
 def split_sql_statements(text: str) -> list:
     """
     按分号切分 SQL 语句，正确跳过以下内容中的分号：

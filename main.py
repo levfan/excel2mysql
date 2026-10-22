@@ -61,6 +61,7 @@ from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
     extract_create_tables, split_sql_statements,
     parse_create_tables, rename_table_sql, apply_display_renames,
+    set_table_comment,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES
@@ -1797,7 +1798,7 @@ class MainWindow(QWidget):
                 items[4].setToolTip(row["comment"])
                 for j, it in enumerate(items):
                     flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                    if j == 3:
+                    if j in (3, 4):
                         flags |= Qt.ItemIsEditable
                     it.setFlags(flags)
                 for j, it in enumerate(items):
@@ -1806,11 +1807,11 @@ class MainWindow(QWidget):
             self._refreshing_sql_table = False
 
     def on_sql_table_double_clicked(self, item):
-        """当前表名列交给编辑器；其余列（含表注释）只是查看这一行对应表的元数据。"""
+        """当前表名与表注释两列交给编辑器；其余列只是查看这一行对应表的元数据。"""
         if item is None or self.task_busy((self.RES_SQL,)):
             return
         row = item.row()
-        if item.column() == 3:
+        if item.column() in (3, 4):
             self.sql_table.editItem(item)
             return
         self.show_sql_table_metadata(row)
@@ -1838,17 +1839,52 @@ class MainWindow(QWidget):
                                  self.chk_sql_upper.isChecked(), self)
 
     def on_sql_table_item_changed(self, item):
-        """只有手动编辑「当前表名」会到这里；同步改脚本引用，日志说清改了多少处。"""
-        if self._refreshing_sql_table or item.column() != 3:
+        """手动编辑「当前表名」或「表注释」会到这里；两者都同步改写脚本正文。"""
+        if self._refreshing_sql_table or item.column() not in (3, 4):
             return
-        row_index = item.row()
+        if item.column() == 3:
+            self._apply_sql_row_name(item.row(), item.text())
+        else:
+            self._apply_sql_row_comment(item.row(), item.text())
+
+    def _apply_sql_row_comment(self, row_index, typed):
+        """表注释改了就写进那句 CREATE TABLE 的表选项，日志说清改的是哪一张表。"""
         if row_index >= len(self._sql_rows):
             return
         row = self._sql_rows[row_index]
         record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
         if record is None:
             return
-        new = item.text().strip().strip("`")
+        new = str(typed or "").strip()
+        if new == row["comment"]:
+            append_log(self.sql_log,
+                       "[表注释] %s 未发生变化，脚本未改写" % row["actual"])
+            self._refresh_sql_table()
+            return
+        new_text, changed = set_table_comment(record["text"], row["actual"], new)
+        if not changed:
+            self._warn("表「%s」那句 CREATE TABLE 没有可改写的表选项"
+                       "（LIKE / AS SELECT 写法不带表选项），脚本未改。" % row["actual"])
+            self._refresh_sql_table()
+            return
+        record["text"] = new_text
+        record["modified"] = True
+        table = ensure_parsed(record).get(row["actual"])
+        if table is not None:
+            table["table_comment"] = new
+        self._refresh_sql_table()
+        append_log(self.sql_log,
+                   "[表注释] %s → %s（已写进脚本；未落盘）" % (row["actual"], new or "（空）"))
+
+    def _apply_sql_row_name(self, row_index, typed):
+        """只有手动编辑「当前表名」会到这里；同步改脚本引用，日志说清改了多少处。"""
+        if row_index >= len(self._sql_rows):
+            return
+        row = self._sql_rows[row_index]
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return
+        new = typed.strip().strip("`")
         old = row["actual"]
         old_display = row["display"]
         if new == old_display:
