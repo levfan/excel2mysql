@@ -25,8 +25,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, REPO)
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QLabel,  # noqa: E402
-                               QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QGroupBox,  # noqa: E402
+                               QLabel, QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
                                QPushButton, QSpinBox, QTableWidget)
 import main as m  # noqa: E402
 
@@ -188,6 +188,19 @@ def dump_buttons(win):
     dump_sql_rows(win)
 
 
+def title_of_table(table):
+    """这张表格左上角那句标识：从真控件往上找到那层组框，读它自己的标题。
+
+    对撞器不能两边各抄一份常量——抄来的那份改了，另一份不会红。
+    """
+    cur = table
+    while cur is not None:
+        if isinstance(cur, QGroupBox):
+            return norm(cur.title())
+        cur = cur.parentWidget()
+    return ""
+
+
 def dump_sql_rows(win):
     """第二页每一行从左到右是哪几颗按钮——位置也是界面事实，与 Java 侧同判据。
 
@@ -321,6 +334,9 @@ def main():
     dump_buttons(win)
     dump_table("file", win.file_table)
     dump_table("sql", win.sql_table)
+    # 每张主表格左上角那句标识（读真控件上的组框标题，不是各抄一份常量）
+    put("table.file.title", title_of_table(win.file_table))
+    put("table.sql.title", title_of_table(win.sql_table))
     put("hint.excel", win.lbl_imp_db.text())
     put("hint.sql", win.lbl_sql_db.text())
     put("drop.hint", win.drop.label.text())

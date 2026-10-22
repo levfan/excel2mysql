@@ -9,6 +9,7 @@ import com.excel2mysql.gui.MainFrame;
 import com.excel2mysql.gui.ProgressDialog;
 import com.excel2mysql.gui.SqlPage;
 import com.excel2mysql.gui.StructureDialog;
+import com.excel2mysql.gui.Tables;
 import com.excel2mysql.gui.UiScale;
 
 import javax.swing.JButton;
@@ -110,6 +111,9 @@ public final class GuiDump {
                 dumpButtons();
                 dumpTable("file", frame.fileTable());
                 dumpSqlTable();
+                // 每张主表格左上角那句标识（读真控件的标题边框，与 Python 侧同判据）
+                put("table.file.title", Tables.titledAncestor(frame.fileTable()));
+                put("table.sql.title", frame.sqlPage().tableTitle());
                 put("hint.excel", frame.excelHintText());
                 put("hint.sql", frame.sqlPage().hintText());
                 put("drop.hint", frame.dropArea().hintText());

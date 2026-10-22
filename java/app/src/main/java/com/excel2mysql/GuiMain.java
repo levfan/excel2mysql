@@ -497,6 +497,11 @@ public final class GuiMain {
         if (dlg.tabTitles().size() != results.size()) {
             problems.add("结构弹窗标签页数不等于表数：" + dlg.tabTitles().size());
         }
+        // 这张表不重复加标识：tab 上写的就是表名，已经贴在表格正上方
+        if (!com.excel2mysql.gui.Tables.titledAncestor(dlg.tabTable(0)).isEmpty()) {
+            problems.add("结构弹窗的字段表上又多了一层标识："
+                    + com.excel2mysql.gui.Tables.titledAncestor(dlg.tabTable(0)));
+        }
         if (!"字段名(拼音/首字母)".equals(dlg.columnHeader(0, 1))
                 || !"字段注释(中文表头)".equals(dlg.columnHeader(0, 2))) {
             problems.add("结构弹窗表头被简写了：" + dlg.columnHeader(0, 1) + " / "
@@ -2160,7 +2165,12 @@ public final class GuiMain {
         long open0 = System.nanoTime();
         cache.showMetadata(7);
         double openMs = (System.nanoTime() - open0) / 1000000.0;
+        // 字段表左上也要有标识，标题里带列数（与两条主表格同一口径）
+        String colTitle = metadataColumnTitle();
         closeMetadataDialogs();
+        if (!"字段清单（共 22 列）".equals(colTitle)) {
+            problems.add("元数据弹窗的字段表没有带列数的标识：" + colTitle);
+        }
         System.out.println("- [INFO] GUI-SELFTEST | 元数据耗时：整份重解析 "
                 + String.format("%.0f", fullMs) + " 毫秒 / 只取一张 "
                 + String.format("%.2f", lookMs) + " 毫秒 / 含建对话框 "
@@ -2260,6 +2270,16 @@ public final class GuiMain {
                 w.dispose();
             }
         }
+    }
+
+    /** 当前开着的那个元数据框里，字段表左上那句标识（没有就返回空串）。 */
+    private static String metadataColumnTitle() {
+        for (java.awt.Window w : java.awt.Window.getWindows()) {
+            if (w instanceof com.excel2mysql.gui.SqlMetadataDialog) {
+                return ((com.excel2mysql.gui.SqlMetadataDialog) w).columnTitle();
+            }
+        }
+        return "";
     }
 
     /**
@@ -2380,6 +2400,15 @@ public final class GuiMain {
         // 三段结构与「Excel 导入」那页一致：拖拽区在最上、表格区在中、日志在下
         if (!"拖拽区|表格区|日志区".equals(page.segmentOrder())) {
             problems.add("SQL 页的三段分栏顺序不对：" + page.segmentOrder());
+        }
+        // 每张表格左上都要有标识（用户口径，第一页的「待导入文件」就是样子）
+        if (!com.excel2mysql.gui.Tables.FILE_TABLE_TITLE.equals(
+                com.excel2mysql.gui.Tables.titledAncestor(frame.fileTable()))) {
+            problems.add("第一页主表格左上没有标识："
+                    + com.excel2mysql.gui.Tables.titledAncestor(frame.fileTable()));
+        }
+        if (!com.excel2mysql.gui.Tables.SQL_TABLE_TITLE.equals(page.tableTitle())) {
+            problems.add("第二页主表格左上的标识不对：" + page.tableTitle());
         }
         com.excel2mysql.gui.DropArea sqlDrop = page.sqlDropArea();
         if (sqlDrop == null || !sqlDrop.acceptsDrops() || !sqlDrop.hasClickAction()) {

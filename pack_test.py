@@ -118,6 +118,17 @@ def main_source():
     return open(p, encoding="utf-8").read() if os.path.isfile(p) else None
 
 
+def box_title(widget):
+    """这张表格左上角那句标识：从真控件往上找到那层组框，读它自己的标题。
+
+    读真控件而不是抄常量：抄来的那份改了，另一份不会红（对撞器同一口径）。
+    """
+    cur = widget
+    while cur is not None and not isinstance(cur, app_main.QGroupBox):
+        cur = cur.parentWidget()
+    return cur.title() if cur is not None else ""
+
+
 # ---------------------------------------------------------------------------
 section("A 依赖与静态资源（打包缺库/缺资源直接在这里暴露）")
 
@@ -697,6 +708,10 @@ else:
 w.tables = [dict(t1)]
 dlg = app_main.StructureDialog(w.tables, w)
 check("F7 表结构预览对话框可构造", dlg.tabs.count() == 1, f"tabs={dlg.tabs.count()}")
+check("F7b 结构弹窗不重复加标识：tab 标题就是表名，tab 内容直接是那张表",
+      isinstance(dlg.tabs.widget(0), app_main.QTableWidget)
+      and box_title(dlg.tabs.widget(0)) == "",
+      box_title(dlg.tabs.widget(0)))
 check("F8 预览页每行有主键勾选框",
       dlg.editors and dlg.editors[0][1].cellWidget(0, 0) is not None)
 ddl_dlg = app_main.DDLDialog(w.tables, True, w)
@@ -1613,6 +1628,18 @@ check("K18 SQL 页的拖拽区收 .sql，点它就是打开选择器（与第一
       w.sql_drop.acceptDrops()
       and w.sql_drop.label.text() == app_main.DropArea.SQL_HINT
       and "SQL" in w.sql_drop.toolTip(), w.sql_drop.label.text())
+
+
+check("K19 两张主表格左上都有标识，标题里带这一张表怎么操作",
+      box_title(w.file_table) == app_main.FILE_TABLE_TITLE
+      and box_title(w.sql_table) == app_main.SQL_TABLE_TITLE
+      and "待导入文件" in box_title(w.file_table)
+      and "待处理的脚本表" in box_title(w.sql_table),
+      (box_title(w.file_table), box_title(w.sql_table)))
+check("K20 表格区那层组框不影响三段分栏：中间那一段仍是装着表格的组框",
+      isinstance(sp2.widget(1), app_main.QGroupBox)
+      and sp2.widget(1).findChild(app_main.QTableWidget) is w.sql_table,
+      type(sp2.widget(1)).__name__)
 w.main_tabs.setCurrentIndex(0)
 _app.processEvents()
 w.close()
@@ -4021,6 +4048,10 @@ check("R45 双击 SQL 行可查看该表元数据，字段随大写开关显示"
       and _meta.tableWidget().item(1, 0).text() == "订单金额",
       None if _meta is None else [
           _meta.tableWidget().item(r, 0).text() for r in range(_meta.tableWidget().rowCount())])
+check("R45a2 元数据弹窗的字段表左上也有标识，标题里带列数",
+      _meta is not None
+      and box_title(_meta.tableWidget()) == "字段清单（共 3 列）",
+      None if _meta is None else box_title(_meta.tableWidget()))
 _nrow_text_before = nw.sql_files[0]["text"]
 _sql_headers = [nw.sql_table.horizontalHeaderItem(c).text()
                 for c in range(nw.sql_table.columnCount())]
