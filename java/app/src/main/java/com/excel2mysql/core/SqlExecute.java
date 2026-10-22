@@ -1,5 +1,6 @@
 package com.excel2mysql.core;
 
+import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -27,6 +28,16 @@ public final class SqlExecute {
         void line(String text);
     }
 
+    /** 逐条回报进度：图形界面的进度条与任务条靠它，命令行不传就是没有。 */
+    public interface Progress {
+        void on(int done, int total);
+    }
+
+    /** 每句之前查一次：不查的话点了「停止」也要等整批跑完才生效。 */
+    public interface Cancel {
+        boolean requested();
+    }
+
     public static final class Report {
         public int statements;
         public int executed;
@@ -35,12 +46,24 @@ public final class SqlExecute {
         public String error = "";
         public boolean committed;
         public boolean rolledBack;
+        public boolean cancelled;
     }
 
     private SqlExecute() {
     }
 
     public static Report run(DbClient db, String text, Out out) {
+        return run(db.connection(), text, out, null, null);
+    }
+
+    public static Report run(DbClient db, String text, Out out, Progress progress,
+                             Cancel cancelled) {
+        return run(db.connection(), text, out, progress, cancelled);
+    }
+
+    /** 真正的一层：收 Connection 而不是 DbClient，没有库也能拿假连接验到这段线上代码。 */
+    public static Report run(Connection conn, String text, Out out, Progress progress,
+                             Cancel cancelled) {
         Report rep = new Report();
         List<String> statements = SqlScript.executableStatements(text);
         rep.statements = statements.size();
@@ -48,12 +71,32 @@ public final class SqlExecute {
             out.line("! [WARN] 没有可执行的语句：编辑区是空的（只写注释也不算）");
             return rep;
         }
+        int total = statements.size();
+        if (progress != null) {
+            progress.on(0, total);
+        }
         Statement st = null;
         try {
-            st = db.connection().createStatement();
-            for (int i = 0; i < statements.size(); i++) {
+            st = conn.createStatement();
+            for (int i = 0; i < total; i++) {
                 String sql = statements.get(i);
-                out.line("- [INFO] 第 " + (i + 1) + "/" + statements.size() + " 条："
+                if (cancelled != null && cancelled.requested()) {
+                    rep.cancelled = true;
+                    out.line("! [WARN] 已取消 | 第 " + (i + 1) + "/" + total
+                            + " 条未执行，本批未提交（已回滚）");
+                    try {
+                        conn.rollback();
+                        rep.rolledBack = true;
+                        out.line("- [INFO] 已回滚 | 前面 " + rep.executed + " 条的效果看不到");
+                    } catch (SQLException e) {
+                        out.line("! [WARN] 回滚也失败了 | " + LogText.describe(e));
+                    }
+                    if (progress != null) {
+                        progress.on(total, total);
+                    }
+                    return rep;
+                }
+                out.line("- [INFO] 第 " + (i + 1) + "/" + total + " 条："
                         + oneLine(sql));
                 try {
                     boolean hasRs = st.execute(sql);
@@ -71,14 +114,17 @@ public final class SqlExecute {
                     out.line("      " + LogText.ROLLBACK_NOTE);
                     break;
                 }
+                if (progress != null) {
+                    progress.on(rep.executed, total);
+                }
             }
             if (!rep.failed) {
-                db.connection().commit();
+                conn.commit();
                 rep.committed = true;
                 out.line("+ [OK] 全部完成 | " + rep.executed + " 条语句已提交");
             } else {
                 try {
-                    db.connection().rollback();
+                    conn.rollback();
                     rep.rolledBack = true;
                     out.line("- [INFO] 已回滚 | 本次未提交，库里看不到刚才这批语句的效果");
                 } catch (SQLException e) {
@@ -91,6 +137,9 @@ public final class SqlExecute {
             out.line("x [ERROR] 执行失败 | " + rep.error);
         } finally {
             close(st);
+            if (progress != null) {
+                progress.on(total, total);
+            }
         }
         return rep;
     }

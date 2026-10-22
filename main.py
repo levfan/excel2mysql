@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unicodedata
 import warnings
 
@@ -37,7 +38,7 @@ warnings.filterwarnings("ignore", message=".*no longer supported by the Python c
 import functools
 import re
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -335,6 +336,7 @@ class ProgressDialog(QDialog):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
+        self.finished_ok = False
         # 只保留标题：任务进行中不能从标题栏关窗（线程还在跑），退出只走「取消」
         self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
         self.setModal(True)
@@ -392,9 +394,22 @@ class ProgressDialog(QDialog):
 
     def finish(self):
         """收尾：进度条直接拉满并关闭对话框。"""
+        self.finished_ok = True
         self._anim.stop()
         self.bar.setValue(100)
         self.accept()
+
+    def closeEvent(self, e):
+        """点标题栏的 X：任务还在跑就等于按「取消」，不能让框消失后留一个看不见的后台任务。
+
+        以前 X 直接 accept()，exec() 一返回，主窗口以为这轮结束了：任务位被放开、
+        用户可以再点下一个按钮，而工作线程还在写同一份列表。
+        """
+        if not getattr(self, "finished_ok", False):
+            e.ignore()
+            self.btn_cancel.click()
+            return
+        super().closeEvent(e)
 
 
 class ProgressWorker(QThread):
@@ -811,8 +826,19 @@ def sql_run_task(text, cfg, sink):
     except Exception as e:
         sink.log_error("x [ERROR] 连不上库 | " + describe_db_error(e))
         return None
+    # 逐条推进度并每句查一次取消：一屏上千条语句的批次，
+    # 进度条停在 0%、取消点了没反应，用户就只能等或者强关窗口
+    state = {"done": 0}
+
+    def progress(done, total):
+        sink.set_total(total)
+        sink.advance(done - state["done"], "第 %d/%d 条" % (done, total))
+        state["done"] = done
+
     try:
-        return {"executed": run_sql_statements(conn, text, sink.log)}
+        return {"executed": run_sql_statements(conn, text, sink.log,
+                                               progress=progress,
+                                               cancelled=lambda: sink.cancelled)}
     finally:
         try:
             conn.close()
@@ -1061,6 +1087,13 @@ class MainWindow(QWidget):
         self._zip_tmp = None        # ZIP 展开用的会话级临时目录，惰性创建
         self._zip_origin = {}       # 解压出的路径 → "包名!包内路径"，供文件列表 tooltip
         self.task_dialog = None     # 当前模态进度框，None 表示没有任务在跑
+        # 被挡下时要说得出「谁在跑、跑到几成、跑了多久」，只回一句请稍等等于没说
+        self.task_title = ""
+        self.task_started = 0.0
+        self.task_done = 0
+        self.task_total = 0
+        self.task_label = ""
+
         self.task_worker = None     # 线程结束前必须一直持有引用，否则 QThread 被提前回收
         self._task_result = None
         self._task_on_done = None
@@ -1340,13 +1373,22 @@ class MainWindow(QWidget):
         两条路径共用同一个 work 和同一个 sink，测试即线上逻辑。
         """
         if self.task_dialog is not None:
-            return                                   # 已有任务在跑（模态框本已挡住交互）
+            # 静默 return 是最坏的写法：用户点了没反应，也不知道在等谁
+            self._warn("已有任务在跑：" + self._task_summary()
+                       + "。这一步没执行，等它跑完或点进度框「取消」。")
+            return
         self._task_log_view = log_view if log_view is not None else self.log
         self._task_on_done = on_done
         self._task_result = None
+        self.task_title = title
+        self.task_started = time.time()
+        self.task_done = 0
+        self.task_total = 0
+        self.task_label = ""
         self._sync_gen_buttons()
         if not MODAL_PROGRESS:
-            sink = ProgressSink(on_log=self._on_task_log, on_log_error=self._on_task_log_error)
+            sink = ProgressSink(on_progress=self._on_task_progress,
+                               on_log=self._on_task_log, on_log_error=self._on_task_log_error)
             try:
                 self._task_result = work(*args, sink)
             except Exception as e:
@@ -1357,6 +1399,7 @@ class MainWindow(QWidget):
         worker = ProgressWorker(work, args)
         self.task_dialog, self.task_worker = dlg, worker
         worker.progress.connect(dlg.set_progress)
+        worker.progress.connect(self._on_task_progress)
         worker.log.connect(self._on_task_log)
         worker.log_error.connect(self._on_task_log_error)
         worker.failed.connect(self._on_task_failed)
@@ -1366,6 +1409,20 @@ class MainWindow(QWidget):
         worker.start()
         dlg.exec()
         self._finish_task()
+
+    def _on_task_progress(self, done, total, label=""):
+        """进度落到台账：被挡下的那一句要能报出跑到几成、当前是哪一项。"""
+        self.task_done = done
+        self.task_total = max(total, 0)
+        self.task_label = label or self.task_label
+
+    def _task_summary(self):
+        """一句能照着排查的话：任务名 + 百分比 + 计数 + 已经跑了多久（+ 当前项）。"""
+        secs = int(time.time() - self.task_started) if self.task_started else 0
+        pct = min(100, int(self.task_done * 100 / self.task_total)) if self.task_total else 0
+        text = "%s %d%%（%d/%d）· 已 %d 秒" % (self.task_title or "未命名任务", pct,
+                                              self.task_done, self.task_total, secs)
+        return text + " · " + self.task_label if self.task_label else text
 
     def _on_task_log(self, text):
         append_log(self._task_log_view or self.log, text)

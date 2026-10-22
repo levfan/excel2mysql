@@ -84,6 +84,15 @@ public final class ProgressDialog extends JDialog {
         anim.setCoalesce(true);
     }
 
+    /** 台账要抄一份进度，这两个数就是抄本的依据。 */
+    public int getDone() {
+        return done;
+    }
+
+    public int getTotal() {
+        return total;
+    }
+
     public void setTotal(int total) {
         this.total = Math.max(1, total);
         this.done = 0;

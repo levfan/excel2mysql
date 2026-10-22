@@ -78,6 +78,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JButton genStd;
     private JButton genSimple;
     private boolean taskRunning;
+    // 被挡下时要说得出"跑到几成、跑了多久"，所以进度除了送进进度框，也在窗口上记一份：
+    // 非模态那条路（自检与原地跑）根本没有进度框，只靠框里的数就报不出来
+    private long taskStartedAt;
+    private int taskDone;
+    private int taskTotal;
+    private String taskLabel = "";
     /**
      * 关掉时任务原地跑完、不弹模态框：自检与非界面调用要靠它验到线上那段代码，
      * 而不是验一份复印件（对应 main.py:137 的 MODAL_PROGRESS）。
@@ -914,11 +920,36 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      */
     public boolean startTask() {
         if (taskRunning) {
-            log("已有任务在跑，请等当前这个结束");
+            // 静默吞掉点击、或只回一句"请稍等"，用户就只能在几个按钮之间一个个试
+            warn("已有任务在跑：" + taskSummary()
+                    + "。这一步没执行，等它跑完或点进度框「取消」。");
             return false;
         }
+        taskStartedAt = System.currentTimeMillis();
+        taskDone = 0;
+        taskTotal = 0;
+        taskLabel = "";
         setEnabledForRun(false);
         return true;
+    }
+
+    /** 进度落到台账：与进度框收到的是同一批数，两条路径报出的句子才一模一样。 */
+    private void noteProgress(int done, int total, String label) {
+        taskDone = Math.max(done, 0);
+        taskTotal = Math.max(total, 0);
+        if (label != null && !label.isEmpty()) {
+            taskLabel = label;
+        }
+    }
+
+    /** 一句能照着排查的话：任务名 + 百分比 + 计数 + 已经跑了多久（+ 当前项）。 */
+    public String taskSummary() {
+        long secs = taskStartedAt <= 0 ? 0 : (System.currentTimeMillis() - taskStartedAt) / 1000L;
+        int pct = taskTotal <= 0 ? 0 : Math.min(100, (int) (taskDone * 100L / taskTotal));
+        String text = (lastTaskTitle == null || lastTaskTitle.isEmpty()
+                ? "未命名任务" : lastTaskTitle) + " " + pct + "%（" + taskDone + "/" + taskTotal
+                + "）· 已 " + secs + " 秒";
+        return taskLabel.isEmpty() ? text : text + " · " + taskLabel;
     }
 
     /** 释放任务位并复原按钮。 */
@@ -1018,14 +1049,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private ImportParse.Sink quietSink() {        return new ImportParse.Sink() {
             @Override
             public void setTotal(int total) {
+                noteProgress(0, total, "");
             }
 
             @Override
             public void step(String label) {
+                noteProgress(taskDone + 1, taskTotal, label);
             }
 
             @Override
             public void advance(int units, String label) {
+                noteProgress(taskDone + units, taskTotal, label);
             }
 
             @Override
@@ -1168,16 +1202,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             @Override
             public void setTotal(int total) {
                 progress.setTotal(total);
+                noteProgress(0, total, "");
             }
 
             @Override
             public void step(String label) {
                 progress.step(label);
+                noteProgress(progress.getDone() + 1, progress.getTotal(), label);
             }
 
             @Override
             public void advance(int units, String label) {
                 progress.advance(units, label);
+                noteProgress(progress.getDone(), progress.getTotal(), label);
             }
 
             @Override
@@ -1765,7 +1802,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             try {
                 db = new com.excel2mysql.core.DbClient(cfg);
                 final com.excel2mysql.core.DbClient fdb = db;
-                return com.excel2mysql.core.SqlExecute.run(fdb, text, sink::log);
+                // 逐条推进度、每句查一次取消：一屏上千条语句的批次，
+                // 进度条停在 0%、点了停止没反应，用户就只能等或者强关窗口
+                final int[] reported = {0};
+                return com.excel2mysql.core.SqlExecute.run(fdb, text, sink::log,
+                        (done, total) -> {
+                            sink.setTotal(total);
+                            sink.advance(done - reported[0], "第 " + done + "/" + total + " 条");
+                            reported[0] = done;
+                        }, () -> sink.cancelled());
             } catch (java.sql.SQLException e) {
                 sink.logError("x [ERROR] 连不上库 | "
                         + com.excel2mysql.core.LogText.describe(e));

@@ -93,16 +93,32 @@ def _print_result(cur, emit):
                                if total > printed else ""))
 
 
-def run(conn, text, emit):
-    """逐条执行。返回已执行条数；出错时最后一条日志就是原因。"""
+def run(conn, text, emit, progress=None, cancelled=None):
+    """逐条执行。返回已执行条数；出错时最后一条日志就是原因。
+
+    progress(done, total) 与 cancelled() 是给图形界面用的：一屏 1242 条语句的批次
+    如果只在结束时报一次，进度条全程停在 0%，用户既看不出在动、也停不下来。
+    命令行那条线不传这两个参数，行为与原来逐字一致。
+    """
     stmts = executable_statements(text)
     if not stmts:
         emit("! [WARN] 没有可执行的语句：编辑区是空的（只写注释也不算）")
         return 0
+    total = len(stmts)
+    if progress:
+        progress(0, total)
     cur = conn.cursor()
     done = 0
     for i, sql in enumerate(stmts, 1):
-        emit("- [INFO] 第 %d/%d 条：%s" % (i, len(stmts), _one_line(sql)))
+        if cancelled is not None and cancelled():
+            emit("! [WARN] 已取消 | 第 %d/%d 条未执行，本批未提交（已回滚）" % (i, total))
+            try:
+                conn.rollback()
+                emit("- [INFO] 已回滚 | 前面 %d 条的效果看不到" % done)
+            except Exception as e2:
+                emit("! [WARN] 回滚也失败了 | %s" % e2)
+            return done
+        emit("- [INFO] 第 %d/%d 条：%s" % (i, total, _one_line(sql)))
         try:
             n = cur.execute(sql)
             done = i
@@ -120,10 +136,16 @@ def run(conn, text, emit):
                 emit("- [INFO] 已回滚 | 本次未提交，库里看不到刚才这批语句的效果")
             except Exception as e2:
                 emit("! [WARN] 回滚也失败了 | %s" % e2)
+            if progress:
+                progress(total, total)
             return done
+        if progress:
+            progress(done, total)
     try:
         conn.commit()
         emit("+ [OK] 全部完成 | %d 条语句已提交" % done)
     except Exception as e:
         emit("x [ERROR] 提交失败 | %s" % describe_db_error(e))
+    if progress:
+        progress(total, total)
     return done
