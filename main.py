@@ -47,7 +47,9 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QTabWidget, QSplitter, QListWidget,
 )
 
-from core.log_text import describe_db_error
+from core.log_text import (
+    describe_db_error, format_log_entry, log_level, LOG_LEVEL_MARK, LOG_TIME_FORMAT,
+)
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
     replace_first_segment, sanitize_table_name, _col_to_field, dedup_field,
@@ -95,9 +97,14 @@ def program_dir() -> str:
 
 
 # ---------------------------------------------------------------------------
-# 日志输出：错误整条标红，并把数据库异常展开成可读的详细信息
+# 日志输出：每条带钟点与分级标签，按级别上色；错误整条标红并展开数据库异常
 # ---------------------------------------------------------------------------
 LOG_ERROR_COLOR = "#c62828"
+LOG_WARN_COLOR = "#b26a00"
+LOG_OK_COLOR = "#1a7f37"
+# info 不上色：一屏里绝大多数行都是它，全染上颜色等于全没染
+LOG_LEVEL_COLORS = {"ok": LOG_OK_COLOR, "info": None, "warn": LOG_WARN_COLOR,
+                    "error": LOG_ERROR_COLOR}
 MAX_LOG_STATEMENT = 2000   # 出错语句全文最长展示，超出截断，避免超大 INSERT 刷爆日志
 
 # 连接区在三个页签上方常驻，不属于任何一页，指引必须指向"上方"而不是某个页签
@@ -114,6 +121,18 @@ SQL_RUN_FONT_SIZE = 16
 
 # 两处日志区共用的字号：默认 9 号字现场反馈"太小"，与第三页的可读档对齐
 LOG_FONT_SIZE = 16
+
+# 日志框的最小高度按"看得见的行数"约定，不按像素：两栈的 16pt 行高本来就不一样
+# （Qt 实测 24px、Swing 实测 28.7px），写同一个像素数会变成"两边各自满足同一个数、
+# 实际能看到的行数却不同"。像素数由各自的字体量出来，跨线比的是这个 4。
+# 下限不能给得更大：主窗口自身最小高就有 717px，按 8 行给会把窗口顶到 847px，
+# 1024x768 的现场机与 U7 那条"整窗落在可用区内"都撑不住。
+LOG_MIN_LINES = 4
+
+
+def log_min_height(view) -> int:
+    """这个日志控件的最小高度：够放下 LOG_MIN_LINES 行它自己的字。"""
+    return LOG_MIN_LINES * view.fontMetrics().height()
 
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
@@ -195,11 +214,20 @@ def popup_box(parent, title: str, text: str, kind: str = "information"):
 
 
 
-def append_log(view: QPlainTextEdit, text: str, error: bool = False) -> None:
-    """向日志控件追加一条记录；error=True 时整条（含换行展开的多个块）标红加粗。"""
-    lines = text.count("\n") + 1
-    view.appendPlainText(text)
-    if not error:
+def append_log(view: QPlainTextEdit, text: str, error: bool = False,
+               level: str = None) -> None:
+    """向日志控件追加一条记录：首行带 [时:分:秒] 与分级标签，整条按级别上色。
+
+    三个页签的日志框都只从这一处写，所以时间戳、级别、颜色不会出现"这一页有、那一页没有"。
+    级别由 core.log_text 定（错误标志 > 已有大写标签 > 中文标签），与 Java 侧同一张表。
+    """
+    formatted, lvl = format_log_entry(text, error)
+    if level:
+        lvl = level
+    color = LOG_LEVEL_COLORS.get(lvl)
+    lines = formatted.count("\n") + 1
+    view.appendPlainText(formatted)
+    if not color:
         return
     doc = view.document()
     blk = doc.lastBlock()
@@ -214,8 +242,8 @@ def append_log(view: QPlainTextEdit, text: str, error: bool = False) -> None:
     # 只覆盖本条记录的文字，不含块尾分隔符，避免格式渗到之后追加的日志上
     cur.setPosition(last.position() + last.length() - 1, QTextCursor.KeepAnchor)
     fmt = QTextCharFormat()
-    fmt.setForeground(QColor(LOG_ERROR_COLOR))
-    fmt.setFontWeight(QFont.Bold)
+    fmt.setForeground(QColor(color))
+    fmt.setFontWeight(QFont.Bold if lvl in ("warn", "error") else QFont.Normal)
     cur.mergeCharFormat(fmt)
 
 
@@ -498,32 +526,38 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
             tables.append(td)
             (added_zip if f in from_zip else added_loose).append(f)
             pk = td.get("primary_key")
-            pk_msg = (f"，主键 `{pk}`（{td.get('pk_reason', '')}）" if pk
-                      else f"，未设主键（{td.get('pk_reason', '')}）")
-            src_msg = "，结构定义模式" if td.get("source") == "structured" else ""
+            pk_msg = (f" | 主键 `{pk}`（{td.get('pk_reason', '')}）" if pk
+                      else f" | 未设主键（{td.get('pk_reason', '')}）")
+            src_msg = " | 结构定义模式" if td.get("source") == "structured" else ""
             merged_header = td.get("merged_header")
-            merge_msg = (f"，合并表头按 {merged_header['depth']} 行展开"
+            merge_msg = (f" | 合并表头按 {merged_header['depth']} 行展开"
                          if merged_header else "")
+            # 这一行的正文用 | 分段：三页的日志一屏几百行，
+            # 逗号串起来的长句要数着读，分段后一眼就能挑出字段数、行数、主键
+            line = (f"[已解析] {fname} → 表名预置 {td['table_name']}"
+                    f" | 字段 {len(td['columns'])} 列 | 数据 {len(td['df'])} 行"
+                    f"{src_msg}{merge_msg}{pk_msg}")
+            notes = []
             extra_cols = td.get("extra_data_columns") or []
-            extra_msg = (f"；数据 Sheet 多余列已忽略：{'、'.join(extra_cols)}"
-                         if extra_cols else "")
+            if extra_cols:
+                notes.append("数据 Sheet 多余列已忽略：%s" % "、".join(extra_cols))
             empty_cols = td.get("empty_columns") or []
-            empty_msg = ""
             if empty_cols:
                 head = "、".join(empty_cols[:6])
                 more = f" 等 {len(empty_cols)} 个" if len(empty_cols) > 6 else ""
-                empty_msg = f"；整列为空的字段照旧保留：{head}{more}"
-            zero_msg = "；没有数据行，建出来是空表" if td.get("no_data_rows") else ""
+                notes.append("整列为空的字段照旧保留：%s%s" % (head, more))
+            if td.get("no_data_rows"):
+                notes.append("没有数据行，建出来是空表")
             blank_h = td.get("blank_headers") or []
-            blank_msg = ""
             if blank_h:
                 head = "、".join(blank_h[:6])
                 more = f" 等 {len(blank_h)} 个" if len(blank_h) > 6 else ""
-                blank_msg = f"；表头整行没写字，按列宽兜底成：{head}{more}"
-            sink.log(
-                f"[已解析] {fname} → 表名预置 {td['table_name']}，"
-                f"字段 {len(td['columns'])} 列，数据 {len(td['df'])} 行{src_msg}"
-                f"{merge_msg}{pk_msg}{extra_msg}{empty_msg}{zero_msg}{blank_msg}")
+                notes.append("表头整行没写字，按列宽兜底成：%s%s" % (head, more))
+            if notes:
+                # 这几条是"为什么这张表长成这样"的补充，缩进跟在[已解析]下面，
+                # 不再挤进正文那一行
+                line += "\n    说明 | " + " | ".join(notes)
+            sink.log(line)
             notes = [c["type_note"] for c in td["columns"] if c.get("type_note")]
             if notes:
                 sink.log(
@@ -1189,6 +1223,7 @@ class MainWindow(QWidget):
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(2000)
         self.log.setFont(QFont("Consolas", LOG_FONT_SIZE))
+        self.log.setMinimumHeight(log_min_height(self.log))
         log_panel = QWidget()
         lp = QVBoxLayout(log_panel)
         lp.setContentsMargins(0, 0, 0, 0)
@@ -1205,7 +1240,9 @@ class MainWindow(QWidget):
         self.excel_split.setStretchFactor(0, 0)
         self.excel_split.setStretchFactor(1, 2)
         self.excel_split.setStretchFactor(2, 3)
-        self.excel_split.setSizes([130, 250, 290])
+        # 日志段给到最大：三段按 670 分时会等比缩，日志只落到 90px（实测两行）；
+        # 110:200:330 让日志在默认窗口里拿到约八行，拖拽区与表格仍够用
+        self.excel_split.setSizes([110, 200, 330])
         excel_lay.addWidget(self.excel_split, 1)
 
         # 6. 操作（贴在窗口底部的动作条）
@@ -1331,8 +1368,7 @@ class MainWindow(QWidget):
         self._finish_task()
 
     def _on_task_log(self, text):
-        view = self._task_log_view or self.log
-        view.appendPlainText(text)
+        append_log(self._task_log_view or self.log, text)
 
     def _on_task_log_error(self, text):
         append_log(self._task_log_view or self.log, text, error=True)
@@ -1486,6 +1522,7 @@ class MainWindow(QWidget):
         self.sql_log.setReadOnly(True)
         self.sql_log.setMaximumBlockCount(2000)
         self.sql_log.setFont(QFont("Consolas", LOG_FONT_SIZE))
+        self.sql_log.setMinimumHeight(log_min_height(self.sql_log))
 
         # 上半区 = 待处理文件表格 + 它自己的前缀行与操作行；下半区 = 日志。
         # 两者之间一条可拖拽分隔条：一边变高另一边就变窄，做法与 Excel 导入页一致。
@@ -1504,7 +1541,7 @@ class MainWindow(QWidget):
         self.sql_split.addWidget(self.sql_log)
         self.sql_split.setStretchFactor(0, 2)
         self.sql_split.setStretchFactor(1, 3)
-        self.sql_split.setSizes([260, 290])
+        self.sql_split.setSizes([230, 330])
         lay.addWidget(self.sql_split, 1)
         return page
 
@@ -1572,7 +1609,7 @@ class MainWindow(QWidget):
         table = next((t for t in parse_create_tables(record["text"])
                       if t["table_name"] == row["actual"]), None)
         if table is None:
-            self.sql_log.appendPlainText(
+            append_log(self.sql_log, 
                 "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
             return None
         return SqlMetadataDialog(table, row["display"],
@@ -1604,10 +1641,10 @@ class MainWindow(QWidget):
             record.setdefault("display_map", {})
             if record["display_map"].pop(old, None) is not None:
                 self._refresh_sql_table()
-                self.sql_log.appendPlainText(
+                append_log(self.sql_log, 
                     "[表名] %s 的显示前缀已移除，脚本未改写" % old)
             else:
-                self.sql_log.appendPlainText("[表名] %s 未发生变化，脚本未改写" % old)
+                append_log(self.sql_log, "[表名] %s 未发生变化，脚本未改写" % old)
                 self._refresh_sql_table()
             return
         new_text, changed = rename_table_sql(record["text"], old, new)
@@ -1623,12 +1660,12 @@ class MainWindow(QWidget):
         record["display_map"].pop(old, None)
         record["display_map"].pop(new, None)
         self._refresh_sql_table()
-        self.sql_log.appendPlainText(
+        append_log(self.sql_log, 
             "[表名] %s → %s（已同步改写 %d 处引用；未落盘）" % (old, new, changed))
 
     def on_sql_upper_toggled(self, checked):
         self._refresh_sql_table()
-        self.sql_log.appendPlainText(
+        append_log(self.sql_log, 
             "[提示] 表名与字段名大小写切换为：%s（当前表名清单、表元数据和生成的 Excel 一起变；"
             "脚本正文不改）" % ("大写" if checked else "保持原样"))
 
@@ -1646,7 +1683,7 @@ class MainWindow(QWidget):
             todo.append(f)
         if not todo:
             for p in dups:
-                self.sql_log.appendPlainText(f"[跳过] 已在列表：{os.path.basename(p)}")
+                append_log(self.sql_log, f"[跳过] 已在列表：{os.path.basename(p)}")
             self._refresh_sql_table()
             self._show_sql_add_result({"loaded": [], "failed": [], "duplicates": dups,
                                        "cancelled": False})
@@ -1690,7 +1727,7 @@ class MainWindow(QWidget):
             return
         self.sql_files = [s for s in self.sql_files if s["path"] not in paths]
         self._refresh_sql_table()
-        self.sql_log.appendPlainText(f"[移除] {len(paths)} 个脚本文件")
+        append_log(self.sql_log, f"[移除] {len(paths)} 个脚本文件")
 
     def _warn(self, text):
         """拦下一次点击：日志与弹窗双写同一句话。
@@ -1738,14 +1775,14 @@ class MainWindow(QWidget):
             s["display_map"] = plan
             total += len(plan)
             if plan:
-                self.sql_log.appendPlainText(
+                append_log(self.sql_log, 
                     f"[前缀] {fname}："
                     + "、".join(f"{o} → {n}（显示）" for o, n in plan.items()))
             if skipped:
-                self.sql_log.appendPlainText(
+                append_log(self.sql_log, 
                     f"[跳过] {fname}：已带前缀 {'、'.join(skipped)}")
         self._refresh_sql_table()
-        self.sql_log.appendPlainText(
+        append_log(self.sql_log, 
             f"[前缀完成] 共 {total} 个表名改为显示前缀「{prefix}」"
             f"（脚本正文未改，点保存/执行/生成时才写入）")
 
@@ -1757,10 +1794,10 @@ class MainWindow(QWidget):
             s["display_map"] = {}
         self._refresh_sql_table()
         if n:
-            self.sql_log.appendPlainText(
+            append_log(self.sql_log, 
                 f"[前缀完成] 前缀已清空，{n} 个表名的显示恢复为脚本中的原名（脚本正文未改）")
         else:
-            self.sql_log.appendPlainText(
+            append_log(self.sql_log, 
                 "[前缀完成] 前缀为空，表名显示本来就是脚本原名，无需恢复")
 
     def on_sql_replace_prefix(self):
@@ -1794,14 +1831,14 @@ class MainWindow(QWidget):
             s["display_map"] = plan
             total += len(plan)
             if plan:
-                self.sql_log.appendPlainText(
+                append_log(self.sql_log, 
                     f"[换前缀] {fname}："
                     + "、".join(f"{o} → {n}（显示）" for o, n in plan.items()))
             if skipped:
-                self.sql_log.appendPlainText(
+                append_log(self.sql_log, 
                     f"[跳过] {fname}：未改写 {'、'.join(skipped)}（表名里没有下划线）")
         self._refresh_sql_table()
-        self.sql_log.appendPlainText(
+        append_log(self.sql_log, 
             f"[换前缀完成] 共 {total} 个表名改为显示名"
             f"（脚本正文未改，点保存/执行/生成时才写入）")
 
@@ -1822,12 +1859,12 @@ class MainWindow(QWidget):
                 s["text"] = new_text
                 s["tabs"] = extract_create_tables(new_text)
                 s["modified"] = True
-                self.sql_log.appendPlainText(
+                append_log(self.sql_log, 
                     f"[生效] {os.path.basename(s['path'])}："
                     + "、".join(f"{r['old']} → {r['new']}（{r['n']} 处）" for r in renamed)
                     + " 已写入脚本")
             if nohit:
-                self.sql_log.appendPlainText(
+                append_log(self.sql_log, 
                     f"[跳过] {os.path.basename(s['path'])}：脚本里找不到 "
                     + "、".join(nohit) + " 的引用，未改写")
             s["display_map"] = {}
@@ -1838,7 +1875,7 @@ class MainWindow(QWidget):
         self._materialize_sql_display()
         items = [(s["path"], s["text"]) for s in self.sql_files if s["modified"]]
         if not items:
-            self.sql_log.appendPlainText("[保存] 没有修改过的脚本文件")
+            append_log(self.sql_log, "[保存] 没有修改过的脚本文件")
             popup_box(self, "保存完成", "没有修改过的脚本文件，无需保存。")
             return
         self._run_modal("正在保存修改后的脚本…", sql_save_task, (items,),
@@ -1875,7 +1912,7 @@ class MainWindow(QWidget):
             self._warn("请先添加 SQL 脚本文件。")
             return
         self._materialize_sql_display()
-        self.sql_log.appendPlainText(
+        append_log(self.sql_log, 
             f"===== 开始执行脚本（目标库 {db}，每个文件一个事务）=====")
         items = [(s["path"], s["text"]) for s in self.sql_files]
         self._run_modal("正在执行脚本到目标库…", sql_execute_task, (items, cfg),
@@ -1982,6 +2019,7 @@ class MainWindow(QWidget):
         self.sql_run_log.setReadOnly(True)
         # 结果集是按显示宽度排出来的表格，字体不是等宽就会错行：与编辑区同一支字体
         self.sql_run_log.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
+        self.sql_run_log.setMinimumHeight(log_min_height(self.sql_run_log))
         self.sql_run_log.setMaximumBlockCount(2000)
         right = QWidget()
         rl = QVBoxLayout(right)
@@ -2058,7 +2096,7 @@ class MainWindow(QWidget):
             self.cb_db.blockSignals(False)
             self.cb_db.setEnabled(True)
             self._refresh_db_labels()
-            self.log.appendPlainText(f"[已加载] 可用数据库：{', '.join(dbs)}")
+            append_log(self.log, f"[已加载] 可用数据库：{', '.join(dbs)}")
         except Exception as e:
             # 弹窗与日志用同一套展开格式，否则弹窗里是 (2003, '...') 这种元组原文
             popup_box(self, "连接失败", describe_db_error(e), "critical")
@@ -2070,13 +2108,13 @@ class MainWindow(QWidget):
 
     def on_initials_toggled(self, checked):
         """命名开关切换要留痕：之后看到 ddje 这样的字段名，得能对上是自己勾的。"""
-        self.log.appendPlainText(
+        append_log(self.log, 
             "[提示] 命名规则切换为：%s（对之后添加的文件生效）"
             % ("拼音首字母" if checked else "全拼"))
 
     def on_upper_toggled(self, checked):
         """大小写开关同样留痕：列表里忽然一片大写，得能对上是自己勾的。"""
-        self.log.appendPlainText(
+        append_log(self.log, 
             "[提示] 表名与字段名大小写切换为：%s（对之后添加的文件生效，"
             "结构定义 Sheet 里人工写的字段名不受影响）" % ("大写" if checked else "小写"))
 
@@ -2093,7 +2131,7 @@ class MainWindow(QWidget):
         if accepted:
             self._add_files(accepted)
         else:
-            self.log.appendPlainText("[提示] 拖入的不是 Excel 或 ZIP 文件，已忽略。")
+            append_log(self.log, "[提示] 拖入的不是 Excel 或 ZIP 文件，已忽略。")
 
     def _add_files(self, files):
         """添加文件：展开压缩包 + 解析表结构全在子线程，主线程只弹模态进度框。"""
@@ -2167,7 +2205,7 @@ class MainWindow(QWidget):
         if res["cancelled"]:
             text = "已取消，只完成了部分解析\n" + text
         # 同一句话既进日志也进弹窗：日志可回溯，弹窗防走神漏看
-        self.log.appendPlainText(f"[添加结果] {text}")
+        append_log(self.log, f"[添加结果] {text}")
         popup_box(self, "添加结果", text)
 
     def _refresh_file_table(self):
@@ -2238,11 +2276,11 @@ class MainWindow(QWidget):
 
     def _finish_replace_prefix(self, res):
         for r in res["renamed"]:
-            self.log.appendPlainText(f"[换前缀] {r['old']} → {r['new']}")
+            append_log(self.log, f"[换前缀] {r['old']} → {r['new']}")
         if res["skipped"]:
-            self.log.appendPlainText(
+            append_log(self.log, 
                 f"[跳过] 表名里没有下划线，未改动：{'、'.join(res['skipped'])}")
-        self.log.appendPlainText(
+        append_log(self.log, 
             f"[换前缀完成] 共改 {len(res['renamed'])} 张表"
             + (f"，跳过 {len(res['skipped'])} 张" if res["skipped"] else ""))
         self._refresh_file_table()
@@ -2258,9 +2296,9 @@ class MainWindow(QWidget):
     def _finish_apply_prefix(self, res):
         self._refresh_file_table()
         if res["prefix"]:
-            self.log.appendPlainText(f"[前缀] 已为全部表名批量添加前缀「{res['prefix']}」")
+            append_log(self.log, f"[前缀] 已为全部表名批量添加前缀「{res['prefix']}」")
         else:
-            self.log.appendPlainText("[前缀] 已移除前缀，恢复基础表名")
+            append_log(self.log, "[前缀] 已移除前缀，恢复基础表名")
 
     # ---- 表结构预览（弹窗表格） ----
     def on_preview_structure(self):
@@ -2382,7 +2420,7 @@ class MainWindow(QWidget):
         self.btn_stop.setEnabled(True)
         self.progress.setValue(0)
         self.worker = ImportWorker(self._conn_cfg(), self.tables, self.chk_drop.isChecked())
-        self.worker.log.connect(self.log.appendPlainText)
+        self.worker.log.connect(self._on_worker_log)
         self.worker.log_error.connect(self._on_worker_error)
         self.worker.table_progress.connect(self._on_table_progress)
         self.worker.table_done.connect(self._on_table_done)
@@ -2402,11 +2440,14 @@ class MainWindow(QWidget):
     def on_stop(self):
         if self.worker:
             self.worker.abort()
-            self.log.appendPlainText("[正在中止...]")
+            append_log(self.log, "[正在中止...]")
         else:
             # 空点「停止」也要留痕：什么都不说会让人以为自己按错了，
             # 而 Swing 那条线同一句已经写在日志里，两边口径要一致
-            self.log.appendPlainText("没有正在执行的任务")
+            append_log(self.log, "没有正在执行的任务")
+
+    def _on_worker_log(self, msg):
+        append_log(self.log, msg)
 
     def _on_worker_error(self, msg):
         append_log(self.log, msg, error=True)
@@ -2433,11 +2474,11 @@ class MainWindow(QWidget):
         removed = [t for t in self.tables if t.get("filepath") in done_files]
         kept = [t for t in self.tables if t.get("filepath") not in done_files]
         if removed:
-            self.log.appendPlainText(
+            append_log(self.log, 
                 "[清理] 已从待导入列表移除成功文件："
                 + "、".join(os.path.basename(t["filepath"]) for t in removed))
         if fail and kept:
-            self.log.appendPlainText(
+            append_log(self.log, 
                 "[保留] 导入失败的文件仍在列表中，可调整后重试："
                 + "、".join(os.path.basename(t["filepath"]) for t in kept))
         self.tables = kept

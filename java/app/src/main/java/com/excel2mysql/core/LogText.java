@@ -1,6 +1,14 @@
 package com.excel2mysql.core;
 
 import java.sql.SQLException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 日志文案的公共零件：报错展开、语句缩进、几句反复使用的提示语。
@@ -90,5 +98,116 @@ public final class LogText {
             t = t.substring(0, t.length() - 1);
         }
         return t.split(NL, -1);
+    }
+
+    // ---------------------------------------------------------------------
+    // 日志一行的形状：[时:分:秒] + 符号 + 大写分级标签，正文分段用 |
+    // 与 Python 侧 core/log_text.py 同一套标签与同一张定级表：同一条日志在两条
+    // 线上必须是同一个颜色同一个级别，对撞器比的是含标签的整行，写歪就当场不等。
+    // ---------------------------------------------------------------------
+
+    /** 只到秒：整场会话都在同一个窗口里，日期不进每一行。 */
+    public static final String TIME_FORMAT = "HH:mm:ss";
+
+    private static final Map<String, String> MARK = new LinkedHashMap<String, String>();
+    private static final Map<String, String> TAG_LEVEL = new LinkedHashMap<String, String>();
+
+    static {
+        MARK.put("ok", "+");
+        MARK.put("info", "-");
+        MARK.put("warn", "!");
+        MARK.put("error", "x");
+        String[][] table = {
+                {"已解析", "ok"}, {"已加载", "ok"}, {"已保存", "ok"}, {"提交", "ok"},
+                {"生效", "ok"}, {"建表成功", "ok"}, {"导入完成", "ok"}, {"全部完成", "ok"},
+                {"前缀完成", "ok"}, {"换前缀完成", "ok"}, {"添加结果", "ok"},
+                {"跳过", "warn"}, {"重复跳过", "warn"}, {"压缩包为空", "warn"},
+                {"已取消", "warn"}, {"已中止", "warn"}, {"正在中止...", "warn"},
+                {"元数据", "warn"}, {"数据警告", "warn"}, {"保留", "warn"},
+                {"解析失败", "error"}, {"读取失败", "error"}, {"保存失败", "error"},
+                {"建表失败", "error"}, {"执行失败", "error"}, {"导入失败", "error"},
+                {"连接失败", "error"}, {"压缩包失败", "error"}, {"任务异常", "error"},
+                {"合并单元格", "error"},
+        };
+        for (String[] row : table) {
+            TAG_LEVEL.put(row[0], row[1]);
+        }
+    }
+
+    /** 命令行那套前缀会原样出现在搬进图形界面的文案里，先剥掉再按本级重拼，避免叠两个标签。 */
+    private static final Pattern HEAD_RE =
+            Pattern.compile("^(?:[+\\-!x]\\s*)?\\[(OK|INFO|WARN|ERROR)\\]\\s+",
+                    Pattern.CASE_INSENSITIVE);
+    private static final Pattern TAG_RE = Pattern.compile("^\\[([^\\]\\n]{1,16})\\]");
+
+    public static String now() {
+        return new SimpleDateFormat(TIME_FORMAT).format(new Date());
+    }
+
+    /** 定级优先看调用方给的错误标志，其次看已有的大写标签，最后看中文标签。 */
+    public static String levelOf(String text, boolean error) {
+        if (error) {
+            return "error";
+        }
+        String head = (text == null ? "" : text).trim();
+        Matcher m = HEAD_RE.matcher(head);
+        if (m.find()) {
+            return m.group(1).toLowerCase();
+        }
+        Matcher t = TAG_RE.matcher(head);
+        if (t.find()) {
+            String tag = t.group(1);
+            // 「添加结果」在有拒绝/失败时会带"另有 …，详见日志"，那是提醒不是报成功
+            if ("添加结果".equals(tag)) {
+                return head.contains("另有") ? "warn" : "ok";
+            }
+            String lvl = TAG_LEVEL.get(tag);
+            return lvl == null ? "info" : lvl;
+        }
+        return "info";
+    }
+
+    /**
+     * 把一条日志拼成界面上的样子。只有首行带时间戳与分级标签；
+     * 已经缩进的续行（结果表格、驱动原文）原样保留——给它们打时间戳会把等宽表格顶歪。
+     */
+    public static String format(String text, boolean error) {
+        return format(text, error, now());
+    }
+
+    public static String format(String text, boolean error, String stamp) {
+        String body = (text == null ? "" : text).replace("\r\n", NL).replace("\r", NL);
+        String[] parts = body.split(NL, -1);
+        // 定级看整条记录，不是只看首行：「添加结果」的"另有 N 项解析失败"写在续行上，
+        // 只按首行定级就会把一批有拒绝的添加报成绿色成功（与 Python 侧同一处修正）
+        String level = levelOf(body, error);
+        String head = parts[0];
+        if (head.trim().isEmpty() || Character.isWhitespace(head.charAt(0))) {
+            return body;
+        }
+        Matcher m = HEAD_RE.matcher(head.trim());
+        String rest = m.find() ? head.trim().substring(m.end()).trim() : head.trim();
+        parts[0] = "[" + stamp + "] " + MARK.get(level) + " [" + level.toUpperCase() + "] " + rest;
+        List<String> out = new ArrayList<String>();
+        out.add(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            if (!parts[i].trim().isEmpty() && !Character.isWhitespace(parts[i].charAt(0))) {
+                out.add("    " + parts[i]);
+            } else {
+                out.add(parts[i]);
+            }
+        }
+        return join(out, NL);
+    }
+
+    private static String join(List<String> items, String sep) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : items) {
+            if (sb.length() > 0) {
+                sb.append(sep);
+            }
+            sb.append(s);
+        }
+        return sb.toString();
     }
 }

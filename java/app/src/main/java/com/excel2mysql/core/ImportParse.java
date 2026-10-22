@@ -257,27 +257,42 @@ public final class ImportParse {
             }
         }
         String reason = td.pkReason == null ? "" : td.pkReason;
-        String pkMsg = pk == null ? "，未设主键（" + reason + "）" : "，主键 `" + pk + "`（" + reason + "）";
-        String srcMsg = "structured".equals(td.table.source) ? "，结构定义模式" : "";
+        // 正文一律用 | 分段：三页的日志一屏几百行，逗号串起来的长句要数着读
+        String pkMsg = pk == null ? " | 未设主键（" + reason + "）"
+                : " | 主键 `" + pk + "`（" + reason + "）";
+        String srcMsg = "structured".equals(td.table.source) ? " | 结构定义模式" : "";
         String mergeMsg = td.mergedHeaderDepth > 0
-                ? "，合并表头按 " + td.mergedHeaderDepth + " 行展开" : "";
-        String extraMsg = td.extraDataColumns.isEmpty() ? ""
-                : "；数据 Sheet 多余列已忽略：" + String.join("、", td.extraDataColumns);
-        // 具名但整列没值的字段：保留下来了，但要在同一行里点名，别让"空模板导进去 0 行"
+                ? " | 合并表头按 " + td.mergedHeaderDepth + " 行展开" : "";
+        String line = "[已解析] " + fname + " → 表名预置 " + td.table.tableName
+                + " | 字段 " + td.table.columns.size() + " 列 | 数据 " + td.rows.size()
+                + " 行" + srcMsg + mergeMsg + pkMsg;
+        // 这四条是"这张表为什么长成这样"的补充，缩进挂在正文那一行下面，不挤进正文
+        List<String> notes = new ArrayList<String>();
+        if (!td.extraDataColumns.isEmpty()) {
+            notes.add("数据 Sheet 多余列已忽略：" + String.join("、", td.extraDataColumns));
+        }
+        // 具名但整列没值的字段：保留下来了，但要在日志里点名，别让"空模板导进去 0 行"
         // 变成一笔糊涂账（与 Python 侧 main/cli 的 [已解析] 行逐字一致）
-        String emptyMsg = td.emptyColumns.isEmpty() ? ""
-                : "；整列为空的字段照旧保留："
-                + String.join("、", td.emptyColumns.subList(0, Math.min(6, td.emptyColumns.size())))
-                + (td.emptyColumns.size() > 6 ? " 等 " + td.emptyColumns.size() + " 个" : "");
-        String zeroMsg = td.noDataRows ? "；没有数据行，建出来是空表" : "";
+        if (!td.emptyColumns.isEmpty()) {
+            notes.add("整列为空的字段照旧保留：" + head6(td.emptyColumns));
+        }
+        if (td.noDataRows) {
+            notes.add("没有数据行，建出来是空表");
+        }
         // 表头整行没写字的模板：兜底出来的字段名要点名，否则现场看到 col、col_2 不知道从哪来
-        String blankMsg = td.blankHeaders.isEmpty() ? ""
-                : "；表头整行没写字，按列宽兜底成："
-                + String.join("、", td.blankHeaders.subList(0, Math.min(6, td.blankHeaders.size())))
-                + (td.blankHeaders.size() > 6 ? " 等 " + td.blankHeaders.size() + " 个" : "");
-        return "[已解析] " + fname + " → 表名预置 " + td.table.tableName
-                + "，字段 " + td.table.columns.size() + " 列，数据 " + td.rows.size()
-                + " 行" + srcMsg + mergeMsg + pkMsg + extraMsg + emptyMsg + zeroMsg + blankMsg;
+        if (!td.blankHeaders.isEmpty()) {
+            notes.add("表头整行没写字，按列宽兜底成：" + head6(td.blankHeaders));
+        }
+        if (!notes.isEmpty()) {
+            line += LogText.NL + "    说明 | " + String.join(" | ", notes);
+        }
+        return line;
+    }
+
+    /** 取前 6 个名字，多余折成"等 N 个"（与 Python 侧同口径）。 */
+    private static String head6(List<String> names) {
+        String joined = String.join("、", names.subList(0, Math.min(6, names.size())));
+        return names.size() > 6 ? joined + " 等 " + names.size() + " 个" : joined;
     }
 
     /** 弹窗正文：只说实际用到的行，同一句话还会写进日志。 */

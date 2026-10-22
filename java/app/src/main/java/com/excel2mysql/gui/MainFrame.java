@@ -448,7 +448,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
         drop.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(60)));
         fileBox.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(150)));
-        logBox.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(100)));
+        logBox.setMinimumSize(new Dimension(UiScale.px(300),
+                logPanel.getMinimumSize().height + UiScale.px(34)));
         JSplitPane lower = new JSplitPane(JSplitPane.VERTICAL_SPLIT, fileBox, logBox);
         lower.setDividerSize(UiScale.px(6));
         // Qt 的 stretchFactor 0/2/3：拖拽区不参与拉伸，剩下 2:3 分给文件表与日志
@@ -456,13 +457,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JSplitPane stacked = new JSplitPane(JSplitPane.VERTICAL_SPLIT, drop, lower);
         stacked.setDividerSize(UiScale.px(6));
         stacked.setResizeWeight(0.0);
-        stacked.setDividerLocation(UiScale.px(130));
-        lower.setDividerLocation(UiScale.px(250));
+        stacked.setDividerLocation(UiScale.px(110));
+        lower.setDividerLocation(UiScale.px(200));
         excelSplit = stacked;
         excelLower = lower;
         excelDrop = drop;
         excelFileBox = fileBox;
-        // Qt 的 setSizes([130,250,290]) 会按可用高度等比缩放，JSplitPane 只认绝对值：
+        // Qt 的 setSizes([110,200,330]) 会按可用高度等比缩放，JSplitPane 只认绝对值：
         // 窗口比 670 矮时日志段会被挤成一行，所以真拿到尺寸后按同一比例重摆一次
         stacked.addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
@@ -1569,7 +1570,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private boolean splitPlaced;
 
     /**
-     * 把三段分栏按 Python 的 130:250:290 等比摆一次。
+     * 把三段分栏按 Python 的 110:200:330 等比摆一次。
      * 只在真拿到足够高度时做，且做一次就够——用户之后自己拖把手，不该被程序改回去。
      */
     public void applySplitProportions() {
@@ -1578,11 +1579,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return;
         }
         splitPlaced = true;
-        int first = (int) Math.round(excelSplit.getHeight() * 130.0 / 670.0);
+        int first = (int) Math.round(excelSplit.getHeight() * 110.0 / 640.0);
         excelSplit.setDividerLocation(Math.max(first, excelDrop.getMinimumSize().height));
         int rest = excelSplit.getHeight() - excelSplit.getDividerLocation()
                 - excelSplit.getDividerSize();
-        int second = (int) Math.round(rest * 250.0 / 540.0);
+        int second = (int) Math.round(rest * 200.0 / 530.0);
         excelLower.setDividerLocation(Math.max(second, excelFileBox.getMinimumSize().height));
     }
 
@@ -1713,6 +1714,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunClearLogBtn.addActionListener(e -> sqlRunLog.clearLog());
         javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(
                 0, UiScale.px(2)));
+        // 结果区也要顶得住：与 Excel 页同一句理由，缩成两行的结果区等于没有
+        right.setMinimumSize(new java.awt.Dimension(UiScale.px(300),
+                sqlRunLog.getMinimumSize().height + UiScale.px(34)));
         right.add(paneHeader("执行结果", sqlRunClearLogBtn), java.awt.BorderLayout.NORTH);
         right.add(new javax.swing.JScrollPane(sqlRunLog), java.awt.BorderLayout.CENTER);
 

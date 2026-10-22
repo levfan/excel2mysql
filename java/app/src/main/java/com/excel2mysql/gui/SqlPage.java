@@ -351,17 +351,19 @@ public final class SqlPage extends JPanel {
         topRow.add(remove);
 
         JScrollPane logScroll = new JScrollPane(logPanel);
-        // Python 的 SQL 日志区同样没有组框标题，只有上面那排按钮
-        logScroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(100)));
+        // Python 的 SQL 日志区同样没有组框标题，只有上面那排按钮；
+        // 下限取日志面板自己量出来的行数高度（这一段里没有标题行，不用再加）
+        logScroll.setMinimumSize(new Dimension(UiScale.px(300),
+                logPanel.getMinimumSize().height));
 
-        // 段数、比例、把手宽度照 main.py:1191-1197：初始 260/290、把手 6px、拉伸 1:3。
+        // 段数、比例、把手宽度照 main.py 的 setSizes([230, 330])：日志段给到最大。
         // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
         upper.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(80)));
         split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
         split.setDividerSize(UiScale.px(6));
         // Qt 的 setStretchFactor(1, 3) 换到 Swing 就是"上段拿 1/(1+3) 的余量"
         split.setResizeWeight(0.25);
-        split.setDividerLocation(UiScale.px(260));
+        split.setDividerLocation(UiScale.px(230));
         split.setContinuousLayout(true);
         // 与 Excel 页同一件事：Qt 的 setSizes([260,290]) 会等比缩放，JSplitPane 只认绝对值
         splitPlaced = false;
@@ -457,7 +459,7 @@ public final class SqlPage extends JPanel {
     private java.awt.Component sqlLog;
     private boolean splitPlaced;
 
-    /** 表格与日志按 260:290 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
+    /** 表格与日志按 230:330 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
     public void applySplitProportions() {
         if (splitPlaced || split == null || split.getHeight() < UiScale.px(120)
                 || sqlUpper == null || sqlLog == null) {
@@ -465,7 +467,7 @@ public final class SqlPage extends JPanel {
         }
         splitPlaced = true;
         int usable = split.getHeight() - split.getDividerSize();
-        int first = (int) Math.round(usable * 260.0 / 550.0);
+        int first = (int) Math.round(usable * 230.0 / 560.0);
         split.setDividerLocation(Math.max(first, sqlUpper.getMinimumSize().height));
     }
 
