@@ -821,14 +821,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     outcomes.add(new ImportOutcome(r.filepath, r.ok));
                 }
                 final boolean cancelled = progress.isCancelled();
-                SwingUtilities.invokeLater(() -> {
+                SwingUtilities.invokeLater(() -> finishTask(task, () -> {
                     progress.close();
                     // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
                     inform2("导入完成", finishImport(outcomes, cancelled));
-                    endTask(task);
-                });
+                }));
             } catch (Throwable t) {
-                crash(t, progress, () -> endTask(task));
+                crash(t, progress, task);
             }
         }, "excel2mysql-import");
         worker.setDaemon(true);
@@ -1009,6 +1008,22 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         syncRunStates();
     }
 
+    /**
+     * 任务收尾的统一口径：先把资源位还出来，再按"这条任务自己那一页"写落界面的日志。
+     *
+     * 两头都不能省：先弹结果再放位，用户没点确定那段时间里这一页会被一条已经做完的
+     * 任务占着；而落界面那几步（finishAdd / finishImport 这类）用的是全局日志去向，
+     * 不先把它指回自己那一页，并行时这几行会被下一个还在跑的任务的面板接走
+     * ——用例里"取消的那条没写已取消"就是这么查出来的，日志其实去了别一页。
+     */
+    private void finishTask(Task task, Runnable deliver) {
+        endTask(task);
+        taskLogView = task.logView == logPanel ? null : task.logView;
+        deliver.run();
+        taskLogView = null;
+        syncRunStates();
+    }
+
     /** 当前在跑的任务清单（自检与用例读它，不再靠一个布尔量猜）。 */
     public List<Task> runningTasks() {
         return new ArrayList<Task>(tasks);
@@ -1047,6 +1062,23 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
         public int percent() {
             return total <= 0 ? 0 : Math.min(100, (int) (done * 100L / total));
+        }
+
+        /**
+         * 计项本身也要读得到：三千项的任务在 400 毫秒里百分比一动不动，
+         * 只拿 percent() 断"两条都在推进"会假红（这一轮第一次红就是这个原因）。
+         */
+        public int getDone() {
+            return done;
+        }
+
+        public int getTotal() {
+            return total;
+        }
+
+        /** 还剩几项没做：用例挑"落后那条"下手时用，比 percent() 准（三千项时 percent 全是 0）。 */
+        public int remaining() {
+            return Math.max(0, total - done);
         }
 
         /** 一句能照着排查的话：任务名 + 百分比 + 计数 + 已跑时长（+ 当前项）。 */
@@ -1138,22 +1170,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 try {
                     out = work.apply(sink);
                 } catch (Throwable t) {
-                    SwingUtilities.invokeLater(() -> {
+                    SwingUtilities.invokeLater(() -> finishTask(task, () -> {
                         progress.close();
                         crashMessage(t);
-                        endTask(task);
-                    });
+                    }));
                     return;
                 }
-                SwingUtilities.invokeLater(() -> {
+                SwingUtilities.invokeLater(() -> finishTask(task, () -> {
                     progress.close();
-                    // 落界面时也算在任务里：这几行的日志要去同一块面板（与原地那条路同序）
-                    taskLogView = task.logView == logPanel ? null : task.logView;
+                    // 工作函数返回 null 视为"这次没做成"，不回调落界面（与 Python 侧同一处理）
                     if (out != null && onUi != null) {
                         onUi.accept(out);
                     }
-                    endTask(task);
-                });
+                }));
             }, "excel2mysql-task");
             task.worker = worker;
             worker.setDaemon(true);
@@ -1166,16 +1195,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         try {
             out = work.apply(sinkFor(task));
         } catch (Throwable t) {
-            crashMessage(t);
-            endTask(task);
+            finishTask(task, () -> crashMessage(t));
             return;
         }
         // 工作函数返回 null 视为"这次没做成"，不回调落界面（与 Python 侧同一处理）
-        taskLogView = task.logView == logPanel ? null : task.logView;
-        if (out != null && onUi != null) {
-            onUi.accept(out);
-        }
-        endTask(task);
+        finishTask(task, () -> {
+            if (out != null && onUi != null) {
+                onUi.accept(out);
+            }
+        });
     }
 
     @Override
@@ -1355,14 +1383,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             final ImportParse.Outcome outcome =
                     ImportParse.parse(paths, currentPaths(), zipDirFor(paths), zipDestSeq,
                             builder, sink);
-            SwingUtilities.invokeLater(() -> {
-                finishAdd(outcome);
+            SwingUtilities.invokeLater(() -> finishTask(task, () -> {
                 progress.close();
-                endTask(task);
-            });
+                finishAdd(outcome);
+            }));
             } catch (Throwable t) {
                 // 线程里的意外只会把模态框留在界面上，必须收掉并说出来
-                crash(t, progress, () -> endTask(task));
+                crash(t, progress, task);
             }
         }, "excel2mysql-parse");
         worker.setDaemon(true);
@@ -1764,18 +1791,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 子线程出意外：收掉模态框、恢复界面，日志与弹窗各写一遍同一句话。
      * 少这一层，线程里的异常只会被默认处理器吞掉，进度框永远挂在界面上。
      */
-    private void crash(Throwable t, ProgressDialog progress, Runnable restore) {
+    private void crash(Throwable t, final ProgressDialog progress, final Task task) {
         final String msg = LogText.describe(t);
-        SwingUtilities.invokeLater(() -> {
+        SwingUtilities.invokeLater(() -> finishTask(task, () -> {
             logError(LogText.crashLog(msg));
             if (progress != null) {
                 progress.close();
             }
-            if (restore != null) {
-                restore.run();
-            }
             informError("任务异常", LogText.crashDialog(msg));
-        });
+        }));
     }
 
     /**

@@ -413,7 +413,9 @@ class ProgressDialog(QDialog):
         self.finished_ok = False
         # 只保留标题：任务进行中不能从标题栏关窗（线程还在跑），退出只走「取消」
         self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
-        self.setModal(True)
+        # 非模态：`show()` 已经不再套嵌套事件循环，但 modal 标志本身就会挡住别的窗口，
+        # 留着它三条页签在任务跑完前一个都点不动（用例 Y1d 实测抓出来的就是这个）
+        self.setModal(False)
         fit_client(self, 480, 140)
         self._target = 0
 
