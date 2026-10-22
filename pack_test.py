@@ -3500,10 +3500,11 @@ _editors = rw6.file_table.findChildren(app_main.QLineEdit)
 check("R51 单击「表名」直接进入编辑器", bool(_editors),
       len(_editors))
 # 真实编辑器里按回车提交：itemChanged 在编辑器收尾前触发整表刷新，别把编辑器留在半开状态
-from PySide6.QtTest import QTest as _QTest
 if _editors:
     _editors[0].setText("enter_name")
-    _QTest.keyClick(_editors[0], Qt.Key_Return)
+    # 不用 QTest.keyClick：冻结包里没有 PySide6.QtTest，直接派发按键事件走同一条编辑器路径
+    for _etype in (QEvent.KeyPress, QEvent.KeyRelease):
+        _app.sendEvent(_editors[0], QKeyEvent(_etype, Qt.Key_Return, Qt.NoModifier))
     _app.processEvents()
     _app.processEvents()
 check("R51c 编辑器里回车提交改名，编辑器随后关闭",
