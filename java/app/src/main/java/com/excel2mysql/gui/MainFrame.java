@@ -77,15 +77,34 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JButton stopBtn;
     private JButton genStd;
     private JButton genSimple;
-    private boolean taskRunning;
-    // 被挡下时要说得出"跑到几成、跑了多久"，所以进度除了送进进度框，也在窗口上记一份：
-    // 非模态那条路（自检与原地跑）根本没有进度框，只靠框里的数就报不出来
-    private long taskStartedAt;
-    private int taskDone;
-    private int taskTotal;
-    private String taskLabel = "";
     /**
-     * 关掉时任务原地跑完、不弹模态框：自检与非界面调用要靠它验到线上那段代码，
+     * 资源位：三页各占自己的位，再加一个两页「生成」共用的产物目录。
+     * 抢同一个位才互斥，不同位可以并行——原来是一个布尔量把三页一起锁住，
+     * 执行器跑上千条语句时另外两页连点都点不动。
+     */
+    public static final String RES_EXCEL = "excel";
+    public static final String RES_SQL = "sql";
+    public static final String RES_RUN = "run";
+    public static final String RES_EXPORT = "export";
+    /** 资源位的人话名字：被挡下的那句要说清楚在等的是哪一样东西。 */
+    private static final Map<String, String> RES_LABEL =
+            new java.util.LinkedHashMap<String, String>();
+
+    static {
+        RES_LABEL.put(RES_EXCEL, "Excel 导入页的待导入列表");
+        RES_LABEL.put(RES_SQL, "SQL 脚本改名入库页的脚本列表");
+        RES_LABEL.put(RES_RUN, "SQL 执行器编辑区里那段文本");
+        RES_LABEL.put(RES_EXPORT, "程序同级的生成输出目录");
+    }
+
+    /**
+     * 正在跑的任务，一个任务一个对象：进度、日志去向、进度框都挂在它自己身上。
+     * 被挡下时要说得出"跑到几成、跑了多久"，所以这些数不能只存在进度框里——
+     * 非模态与原地跑（自检）那条路根本没有框，只靠框里的数就报不出来。
+     */
+    private final List<Task> tasks = new ArrayList<Task>();
+    /**
+     * 关掉时任务原地跑完、不弹进度框：自检与非界面调用要靠它验到线上那段代码，
      * 而不是验一份复印件（对应 main.py:137 的 MODAL_PROGRESS）。
      */
     public static boolean modalProgress = true;
@@ -764,9 +783,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             warn(LogText.NO_DB_HINT);
             return;
         }
-        if (!startTask()) {
+        lastTaskTitle = "正在导入到目标库…";
+        taskLogView = null;
+        if (!startTask(RES_EXCEL)) {
             return;
         }
+        final Task task = tasks.get(tasks.size() - 1);
         config = cfg;
         final List<TableBuilder.Result> work = new ArrayList<TableBuilder.Result>();
         for (TableOps.Table t : tables) {
@@ -781,8 +803,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 导入是唯一能中止的长任务，按钮名要说清楚"做完当前表才停"
         progress.setCancelText("停止（当前表完成后中止）");
         lastTask = progress;
-        final ImportParse.Sink sink = sinkFor(progress);
-        setEnabledForRun(false);
+        task.dialog = progress;
+        final ImportParse.Sink sink = sinkFor(task);
         setPageProgress(0);
         Thread worker = new Thread(() -> {
             try {
@@ -800,13 +822,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 }
                 final boolean cancelled = progress.isCancelled();
                 SwingUtilities.invokeLater(() -> {
-                    setEnabledForRun(true);
                     progress.close();
                     // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
                     inform2("导入完成", finishImport(outcomes, cancelled));
+                    endTask(task);
                 });
             } catch (Throwable t) {
-                crash(t, progress, () -> setEnabledForRun(true));
+                crash(t, progress, () -> endTask(task));
             }
         }, "excel2mysql-import");
         worker.setDaemon(true);
@@ -815,30 +837,33 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 任务在跑与没在跑是同一处开关：导入/解析开始置灰、结束复原。
-     * 顺手把并发护栏也管起来——两个任务同时跑会共用同一份表列表互相踩，
-     * 进度框也会叠到看不见底下那个（Python 侧靠 task_dialog 非空直接不吃第二次点击）。
+     * 按钮可用性统一按资源位算一次：只有占着这一位的任务在跑，才灰掉这一页的按钮。
+     * 连接按钮管的是三页共用的那套配置，任何一个任务在跑都不动它——
+     * 半途换库会让正在跑的那步说不清自己连的是哪儿。
      */
-    private void setEnabledForRun(boolean on) {
-        taskRunning = !on;
-        connect.setEnabled(on);
+    private void syncRunStates() {
+        connect.setEnabled(tasks.isEmpty());
         // 「有表就能点」，与 Python 侧同一口径：没选库时点下去由 startImport 弹 NO_DB_HINT，
         // 而不是把按钮一直灰着让人以为是坏了
-        importBtn.setEnabled(on && !tables.isEmpty());
-        stopBtn.setEnabled(!on);
+        importBtn.setEnabled(!taskBusy(RES_EXCEL) && !tables.isEmpty());
+        // 停止只管 Excel 页这一页的任务：进度框自己那颗「取消」才是各页通用的中止口
+        stopBtn.setEnabled(taskBusy(RES_EXCEL));
         syncGenButtons();
+        if (sqlPage != null) {
+            sqlPage.setGenBusy(taskBusy(RES_SQL));
+        }
     }
 
     /**
-     * 两个生成按钮只在"有表可导、且没有别的任务在跑"时可点。
+     * 两个生成按钮只在"有表可导、且这一页没有任务在跑"时可点。
      * 判据取自同一处而不是各写各的：任务跑着的时候表列表正被工作线程读，
-     * 这时候再生成一份就是两个任务共用同一份数据互相踩。
+     * 这时候再生成一份就是两个任务共用同一份数据互相踩。别的页在跑不影响这一页。
      */
     public void syncGenButtons() {
         if (genStd == null) {
             return;     // 连接栏比页签里的按钮先建，赋初值阶段还不能动它们
         }
-        boolean on = !tables.isEmpty() && !taskRunning;
+        boolean on = !tables.isEmpty() && !taskBusy(RES_EXCEL);
         genStd.setEnabled(on);
         genSimple.setEnabled(on);
     }
@@ -888,7 +913,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 + outRoot + "）=====");
         runTask(withMeta ? "正在生成标准excel文件…" : "正在生成简易excel文件…",
                 sink -> MetaExport.exportTables(work, outRoot, withMeta, sink),
-                out -> finishMetaExport((MetaExport.Outcome) out));
+                out -> finishMetaExport((MetaExport.Outcome) out),
+                null, new String[]{RES_EXPORT});
     }
 
     /**
@@ -914,58 +940,139 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 占住任务位：占不到就说明已有任务在跑，这次点击直接不吃掉。
-     * 两个任务同时跑会共用同一份表列表互相踩，进度框也会叠到看不见底下那个，
-     * 所以护栏得是真入口，而不是散在各方法开头的 if。
+     * 占住这一批资源位：占不到就说明有冲突的任务在跑，这次点击不能悄悄吃掉。
+     *
+     * 护栏必须是真入口，而不是散在各方法开头的 if：以前是一个全局开关锁住三页，
+     * 执行器跑上千条语句时另外两页连点都点不动。现在按资源判——同一页互斥，
+     * 两页的「生成」因为写同一个输出目录所以也互斥。
      */
-    public boolean startTask() {
-        if (taskRunning) {
+    public boolean startTask(String... resources) {
+        if (resources.length == 0) {
+            // 没说占哪一位的调用（Excel 页那两个手写的入口与自检）默认占这一页的位：
+            // 空着当"什么都不占"就等于把并发护栏拆了，第二次点击能挤进来踩同一份表列表
+            resources = new String[]{RES_EXCEL};
+        }
+        Task other = conflict(resources);
+        if (other != null) {
             // 静默吞掉点击、或只回一句"请稍等"，用户就只能在几个按钮之间一个个试
-            warn("已有任务在跑：" + taskSummary()
-                    + "。这一步没执行，等它跑完或点进度框「取消」。");
+            warn("已有任务在跑：" + other.describe() + "。这一步没执行——它和那个任务共用「"
+                    + sharedLabel(other) + "」，等它跑完或点进度框「取消」。");
             return false;
         }
-        taskStartedAt = System.currentTimeMillis();
-        taskDone = 0;
-        taskTotal = 0;
-        taskLabel = "";
-        setEnabledForRun(false);
+        Task task = new Task(resources, lastTaskTitle, taskLogView);
+        tasks.add(task);
+        syncRunStates();
         return true;
     }
 
-    /** 进度落到台账：与进度框收到的是同一批数，两条路径报出的句子才一模一样。 */
-    private void noteProgress(int done, int total, String label) {
-        taskDone = Math.max(done, 0);
-        taskTotal = Math.max(total, 0);
-        if (label != null && !label.isEmpty()) {
-            taskLabel = label;
+    /** 第一个与这批资源冲突的在跑任务；没有冲突返回 null。 */
+    public Task conflict(String... resources) {
+        for (Task t : tasks) {
+            for (String r : t.resources) {
+                for (String want : resources) {
+                    if (r.equals(want)) {
+                        return t;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 冲突句里要说的是"那两个任务抢的是同一样东西"，光报资源代号没人看得懂。 */
+    private String sharedLabel(Task other) {
+        StringBuilder sb = new StringBuilder();
+        for (String r : other.resources) {
+            if (sb.length() > 0) {
+                sb.append("、");
+            }
+            sb.append(RES_LABEL.containsKey(r) ? RES_LABEL.get(r) : r);
+        }
+        return sb.toString();
+    }
+
+    /** 释放最后登记的那个任务位：自检与命令行按这个口强制收摊。 */
+    public void endTask() {
+        if (!tasks.isEmpty()) {
+            endTask(tasks.get(tasks.size() - 1));
         }
     }
 
-    /** 一句能照着排查的话：任务名 + 百分比 + 计数 + 已经跑了多久（+ 当前项）。 */
-    public String taskSummary() {
-        long secs = taskStartedAt <= 0 ? 0 : (System.currentTimeMillis() - taskStartedAt) / 1000L;
-        int pct = taskTotal <= 0 ? 0 : Math.min(100, (int) (taskDone * 100L / taskTotal));
-        String text = (lastTaskTitle == null || lastTaskTitle.isEmpty()
-                ? "未命名任务" : lastTaskTitle) + " " + pct + "%（" + taskDone + "/" + taskTotal
-                + "）· 已 " + secs + " 秒";
-        return taskLabel.isEmpty() ? text : text + " · " + taskLabel;
+    /** 收尾指定任务：runTask 的每条出口都走这里，避免"最新那个"被认错。 */
+    void endTask(Task task) {
+        tasks.remove(task);
+        task.dialog = null;
+        // 直接往面板上写的那几行（SqlPage.log 这类）跟着最后一个还在跑的任务走：
+        // 两个任务并行时，先收尾的那个不该把另一个的日志去向改回 Excel 页
+        Task last = tasks.isEmpty() ? null : tasks.get(tasks.size() - 1);
+        taskLogView = last == null || last.logView == logPanel ? null : last.logView;
+        syncRunStates();
     }
 
-    /** 释放任务位并复原按钮。 */
-    public void endTask() {
-        taskLogView = null;
-        setEnabledForRun(true);
+    /** 当前在跑的任务清单（自检与用例读它，不再靠一个布尔量猜）。 */
+    public List<Task> runningTasks() {
+        return new ArrayList<Task>(tasks);
+    }
+
+    /** 一个在跑的任务：占哪些资源、叫什么、进度到哪、日志写哪、进度框是哪个。 */
+    public final class Task {
+        public final String[] resources;
+        public final String title;
+        public final LogPanel logView;
+        public ProgressDialog dialog;
+        public Thread worker;
+        private final long startedAt = System.currentTimeMillis();
+        private int done;
+        private int total;
+        private String label = "";
+
+        Task(String[] resources, String title, LogPanel logView) {
+            this.resources = resources;
+            this.title = title == null || title.isEmpty() ? "未命名任务" : title;
+            // 没指定面板的任务（Excel 页那些）日志写主页面的日志框，与 logView() 同一口径
+            this.logView = logView == null ? logPanel : logView;
+        }
+
+        /** 进度落到台账：非模态之后没有"框一定在"的假设，句子得自己说得清。 */
+        public void setProgress(int doneNow, int totalNow, String labelNow) {
+            done = Math.max(doneNow, 0);
+            total = Math.max(totalNow, 0);
+            if (labelNow != null && !labelNow.isEmpty()) {
+                label = labelNow;
+            }
+            if (dialog != null) {
+                dialog.setProgress(done, total, labelNow == null ? "" : labelNow);
+            }
+        }
+
+        public int percent() {
+            return total <= 0 ? 0 : Math.min(100, (int) (done * 100L / total));
+        }
+
+        /** 一句能照着排查的话：任务名 + 百分比 + 计数 + 已跑时长（+ 当前项）。 */
+        public String describe() {
+            long secs = (System.currentTimeMillis() - startedAt) / 1000L;
+            String text = title + " " + percent() + "%（" + done + "/" + total
+                    + "）· 已 " + secs + " 秒";
+            return label.isEmpty() ? text : text + " · " + label;
+        }
+
+        /** 中止这个任务：取消在当前项做完时生效。 */
+        public void cancel() {
+            if (dialog != null) {
+                dialog.requestCancel();
+            }
+        }
     }
 
     /**
-     * 带进度框的任务入口：抢任务位 -> 子线程算 + 模态框报进度 -> 回到事件分发线程落界面。
+     * 带进度框的任务入口：抢资源位 -> 子线程算 + 非模态框报进度 -> 回到事件分发线程落界面。
      * modalProgress 关掉时同一个 work 原地跑完，只是不弹框。
      */
     private void runTask(String title,
                          java.util.function.Function<ImportParse.Sink, Object> work,
                          java.util.function.Consumer<Object> onUi) {
-        runTask(title, work, onUi, null);
+        runTask(title, work, onUi, null, new String[0]);
     }
 
     /**
@@ -976,18 +1083,56 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                          java.util.function.Function<ImportParse.Sink, Object> work,
                          java.util.function.Consumer<Object> onUi,
                          LogPanel logView) {
+        runTask(title, work, onUi, logView, new String[0]);
+    }
+
+    /** 任务占哪些资源：按日志去向认出是哪一页发起的，extra 再补共用的产物资源。 */
+    private String[] resourcesFor(LogPanel logView, String[] extra) {
+        String base;
+        if (logView == null) {
+            base = RES_EXCEL;
+        } else if (logView == sqlRunLog) {
+            base = RES_RUN;
+        } else if (sqlPage != null && logView == sqlPage.logPanel()) {
+            base = RES_SQL;
+        } else {
+            base = RES_EXCEL;
+        }
+        List<String> all = new ArrayList<String>();
+        all.add(base);
+        for (String r : extra) {
+            if (!all.contains(r)) {
+                all.add(r);
+            }
+        }
+        return all.toArray(new String[0]);
+    }
+
+    /**
+     * 任务入口：按资源抢位 -> 子线程算 + 非模态框报进度 -> 回事件分发线程落界面。
+     *
+     * 非模态是这一轮的目的：框挡在中间时另外两页根本点不动，用户只能等或者强关窗口。
+     * 现在同一页互斥、不同页可以并行，每个任务自己的框显示自己的进度。
+     * modalProgress 关掉时同一个 work 原地跑完，只是不弹框。
+     */
+    private void runTask(String title,
+                         java.util.function.Function<ImportParse.Sink, Object> work,
+                         java.util.function.Consumer<Object> onUi,
+                         LogPanel logView, String[] extra) {
         lastTaskTitle = title;
         LogPanel previous = taskLogView;
-        // 先认下面板再抢任务位：抢输的那句"已有任务在跑"要落在用户刚点的那一页
+        // 先认下面板再抢资源位：抢输的那句"已有任务在跑"要落在用户刚点的那一页
         taskLogView = logView;
-        if (!startTask()) {
+        if (!startTask(resourcesFor(logView, extra))) {
             taskLogView = previous;
             return;
         }
+        final Task task = tasks.get(tasks.size() - 1);
         if (modalProgress) {
             final ProgressDialog progress = new ProgressDialog(this, title);
             lastTask = progress;
-            final ImportParse.Sink sink = sinkFor(progress);
+            task.dialog = progress;
+            final ImportParse.Sink sink = sinkFor(task);
             Thread worker = new Thread(() -> {
                 Object out;
                 try {
@@ -996,37 +1141,41 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     SwingUtilities.invokeLater(() -> {
                         progress.close();
                         crashMessage(t);
-                        endTask();
+                        endTask(task);
                     });
                     return;
                 }
                 SwingUtilities.invokeLater(() -> {
                     progress.close();
                     // 落界面时也算在任务里：这几行的日志要去同一块面板（与原地那条路同序）
-                    if (out != null) {
+                    taskLogView = task.logView == logPanel ? null : task.logView;
+                    if (out != null && onUi != null) {
                         onUi.accept(out);
                     }
-                    endTask();
+                    endTask(task);
                 });
             }, "excel2mysql-task");
+            task.worker = worker;
             worker.setDaemon(true);
             worker.start();
+            // open() 现在显示的是非模态框：主线程不再停在嵌套循环里，别的页照常能用
             progress.open();
             return;
         }
         Object out;
         try {
-            out = work.apply(quietSink());
+            out = work.apply(sinkFor(task));
         } catch (Throwable t) {
             crashMessage(t);
-            endTask();
+            endTask(task);
             return;
         }
         // 工作函数返回 null 视为"这次没做成"，不回调落界面（与 Python 侧同一处理）
-        if (out != null) {
+        taskLogView = task.logView == logPanel ? null : task.logView;
+        if (out != null && onUi != null) {
             onUi.accept(out);
         }
-        endTask();
+        endTask(task);
     }
 
     @Override
@@ -1035,53 +1184,65 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * SQL 页的五个耗时操作（读取 / 加前缀 / 换前缀 / 保存 / 生成交付件）共用 Excel 页那套
-     * 任务位，差别只在日志要去 SQL 页那块面板——否则切回 Excel 页才看得见刚才那步做了什么。
+     * SQL 页的耗时操作（读取 / 保存 / 执行 / 生成交付件）走主窗口同一套任务框架，
+     * 差别只在日志要去 SQL 页那块面板——否则切回 Excel 页才看得见刚才那步做了什么。
+     *
+     * extra 用来补共用的资源位：这一页的「生成」和 Excel 页的「生成」写同一个输出目录，
+     * 它们得互斥，而"读脚本"和"执行脚本"各占自己那一位，可以并行。
      */
     @Override
     public void runSqlTask(String title,
                            java.util.function.Function<ImportParse.Sink, Object> work,
-                           java.util.function.Consumer<Object> onUi) {
-        runTask(title, work, onUi, sqlPage == null ? null : sqlPage.logPanel());
+                           java.util.function.Consumer<Object> onUi,
+                           String... extra) {
+        runTask(title, work, onUi, sqlPage == null ? null : sqlPage.logPanel(), extra);
     }
 
-    /** 只写日志不碰进度框的回报口。 */
-    private ImportParse.Sink quietSink() {        return new ImportParse.Sink() {
+    /**
+     * 任务台账的回报口：进度先落进台账，台账再刷它自己的框（原地跑那条路没有框，只记账）。
+     * log/logError 本身就是线程安全的；日志一律写这个任务自己那一页的面板。
+     */
+    private ImportParse.Sink sinkFor(final Task task) {
+        return new ImportParse.Sink() {
             @Override
             public void setTotal(int total) {
-                noteProgress(0, total, "");
+                task.setProgress(0, total, "");
             }
 
             @Override
             public void step(String label) {
-                noteProgress(taskDone + 1, taskTotal, label);
+                task.setProgress(task.done + 1, task.total, label);
             }
 
             @Override
             public void advance(int units, String label) {
-                noteProgress(taskDone + units, taskTotal, label);
+                task.setProgress(task.done + units, task.total, label);
             }
 
             @Override
             public void log(String text) {
-                MainFrame.this.log(text);
+                task.logView.log(text);
             }
 
             @Override
             public void logError(String text) {
-                MainFrame.this.logError(text);
+                task.logView.error(text);
             }
 
             @Override
             public boolean cancelled() {
-                return false;
+                return task.dialog != null && task.dialog.isCancelled();
             }
         };
     }
 
-    /** 有长任务在跑吗：护栏与自检都读这一个判定，不留两套状态。 */
+    /** 有长任务在跑吗：不给资源位就是问"有没有任何一个"，给了只问那几位占没占。 */
     public boolean taskBusy() {
-        return taskRunning;
+        return !tasks.isEmpty();
+    }
+
+    public boolean taskBusy(String... resources) {
+        return conflict(resources) != null;
     }
 
     public javax.swing.JButton stopButton() {
@@ -1097,13 +1258,23 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return genSimple;
     }
 
-    /** 请求中止当前任务：已经做完的那一项会跑完，剩下的不再开工。 */
+    /**
+     * 请求中止 Excel 页最新的那个任务：已经做完的那一项会跑完，剩下的不再开工。
+     * 进度框上的「取消」是各页通用的中止口，这颗按钮只管这一页——
+     * 别的页也在跑时，它不能隔着页签去掐别人的任务。
+     */
     public void stopTask() {
-        if (!taskRunning || lastTask == null) {
+        Task task = null;
+        for (Task t : tasks) {
+            if (t.resources.length > 0 && RES_EXCEL.equals(t.resources[0])) {
+                task = t;
+            }
+        }
+        if (task == null || task.dialog == null) {
             log("没有正在执行的任务");
             return;
         }
-        lastTask.requestCancel();
+        task.cancel();
         log("[正在中止...]");
     }
 
@@ -1168,14 +1339,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 界面只挂一个可取消的模态进度框。几十万行的表读起来不该让窗口变成白屏。
      */
     public void addFilesAsync(final List<String> paths) {
-        if (!startTask()) {
+        lastTaskTitle = "正在解析文件…";
+        taskLogView = null;
+        if (!startTask(RES_EXCEL)) {
             return;
         }
+        final Task task = tasks.get(tasks.size() - 1);
         applyNamingSwitches();
-        final ProgressDialog progress = new ProgressDialog(this, "正在解析文件…");
-        final ImportParse.Sink sink = sinkFor(progress);
+        final ProgressDialog progress = new ProgressDialog(this, task.title);
         lastTask = progress;
-        setEnabledForRun(false);
+        task.dialog = progress;
+        final ImportParse.Sink sink = sinkFor(task);
         Thread worker = new Thread(() -> {
             try {
             final ImportParse.Outcome outcome =
@@ -1184,54 +1358,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             SwingUtilities.invokeLater(() -> {
                 finishAdd(outcome);
                 progress.close();
-                setEnabledForRun(true);
+                endTask(task);
             });
             } catch (Throwable t) {
                 // 线程里的意外只会把模态框留在界面上，必须收掉并说出来
-                crash(t, progress, () -> setEnabledForRun(true));
+                crash(t, progress, () -> endTask(task));
             }
         }, "excel2mysql-parse");
         worker.setDaemon(true);
         worker.start();
         progress.open();
-    }
-
-    /** 进度框 + 日志区的组合回报口；log/logError 本身就是线程安全的。 */
-    private ImportParse.Sink sinkFor(final ProgressDialog progress) {
-        return new ImportParse.Sink() {
-            @Override
-            public void setTotal(int total) {
-                progress.setTotal(total);
-                noteProgress(0, total, "");
-            }
-
-            @Override
-            public void step(String label) {
-                progress.step(label);
-                noteProgress(progress.getDone() + 1, progress.getTotal(), label);
-            }
-
-            @Override
-            public void advance(int units, String label) {
-                progress.advance(units, label);
-                noteProgress(progress.getDone(), progress.getTotal(), label);
-            }
-
-            @Override
-            public void log(String text) {
-                MainFrame.this.log(text);
-            }
-
-            @Override
-            public void logError(String text) {
-                MainFrame.this.logError(text);
-            }
-
-            @Override
-            public boolean cancelled() {
-                return progress.isCancelled();
-            }
-        };
     }
 
     /** 开关状态在主线程取好再进解析线程：解析线程不碰控件，只读 Names 上的两个布尔。 */

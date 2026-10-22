@@ -326,6 +326,80 @@ class ProgressSink:
         return bool(self.is_cancelled())
 
 
+class TaskInfo(QObject):
+    """一个在跑的任务：占哪些资源、叫什么、进度到哪、日志写哪、完了回调谁。
+
+    以前这些散在主窗口的一组字段上（task_dialog / _task_log_view / _task_on_done / task_*），
+    一次只容得下一个任务，于是执行器跑上千条语句时另外两页全被锁住，
+    而被挡下的人只看到一句"请稍等"。现在一个任务一个对象，资源冲突才互斥。
+    """
+
+    def __init__(self, window, resources, title, log_view, on_done):
+        super().__init__(window)
+        self.window = window
+        self.resources = tuple(resources)
+        self.title = title
+        self.log_view = log_view
+        self.on_done = on_done
+        self.dialog = None
+        self.worker = None
+        self.started = time.time()
+        self.done = 0
+        self.total = 0
+        self.label = ""
+        self.result = None
+        self.finished = False
+
+    # ---- 进度：工作线程的信号排队送到这里（本对象住在主线程） ----
+    def set_progress(self, done, total, label=""):
+        self.done = done
+        self.total = max(total, 0)
+        self.label = label or self.label
+        if self.dialog is not None:
+            self.dialog.set_progress(done, total, label)
+
+    def log(self, text):
+        append_log(self.log_view, text)
+
+    def log_error(self, text):
+        append_log(self.log_view, text, error=True)
+
+    def percent(self):
+        if self.total <= 0:
+            return 0
+        return min(100, int(self.done * 100 / self.total))
+
+    def describe(self):
+        """一句能照着排查的话：任务名 + 百分比 + 计数 + 已跑多久（+ 当前项）。"""
+        secs = int(time.time() - self.started)
+        text = "%s %d%%（%d/%d）· 已 %d 秒" % (self.title or "未命名任务",
+                                              self.percent(), self.done, self.total, secs)
+        return text + " · " + self.label if self.label else text
+
+    def cancel(self):
+        if self.worker is not None:
+            self.worker.cancel()
+        elif self.dialog is not None:
+            self.dialog.btn_cancel.click()
+
+    def completed(self, result):
+        self.result = result
+        if self.dialog is not None:
+            self.dialog.finish()
+
+    def failed(self, msg):
+        self.result = None
+        if self.dialog is not None:
+            self.dialog.finish()
+        append_log(self.log_view,
+                   "[任务异常] %s\n    本次操作未完成，请查看日志后重试。" % msg, error=True)
+        popup_box(self.window, "任务异常", "%s\n本次操作未完成，详见日志。" % msg, "critical")
+
+    def thread_done(self):
+        """线程真正退出后才收尾：completed 可能更早（run 的最后一句就是发信号）。"""
+        self.window._finish_task(self)
+
+
 class ProgressDialog(QDialog):
     """模态进度框：标题 + 当前项文字 + 进度条 + 取消按钮。
 
@@ -1086,18 +1160,10 @@ class MainWindow(QWidget):
         self._refreshing_file_table = False   # 刷新文件表时压住 itemChanged，避免自己触发改名
         self._zip_tmp = None        # ZIP 展开用的会话级临时目录，惰性创建
         self._zip_origin = {}       # 解压出的路径 → "包名!包内路径"，供文件列表 tooltip
-        self.task_dialog = None     # 当前模态进度框，None 表示没有任务在跑
-        # 被挡下时要说得出「谁在跑、跑到几成、跑了多久」，只回一句请稍等等于没说
-        self.task_title = ""
-        self.task_started = 0.0
-        self.task_done = 0
-        self.task_total = 0
-        self.task_label = ""
+        # 在跑的任务清单：一个任务一份账，资源冲突才互斥（不再是一个全局开关锁三页）
+        self._tasks = []
+        self._import_task = None   # 导入这条长任务单独留一份引用，收尾收它自己的框
 
-        self.task_worker = None     # 线程结束前必须一直持有引用，否则 QThread 被提前回收
-        self._task_result = None
-        self._task_on_done = None
-        self._task_log_view = None
         self._build_ui()
 
     # -------------------- UI --------------------
@@ -1364,113 +1430,122 @@ class MainWindow(QWidget):
         super().keyPressEvent(e)
 
     # -------------------- 长任务：子线程干活 + 模态进度框 --------------------
-    def _run_modal(self, title, work, args=(), on_done=None, log_view=None):
-        """统一入口：把纯工作函数 work(sink, *args) 放到子线程跑，同时弹模态进度框。
+    # -------------------- 长任务：按资源占用，一个任务一个非模态框 --------------------
+    RES_EXCEL = "excel"
+    RES_SQL = "sql"
+    RES_RUN = "run"
+    RES_EXPORT = "export"
+    RES_LABEL = {
+        "excel": "Excel 导入页的待导入列表",
+        "sql": "SQL 脚本改名入库页的脚本列表",
+        "run": "SQL 执行器编辑区里那段文本",
+        "export": "程序同级的生成输出目录",
+    }
 
-        进度和日志靠信号排队回主线程，所以框始终能刷新、能取消；结果由 on_done
-        在 exec() 返回后处理，避免在模态框里再套一层弹窗。
-        MODAL_PROGRESS=False（离屏用例）时不起线程、不弹框，原地跑完再回调，
-        两条路径共用同一个 work 和同一个 sink，测试即线上逻辑。
+    def _resources_for(self, log_view, extra=()):
+        """任务占哪些资源：按日志去向认出是哪一页发起的。
+
+        拆资源而不是拆页面：Excel 页与 SQL 页的「生成标准/简易excel文件」都往程序同级
+        同一个日期目录里写，这两个必须互斥；而执行器跑上千条语句不该锁住另外两页。
         """
-        if self.task_dialog is not None:
+        if log_view is self.sql_log:
+            base = self.RES_SQL
+        elif log_view is self.sql_run_log:
+            base = self.RES_RUN
+        else:
+            base = self.RES_EXCEL
+        return tuple([base] + [r for r in extra if r != base])
+
+    def _conflict(self, resources):
+        for task in self._tasks:
+            for res in task.resources:
+                if res in resources:
+                    return task
+        return None
+
+    def task_busy(self, resources=None):
+        """有没有任务在跑；给了 resources 就只问这几个资源是否被占。"""
+        if resources is None:
+            return bool(self._tasks)
+        return self._conflict(tuple(resources)) is not None
+
+    @property
+    def task_dialog(self):
+        """最近那个任务的进度框（用例与旧代码按这个名字取框）。"""
+        return self._tasks[-1].dialog if self._tasks else None
+
+    def _busy_text(self, other):
+        shared = "、".join(self.RES_LABEL.get(r, r) for r in other.resources)
+        return ("已有任务在跑：" + other.describe()
+                + "。这一步没执行——它和那个任务共用「%s」，等它跑完或点进度框「取消」。" % shared)
+
+    def _run_modal(self, title, work, args=(), on_done=None, log_view=None, extra=()):
+        """统一入口：把纯工作函数 work(sink, *args) 放到子线程跑，弹一个非模态进度框。
+
+        非模态是这一轮的目的：框挡在中间时另外两页根本点不动，用户只能等或者强关窗口。
+        现在同一页的任务互斥、不同页可以并行，每个任务自己的框显示自己的进度。
+        MODAL_PROGRESS=False（离屏用例）时不起线程、不弹框，原地跑完再回调，
+        两条路径共用同一个 work 和同一个 TaskInfo，测试跑到的就是线上那段逻辑。
+        """
+        view = log_view if log_view is not None else self.log
+        resources = self._resources_for(view, extra)
+        other = self._conflict(resources)
+        if other is not None:
             # 静默 return 是最坏的写法：用户点了没反应，也不知道在等谁
-            self._warn("已有任务在跑：" + self._task_summary()
-                       + "。这一步没执行，等它跑完或点进度框「取消」。")
+            self._warn(self._busy_text(other))
             return
-        self._task_log_view = log_view if log_view is not None else self.log
-        self._task_on_done = on_done
-        self._task_result = None
-        self.task_title = title
-        self.task_started = time.time()
-        self.task_done = 0
-        self.task_total = 0
-        self.task_label = ""
+        task = TaskInfo(self, resources, title, view, on_done)
+        self._tasks.append(task)
         self._sync_gen_buttons()
         if not MODAL_PROGRESS:
-            sink = ProgressSink(on_progress=self._on_task_progress,
-                               on_log=self._on_task_log, on_log_error=self._on_task_log_error)
+            sink = ProgressSink(on_progress=task.set_progress, on_log=task.log,
+                                on_log_error=task.log_error)
             try:
-                self._task_result = work(*args, sink)
+                task.result = work(*args, sink)
             except Exception as e:
-                self._on_task_failed(describe_db_error(e))
-            self._finish_task()
+                task.failed(describe_db_error(e))
+            self._finish_task(task)
             return
         dlg = ProgressDialog(title, self)
         worker = ProgressWorker(work, args)
-        self.task_dialog, self.task_worker = dlg, worker
-        worker.progress.connect(dlg.set_progress)
-        worker.progress.connect(self._on_task_progress)
-        worker.log.connect(self._on_task_log)
-        worker.log_error.connect(self._on_task_log_error)
-        worker.failed.connect(self._on_task_failed)
-        worker.completed.connect(self._on_task_completed)
-        worker.finished.connect(self._on_task_thread_done)
+        task.dialog, task.worker = dlg, worker
+        worker.progress.connect(task.set_progress)
+        worker.log.connect(task.log)
+        worker.log_error.connect(task.log_error)
+        worker.failed.connect(task.failed)
+        worker.completed.connect(task.completed)
+        worker.finished.connect(task.thread_done)
         dlg.btn_cancel.clicked.connect(worker.cancel)
         worker.start()
-        dlg.exec()
-        self._finish_task()
+        # show() 而不是 exec()：主线程不再停在嵌套循环里，别的页签照常能用
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
-    def _on_task_progress(self, done, total, label=""):
-        """进度落到台账：被挡下的那一句要能报出跑到几成、当前是哪一项。"""
-        self.task_done = done
-        self.task_total = max(total, 0)
-        self.task_label = label or self.task_label
-
-    def _task_summary(self):
-        """一句能照着排查的话：任务名 + 百分比 + 计数 + 已经跑了多久（+ 当前项）。"""
-        secs = int(time.time() - self.task_started) if self.task_started else 0
-        pct = min(100, int(self.task_done * 100 / self.task_total)) if self.task_total else 0
-        text = "%s %d%%（%d/%d）· 已 %d 秒" % (self.task_title or "未命名任务", pct,
-                                              self.task_done, self.task_total, secs)
-        return text + " · " + self.task_label if self.task_label else text
-
-    def _on_task_log(self, text):
-        append_log(self._task_log_view or self.log, text)
-
-    def _on_task_log_error(self, text):
-        append_log(self._task_log_view or self.log, text, error=True)
-
-    def _on_task_completed(self, result):
-        self._task_result = result
-        if self.task_dialog is not None:
-            self.task_dialog.finish()
-
-    def _on_task_thread_done(self):
-        # 线程真正退出后才放引用；completed 可能更早（run 的最后一句就是发信号）
-        self.task_worker = None
-
-    def _on_task_failed(self, msg):
-        if self.task_dialog is not None:
-            self.task_dialog.finish()
-        self._task_result = None
-        append_log(self._task_log_view or self.log,
-                   f"[任务异常] {msg}\n    本次操作未完成，请查看日志后重试。", error=True)
-        popup_box(self, "任务异常", f"{msg}\n本次操作未完成，详见日志。", "critical")
+    def _finish_task(self, task):
+        """一个任务收尾：把结果交给它自己的回调（返回 None 视为没做成，不回调）。"""
+        if task in self._tasks:
+            self._tasks.remove(task)
+        cb, result = task.on_done, task.result
+        task.on_done, task.result, task.worker = None, None, None
+        if result is not None and cb:
+            cb(result)
+        self._sync_gen_buttons()
 
     def _sync_gen_buttons(self):
-        """两个生成按钮只在"有表可导、且没有别的任务在跑"时可点。
+        """两个生成按钮只在"有表可导、且这一页没有任务在跑"时可点。
 
         判据取自同一处而不是各写各的：任务跑着的时候表列表正被工作线程读，
-        这时候再生成一份就是两个任务共用同一份数据互相踩。
+        这时候再生成一份就是两个任务共用同一份数据互相踩。别的页在跑不影响这一页。
         """
-        on = bool(self.tables) and self.task_dialog is None
+        on = bool(self.tables) and not self.task_busy((self.RES_EXCEL,))
         self.btn_gen_std.setEnabled(on)
         self.btn_gen_simple.setEnabled(on)
         # 这一页的判据是"有没有脚本"，不是"有没有解析出表"：
         # 解析在点下去之后才做，解析不出东西时日志会给话，按钮不该一直灰着让人以为坏了
-        sql_on = bool(self.sql_files) and self.task_dialog is None
+        sql_on = bool(self.sql_files) and not self.task_busy((self.RES_SQL,))
         self.btn_sql_gen_std.setEnabled(sql_on)
         self.btn_sql_gen_simple.setEnabled(sql_on)
-
-    def _finish_task(self):
-        """exec() 退出后收尾：把结果交给回调（工作函数返回 None 视为没做成，不回调）。"""
-        self.task_dialog = None
-        cb, self._task_on_done = self._task_on_done, None
-        result = self._task_result
-        self._task_result = None
-        if result is not None and cb:
-            cb(result)
-        self._sync_gen_buttons()
 
     # -------------------- 槽函数 --------------------
     def on_clear_log(self):
@@ -1642,7 +1717,7 @@ class MainWindow(QWidget):
 
     def on_sql_table_double_clicked(self, item):
         """当前表名列交给编辑器；其余列只是查看这一行对应表的元数据。"""
-        if item is None or self.task_dialog is not None:
+        if item is None or self.task_busy((self.RES_SQL,)):
             return
         row = item.row()
         if item.column() == 4:
@@ -2005,7 +2080,8 @@ class MainWindow(QWidget):
         items = [(s["path"], s["text"]) for s in self.sql_files]
         self._run_modal("正在生成%sexcel文件…" % label, sql_meta_export_task,
                         (items, out_root, with_meta, self.chk_sql_upper.isChecked()),
-                        on_done=self._finish_sql_gen_excel, log_view=self.sql_log)
+                        on_done=self._finish_sql_gen_excel, log_view=self.sql_log,
+                        extra=(self.RES_EXPORT,))
 
     def _finish_sql_gen_excel(self, res):
         if not res:
@@ -2371,7 +2447,7 @@ class MainWindow(QWidget):
 
     def on_file_table_clicked(self, row: int, col: int) -> None:
         """单击「表名」直接进编辑器；其他列保持只读（双击才去看结构）。"""
-        if col != 2 or self.task_dialog is not None:
+        if col != 2 or self.task_busy((self.RES_EXCEL,)):
             return
         if not 0 <= row < self.file_table.rowCount():
             return
@@ -2449,7 +2525,8 @@ class MainWindow(QWidget):
         title = ("正在生成标准excel文件…" if with_meta else "正在生成简易excel文件…")
         append_log(self.log, f"===== 开始生成{label}excel文件（输出根目录 {out_root}）=====")
         self._run_modal(title, meta_export_task, (list(self.tables), out_root, with_meta),
-                        on_done=self._finish_meta_export, log_view=self.log)
+                        on_done=self._finish_meta_export, log_view=self.log,
+                        extra=(self.RES_EXPORT,))
 
     def _finish_meta_export(self, res):
         if not res:
@@ -2485,14 +2562,20 @@ class MainWindow(QWidget):
         if not MODAL_PROGRESS:
             self.worker.start()
             return
-        # 导入是真正的长任务：模态框按「每张表 + 每行数据」计项，随时能看到推进
-        dlg = ProgressDialog("正在导入到目标库…", self)
+        # 导入是真正的长任务：框按「每张表 + 每行数据」计项，随时能看到推进
+        task = TaskInfo(self, (self.RES_EXCEL,), "正在导入到目标库…", self.log, None)
+        self._tasks.append(task)
+        self._import_task = task
+        dlg = ProgressDialog(task.title, self)
         dlg.btn_cancel.setText("停止（当前表完成后中止）")
-        self.task_dialog = dlg
-        self.worker.progress.connect(dlg.set_progress)
+        task.dialog = dlg
+        self.worker.progress.connect(task.set_progress)
         dlg.btn_cancel.clicked.connect(self.worker.abort)
         self.worker.start()
-        dlg.exec()
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        self._sync_gen_buttons()
 
     def on_stop(self):
         if self.worker:
@@ -2517,10 +2600,15 @@ class MainWindow(QWidget):
         pass
 
     def _on_finished_all(self, results):
-        # 先收掉模态框，再打汇总弹窗，避免两个模态框叠在一起
-        dlg, self.task_dialog = self.task_dialog, None
-        if dlg is not None:
-            dlg.finish()
+        # 先收掉这一次导入自己的框，再打汇总弹窗，避免两个框叠在一起
+        task, self._import_task = self._import_task, None
+        if task is not None:
+            if task in self._tasks:
+                self._tasks.remove(task)
+            if task.dialog is not None:
+                task.dialog.finish()
+            task.dialog, task.worker = None, None
+            self._sync_gen_buttons()
         ok = sum(1 for r in results if r["ok"])
         fail = len(results) - ok
         append_log(self.log,

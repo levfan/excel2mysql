@@ -43,7 +43,8 @@ public final class ProgressDialog extends JDialog {
     private final javax.swing.Timer anim;
 
     public ProgressDialog(Frame owner, String title) {
-        super(owner, title, true);
+        // 非模态：任务在跑时用户还要能切到别的页签做事，进度各看各的框
+        super(owner, title, false);
         JPanel body = new JPanel(new BorderLayout(UiScale.px(8), UiScale.px(8)));
         body.setBorder(BorderFactory.createEmptyBorder(
                 UiScale.px(12), UiScale.px(12), UiScale.px(12), UiScale.px(12)));
@@ -129,14 +130,26 @@ public final class ProgressDialog extends JDialog {
     }
 
     /**
-     * 一次推进若干格。解析一个文件按阶段计 5 格、被跳过的重复项也要一次补齐 5 格，
-     * 否则进度条要么停在半途，要么超出总数。
+     * 按绝对值刷一次（对应 main.py 的 ProgressDialog.set_progress）。
+     *
+     * 非模态之后框只是台账的一个显示端：任务台账才是进度的唯一来源，
+     * 框可能还没建好、也可能已经被关掉，所以它得能被"现在是 i/N"重述，
+     * 而不是只会被 step 一格推着走。
      */
-    public void advance(final int units, final String text) {
-        // 状态在调用线程上就更新完，控件更新才排队：自检与调用方往往就站在事件分发线程上，
-        // 全排进队列的话它读回来的是旧值（LogPanel 踩过同一个坑）
-        done += units;
-        steps += units;
+    public void setProgress(int doneNow, int totalNow, String text) {
+        total = Math.max(1, totalNow);
+        done = Math.max(0, doneNow);
+        steps++;
+        applyProgress(text == null || text.isEmpty() ? plainTextLabel() : text);
+    }
+
+    /** 收尾文案沿用上一句，只有计项变化时不额外改写"当前项"。 */
+    private String plainTextLabel() {
+        int slash = plainText.indexOf(" 项 · ");
+        return slash < 0 ? "准备中…" : plainText.substring(slash + 5);
+    }
+
+    private void applyProgress(String text) {
         final boolean over = done >= total;
         target = over ? 100 : Math.min(100, (int) Math.round(done * 100.0 / total));
         plainText = "进度 " + Math.min(done, total) + "/" + total + " 项 · " + text;
@@ -153,6 +166,18 @@ public final class ProgressDialog extends JDialog {
                 anim.start();
             }
         });
+    }
+
+    /**
+     * 一次推进若干格。解析一个文件按阶段计 5 格、被跳过的重复项也要一次补齐 5 格，
+     * 否则进度条要么停在半途，要么超出总数。
+     */
+    public void advance(final int units, final String text) {
+        // 状态在调用线程上就更新完，控件更新才排队：自检与调用方往往就站在事件分发线程上，
+        // 全排进队列的话它读回来的是旧值（LogPanel 踩过同一个坑）
+        done += units;
+        steps += units;
+        applyProgress(text);
     }
 
     private void tick() {

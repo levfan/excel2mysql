@@ -58,10 +58,16 @@ public final class SqlPage extends JPanel {
 
         void informError(String title, String text);
 
-        /** 耗时操作交给主窗口的任务位跑：子线程算 + 进度框 + 回事件分发线程落界面。 */
+        /**
+         * 耗时操作交给主窗口的任务位跑：子线程算 + 进度框 + 回事件分发线程落界面。
+         *
+         * extra 传主窗口的资源代号，用来声明"这一步还占着别的东西"：这一页的「生成」
+         * 与 Excel 页的「生成」往同一个输出目录里写，得占同一个位才互斥。
+         */
         void runSqlTask(String title,
                         java.util.function.Function<com.excel2mysql.core.ImportParse.Sink, Object> work,
-                        java.util.function.Consumer<Object> onUi);
+                        java.util.function.Consumer<Object> onUi,
+                        String... extra);
 
         /** 交付件落在哪儿：界面里是程序同级，自检指到临时目录。 */
         String exportRoot();
@@ -191,6 +197,8 @@ public final class SqlPage extends JPanel {
                     + "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头";
     private JButton genStd;
     private JButton genSimple;
+    /** 这一页有没有任务在跑：只用来管两颗生成按钮，由主窗口每次改动任务清单时回来说一句。 */
+    private boolean genBusy;
     /** 大小写开关：清单、元数据弹窗和生成件同步按大写显示；脚本正文不回写。 */
     private final JCheckBox upperBox = new JCheckBox("表名与字段名转大写");
     private final List<String> rowPath = new ArrayList<String>();
@@ -1195,9 +1203,23 @@ public final class SqlPage extends JPanel {
         }
         // 判据是"有没有脚本"，不是"解析得出几张表"：解析在点下去之后才做，
         // 解析不出东西时日志会给话，按钮不该一直灰着让人以为程序坏了
-        boolean hasScript = !entries.isEmpty();
-        genStd.setEnabled(hasScript);
-        genSimple.setEnabled(hasScript);
+        applyGenEnabled();
+    }
+
+    /**
+     * 两颗生成按钮的可用性：有脚本、且这一页没有任务在跑（与 Excel 页同一口径）。
+     * 别的按钮不跟着灰——它们点下去会由任务位拦下并说清楚在等哪个任务，比闷着不响有用。
+     */
+    private void applyGenEnabled() {
+        boolean on = !entries.isEmpty() && !genBusy;
+        genStd.setEnabled(on);
+        genSimple.setEnabled(on);
+    }
+
+    /** 主窗口每次改动任务清单时回来说一句这一页忙不忙。 */
+    public void setGenBusy(boolean busy) {
+        genBusy = busy;
+        applyGenEnabled();
     }
 
     private String displayName(String actual) {
@@ -1346,7 +1368,8 @@ public final class SqlPage extends JPanel {
         final boolean upper = upperBox.isSelected();
         host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
                 sink -> exportFromScripts(items, outRoot, withMeta, upper, sink),
-                out -> finishGenerate((GenResult) out));
+                out -> finishGenerate((GenResult) out),
+                MainFrame.RES_EXPORT);
     }
 
     /** 生成结果：目录、写成数、应写数与取消标志。 */
