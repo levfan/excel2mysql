@@ -260,6 +260,8 @@ public final class GuiMain {
                 checkLogFonts(frame, problems);
                 // 第二个页签的两颗生成按钮：解析脚本 → 标准/简易件 → 回读
                 sql_gen_excel(frame, problems);
+                // 双击一行的耗时：读入时缓存字段定义，点开只取那一张（含改表名后的重挂）
+                sql_metadata_cache(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
                 // 程序同级 conn.ini 预填连接信息：读到 / 读不了 / 没有，三种说法各验一条
@@ -2071,6 +2073,164 @@ public final class GuiMain {
             }
         }
         return null;
+    }
+
+    /**
+     * SQL 页双击一行的耗时：读入时整份解析一次并按表存好，点开只取那一张。
+     *
+     * 现场反馈"双击后要等一下才出元数据"。慢的不是建对话框，是那一刻把整份脚本
+     * 重新解析一遍——所以夹具要够大，大到整份解析仍是人眼等得到的一档，
+     * 否则下面那条"快一个量级"的判据就成了空判。
+     */
+    private static void sql_metadata_cache(MainFrame frame, List<String> problems) {
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-sqlcache").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建元数据耗时检查的临时目录失败：" + e);
+            return;
+        }
+        String nl = String.valueOf((char) 10);
+        StringBuilder big = new StringBuilder();
+        // 夹具与 Python 那一份同形（40 张 × 20~24 列 × 120 条 INSERT）。
+        // 不放大表数：200 张那版把后面并发自检的"事件分发线程回应一次"从 200 毫秒顶到
+        // 1790 毫秒（100 张顶到 916 毫秒），多出来的是列对象与表格模型，代价落在回收上；
+        // 判据本身不需要大夹具——缓存失效时"只取一张"会退化成"整份重解析"，比值当场就红
+        for (int t = 0; t < 40; t++) {
+            big.append("CREATE TABLE t_big_").append(String.format("%02d", t))
+                    .append(" (").append(nl);
+            for (int c = 0; c < 20 + t % 5; c++) {
+                big.append("  col_").append(String.format("%02d", c))
+                        .append(" VARCHAR(64) DEFAULT NULL COMMENT '字段").append(c)
+                        .append("',").append(nl);
+            }
+            big.append("  PRIMARY KEY (col_00)").append(nl)
+                    .append(") ENGINE=InnoDB COMMENT='大脚本").append(t).append("';").append(nl);
+            for (int r = 0; r < 120; r++) {
+                // CREATE 之间夹大量 INSERT，行数是靠它们堆上去的（与 Python 那份同形）
+                big.append("INSERT INTO t_big_").append(String.format("%02d", t))
+                        .append(" VALUES ('v").append(r).append("');").append(nl);
+            }
+        }
+        java.io.File script = new java.io.File(dir, "big_script.sql");
+        writeText(script.getPath(), big.toString());
+
+        com.excel2mysql.gui.SqlPage cache = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> paths = new ArrayList<String>();
+        paths.add(script.getPath());
+        cache.addFiles(paths);
+
+        java.util.Map<String, com.excel2mysql.core.SqlScript.ParsedTable> c1 =
+                cache.parsedCacheOf(script.getPath());
+        if (c1 == null || c1.size() != 40
+                || c1.get("t_big_07") == null || c1.get("t_big_07").columns.size() != 22) {
+            problems.add("读入大脚本时没把每张表的字段定义都缓存好："
+                    + (c1 == null ? "无缓存" : c1.size() + " 张"));
+            return;
+        }
+
+        long full0 = System.nanoTime();
+        com.excel2mysql.core.SqlScript.parseCreateTables(cache.textOf(script.getPath()));
+        double fullMs = (System.nanoTime() - full0) / 1000000.0;
+        cache.metadataAtRow(7);   // 先走一次把这条路径预热，免得把 JIT 的账算成缓存没生效
+        long look0 = System.nanoTime();
+        com.excel2mysql.core.SqlScript.ParsedTable looked = cache.metadataAtRow(7);
+        double lookMs = (System.nanoTime() - look0) / 1000000.0;
+        long open0 = System.nanoTime();
+        cache.showMetadata(7);
+        double openMs = (System.nanoTime() - open0) / 1000000.0;
+        closeMetadataDialogs();
+        System.out.println("- [INFO] GUI-SELFTEST | 元数据耗时：整份重解析 "
+                + String.format("%.0f", fullMs) + " 毫秒 / 只取一张 "
+                + String.format("%.2f", lookMs) + " 毫秒 / 含建对话框 "
+                + String.format("%.1f", openMs) + " 毫秒");
+        if (fullMs < 1.0) {
+            problems.add("整份重解析测不出耗时（" + String.format("%.2f", fullMs)
+                    + " 毫秒），比值判据成了拿 0 除 0");
+        }
+        if (looked == null || looked.columns.size() != 22) {
+            problems.add("双击一行取到的字段定义不对："
+                    + (looked == null ? "无表" : looked.columns.size() + " 列"));
+        }
+        // 缓存失效时这条路会退化成整份重解析，比值当场就红，不需要另外设夹具大小下限
+        if (lookMs * 10 >= fullMs) {
+            problems.add("缓存没起作用：只取一张要 " + String.format("%.2f", lookMs)
+                    + " 毫秒，整份重解析才 " + String.format("%.0f", fullMs) + " 毫秒");
+        }
+        // 建对话框本身的开销躲不掉（Swing 建窗口 + 排 22 行），这里只管"人感知不到"那一档
+        if (openMs >= 300.0) {
+            problems.add("双击一行到对话框出来要 " + String.format("%.1f", openMs)
+                    + " 毫秒，人已经等得出了");
+        }
+
+        cache.setSqlRowName(7, "t_big_renamed");
+        java.util.Map<String, com.excel2mysql.core.SqlScript.ParsedTable> c2 =
+                cache.parsedCacheOf(script.getPath());
+        if (c2 == null || !c2.containsKey("t_big_renamed") || c2.containsKey("t_big_07")
+                || !"t_big_renamed".equals(c2.get("t_big_renamed").tableName)) {
+            problems.add("改表名没把缓存里那一格一起改名");
+        }
+        long open2 = System.nanoTime();
+        com.excel2mysql.core.SqlScript.ParsedTable after = cache.metadataAtRow(7);
+        double open2Ms = (System.nanoTime() - open2) / 1000000.0;
+        if (after == null || after.columns.size() != 22 || open2Ms >= 100.0) {
+            problems.add("改名后点开不是毫秒级或字段少了：" + String.format("%.1f", open2Ms)
+                    + " 毫秒 / " + (after == null ? "无" : after.columns.size()) + " 列");
+        }
+
+        // 撞车：新名和另一张表同名，缓存整个丢掉，而不是留着对不上号的那一份
+        cache.setSqlRowName(0, "t_big_01");
+        if (cache.parsedCacheOf(script.getPath()) != null) {
+            problems.add("改成同名表后缓存没丢掉，元数据会显示对不上号的字段");
+        }
+        com.excel2mysql.core.SqlScript.ParsedTable refill = cache.metadataAtRow(0);
+        java.util.Map<String, com.excel2mysql.core.SqlScript.ParsedTable> c3 =
+                cache.parsedCacheOf(script.getPath());
+        if (refill == null || refill.columns.size() != 20 || c3 == null) {
+            problems.add("丢掉缓存后第一次点开没自己补回去："
+                    + (refill == null ? "无表" : refill.columns.size() + " 列"));
+        }
+        long open3 = System.nanoTime();
+        cache.metadataAtRow(0);
+        if ((System.nanoTime() - open3) / 1000000.0 >= 100.0) {
+            problems.add("补回缓存后同一行再点开还是慢");
+        }
+
+        // 一次改多张表：每张各改各的键，不做链式二次改名
+        java.util.Map<String, com.excel2mysql.core.SqlScript.ParsedTable> seed =
+                new java.util.LinkedHashMap<String, com.excel2mysql.core.SqlScript.ParsedTable>();
+        seed.put("a", new com.excel2mysql.core.SqlScript.ParsedTable());
+        seed.get("a").tableName = "a";
+        seed.put("b", new com.excel2mysql.core.SqlScript.ParsedTable());
+        seed.get("b").tableName = "b";
+        java.util.Map<String, String> two = new java.util.LinkedHashMap<String, String>();
+        two.put("a", "x");
+        two.put("b", "y");
+        java.util.Map<String, com.excel2mysql.core.SqlScript.ParsedTable> rk =
+                com.excel2mysql.gui.SqlPage.rekeyParsed(seed, two);
+        if (rk == null || rk.size() != 2 || !rk.containsKey("x") || !rk.containsKey("y")
+                || !"y".equals(rk.get("y").tableName)) {
+            problems.add("一次改多张表的缓存重挂不对：" + (rk == null ? "被丢掉" : rk.keySet()));
+        }
+        java.util.Map<String, String> miss = new java.util.LinkedHashMap<String, String>();
+        miss.put("c", "d");
+        java.util.Map<String, String> hit = new java.util.LinkedHashMap<String, String>();
+        hit.put("a", "b");
+        if (com.excel2mysql.gui.SqlPage.rekeyParsed(seed, miss) != null
+                || com.excel2mysql.gui.SqlPage.rekeyParsed(seed, hit) != null
+                || com.excel2mysql.gui.SqlPage.rekeyParsed(null, two) != null) {
+            problems.add("要改的名字不在缓存里、新键撞车、或本就没缓存，"
+                    + "其中有一种没被判成\"丢掉整份\"");
+        }
+    }
+
+    /** 关掉自检期间弹出的元数据框：不关掉会攒出一堆隐藏窗口，后面的截图就不是现场。 */
+    private static void closeMetadataDialogs() {
+        for (java.awt.Window w : java.awt.Window.getWindows()) {
+            if (w instanceof com.excel2mysql.gui.SqlMetadataDialog) {
+                w.dispose();
+            }
+        }
     }
 
     private static void sql_page(MainFrame frame, List<String> problems) {

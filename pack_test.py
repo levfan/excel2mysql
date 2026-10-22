@@ -2289,6 +2289,27 @@ def _last_dialog():
     return _FakeProgress.made[-1] if _FakeProgress.made else None
 
 
+def _wait_until(pred, seconds):
+    """有限等待：超时返回 False 让用例红，绝不从这里抛出去（一抛整轮中止，红就找不着了）。
+
+    放在进度框替身这一片，是因为凡走真线程（MODAL_PROGRESS=True）的场景都可能撞上
+    "上一步还没腾出资源位，这一步就被同页互斥挡下"——那是取证的时机问题，不是产品缺陷。
+    """
+    deadline = _t_busy.time() + seconds
+    while _t_busy.time() < deadline:
+        QApplication.processEvents()
+        if pred():
+            return True
+        _t_busy.sleep(0.005)
+    QApplication.processEvents()
+    return False
+
+
+def _pump(seconds):
+    """干等这么久，但事件循环照常泵：站在主线程 sleep 就等于自己把界面掐死了。"""
+    return _wait_until(lambda: False, seconds)
+
+
 class _FakeBtn:
     def __init__(self):
         self.clicked = _Sig()
@@ -2535,6 +2556,9 @@ check("O31 SQL 执行连不上库时进度框照样收尾", d7 is not None and d
 check("O32 连不上库的详情进了 SQL 日志", "[连接失败]" in ow3.sql_log.toPlainText(),
       [l for l in ow3.sql_log.toPlainText().splitlines() if "连接失败" in l][:1])
 ow3._add_files([jx1])
+# 同 R31 那处：这一段 MODAL_PROGRESS 是 True，_add_files 走真线程。不等它腾出资源位就点
+# 「开始导入」，会被同页互斥挡下、不弹框，下面三条一起拿到上一步那颗 SQL 执行的框
+_wait_until(lambda: not ow3.task_busy((ow3.RES_EXCEL,)), 20)
 _FakeProgress.made.clear()
 ow3.on_start_import()
 d8 = _last_dialog()
@@ -3376,23 +3400,6 @@ def _make_gen_sql(tables):
     return p
 
 
-def _wait_until(pred, seconds):
-    """有限等待：超时返回 False 让用例红，绝不从这里抛出去（一抛整轮中止，红就找不着了）。"""
-    deadline = _time.time() + seconds
-    while _time.time() < deadline:
-        QApplication.processEvents()
-        if pred():
-            return True
-        _time.sleep(0.005)
-    QApplication.processEvents()
-    return False
-
-
-def _pump(seconds):
-    """干等这么久，但事件循环照常泵：站在主线程 sleep 就等于自己把界面掐死了。"""
-    return _wait_until(lambda: False, seconds)
-
-
 BIG_FILES, BIG_ROWS, GEN_TABLES = 8, 7500, 150
 big_xlsx = [_make_big_xlsx(chr(ord("A") + k), BIG_ROWS) for k in range(BIG_FILES)]
 gen_sql = _make_gen_sql(GEN_TABLES)
@@ -3800,6 +3807,10 @@ _FakeProgress.made.clear()
 pw3 = _legacy_naming(app_main.MainWindow())
 pw3.cb_db.addItem("alpha", "alpha")
 pw3._add_files([f1, f2, f3])
+# 这一支把 MODAL_PROGRESS 换回 True，_add_files 因此走真线程。机器被别的闸门同时压满时
+# 它还没收工，下一句点「替换首个前缀」就被同页互斥挡下、压根不弹进度框
+# （实测红过一次：拿到的 dlg 是上一步那颗，total=15 而不是 4）。等它腾出资源位再点。
+_wait_until(lambda: not pw3.task_busy((pw3.RES_EXCEL,)), 20)
 pw3.ed_prefix.setText("ods2")
 pw3.btn_replace_prefix.click()
 dlg = _last_dialog()
@@ -4039,6 +4050,84 @@ check("R49b 正文自带 U+FFFD 的 UTF-8 脚本仍按 UTF-8 解码",
       _repl_tab["table_comment"] == "编号表 "
       and _repl_tab["columns"][0]["comment"] == "编号",
       (_repl_tab["table_comment"], _repl_tab["columns"][0]["comment"]))
+
+# ---- SQL 页：双击一行的耗时（读入时整份解析一次，点开只取那一张表）----
+# 现场反馈是"双击一行后要等一下才出元数据"。慢的不是建对话框，是那一刻把整份
+# 脚本重新解析一遍，所以夹具要够大：大到整份解析仍是"人眼等得到"的一档。
+_big_sql = os.path.join(_tmpdir, "big_script.sql")
+with io.open(_big_sql, "w", encoding="utf-8") as _bfh:
+    for _bt in range(40):
+        _bfh.write("CREATE TABLE t_big_%02d (\n" % _bt)
+        for _bc in range(20 + _bt % 5):
+            _bfh.write("  col_%02d VARCHAR(64) DEFAULT NULL COMMENT '字段%d',\n"
+                       % (_bc, _bc))
+        _bfh.write("  PRIMARY KEY (col_00)\n) ENGINE=InnoDB COMMENT='大脚本%d';\n" % _bt)
+        for _br in range(120):
+            # CREATE 之间夹大量 INSERT，行数是靠它们堆上去的（与现场那份同形）
+            _bfh.write("INSERT INTO t_big_%02d VALUES ('v%d');\n" % (_bt, _br))
+bw = app_main.MainWindow()
+_orig_gofn7 = app_main.QFileDialog.getOpenFileNames
+app_main.QFileDialog.getOpenFileNames = staticmethod(
+    lambda *a, **k: ([_big_sql], "SQL (*.sql)"))
+try:
+    bw.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn7)
+_brec = bw.sql_files[0]
+_bcols = ((_brec.get("parsed") or {}).get("t_big_07") or {}).get("columns") or []
+check("R59 读入大脚本时把每张表的字段定义都缓存好，一张不落",
+      len(_brec.get("parsed") or {}) == 40 and len(_bcols) == 22,
+      (len(_brec.get("parsed") or {}), len(_bcols)))
+_t0 = _t_busy.monotonic()
+app_main.parse_create_tables(_brec["text"])
+_full_ms = (_t_busy.monotonic() - _t0) * 1000.0
+bw._build_sql_metadata_dialog(7)          # 先走一次，量的是稳态而不是首次建窗
+_t0 = _t_busy.monotonic()
+_bdlg = bw._build_sql_metadata_dialog(7)
+_open_ms = (_t_busy.monotonic() - _t0) * 1000.0
+check("R60 整份重解析测得出耗时（不然下面那条比值是拿 0 除 0）",
+      _full_ms >= 1.0, "%.0f 毫秒" % _full_ms)
+# 缓存失效时这条路就退化成整份重解析，比值当场就红——判据自己不依赖夹具多大
+check("R61 双击一行只从缓存取那一张：建对话框比整份重解析快一个数量级以上，且低于 100 毫秒",
+      _open_ms < 100.0 and _open_ms * 10 < _full_ms
+      and _bdlg is not None and _bdlg.tableWidget().rowCount() == 22,
+      "点开 %.1f 毫秒 / 整份 %.0f 毫秒" % (_open_ms, _full_ms))
+bw.sql_table.item(7, 4).setText("t_big_renamed")
+check("R62 改表名把缓存里那一格一起改名，不留旧键",
+      "t_big_renamed" in (_brec.get("parsed") or {})
+      and "t_big_07" not in (_brec.get("parsed") or {})
+      and _brec["parsed"]["t_big_renamed"]["table_name"] == "t_big_renamed",
+      sorted((_brec.get("parsed") or {}))[:3])
+_t0 = _t_busy.monotonic()
+_bdlg2 = bw._build_sql_metadata_dialog(7)
+_open2_ms = (_t_busy.monotonic() - _t0) * 1000.0
+check("R63 改名后点开仍是毫秒级，字段一个没少",
+      _open2_ms < 100.0 and _bdlg2 is not None
+      and _bdlg2.tableWidget().rowCount() == 22, "%.1f 毫秒" % _open2_ms)
+bw.sql_table.item(0, 4).setText("t_big_01")
+check("R64 改成与另一张表同名时丢掉整份缓存：宁可慢那一次，不显示对不上号的字段",
+      _brec.get("parsed") is None and _brec["tabs"][0]["name"] == "t_big_01",
+      _brec.get("parsed"))
+_t0 = _t_busy.monotonic()
+_bdlg3 = bw._build_sql_metadata_dialog(0)
+check("R65 丢掉缓存后第一次点开自己现解析并补回去，字段照样出得来",
+      _bdlg3 is not None and _brec.get("parsed") is not None
+      and _bdlg3.tableWidget().rowCount() == 20, len(_brec.get("parsed") or {}))
+_t0 = _t_busy.monotonic()
+bw._build_sql_metadata_dialog(0)
+check("R66 补回缓存后同一行再点开低于 100 毫秒",
+      (_t_busy.monotonic() - _t0) * 1000.0 < 100.0)
+# 前缀「生效」一次改多张表：整份改名走同一套重挂规则
+_rk = app_main.rekey_parsed({"a": {"table_name": "a"}, "b": {"table_name": "b"}},
+                            {"a": "x", "b": "y"})
+check("R67 一次改多张表：每张各改各的键，不做链式二次改名",
+      sorted(_rk) == ["x", "y"] and _rk["y"]["table_name"] == "y", _rk)
+check("R68 要改的名字不在缓存里、或新键撞车，都判定为丢掉整份",
+      app_main.rekey_parsed({"a": {}}, {"c": "d"}) is None
+      and app_main.rekey_parsed({"a": {}, "b": {}}, {"a": "b"}) is None
+      and app_main.rekey_parsed(None, {"a": "b"}) is None)
+bw.close()
+bw = None
 
 # ---- Excel 导入页：单击表名单独改一张表 ----
 rw6 = _legacy_naming(app_main.MainWindow())

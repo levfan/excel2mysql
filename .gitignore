@@ -257,6 +257,9 @@ build_stamp.py
 hs_err_pid*.log
 replay_pid*.log
 
+# Java 自检的并发留影：每跑一次闸门重写一遍 png，是取证输出不是源文件
+/java/shots/
+
 # 本机测试库的口令与连接参数（G 组真 MySQL 用例读它），同样永不入库：
 # 远端是公开仓库，口令一旦进 commit 就永久留在历史里，删文件也撤不掉。
 # 口径与用法写在 .agents/skills/git-commit/SKILL.md 的「本机测试库」一节。
