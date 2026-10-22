@@ -1172,14 +1172,21 @@ class DropArea(QWidget):
     files_dropped = Signal(list)
     clicked = Signal()
 
-    def __init__(self, parent=None):
+    # 两个图形页共用这一种拖拽区，只有文案不同：Excel 页收 xlsx/xls/zip，
+    # SQL 页只收 .sql。默认值保持第一页原来那句，第二页构造时传自己那两句。
+    EXCEL_HINT = "将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n" \
+                 "（支持 .xlsx / .xls / .zip，可多选）"
+    SQL_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）"
+
+    def __init__(self, parent=None, hint=None, tooltip=None):
         super().__init__(parent)
+        self.hint_text = hint if hint is not None else self.EXCEL_HINT
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("点击选择 Excel / ZIP 文件；也可以直接拖到这里")
+        self.setToolTip(tooltip if tooltip is not None
+                        else "点击选择 Excel / ZIP 文件；也可以直接拖到这里")
         lay = QVBoxLayout(self)
-        self.label = QLabel("将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n"
-                            "（支持 .xlsx / .xls / .zip，可多选）")
+        self.label = QLabel(self.hint_text)
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setFont(QFont("", 12))
         lay.addWidget(self.label)
@@ -1641,15 +1648,12 @@ class MainWindow(QWidget):
         self.lbl_sql_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.lbl_sql_db)
 
-        btn_row = QHBoxLayout()
-        self.btn_sql_add = QPushButton("添加 SQL 文件")
-        self.btn_sql_add.clicked.connect(self.on_sql_add_files)
-        self.btn_sql_remove = QPushButton("移除选中文件")
-        self.btn_sql_remove.clicked.connect(self.on_sql_remove_selected)
-        btn_row.addWidget(self.btn_sql_add)
-        btn_row.addWidget(self.btn_sql_remove)
-        btn_row.addStretch(1)
-        lay.addLayout(btn_row)
+        # 添加文件这一路与「Excel 导入」那页统一：拖进来或点这块区域选文件，
+        # 不再单独放一颗「添加 SQL 文件」按钮（两页各一套入口只会让人找两遍）
+        self.sql_drop = DropArea(hint=DropArea.SQL_HINT,
+                                 tooltip="点击选择 SQL 脚本；也可以直接拖到这里")
+        self.sql_drop.files_dropped.connect(self.on_sql_files_dropped)
+        self.sql_drop.clicked.connect(self.on_sql_add_files)
 
         self.sql_table = QTableWidget(0, 5)
         style_table_font(self.sql_table)
@@ -1696,7 +1700,14 @@ class MainWindow(QWidget):
 
         # 第二页只保留大小写开关：默认不勾选。勾选后表名清单、元数据弹窗和生成件都按大写显示，
         # 但脚本正文仍保持原样，避免用户只是想看一份大写清单却把源文件改掉。
+        # 移除按钮排在同一排的最左：表格下面第一排（前缀行的下一行）的最左那颗，
+        # 与「Excel 导入」那页「清空待上传文件」的相对位置一致。
+        # 不塞进保存/执行那一排——那排的最小宽度已经贴着窗口宽度，再加一颗就顶出屏幕
+        # （U7 那条"整窗落在可用区内"实测被顶到 848 > 可用 800）。
         name_row = QHBoxLayout()
+        self.btn_sql_remove = QPushButton("移除选中文件")
+        self.btn_sql_remove.clicked.connect(self.on_sql_remove_selected)
+        name_row.addWidget(self.btn_sql_remove)
         self.chk_sql_upper = QCheckBox("表名与字段名转大写")
         self.chk_sql_upper.setToolTip(
             "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部大写\n"
@@ -1743,8 +1754,8 @@ class MainWindow(QWidget):
         self.sql_log.setFont(QFont("Consolas", LOG_FONT_SIZE))
         self.sql_log.setMinimumHeight(log_min_height(self.sql_log))
 
-        # 上半区 = 待处理文件表格 + 它自己的前缀行与操作行；下半区 = 日志。
-        # 两者之间一条可拖拽分隔条：一边变高另一边就变窄，做法与 Excel 导入页一致。
+        # 三段可上下拖拽，与「Excel 导入」那页同一形状：拖拽区 / 表格与它的三行操作条 / 日志。
+        # 把手 6px、任何一段都不许拖到 0 高；日志段给到最大，理由与第一页那条一样。
         sql_upper = QWidget()
         up_lay = QVBoxLayout(sql_upper)
         up_lay.setContentsMargins(0, 0, 0, 0)
@@ -1756,11 +1767,14 @@ class MainWindow(QWidget):
         self.sql_split = QSplitter(Qt.Vertical)
         self.sql_split.setChildrenCollapsible(False)     # 不允许把任一边拖到 0 高
         self.sql_split.setHandleWidth(6)
+        self.sql_split.addWidget(self.sql_drop)
         self.sql_split.addWidget(sql_upper)
         self.sql_split.addWidget(self.sql_log)
-        self.sql_split.setStretchFactor(0, 2)
-        self.sql_split.setStretchFactor(1, 3)
-        self.sql_split.setSizes([230, 330])
+        self.sql_split.setStretchFactor(0, 0)
+        self.sql_split.setStretchFactor(1, 2)
+        self.sql_split.setStretchFactor(2, 3)
+        # 110 是拖拽区的四行字，230 给表格加它自己那三行，剩下的给日志（同第一页的 110:200:330）
+        self.sql_split.setSizes([110, 230, 330])
         lay.addWidget(self.sql_split, 1)
         return page
 
@@ -1931,8 +1945,24 @@ class MainWindow(QWidget):
     def on_sql_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, "选择 SQL 脚本", "", "SQL 脚本 (*.sql);;所有文件 (*)")
-        if not files:
+        if files:
+            self.add_sql_paths(files)
+
+    def on_sql_files_dropped(self, paths):
+        """拖进来的路径只收 .sql，与第一页同一句口径；混着别的文件时点名哪些没进去。"""
+        keep = [p for p in paths if p.lower().endswith(".sql")]
+        wrong = [p for p in paths if not p.lower().endswith(".sql")]
+        if not keep:
+            append_log(self.sql_log, "[提示] 拖入的不是 SQL 脚本文件，已忽略。")
             return
+        if wrong:
+            append_log(self.sql_log,
+                       "[跳过] 不是 SQL 脚本，未读入：%s"
+                       % "、".join(os.path.basename(p) for p in wrong))
+        self.add_sql_paths(keep)
+
+    def add_sql_paths(self, files):
+        """点击选择与拖拽共用这一个入口：先去重，再交给读盘子线程。"""
         existing = {s["path"] for s in self.sql_files}
         todo, dups = [], []
         for f in files:

@@ -224,8 +224,14 @@ public final class SqlPage extends JPanel {
     private final LogPanel logPanel = new LogPanel();
     private final HintTextField prefixField;
     private final JButton runButton;
-    /** 表格与日志之间的分栏：初始比例、把手宽度都要能被读出来核对（Python 那边是 sql_split）。 */
+    /** 三段分栏：拖拽区 / 表格与它的三行操作条 / 日志。内层是 split，外层是 outerSplit。 */
     private JSplitPane split;
+    private JSplitPane outerSplit;
+    private DropArea sqlDrop;
+    /** 表格区那三行的真实容器（对撞器要读"哪颗按钮在哪一行"，不看像素）。 */
+    private java.awt.Container rowPrefix;
+    private java.awt.Container rowName;
+    private java.awt.Container rowAct;
     private final HintLabel hint = new HintLabel();
 
     public SqlPage(Host host) {
@@ -287,8 +293,9 @@ public final class SqlPage extends JPanel {
         JScrollPane scroll = new JScrollPane(table);
         scroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(120)));
 
-        JButton add = new JButton("添加 SQL 文件");
-        add.addActionListener(e -> chooseFiles());
+        // 添加文件这一路与第一页统一：拖进来或点这块区域选文件，不再单独放一颗按钮
+        sqlDrop = new DropArea(paths -> dropFiles(paths), () -> chooseFiles(),
+                DropArea.SQL_HINT, "点击选择 SQL 脚本；也可以直接拖到这里");
         JButton remove = new JButton("移除选中文件");
         remove.addActionListener(e -> {
             if (removeSelected() == 0) {
@@ -349,21 +356,29 @@ public final class SqlPage extends JPanel {
         prefixBtns.add(apply);
         prefixBtns.add(replace);
         JPanel prefixRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
+        rowPrefix = prefixRow;
         prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixBtns, BorderLayout.EAST);
 
-        // 保存/执行在左、清除日志在右（main.py:1178-1183 的 addStretch(1)）
+        // 保存/执行在左、清除日志在右（与 Python 侧同一排布）。移除按钮不排这一排：
+        // 这一排的最小宽度已经贴着窗口宽度，再加一颗就顶出屏幕
+        //（Python 侧 U7「整窗落在可用区内」实测被顶到 848 > 可用 800），两条线同一做法
         JPanel runBtns = flow();
         runBtns.add(save);
         runBtns.add(runButton);
         runBtns.add(genStd);
         runBtns.add(genSimple);
         JPanel actRow = new JPanel(new BorderLayout());
+        rowAct = actRow;
         actRow.add(runBtns, BorderLayout.WEST);
         actRow.add(clearLog, BorderLayout.EAST);
 
+        // 移除按钮排在表格下方第一排（前缀行的下一行）的最左，
+        // 与「Excel 导入」那页「清空待上传文件」的相对位置一致
         JPanel nameRow = flow();
+        rowName = nameRow;
+        nameRow.add(remove);
         nameRow.add(upperBox);
 
         JPanel actions = new JPanel(new BorderLayout());
@@ -375,18 +390,15 @@ public final class SqlPage extends JPanel {
         upper.add(scroll, BorderLayout.CENTER);
         upper.add(actions, BorderLayout.SOUTH);
 
-        JPanel topRow = flow();
-        topRow.add(add);
-        topRow.add(remove);
-
         JScrollPane logScroll = new JScrollPane(logPanel);
         // Python 的 SQL 日志区同样没有组框标题，只有上面那排按钮；
         // 下限取日志面板自己量出来的行数高度（这一段里没有标题行，不用再加）
         logScroll.setMinimumSize(new Dimension(UiScale.px(300),
                 logPanel.getMinimumSize().height));
 
-        // 段数、比例、把手宽度照 main.py 的 setSizes([230, 330])：日志段给到最大。
-        // Swing 没有 setChildrenCollapsible(false)，用最小尺寸顶住——拖到 0 高那段就等于没了
+        // 三段纵向分栏，段数与比例照 main.py 的 setSizes([110, 230, 330])：
+        // 拖拽区不参与拉伸，剩下 2:3 给表格与日志（与第一页同一套做法）
+        sqlDrop.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(60)));
         upper.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(80)));
         split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
         split.setDividerSize(UiScale.px(6));
@@ -394,11 +406,16 @@ public final class SqlPage extends JPanel {
         split.setResizeWeight(0.25);
         split.setDividerLocation(UiScale.px(230));
         split.setContinuousLayout(true);
-        // 与 Excel 页同一件事：Qt 的 setSizes([260,290]) 会等比缩放，JSplitPane 只认绝对值
+        outerSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, sqlDrop, split);
+        outerSplit.setDividerSize(UiScale.px(6));
+        outerSplit.setResizeWeight(0.0);
+        outerSplit.setDividerLocation(UiScale.px(110));
+        outerSplit.setContinuousLayout(true);
+        // 与 Excel 页同一件事：Qt 的 setSizes 会等比缩放，JSplitPane 只认绝对值
         splitPlaced = false;
         sqlUpper = upper;
         sqlLog = logScroll;
-        split.addComponentListener(new java.awt.event.ComponentAdapter() {
+        outerSplit.addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
             public void componentResized(java.awt.event.ComponentEvent e) {
                 applySplitProportions();
@@ -407,9 +424,8 @@ public final class SqlPage extends JPanel {
 
         JPanel north = new JPanel(new BorderLayout());
         north.add(hint, BorderLayout.NORTH);
-        north.add(topRow, BorderLayout.SOUTH);
         add(north, BorderLayout.NORTH);
-        add(split, BorderLayout.CENTER);
+        add(outerSplit, BorderLayout.CENTER);
     }
 
     private static JPanel flow() {
@@ -500,14 +516,19 @@ public final class SqlPage extends JPanel {
 
     /** 表格与日志按 230:330 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
     public void applySplitProportions() {
-        if (splitPlaced || split == null || split.getHeight() < UiScale.px(120)
+        if (splitPlaced || outerSplit == null || split == null
+                || outerSplit.getHeight() < UiScale.px(200)
                 || sqlUpper == null || sqlLog == null) {
             return;
         }
         splitPlaced = true;
-        int usable = split.getHeight() - split.getDividerSize();
-        int first = (int) Math.round(usable * 230.0 / 560.0);
-        split.setDividerLocation(Math.max(first, sqlUpper.getMinimumSize().height));
+        // 与第一页同一个算法：外层先按 110:640 给拖拽区，剩下的再按 230:330 分给表格与日志
+        int first = (int) Math.round(outerSplit.getHeight() * 110.0 / 670.0);
+        outerSplit.setDividerLocation(Math.max(first, sqlDrop.getMinimumSize().height));
+        int rest = outerSplit.getHeight() - outerSplit.getDividerLocation()
+                - outerSplit.getDividerSize();
+        int second = (int) Math.round(rest * 230.0 / 560.0);
+        split.setDividerLocation(Math.max(second, sqlUpper.getMinimumSize().height));
     }
 
     public double splitResizeWeight() {
@@ -516,6 +537,85 @@ public final class SqlPage extends JPanel {
 
     public int splitDividerLocation() {
         return split.getDividerLocation();
+    }
+
+    /** 外层那条（拖拽区与表格之间）的三个值，与第一页的 drop 段同一判据。 */
+    public double dropResizeWeight() {
+        return outerSplit.getResizeWeight();
+    }
+
+    public int dropDividerSize() {
+        return outerSplit.getDividerSize();
+    }
+
+    public int dropDividerLocation() {
+        return outerSplit.getDividerLocation();
+    }
+
+    public DropArea sqlDropArea() {
+        return sqlDrop;
+    }
+
+    /**
+     * 三段分栏的真实顺序，由组件本身推出来（不写死）：
+     * 双端对撞器比的就是"这一页从上到下是哪三段"（Python 那边是 sql_split 的三个 widget）。
+     */
+    public String segmentOrder() {
+        if (outerSplit == null || split == null || sqlDrop == null) {
+            return "";
+        }
+        return (outerSplit.getLeftComponent() == sqlDrop ? "拖拽区" : "?")
+                + "|" + (split.getTopComponent() == sqlUpper
+                        && findTable((java.awt.Container) sqlUpper) == table ? "表格区" : "?")
+                + "|" + (split.getBottomComponent() == sqlLog ? "日志区" : "?");
+    }
+
+    /** 表格区从上到下的三行容器：前缀行 / 移除与开关行 / 保存执行生成行。 */
+    public java.awt.Container[] sqlRows() {
+        return new java.awt.Container[]{rowPrefix, rowName, rowAct};
+    }
+
+    private JTable findTable(java.awt.Container c) {
+        if (c == null) {
+            return null;
+        }
+        for (java.awt.Component child : c.getComponents()) {
+            if (child == table) {
+                return table;
+            }
+            if (child instanceof java.awt.Container) {
+                JTable found = findTable((java.awt.Container) child);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 拖进来的路径只收 .sql，与第一页同一句口径；混着别的文件时点名哪些没进去。
+     * 一个都没收到时也要说一句，不然拖完清单不动、用户不知道是没接受还是没读进来。
+     */
+    public void dropFiles(List<String> paths) {
+        List<String> keep = new ArrayList<String>();
+        List<String> wrong = new ArrayList<String>();
+        for (String p : paths) {
+            (p != null && p.toLowerCase(java.util.Locale.ROOT).endsWith(".sql")
+                    ? keep : wrong).add(p);
+        }
+        if (keep.isEmpty()) {
+            log("[提示] 拖入的不是 SQL 脚本文件，已忽略。");
+            return;
+        }
+        if (!wrong.isEmpty()) {
+            List<String> names = new ArrayList<String>();
+            for (String p : wrong) {
+                names.add(baseName(p));
+            }
+            log("[跳过] 不是 SQL 脚本，未读入：" + String.join("、", names));
+        }
+        addFiles(keep);
     }
 
     public HintTextField prefixField() {
