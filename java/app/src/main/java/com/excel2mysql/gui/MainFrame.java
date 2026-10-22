@@ -832,6 +832,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }, "excel2mysql-import");
         worker.setDaemon(true);
         worker.start();
+        placeTaskDialog(progress);
         progress.open();
     }
 
@@ -1170,6 +1171,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             task.worker = worker;
             worker.setDaemon(true);
             worker.start();
+            placeTaskDialog(progress);
             // open() 现在显示的是非模态框：主线程不再停在嵌套循环里，别的页照常能用
             progress.open();
             return;
@@ -1192,6 +1194,33 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     @Override
     public String exportRoot() {
         return programDir();   // 交付件落点：界面里是程序同级，自检指临时目录
+    }
+
+    /**
+     * 多个进度框错开摆：都居中在主人窗口上会叠成一颗，后面那颗的「取消」根本点不到。
+     *
+     * 往右下各错一格，竖直那一步（160）比框本身高还多，几颗不会压住对方。
+     * 偏移量按"此刻有几个框在屏"算，不按任务累计序号——任务号会一直涨，
+     * 跑上几轮就把框推到屏幕外去了。两条线同一个算法（Python 侧 `_place_task_dialog`）。
+     */
+    private void placeTaskDialog(ProgressDialog dlg) {
+        int shown = 0;
+        for (Task t : tasks) {
+            if (t.dialog != null && t.dialog != dlg && t.dialog.isShowing()) {
+                shown++;
+            }
+        }
+        java.awt.Rectangle avail = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getDefaultScreenDevice().getDefaultConfiguration().getBounds();
+        int w = dlg.getWidth() > 0 ? dlg.getWidth() : dlg.getPreferredSize().width;
+        int h = dlg.getHeight() > 0 ? dlg.getHeight() : dlg.getPreferredSize().height;
+        int x = getX() + UiScale.px(40) + shown * UiScale.px(40);
+        // 竖直那一步要大于框自己的高：框高按 DPI 折算，写死 160 在 144dpi 上就比框矮，
+        // 两颗照样上下叠住（自检抓到过一次，交叠 26 像素）
+        int y = getY() + UiScale.px(90) + shown * (h + UiScale.px(20));
+        dlg.setLocationRelativeTo(null);   // 先取消 AWT 那个"没动过就居中在主人上"的默认
+        dlg.setLocation(Math.max(avail.x + 8, Math.min(x, avail.x + avail.width - w - 8)),
+                Math.max(avail.y + 8, Math.min(y, avail.y + avail.height - h - 8)));
     }
 
     /**
@@ -1376,6 +1405,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }, "excel2mysql-parse");
         worker.setDaemon(true);
         worker.start();
+        placeTaskDialog(progress);
         progress.open();
     }
 
@@ -2088,6 +2118,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public boolean sqlSamplesShowing() {
         return sqlRunSamples != null && sqlRunSamples.isShowing();
+    }
+
+    /** 收起那份示例清单：它是非模态的，自检点完得自己收，不然会留在屏上挡后面的场景。 */
+    public void closeSqlSamples() {
+        if (sqlRunSamples != null) {
+            sqlRunSamples.setVisible(false);
+        }
     }
 
     public String sqlSamplesTitle() {

@@ -1481,6 +1481,22 @@ class MainWindow(QWidget):
         return ("已有任务在跑：" + other.describe()
                 + "。这一步没执行——它和那个任务共用「%s」，等它跑完或点进度框「取消」。" % shared)
 
+    def _place_task_dialog(self, dlg):
+        """多个进度框错开摆：都居中在主人窗口上会叠成一颗，后面那颗的「取消」点不到。
+
+        往右下各错一格，竖直那一步取"框自己的高再加 20"，所以几颗不会压住对方。
+        偏移量按"此刻有几个框在屏"算，不按任务累计序号——任务号会一直涨，
+        跑上几轮就把框推到屏幕外去了。
+        """
+        shown = sum(1 for t in self._tasks
+                    if t.dialog is not None and t.dialog is not dlg and t.dialog.isVisible())
+        avail = QApplication.primaryScreen().availableGeometry()
+        x = self.x() + 40 + shown * 40
+        # 竖直那一步要大于框自己的高，不然两颗照样上下叠住（Java 侧自检实测到过）
+        y = self.y() + 90 + shown * (dlg.height() + 20)
+        dlg.move(max(avail.left() + 8, min(x, avail.right() - dlg.width() - 8)),
+                 max(avail.top() + 8, min(y, avail.bottom() - dlg.height() - 8)))
+
     def _run_modal(self, title, work, args=(), on_done=None, log_view=None):
         """统一入口：把纯工作函数 work(sink, *args) 放到子线程跑，弹一个非模态进度框。
 
@@ -1519,6 +1535,7 @@ class MainWindow(QWidget):
         worker.finished.connect(task.thread_done)
         dlg.btn_cancel.clicked.connect(worker.cancel)
         worker.start()
+        self._place_task_dialog(dlg)
         # show() 而不是 exec()：主线程不再停在嵌套循环里，别的页签照常能用
         dlg.show()
         dlg.raise_()
@@ -2574,6 +2591,7 @@ class MainWindow(QWidget):
         self.worker.progress.connect(task.set_progress)
         dlg.btn_cancel.clicked.connect(self.worker.abort)
         self.worker.start()
+        self._place_task_dialog(dlg)
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
