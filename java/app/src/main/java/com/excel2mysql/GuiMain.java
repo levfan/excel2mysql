@@ -2129,6 +2129,25 @@ public final class GuiMain {
             return;
         }
 
+        // 列集合与「Excel 导入」页对齐：去掉全是 1 的出现次数，换成看得懂的表注释
+        StringBuilder cols = new StringBuilder();
+        for (int c = 0; c < cache.columnCount(); c++) {
+            cols.append(c == 0 ? "" : "|").append(cache.columnName(c));
+        }
+        if (!"序号|文件|原表名|当前表名|表注释".equals(cols.toString())) {
+            problems.add("SQL 页的列不是 序号|文件|原表名|当前表名|表注释：" + cols);
+        }
+        if (!"大脚本7".equals(cache.sqlRowComment(7))) {
+            problems.add("导入脚本后表注释没显示在清单里：" + cache.sqlRowComment(7));
+        }
+        StringBuilder edit = new StringBuilder();
+        for (int c = 0; c < cache.columnCount(); c++) {
+            edit.append(c == 0 ? "" : ",").append(cache.cellEditable(7, c));
+        }
+        if (!"false,false,false,true,false".equals(edit.toString())) {
+            problems.add("SQL 页可编辑的列不对（应只有「当前表名」）：" + edit);
+        }
+
         long full0 = System.nanoTime();
         com.excel2mysql.core.SqlScript.parseCreateTables(cache.textOf(script.getPath()));
         double fullMs = (System.nanoTime() - full0) / 1000000.0;
@@ -2178,22 +2197,25 @@ public final class GuiMain {
                     + " 毫秒 / " + (after == null ? "无" : after.columns.size()) + " 列");
         }
 
-        // 撞车：新名和另一张表同名，缓存整个丢掉，而不是留着对不上号的那一份
+        // 撞车：新名和另一张表同名。缓存留着可用（刷新清单要读它，丢了就等于把整份
+        // 重解析搬回事件分发线程），同名两行并成一行，注释与字段都取先出现那一张
         cache.setSqlRowName(0, "t_big_01");
-        if (cache.parsedCacheOf(script.getPath()) != null) {
-            problems.add("改成同名表后缓存没丢掉，元数据会显示对不上号的字段");
-        }
-        com.excel2mysql.core.SqlScript.ParsedTable refill = cache.metadataAtRow(0);
         java.util.Map<String, com.excel2mysql.core.SqlScript.ParsedTable> c3 =
                 cache.parsedCacheOf(script.getPath());
-        if (refill == null || refill.columns.size() != 20 || c3 == null) {
-            problems.add("丢掉缓存后第一次点开没自己补回去："
-                    + (refill == null ? "无表" : refill.columns.size() + " 列"));
+        if (c3 == null || c3.size() != 39 || c3.containsKey("t_big_00")) {
+            problems.add("改成同名表后缓存不对：" + (c3 == null ? "被丢掉" : c3.size() + " 键"));
+        }
+        com.excel2mysql.core.SqlScript.ParsedTable hit0 = cache.metadataAtRow(0);
+        if (hit0 == null || hit0.columns.size() != 20 || cache.rowCount() != 39
+                || !"t_big_01".equals(cache.sqlRowActualName(0))
+                || !"大脚本0".equals(cache.sqlRowComment(0))) {
+            problems.add("撞名后没并成一行、或注释与字段没取先出现那一张："
+                    + cache.rowCount() + " 行 / " + cache.sqlRowComment(0));
         }
         long open3 = System.nanoTime();
         cache.metadataAtRow(0);
         if ((System.nanoTime() - open3) / 1000000.0 >= 100.0) {
-            problems.add("补回缓存后同一行再点开还是慢");
+            problems.add("撞名后同一行再点开还是慢");
         }
 
         // 一次改多张表：每张各改各的键，不做链式二次改名
@@ -2214,13 +2236,18 @@ public final class GuiMain {
         }
         java.util.Map<String, String> miss = new java.util.LinkedHashMap<String, String>();
         miss.put("c", "d");
-        java.util.Map<String, String> hit = new java.util.LinkedHashMap<String, String>();
-        hit.put("a", "b");
+        java.util.Map<String, String> clash = new java.util.LinkedHashMap<String, String>();
+        clash.put("a", "b");
+        java.util.Map<String, com.excel2mysql.core.SqlScript.ParsedTable> kept =
+                com.excel2mysql.gui.SqlPage.rekeyParsed(seed, clash);
         if (com.excel2mysql.gui.SqlPage.rekeyParsed(seed, miss) != null
-                || com.excel2mysql.gui.SqlPage.rekeyParsed(seed, hit) != null
                 || com.excel2mysql.gui.SqlPage.rekeyParsed(null, two) != null) {
-            problems.add("要改的名字不在缓存里、新键撞车、或本就没缓存，"
-                    + "其中有一种没被判成\"丢掉整份\"");
+            problems.add("要改的名字不在缓存里、或本就没缓存，其中有一种没被判成\"丢掉整份\"");
+        }
+        if (kept == null || kept.size() != 1 || !kept.containsKey("b")
+                || kept.get("b") != seed.get("a")) {
+            problems.add("新键撞车时没留先出现那一张，或整份被误丢掉："
+                    + (kept == null ? "null" : kept.keySet()));
         }
     }
 
@@ -2325,8 +2352,8 @@ public final class GuiMain {
         if (page.isModified(a)) {
             problems.add("只改显示的前缀不该把脚本标记成已修改");
         }
-        if (!page.cellText(0, 4).equals("ods_t_order")) {
-            problems.add("「当前表名」列没跟着显示前缀走：" + page.cellText(0, 4));
+        if (!page.cellText(0, 3).equals("ods_t_order")) {
+            problems.add("「当前表名」列没跟着显示前缀走：" + page.cellText(0, 3));
         }
         if (!page.cellText(0, 2).equals("t_order")) {
             problems.add("「原表名」列显示的不是最初的表名：" + page.cellText(0, 2));
@@ -2340,14 +2367,14 @@ public final class GuiMain {
         int rowsBefore = page.rowCount();
         page.setPrefixText("ods_");
         page.applyPrefix();
-        if (page.rowCount() != rowsBefore || page.cellText(0, 4).contains("ods_ods_")) {
+        if (page.rowCount() != rowsBefore || page.cellText(0, 3).contains("ods_ods_")) {
             problems.add("重复加同一个前缀叠了一层");
         }
         page.setPrefixText("");
         page.applyPrefix();
-        if (!page.cellText(0, 4).equals("t_order") || !page.cellText(2, 4).equals("dim_x")) {
-            problems.add("清空前缀再点一次没恢复脚本原名：" + page.cellText(0, 4)
-                    + "/" + page.cellText(2, 4));
+        if (!page.cellText(0, 3).equals("t_order") || !page.cellText(2, 3).equals("dim_x")) {
+            problems.add("清空前缀再点一次没恢复脚本原名：" + page.cellText(0, 3)
+                    + "/" + page.cellText(2, 3));
         }
         if (!page.logPanel().contains("前缀已清空")) {
             problems.add("清空前缀没有留下恢复原名的日志");
@@ -2366,13 +2393,13 @@ public final class GuiMain {
         if (after.contains("change_t_order") || after.contains("change_plain")) {
             problems.add("「替换首个前缀」不该改脚本正文：" + after);
         }
-        if (!page.cellText(0, 4).equals("change_t_order")
-                || !page.cellText(1, 4).equals("change_plain")) {
-            problems.add("替换首段没改到显示名：" + page.cellText(0, 4)
-                    + "/" + page.cellText(1, 4));
+        if (!page.cellText(0, 3).equals("change_t_order")
+                || !page.cellText(1, 3).equals("change_plain")) {
+            problems.add("替换首段没改到显示名：" + page.cellText(0, 3)
+                    + "/" + page.cellText(1, 3));
         }
-        if (!page.cellText(2, 4).equals("change_dim_x")) {
-            problems.add("ods_dim_x 的首段在显示层没被换掉：" + page.cellText(2, 4));
+        if (!page.cellText(2, 3).equals("change_dim_x")) {
+            problems.add("ods_dim_x 的首段在显示层没被换掉：" + page.cellText(2, 3));
         }
         if (page.isModified(a) || page.isModified(b)) {
             problems.add("只改显示的换前缀不该标记成已修改");

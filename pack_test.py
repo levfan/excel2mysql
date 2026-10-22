@@ -2515,10 +2515,10 @@ _FakeProgress.made.clear()
 ow2.ed_sql_prefix.setText("ods_")
 ow2.on_sql_apply_prefix()
 check("O29 SQL「批量应用前缀」只改页面显示：不弹进度框、脚本正文一个字不动",
-      _FakeProgress.made == [] and ow2.sql_table.item(0, 4).text() == "ods_t_a"
+      _FakeProgress.made == [] and ow2.sql_table.item(0, 3).text() == "ods_t_a"
       and "`ods_t_a`" not in ow2.sql_files[-1]["text"]
       and ow2.sql_files[-1]["modified"] is False,
-      (_FakeProgress.made, ow2.sql_table.item(0, 4).text()))
+      (_FakeProgress.made, ow2.sql_table.item(0, 3).text()))
 POPUPS.clear()
 _FakeProgress.made.clear()
 ow2.on_sql_save_modified()
@@ -3098,7 +3098,7 @@ check("Q26 表名清单随加载缓存（刷新表格不必回扫几十万行）
       len(sw2.sql_files[0].get("tabs") or []) == 2, sw2.sql_files[0].get("tabs"))
 sw2.ed_sql_prefix.setText("ods_")
 sw2.on_sql_apply_prefix()
-_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
 _orig = [sw2.sql_table.item(i, 2).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27 加前缀后「当前表名」更新而「原表名」保持原样，脚本未改",
       _cur == ["ods_t_one", "ods_t_two"] and _orig == ["t_one", "t_two"]
@@ -3111,27 +3111,27 @@ check("Q27a 前缀只改显示时，双击行看到的元数据标题也用显�
 if _qmeta is not None:
     _qmeta.close()
 sw2.on_sql_apply_prefix()                     # 同一前缀再点一次
-_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27d 同一前缀重复点不叠加，始终只多一段",
       _cur == ["ods_t_one", "ods_t_two"], _cur)
 sw2.ed_sql_prefix.setText("change")
 sw2.on_sql_replace_prefix()                   # 换首段接在当前显示名之后
-_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27e 换首段基于当前显示名：ods_t_one → change_t_one",
       _cur == ["change_t_one", "change_t_two"]
       and "`change_t_one`" not in sw2.sql_files[0]["text"], _cur)
 sw2.ed_sql_prefix.setText("")
 sw2.on_sql_apply_prefix()
-_cur = [sw2.sql_table.item(i, 4).text() for i in range(sw2.sql_table.rowCount())]
+_cur = [sw2.sql_table.item(i, 3).text() for i in range(sw2.sql_table.rowCount())]
 check("Q27b 前缀清空后再点一次，表名显示恢复脚本原名且正文仍未改",
       _cur == ["t_one", "t_two"] and "前缀已清空" in sw2.sql_log.toPlainText()
       and sw2.sql_files[0]["modified"] is False, _cur)
 sw2.ed_sql_prefix.setText("ods_")
 sw2.on_sql_apply_prefix()
-sw2.sql_table.item(0, 4).setText("t_one")
+sw2.sql_table.item(0, 3).setText("t_one")
 _app.processEvents()
 check("Q27c 手动把显示名改回脚本里的原名 = 只撤掉这一行的显示前缀",
-      sw2.sql_table.item(0, 4).text() == "t_one"
+      sw2.sql_table.item(0, 3).text() == "t_one"
       and "显示前缀已移除，脚本未改写" in sw2.sql_log.toPlainText()
       and "t_one" not in sw2.sql_files[0].get("display_map", {}), 
       sw2.sql_files[0].get("display_map"))
@@ -3772,7 +3772,7 @@ finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn2)
 sw3.ed_sql_prefix.setText("change")
 sw3.btn_sql_replace.click()
-_cur = [sw3.sql_table.item(i, 4).text() for i in range(sw3.sql_table.rowCount())]
+_cur = [sw3.sql_table.item(i, 3).text() for i in range(sw3.sql_table.rowCount())]
 _orig = [sw3.sql_table.item(i, 2).text() for i in range(sw3.sql_table.rowCount())]
 check("R27 SQL 页替换后「当前表名」更新、「原表名」仍是最初的名字",
       _cur == ["change_t_order", "change_table2", "users"]
@@ -3823,7 +3823,7 @@ check("R31 「替换首个前缀」走模态进度框，按表计项且跳过的
 _FakeProgress.made.clear()
 sw3.ed_sql_prefix.setText("ods3")
 sw3.btn_sql_replace.click()
-_cur = [sw3.sql_table.item(i, 4).text() for i in range(sw3.sql_table.rowCount())]
+_cur = [sw3.sql_table.item(i, 3).text() for i in range(sw3.sql_table.rowCount())]
 check("R32 SQL 页替换同样只改显示：不弹进度框、脚本正文保持保存时的样子",
       _FakeProgress.made == [] and _cur == ["ods3_t_order", "ods3_table2", "users"]
       and "`change_t_order`" in sw3.sql_files[0]["text"]
@@ -3967,9 +3967,9 @@ try:
 finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn5)
 check("R44 未勾大写时清单沿用脚本原名",
-      nw.sql_table.item(0, 4).text() == "t_case9"
+      nw.sql_table.item(0, 3).text() == "t_case9"
       and nw._sql_rows[0]["actual"] == "t_case9",
-      (nw.sql_table.item(0, 4).text(), nw._sql_rows[0]["actual"]))
+      (nw.sql_table.item(0, 3).text(), nw._sql_rows[0]["actual"]))
 POPUPS.clear()
 nw.chk_sql_upper.setChecked(True)
 _nlog = nw.sql_log.toPlainText()
@@ -3978,9 +3978,9 @@ check("R44b 第二页大小写切换写进日志：清单、元数据、生成�
       "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）" in _nlog,
       _nlog.splitlines()[-1:])
 check("R44c 已加载的行切换大写后立即刷新，实际脚本名仍保持原样",
-      nw.sql_table.item(0, 4).text() == "T_CASE9"
+      nw.sql_table.item(0, 3).text() == "T_CASE9"
       and nw._sql_rows[0]["actual"] == "t_case9",
-      (nw.sql_table.item(0, 4).text(), nw._sql_rows[0]["actual"]))
+      (nw.sql_table.item(0, 3).text(), nw._sql_rows[0]["actual"]))
 _meta = nw._build_sql_metadata_dialog(0)
 check("R45 双击 SQL 行可查看该表元数据，字段随大写开关显示",
       _meta is not None and _meta.tableWidget().rowCount() == 3
@@ -3989,11 +3989,43 @@ check("R45 双击 SQL 行可查看该表元数据，字段随大写开关显示"
       None if _meta is None else [
           _meta.tableWidget().item(r, 0).text() for r in range(_meta.tableWidget().rowCount())])
 _nrow_text_before = nw.sql_files[0]["text"]
+_sql_headers = [nw.sql_table.horizontalHeaderItem(c).text()
+                for c in range(nw.sql_table.columnCount())]
+check("R45b 第二页列为 序号/文件/原表名/当前表名/表注释，没有「CREATE 出现次数」",
+      _sql_headers == ["序号", "文件", "原表名", "当前表名", "表注释"], _sql_headers)
+check("R45c 脚本一导入就把表注释摆在清单里，取的是 CREATE TABLE 那句 COMMENT",
+      nw.sql_table.item(0, 4).text() == "大小写检查表"
+      and nw._sql_rows[0]["comment"] == "大小写检查表",
+      nw.sql_table.item(0, 4).text())
+_sql_flags = [bool(nw.sql_table.item(0, c).flags() & Qt.ItemIsEditable)
+              for c in range(nw.sql_table.columnCount())]
+check("R45d 第二页只有「当前表名」一列可直接编辑",
+      _sql_flags == [False, False, False, True, False], _sql_flags)
+# 表注释这格不可编辑，双击必须走"看这一行的元数据"，不能点了什么都没发生
+_seen_meta = []
+_orig_show_meta = nw.show_sql_table_metadata
+nw.show_sql_table_metadata = lambda r: _seen_meta.append(r)
+try:
+    nw.on_sql_table_double_clicked(nw.sql_table.item(0, 4))
+    nw.on_sql_table_double_clicked(nw.sql_table.item(0, 2))
+finally:
+    nw.show_sql_table_metadata = _orig_show_meta
+check("R45e 双击表注释与双击原表名一样打开这一行的元数据", _seen_meta == [0, 0], _seen_meta)
+# 表注释这一列在没有 COMMENT 的脚本上必须是空的：sw2 那份表名被前面的用例改过，另起一份
+cw9 = app_main.MainWindow()
+app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([qsql], "SQL (*.sql)"))
+try:
+    cw9.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn)
+check("R45f 没有表注释的脚本这一列是空的，不编一个占位文字出来",
+      cw9.sql_table.item(0, 4).text() == "" and cw9._sql_rows[0]["comment"] == "",
+      repr(cw9.sql_table.item(0, 4).text()))
 from PySide6.QtWidgets import QAbstractItemDelegate as _QDelegate
 
 
 def _edit_sql_name(row, name):
-    cell = nw.sql_table.item(row, 4)
+    cell = nw.sql_table.item(row, 3)
     nw.sql_table.setCurrentItem(cell)
     nw.sql_table.editItem(cell)
     _app.processEvents()
@@ -4002,7 +4034,7 @@ def _edit_sql_name(row, name):
         return False
     nw.sql_table.closeEditor(editor[0], _QDelegate.NoHint)
     _app.processEvents()
-    nw.sql_table.item(row, 4).setText(name)
+    nw.sql_table.item(row, 3).setText(name)
     _app.processEvents()
     return True
 
@@ -4012,8 +4044,8 @@ check("R46 双击当前表名可直接编辑，并同步改写这一行脚本的
       nw.sql_files[0]["text"] != _nrow_text_before
       and "CREATE TABLE `manual_case`" in nw.sql_files[0]["text"]
       and nw._sql_rows[0]["actual"] == "manual_case"
-      and nw.sql_table.item(0, 4).text() == "MANUAL_CASE",
-      (nw._sql_rows[0]["actual"], nw.sql_table.item(0, 4).text()))
+      and nw.sql_table.item(0, 3).text() == "MANUAL_CASE",
+      (nw._sql_rows[0]["actual"], nw.sql_table.item(0, 3).text()))
 _edit_sql_name(0, "t_case9")
 _ntext = _nrow_text_before
 nout = os.path.join(_tmpdir, "sqlgen_name_out")
@@ -4092,7 +4124,7 @@ check("R61 双击一行只从缓存取那一张：建对话框比整份重解析
       _open_ms < 100.0 and _open_ms * 10 < _full_ms
       and _bdlg is not None and _bdlg.tableWidget().rowCount() == 22,
       "点开 %.1f 毫秒 / 整份 %.0f 毫秒" % (_open_ms, _full_ms))
-bw.sql_table.item(7, 4).setText("t_big_renamed")
+bw.sql_table.item(7, 3).setText("t_big_renamed")
 check("R62 改表名把缓存里那一格一起改名，不留旧键",
       "t_big_renamed" in (_brec.get("parsed") or {})
       and "t_big_07" not in (_brec.get("parsed") or {})
@@ -4104,28 +4136,37 @@ _open2_ms = (_t_busy.monotonic() - _t0) * 1000.0
 check("R63 改名后点开仍是毫秒级，字段一个没少",
       _open2_ms < 100.0 and _bdlg2 is not None
       and _bdlg2.tableWidget().rowCount() == 22, "%.1f 毫秒" % _open2_ms)
-bw.sql_table.item(0, 4).setText("t_big_01")
-check("R64 改成与另一张表同名时丢掉整份缓存：宁可慢那一次，不显示对不上号的字段",
-      _brec.get("parsed") is None and _brec["tabs"][0]["name"] == "t_big_01",
-      _brec.get("parsed"))
+# 撞车：新名和另一张表同名。缓存留着可用（刷新清单要读它，丢了就等于把整份重解析
+# 搬回主线程），同名两行并成一行。改名那一步本身要重写正文+重取表名清单，
+# 拿它的耗时去比整份解析比不出东西，所以这里只断缓存的形状，快不快交给 R66
+bw.sql_table.item(0, 3).setText("t_big_01")
+_parsed_after = _brec.get("parsed") or {}
+check("R64 改成与另一张表同名：缓存留着可用，旧名那一张不留在键里",
+      _parsed_after and "t_big_00" not in _parsed_after and len(_parsed_after) == 39,
+      "键数 %d" % len(_parsed_after))
+check("R65 撞名后两张同名表并成一行，注释与字段都取先出现那一张",
+      _parsed_after.get("t_big_01", {}).get("table_name") == "t_big_01"
+      and len(_parsed_after["t_big_01"]["columns"]) == 20
+      and bw.sql_table.rowCount() == 39
+      and bw.sql_table.item(0, 3).text() == "t_big_01"
+      and bw.sql_table.item(0, 4).text() == "大脚本0",
+      (bw.sql_table.rowCount(), bw.sql_table.item(0, 4).text()))
 _t0 = _t_busy.monotonic()
 _bdlg3 = bw._build_sql_metadata_dialog(0)
-check("R65 丢掉缓存后第一次点开自己现解析并补回去，字段照样出得来",
-      _bdlg3 is not None and _brec.get("parsed") is not None
-      and _bdlg3.tableWidget().rowCount() == 20, len(_brec.get("parsed") or {}))
-_t0 = _t_busy.monotonic()
-bw._build_sql_metadata_dialog(0)
-check("R66 补回缓存后同一行再点开低于 100 毫秒",
-      (_t_busy.monotonic() - _t0) * 1000.0 < 100.0)
+check("R66 撞名后点开仍是毫秒级，字段取的是先出现那一张",
+      (_t_busy.monotonic() - _t0) * 1000.0 < 100.0 and _bdlg3 is not None
+      and _bdlg3.tableWidget().rowCount() == 20, _brec.get("parsed"))
 # 前缀「生效」一次改多张表：整份改名走同一套重挂规则
 _rk = app_main.rekey_parsed({"a": {"table_name": "a"}, "b": {"table_name": "b"}},
                             {"a": "x", "b": "y"})
 check("R67 一次改多张表：每张各改各的键，不做链式二次改名",
       sorted(_rk) == ["x", "y"] and _rk["y"]["table_name"] == "y", _rk)
-check("R68 要改的名字不在缓存里、或新键撞车，都判定为丢掉整份",
+check("R68 要改的名字不在缓存里、或本就没缓存 → 丢掉整份；新键撞车 → 留先出现那一张",
       app_main.rekey_parsed({"a": {}}, {"c": "d"}) is None
-      and app_main.rekey_parsed({"a": {}, "b": {}}, {"a": "b"}) is None
-      and app_main.rekey_parsed(None, {"a": "b"}) is None)
+      and app_main.rekey_parsed(None, {"a": "b"}) is None
+      and app_main.rekey_parsed({"a": {"table_name": "a"},
+                                 "b": {"table_name": "b"}}, {"a": "b"})
+      == {"b": {"table_name": "b"}})
 bw.close()
 bw = None
 
