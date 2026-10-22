@@ -128,6 +128,13 @@ LOG_FONT_SIZE = 16
 # 看上去就是"日志比内容还大"。用户点名不许这样，这里把表格提到同一档
 TABLE_FONT_SIZE = LOG_FONT_SIZE
 
+# 每张表格左上角那一句标识（组框标题）。用户口径：每个表格都要有标识，
+# 第一页的「待导入文件」就是样子——标题里顺带写明这一张表怎么操作。
+# 两栈同一句、由对撞器逐条比（读的是真控件上的标题，不是这里抄一份）。
+FILE_TABLE_TITLE = "待导入文件（单击表名改名，双击其他列改字段）"
+SQL_TABLE_TITLE = "待处理的脚本表（双击表名或表注释编辑，双击其他列看元数据）"
+COLUMN_TABLE_TITLE = "字段清单"
+
 # 日志框的最小高度按"看得见的行数"约定，不按像素：两栈的 16pt 行高本来就不一样
 # （Qt 实测 24px、Swing 实测 28.7px），写同一个像素数会变成"两边各自满足同一个数、
 # 实际能看到的行数却不同"。像素数由各自的字体量出来，跨线比的是这个 4。
@@ -1301,7 +1308,7 @@ class MainWindow(QWidget):
         self.drop.clicked.connect(self.on_add_files)
 
         # 3. 文件列表
-        file_box = QGroupBox("待导入文件（单击表名改名，双击其他列改字段）")
+        file_box = QGroupBox(FILE_TABLE_TITLE)
         fl = QVBoxLayout(file_box)
         self.file_table = QTableWidget(0, 7)
         style_table_font(self.file_table)
@@ -1756,7 +1763,8 @@ class MainWindow(QWidget):
 
         # 三段可上下拖拽，与「Excel 导入」那页同一形状：拖拽区 / 表格与它的三行操作条 / 日志。
         # 把手 6px、任何一段都不许拖到 0 高；日志段给到最大，理由与第一页那条一样。
-        sql_upper = QWidget()
+        # 表格区套一层组框，标题就是这张表的标识——与第一页「待导入文件」同一做法
+        sql_upper = QGroupBox(SQL_TABLE_TITLE)
         up_lay = QVBoxLayout(sql_upper)
         up_lay.setContentsMargins(0, 0, 0, 0)
         up_lay.addWidget(self.sql_table, 1)
@@ -2877,6 +2885,7 @@ class StructureDialog(QDialog):
             tw.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
             tw.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
             tw.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方
             self.tabs.addTab(tw, t["table_name"])
             self.editors.append((t, tw))
         lay.addWidget(self.tabs)
@@ -2968,7 +2977,13 @@ class SqlMetadataDialog(QDialog):
         tw.setColumnWidth(2, 130)
         tw.setColumnWidth(3, 80)
         tw.setColumnWidth(4, 70)
-        lay.addWidget(tw, 1)
+        # 表格左上的标识（与第一页「待导入文件」同一做法）：标题里带列数，
+        # 不必滚到表格末尾数这一张表解析出了多少列
+        col_box = QGroupBox("%s（共 %d 列）" % (COLUMN_TABLE_TITLE, len(cols)))
+        cb_lay = QVBoxLayout(col_box)
+        cb_lay.setContentsMargins(6, 2, 6, 6)
+        cb_lay.addWidget(tw, 1)
+        lay.addWidget(col_box, 1)
         self.field_table = tw
         btns = QDialogButtonBox(QDialogButtonBox.Close)
         btns.rejected.connect(self.reject)

@@ -387,6 +387,8 @@ public final class SqlPage extends JPanel {
         actions.add(actRow, BorderLayout.SOUTH);
 
         JPanel upper = new JPanel(new BorderLayout(UiScale.px(4), UiScale.px(4)));
+        // 表格区套一层标题边框，标题就是这张表的标识——与第一页「待导入文件」同一做法
+        Tables.titled(upper, Tables.SQL_TABLE_TITLE);
         upper.add(scroll, BorderLayout.CENTER);
         upper.add(actions, BorderLayout.SOUTH);
 
@@ -573,6 +575,11 @@ public final class SqlPage extends JPanel {
     /** 表格区从上到下的三行容器：前缀行 / 移除与开关行 / 保存执行生成行。 */
     public java.awt.Container[] sqlRows() {
         return new java.awt.Container[]{rowPrefix, rowName, rowAct};
+    }
+
+    /** 表格左上角那句标识，从真控件的标题边框上读（对撞器用）。 */
+    public String tableTitle() {
+        return sqlUpper == null ? "" : Tables.titledOf((javax.swing.JComponent) sqlUpper);
     }
 
     private JTable findTable(java.awt.Container c) {

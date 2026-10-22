@@ -21,6 +21,9 @@ import java.util.Locale;
 /** SQL 脚本页的表元数据弹窗：展示脚本里 CREATE TABLE 已解析出的字段定义，不回写脚本。 */
 public final class SqlMetadataDialog extends JDialog {
 
+    /** 字段表外面那层带标题的容器，标题里带列数；自检要读它。 */
+    private final JPanel columnsBox;
+
     public SqlMetadataDialog(Frame owner, SqlScript.ParsedTable table,
                              String displayName, boolean upper) {
         super(owner, "表元数据（" + displayName + "）", false);
@@ -75,7 +78,13 @@ public final class SqlMetadataDialog extends JDialog {
         fieldTable.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(130));
         fieldTable.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(80));
         JScrollPane scroll = new JScrollPane(fieldTable);
-        content.add(scroll, java.awt.BorderLayout.CENTER);
+        // 表格左上角的标识（与第一页「待导入文件」同一做法）：标题里带列数，
+        // 不必滚到表格末尾数这一张表解析出了多少列
+        JPanel colBox = new JPanel(new java.awt.BorderLayout());
+        columnsBox = colBox;
+        Tables.titled(colBox, Tables.COLUMN_TABLE_TITLE + "（共 " + table.columns.size() + " 列）");
+        colBox.add(scroll, java.awt.BorderLayout.CENTER);
+        content.add(colBox, java.awt.BorderLayout.CENTER);
 
         JPanel footer = new JPanel();
         footer.setLayout(new java.awt.FlowLayout(
@@ -89,5 +98,10 @@ public final class SqlMetadataDialog extends JDialog {
         setContentPane(content);
         Windows.clientSize(content, this, 980, 640);
         setLocationRelativeTo(owner);
+    }
+
+    /** 字段表左上角那句标识（含列数），从真控件的标题边框上读。 */
+    public String columnTitle() {
+        return Tables.titledOf(columnsBox);
     }
 }

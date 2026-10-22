@@ -39,6 +39,8 @@ public final class StructureDialog extends JDialog {
         final TableOps.Table table;
         final List<List<Object>> rows;
         final DefaultTableModel model;
+        /** 这张表的滚动容器；自检要顺着它往上读"有没有再套一层标识"。 */
+        JScrollPane scroll;
 
         Editor(TableOps.Table table, List<List<Object>> rows) {
             this.table = table;
@@ -106,7 +108,9 @@ public final class StructureDialog extends JDialog {
             table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(46));
             table.getColumnModel().getColumn(4).setPreferredWidth(UiScale.px(96));
             JScrollPane scroll = new JScrollPane(table);
+            ed.scroll = scroll;
             scroll.setPreferredSize(new Dimension(UiScale.px(900), UiScale.px(420)));
+            // 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方
             tabs.addTab(r.table.tableName, scroll);
         }
 
@@ -229,6 +233,11 @@ public final class StructureDialog extends JDialog {
 
     public int rowCount(int tabIndex) {
         return editors.get(tabIndex).model.getRowCount();
+    }
+
+    /** 自检用：某个 tab 里那张表的容器，用来读它外面有没有再套一层标识。 */
+    public javax.swing.JComponent tabTable(int tabIndex) {
+        return editors.get(tabIndex).scroll;
     }
 
     /** 走同一条 applyEdits，只是不弹模态框——自检在 EDT 上，弹窗会把自己卡死。 */

@@ -455,10 +455,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         fileRows.add(prefixRow, BorderLayout.NORTH);
         fileRows.add(btnRow, BorderLayout.SOUTH);
         JPanel fileBox = new JPanel(new BorderLayout());
-        fileBox.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createTitledBorder("待导入文件（单击表名改名，双击其他列改字段）"),
-                BorderFactory.createEmptyBorder(
-                        UiScale.px(2), UiScale.px(6), UiScale.px(4), UiScale.px(6))));
+        Tables.titled(fileBox, Tables.FILE_TABLE_TITLE);
         fileBox.add(tableScroll, BorderLayout.CENTER);
         fileBox.add(fileRows, BorderLayout.SOUTH);
 
