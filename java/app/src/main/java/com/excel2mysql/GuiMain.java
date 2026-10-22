@@ -336,6 +336,7 @@ public final class GuiMain {
                 if (frame.logPanel().isErrorLine("自检普通行")) {
                     problems.add("普通日志被误标成错误级");
                 }
+                sql_exec_progress(problems);
                 log_line_shape(frame, problems);
                 log_pane_height(frame, problems);
                 for (int i = 0; i < frame.logPanel().maxLines() + 50; i++) {
@@ -716,6 +717,142 @@ public final class GuiMain {
                         + (4 * fm.getHeight()));
             }
         }
+    }
+
+    /**
+     * 「SQL 执行器」的逐条进度与真取消：一屏上千条语句时，这两件决定用户是等还是走。
+     * DbClient 是 final 类，造不出来，所以 SqlExecute 拆了一层收 Connection 的入口，
+     * 这里用动态代理假一个连接——没有库也验的是线上那段循环。
+     */
+    private static void sql_exec_progress(List<String> problems) {
+        final List<String> executed = new ArrayList<String>();
+        final boolean[] committed = {false};
+        final boolean[] rolled = {false};
+        java.sql.Connection conn = (java.sql.Connection) java.lang.reflect.Proxy.newProxyInstance(
+                GuiMain.class.getClassLoader(), new Class<?>[]{java.sql.Connection.class},
+                (proxy, method, args) -> {
+                    String name = method.getName();
+                    if ("createStatement".equals(name)) {
+                        return java.lang.reflect.Proxy.newProxyInstance(
+                                GuiMain.class.getClassLoader(),
+                                new Class<?>[]{java.sql.Statement.class},
+                                (p2, m2, a2) -> {
+                                    if ("execute".equals(m2.getName())) {
+                                        executed.add(String.valueOf(a2[0]));
+                                        return Boolean.FALSE;
+                                    }
+                                    if ("getUpdateCount".equals(m2.getName())) {
+                                        return Integer.valueOf(1);
+                                    }
+                                    if ("close".equals(m2.getName())) {
+                                        return null;
+                                    }
+                                    if ("toString".equals(m2.getName())) {
+                                        return "fake-statement";
+                                    }
+                                    return defaultValue(m2.getReturnType());
+                                });
+                    }
+                    if ("commit".equals(name)) {
+                        committed[0] = true;
+                        return null;
+                    }
+                    if ("rollback".equals(name)) {
+                        rolled[0] = true;
+                        return null;
+                    }
+                    if ("isClosed".equals(name)) {
+                        return Boolean.FALSE;
+                    }
+                    if ("toString".equals(name)) {
+                        return "fake-connection";
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        final List<int[]> steps = new ArrayList<int[]>();
+        final boolean[] stop = {false};
+        com.excel2mysql.core.SqlExecute.Report r = com.excel2mysql.core.SqlExecute.run(
+                conn, "CREATE TABLE pa (i INT);\nCREATE TABLE pb (i INT);"
+                        + "\nCREATE TABLE pc (i INT);",
+                text -> {
+                },
+                (done, total) -> {
+                    steps.add(new int[]{done, total});
+                    if (done >= 1) {
+                        stop[0] = true;      // 第一条跑完就当作"用户点了停止"
+                    }
+                },
+                () -> stop[0]);
+        if (steps.isEmpty() || steps.get(0)[0] != 0 || steps.get(0)[1] != 3) {
+            problems.add("执行器没在开工前先报 0/3：" + describeSteps(steps));
+        }
+        if (executed.size() != 1) {
+            problems.add("点了停止还在往下执行：" + executed);
+        }
+        if (!rolled[0] || committed[0]) {
+            problems.add("取消的这批没回滚或竟然提交了：rolled=" + rolled[0]
+                    + " committed=" + committed[0]);
+        }
+        if (!r.cancelled) {
+            problems.add("Report.cancelled 没置上，界面分不清是跑完还是被停");
+        }
+        // 不传进度与取消时行为必须与改前一致（命令行那条线就是这么调的）
+        final List<String> executed2 = new ArrayList<String>();
+        final boolean[] committed2 = {false};
+        java.sql.Connection conn2 = (java.sql.Connection) java.lang.reflect.Proxy.newProxyInstance(
+                GuiMain.class.getClassLoader(), new Class<?>[]{java.sql.Connection.class},
+                (proxy, method, args) -> {
+                    if ("createStatement".equals(method.getName())) {
+                        return java.lang.reflect.Proxy.newProxyInstance(
+                                GuiMain.class.getClassLoader(),
+                                new Class<?>[]{java.sql.Statement.class},
+                                (p2, m2, a2) -> {
+                                    if ("execute".equals(m2.getName())) {
+                                        executed2.add(String.valueOf(a2[0]));
+                                    }
+                                    if ("getUpdateCount".equals(m2.getName())) {
+                                        return Integer.valueOf(1);
+                                    }
+                                    return defaultValue(m2.getReturnType());
+                                });
+                    }
+                    if ("commit".equals(method.getName())) {
+                        committed2[0] = true;
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        com.excel2mysql.core.SqlExecute.run(conn2,
+                "CREATE TABLE pa (i INT);\nCREATE TABLE pb (i INT);"
+                        + "\nCREATE TABLE pc (i INT);", text -> {
+                }, null, null);
+        if (executed2.size() != 3 || !committed2[0]) {
+            problems.add("不传进度与取消时行为变了：跑了 " + executed2.size()
+                    + " 句、提交=" + committed2[0]);
+        }
+    }
+
+    private static String describeSteps(List<int[]> steps) {
+        StringBuilder sb = new StringBuilder();
+        for (int[] st : steps) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(st[0]).append('/').append(st[1]);
+        }
+        return sb.toString();
+    }
+
+    private static Object defaultValue(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return null;
+        }
+        if (boolean.class.equals(type)) {
+            return Boolean.FALSE;
+        }
+        if (void.class.equals(type)) {
+            return null;
+        }
+        return Integer.valueOf(0);
     }
 
     private static int countOf(String text, String needle) {
@@ -3119,6 +3256,18 @@ public final class GuiMain {
         }
         if (frame.startTask()) {
             problems.add("第二个任务挤得进来，两个任务会踩同一份表列表");
+        }
+        // 抢输的那一句必须说得出"谁在跑、跑到几成、跑了多久"，只回一句请稍等等于没说
+        if (!frame.logPanel().contains("已有任务在跑：")) {
+            problems.add("被挡下时没说清是谁在跑：" + tail(frame.logPanel().text()));
+        }
+        if (!frame.logPanel().contains("%") || !frame.logPanel().contains("秒")) {
+            problems.add("被挡下的那句里没有百分比或没有已跑时长："
+                    + tail(frame.logPanel().text()));
+        }
+        if (!frame.lastDialogText().contains("已有任务在跑：")) {
+            problems.add("被挡下只写了日志、没弹窗（用户可能正看着别处）："
+                    + frame.lastDialogText());
         }
         if (!stop.isEnabled()) {
             problems.add("任务在跑时「停止」是灰的，中止只能等它自己跑完");

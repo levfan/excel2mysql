@@ -26,6 +26,7 @@ import re
 import sys
 import tempfile
 import traceback
+import time as _t_busy
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -978,6 +979,71 @@ check("F27 中途出错整批回滚：全程一次都不提交，失败那句直
 check("F28 失败行标红并附 DDL 隐式提交提醒",
       "第 2 条被拒绝" in _run_log and "隐式提交" in _run_log, _run_log)
 check("F29 执行结果不额外弹窗（这一页是给人来回试语句的）", not POPUPS, POPUPS)
+
+# ---- 执行器任务的进度与取消：一屏上千条语句时，这两件决定用户是等还是走 ----
+class _PCur:
+    def __init__(self, log):
+        self.description = None
+        self._log = log
+
+    def execute(self, sql):
+        self._log.append(sql)
+        return 0
+
+
+class _PConn:
+    """假连接：记下执行了哪几句、有没有提交、有没有回滚。"""
+
+    def __init__(self):
+        self.executed = []
+        self.committed = False
+        self.rolled = False
+
+    def cursor(self):
+        return _PCur(self.executed)
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled = True
+
+    def close(self):
+        pass
+
+
+from core.sql_execute import run as _run_exec
+
+_THREE = ("CREATE TABLE pa (i INT);\n"
+          "CREATE TABLE pb (i INT);\n"
+          "CREATE TABLE pc (i INT);\n")
+_pc = _PConn()
+_steps = []
+_run_exec(_pc, _THREE, lambda t: None,
+          progress=lambda d, t: _steps.append((d, t)), cancelled=lambda: False)
+check("F29b 执行器逐条回报进度：开工先报 0/3，收尾落到 3/3",
+      _steps[0] == (0, 3) and _steps[-1] == (3, 3) and len(_steps) >= 4, _steps)
+check("F29c 全部成功才提交，进度回报不改事务语义",
+      _pc.committed and not _pc.rolled and len(_pc.executed) == 3,
+      (_pc.committed, _pc.rolled, _pc.executed))
+_pc2 = _PConn()
+_stop = {"now": False}
+
+
+def _stop_after_one(done, total):
+    if done >= 1:
+        _stop["now"] = True
+
+
+_run_exec(_pc2, _THREE, lambda t: None, progress=_stop_after_one,
+          cancelled=lambda: _stop["now"])
+check("F29d 点了停止就在下一条之前收手：只执行 1 句、整批回滚、一次都不提交",
+      len(_pc2.executed) == 1 and _pc2.rolled and not _pc2.committed,
+      (_pc2.executed, _pc2.rolled, _pc2.committed))
+_pc3 = _PConn()
+_run_exec(_pc3, _THREE, lambda t: None)
+check("F29e 命令行那条线不传进度与取消，行为与改前一致",
+      len(_pc3.executed) == 3 and _pc3.committed, _pc3.executed)
 
 
 def _boom(cfg):
@@ -3070,6 +3136,22 @@ res_box.clear()
 rw2._run_modal("不该起任务", _slow_task, (3,), on_done=lambda x: res_box.append(x))
 check("Q38 已有任务在跑时再起任务被忽略，不叠第二个框",
       len(_FakeProgress.made) == 1 and res_box == [], (len(_FakeProgress.made), res_box))
+rw2.task_title = "正在执行 SQL…"
+rw2.task_started = _t_busy.time() - 7
+rw2.task_done = 45
+rw2.task_total = 121
+rw2.task_label = "第 45/121 条"
+POPUPS.clear()
+rw2._run_modal("不该起任务2", _slow_task, (3,), on_done=lambda x: res_box.append(x))
+_busy = [x for _t, x in POPUPS if "已有任务在跑" in x]
+check("Q38b 被挡下时说得出谁在跑、跑到几成、跑了多久（不是只回一句请稍等）",
+      _busy and "正在执行 SQL…" in _busy[0] and "37%" in _busy[0]
+      and "（45/121）" in _busy[0] and "已 7 秒" in _busy[0]
+      and "第 45/121 条" in _busy[0],
+      _busy[:1])
+check("Q38c 挡下这件事同时写进日志（弹窗会被关掉，日志要留痕）",
+      "已有任务在跑" in rw2.log.toPlainText(),
+      log_lines(rw2.log.toPlainText(), "已拦下")[:2])
 rw2.task_dialog = None
 app_main.MODAL_PROGRESS = False
 
