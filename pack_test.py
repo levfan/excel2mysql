@@ -3225,6 +3225,171 @@ app_main.MODAL_PROGRESS = False
 rw2._tasks.remove(_ph)
 app_main.MODAL_PROGRESS = False
 
+# ==== 真线程并发：生产那条路（真进度框 + 子线程 + 真写盘），两条任务同时在跑 ====
+# 上面 Q51 那组用替身任务验的是"抢位规则"；这一组验的是"两个真任务真的在同时干活、
+# 界面还转得动"——用户要的正是这个，替身验不出来。
+_PD_BEFORE = app_main.ProgressDialog
+_app_pdir = app_main.program_dir
+xwin = app_main.MainWindow()
+
+
+def _make_big_xlsx(tag, rows):
+    """openpyxl 流式写（比 pandas 快得多），只为造几个真要读上半秒的文件。
+
+    拆成好几个而不是一张大表：解析是按阶段计项的，一张几十万行的表总共只有 5 项，
+    "读取工作簿"那一项能占三秒不动，进度推进采不到样；八个七千行的文件是 40 项，
+    每零点一秒就动一格，"两条任务都在推进"这条断言才咬得住。
+    """
+    from openpyxl import Workbook
+    p = os.path.join(_tmpdir, "并发大表%s_%d.xlsx" % (tag, rows))
+    if os.path.exists(p):
+        return p
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("数据")
+    ws.append(["编号", "名称", "金额", "数量", "日期", "备注"])
+    for i in range(rows):
+        ws.append(["N%08d" % i, "%s名称%d" % (tag, i), 3.14 + i % 100, i % 997,
+                   "2026-03-%02d" % (i % 28 + 1), "备注%d" % (i % 50)])
+    wb.save(p)
+    return p
+
+
+def _make_gen_sql(tables):
+    p = os.path.join(_tmpdir, "并发生成_%d.sql" % tables)
+    if not os.path.exists(p):
+        with io.open(p, "w", encoding="utf-8") as f:
+            for i in range(tables):
+                f.write("CREATE TABLE t_par_%05d (\n" % i)
+                for c in range(8):
+                    f.write("  col_%02d VARCHAR(64) DEFAULT NULL COMMENT '字段%d',\n" % (c, c))
+                f.write("  PRIMARY KEY (id)\n) ENGINE=InnoDB COMMENT='并发表%d';\n" % i)
+    return p
+
+
+def _wait_until(pred, seconds):
+    """有限等待：超时返回 False 让用例红，绝不从这里抛出去（一抛整轮中止，红就找不着了）。"""
+    deadline = _time.time() + seconds
+    while _time.time() < deadline:
+        QApplication.processEvents()
+        if pred():
+            return True
+        _time.sleep(0.005)
+    QApplication.processEvents()
+    return False
+
+
+def _pump(seconds):
+    """干等这么久，但事件循环照常泵：站在主线程 sleep 就等于自己把界面掐死了。"""
+    return _wait_until(lambda: False, seconds)
+
+
+BIG_FILES, BIG_ROWS, GEN_TABLES = 8, 7500, 150
+big_xlsx = [_make_big_xlsx(chr(ord("A") + k), BIG_ROWS) for k in range(BIG_FILES)]
+gen_sql = _make_gen_sql(GEN_TABLES)
+gen_root = os.path.join(_tmpdir, "并发输出")
+app_main.MODAL_PROGRESS = True               # 这一组全程走真那条路：起线程 + 挂真框
+app_main.program_dir = lambda: gen_root
+xwin._run_modal("正在读取 SQL 脚本…", app_main.sql_load_task, ([gen_sql], []),
+                on_done=xwin._finish_sql_load, log_view=xwin.sql_log)
+check("Y0 前置：SQL 页脚本先读进来（这条走的是同一个任务框架）",
+      _wait_until(lambda: not xwin._tasks and xwin.sql_files, 20),
+      [t.title for t in xwin._tasks])
+
+app_main.ProgressDialog = REAL_PROGRESS      # 这一组必须是真框，替身验不出"框没挡住窗口"
+_ticks = [0]
+_tick_timer = QTimer()
+_tick_timer.setInterval(10)
+_tick_timer.timeout.connect(lambda: _ticks.__setitem__(0, _ticks[0] + 1))
+_tick_timer.start()
+POPUPS.clear()
+_t0 = _time.time()
+xwin._add_files(big_xlsx)                    # 页 1：解析八个七千行（真子线程）
+_launch_a = _time.time() - _t0
+_t1 = _time.time()
+xwin.on_sql_gen_excel("标准", True)           # 页 2：写 150 个 xlsx（真子线程）
+_launch_b = _time.time() - _t1
+both = _wait_until(lambda: len(xwin._tasks) == 2, 5)
+_a = [t for t in xwin._tasks if t.resources[0] == _MW.RES_EXCEL]
+_b = [t for t in xwin._tasks if _MW.RES_SQL in t.resources]
+_pa = _a[0].done if _a else -1
+_pb = _b[0].done if _b else -1
+tk0 = _ticks[0]
+_pump(0.4)
+_pa2 = _a[0].done if _a else -1
+_pb2 = _b[0].done if _b else -1
+tk1 = _ticks[0]
+dialogs = [t.dialog for t in xwin._tasks]
+check("Y1 起任务那两句立刻返回（页 1 解析几万行也没占住主线程）",
+      _launch_a < 0.5 and _launch_b < 0.5, (_launch_a, _launch_b))
+check("Y1b 两个真任务同时在跑：Excel 页解析与 SQL 页写盘撞在一起",
+      both and len(xwin._tasks) == 2, [t.describe() for t in xwin._tasks])
+check("Y1c 两条任务各自都在推进（不是只有一根条在动）",
+      _pa >= 0 and _pb >= 0 and _pa2 > _pa and _pb2 > _pb, (_pa, _pa2, _pb, _pb2))
+check("Y1d 两个真进度框同时在屏，且都不是模态的",
+      len(dialogs) == 2 and all(d is not None and isinstance(d, REAL_PROGRESS)
+                                and d.isVisible() and d.isModal() is False for d in dialogs),
+      [None if d is None else (d.isVisible(), d.isModal()) for d in dialogs])
+check("Y1e 任务在跑时主线程事件循环一直在转（界面没被框挡住）",
+      tk1 - tk0 >= 5, (tk0, tk1))
+
+# 同一页再点一次：被挡下，但这一页被挡不该影响另一页
+POPUPS.clear()
+xwin.on_sql_gen_excel("标准", True)
+check("Y1f SQL 页的第二个任务被挡下，Excel 页那个照常活着",
+      any("已有任务在跑" in x for _t, x in POPUPS)
+      and len(xwin._tasks) == 2 and _a[0] in xwin._tasks,
+      [x.replace("\n", " ")[:90] for _t, x in POPUPS][:1])
+
+
+def _gen_count():
+    """已经写到盘上的交付件个数（返回数字，别让调用方各自记着要 len()）。"""
+    if not os.path.isdir(gen_root):
+        return 0
+    n = 0
+    for _base, _dirs, names in os.walk(gen_root):
+        n += sum(1 for x in names if x.endswith(".xlsx"))
+    return n
+
+
+# 谁先收尾不作弊：等到只剩一条，再确认活着那条仍在推进（收尾那条没把它一起带走）
+one = _wait_until(lambda: len(xwin._tasks) == 1, 30)
+surv = xwin._tasks[0] if one else None
+_sd0 = surv.done if surv is not None else -1
+_pump(0.4)
+_sd1 = surv.done if surv is not None else -1
+check("Y1g 一条先收尾，另一条不受牵连、仍在推进",
+      one and ((_sd1 > _sd0) or (surv is not None and surv.finished)),
+      (one, _sd0, _sd1, None if surv is None else surv.describe()))
+files_1 = _gen_count()
+tables_1 = len(xwin.tables)
+check("Y1h 先收尾那条的结果按事实落了地（文件写出来或表进列表）",
+      files_1 > 0 or tables_1 > 0, (files_1, tables_1))
+
+# 掐掉还在跑的那条：它提前收尾要留痕，另一条已经做完的结果一个都不能少
+victim = surv
+victim.cancel()
+gone = _wait_until(lambda: not xwin._tasks, 30)
+files_2 = _gen_count()
+tables_2 = len(xwin.tables)
+whole_gen = files_2 == GEN_TABLES
+whole_parse = tables_2 == BIG_FILES
+check("Y1i 取消只中止被掐的那一条，另一条的完整结果不受牵连",
+      gone and (whole_gen != whole_parse),
+      [len(xwin._tasks), files_2, tables_2])
+check("Y1j 被取消的那条在自己那一页写明只完成了部分",
+      # 资源位是先还的、收尾留痕是随后写的，只读一次会读到空的（Java 那条同一轮踩过）
+      _wait_until(lambda: "已取消" in victim.log_view.toPlainText()
+                  or any("已取消" in x for _t, x in POPUPS), 15),
+      log_lines(victim.log_view.toPlainText(), "已取消")[:1])
+check("Y1k 收尾状态干净：没有任务残留、进度条不挂着",
+      not xwin._tasks and xwin.progress.value() == 0,
+      (len(xwin._tasks), xwin.progress.value()))
+_tick_timer.stop()
+app_main.ProgressDialog = _PD_BEFORE
+app_main.program_dir = _app_pdir
+app_main.MODAL_PROGRESS = False
+xwin.close()
+
 # ---- 结构预览保存：主键校验不过要挡在写回之前 ----
 vw = app_main.MainWindow()
 vw._add_files([make_xlsx("重复主键.xlsx", {"S": pd.DataFrame(

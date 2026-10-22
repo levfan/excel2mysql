@@ -77,11 +77,17 @@ public final class GuiMain {
         com.excel2mysql.gui.MainFrame.modalProgress = false;
         final CountDownLatch done = new CountDownLatch(1);
         final int[] result = {0};
+        // 账本与窗口要能拿到事件分发线程外面：真线程那一支必须站在 EDT 之外等
+        //（站在里面睡过去，进度框刷新与任务收尾回调全停，"没卡"就成了假象），
+        // 所以判定挪到那一段跑完之后再打，否则并发用例还没跑就被算成通过了
+        final List<String> problems = new ArrayList<String>();
+        final MainFrame[] holder = new MainFrame[1];
+        final int[] metrics = new int[2];
         SwingUtilities.invokeLater(() -> {
             MainFrame frame = null;
             try {
                 frame = new MainFrame();   // 建窗也在 try 里：构造期抛异常要让自检拿到退出码，而不是把闸门挂死
-                List<String> problems = new ArrayList<String>();
+                holder[0] = frame;
                 if (!frame.initialsBox().isSelected() || !frame.upperBox().isSelected()) {
                     problems.add("两颗命名开关应默认勾选（取拼音首字母 / 转大写）");
                 }
@@ -362,16 +368,8 @@ public final class GuiMain {
                     problems.add("进度框不该初始就是取消态");
                 }
                 pd.dispose();
-                if (problems.isEmpty()) {
-                    System.out.println("+ [OK] GUI-SELFTEST | 窗口构造成功，文件表 "
-                            + fileRows + " 行 / 字段合计 " + rows
-                            + " 个，DDL 预览含建表语句与主键，改类型能反映到预览");
-                } else {
-                    for (String p : problems) {
-                        System.out.println("x [ERROR] GUI-SELFTEST | " + p);
-                    }
-                    result[0] = 1;
-                }
+                metrics[0] = fileRows;
+                metrics[1] = rows;
             } catch (Throwable e) {
                 // 中途抛异常必须换成非 0 退出码：只把栈打在控制台上、闸门照样绿，比没闸门更糟
                 System.out.println("x [ERROR] GUI-SELFTEST | 自检中途抛异常："
@@ -387,6 +385,27 @@ public final class GuiMain {
             Thread.currentThread().interrupt();
             System.out.println("x [ERROR] GUI-SELFTEST | 被中断");
             return 1;
+        }
+        // 真线程那一支：进度框那条路（真子线程 + 真非模态框 + 真写盘）跑两条任务，
+        // 这一段自己站在非事件分发线程上
+        if (result[0] == 0 && holder[0] != null) {
+            try {
+                concurrent_tasks(holder[0], problems);
+            } catch (Throwable e) {
+                problems.add("真线程并发自检意外中止：" + e.getClass().getName()
+                        + " " + e.getMessage());
+            }
+        }
+        if (problems.isEmpty()) {
+            System.out.println("+ [OK] GUI-SELFTEST | 窗口构造成功，文件表 " + metrics[0]
+                    + " 行 / 字段合计 " + metrics[1]
+                    + " 个，DDL 预览含建表语句与主键，改类型能反映到预览；"
+                    + "两条真任务同时在跑、界面照旧响应");
+        } else {
+            for (String p : problems) {
+                System.out.println("x [ERROR] GUI-SELFTEST | " + p);
+            }
+            result[0] = 1;
         }
         return result[0];
     }
@@ -3368,6 +3387,352 @@ public final class GuiMain {
         if (frame.taskBusy()) {
             problems.add("endTask 没能把资源位还回去");
         }
+    }
+
+    /**
+     * 真线程那一支：打开进度框那条路，两条真任务同时在跑。
+     *
+     * 上面的 task_slots 验的是抢位规则（原地跑，没有线程也没有框）；这一支验的是用户那句
+     * "多个操作不要互相阻塞"本身——Excel 页在解析八个七千行的表、SQL 页在往盘上写一百五十个
+     * 文件，两边都得在动、界面还得点得动。所以整段站在非事件分发线程上：站在 EDT 里睡过去
+     * 就等于自己把事件循环掐了，那时候"看着没卡"是假的。
+     *
+     * 夹具拆成八个小文件而不是一个大文件：解析按阶段计项，一张几十万行的表总共只有 5 项，
+     * "读取工作簿"那一项能三秒不动一格，"两条都在推进"就采不到样。
+     */
+    private static void concurrent_tasks(MainFrame frame, List<String> problems)
+            throws Exception {
+        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
+                "e2m-concurrent");
+        deleteTree(dir);
+        dir.mkdirs();
+        List<String> xlsx = new ArrayList<String>();
+        // 解析这条要当两格里最长的那个（八个两万行，实测约六秒）：取消、推进取样、
+        // 同页拒绝这三步都得在它还没做完的时候做，夹具一旦快过用例就只能报"没验到取消"
+        for (int k = 0; k < 8; k++) {
+            xlsx.add(bigFixture(new java.io.File(dir, "并发大表" + (char) ('A' + k) + ".xlsx"),
+                    20000));
+        }
+        java.io.File script = new java.io.File(dir, "并发生成.sql");
+        StringBuilder sb = new StringBuilder();
+        // 生成那一头六百张表（Java 写六百个文件约两秒）。别再往大了加：实测三千张时
+        // 每个文件两行日志把事件分发线程灌满了，解析那条从 4 秒拖到 135 秒，
+        // 用例量的就成了日志刷屏速度而不是并发
+        for (int i = 0; i < 600; i++) {
+            sb.append("CREATE TABLE t_par_").append(i)
+                    .append(" (id BIGINT NOT NULL COMMENT '编号',")
+                    .append(" name VARCHAR(64) COMMENT '名称',")
+                    .append(" primary key (id)) ENGINE=InnoDB COMMENT='并发表").append(i)
+                    .append("';\n");
+        }
+        writeText(script.getPath(), sb.toString());
+        java.io.File script2 = new java.io.File(dir, "并发被挡.sql");
+        writeText(script2.getPath(), "CREATE TABLE t_block_0 (id BIGINT, primary key (id));\n");
+        final String genRoot = new java.io.File(dir, "并发输出").getPath();
+
+        MainFrame.modalProgress = true;      // 真那条路：起子线程、挂真框
+        try {
+            invokeUi(() -> frame.clearAll());
+            // 这一步不能等事件分发线程返回：进度框一旦回归模态，invokeAndWait 会和
+            // 一个没人点的结果弹窗互相等死（变异抽查实测：整道闸门挂住不出结果）。
+            // 也不能拿"台账里有一条"当前提——这份脚本几百毫秒就读完了，
+            // 60 毫秒一轮的采样根本抓不到那一瞬（上一版就是这么假红的）。
+            // 直接等它的结果：日志里出现这份脚本名，就说明条目已经进了 SQL 页列表。
+            fireUi(() -> frame.sqlPage().addFiles(
+                    java.util.Collections.singletonList(script.getPath())));
+            long loadUntil = System.currentTimeMillis() + 30000;
+            boolean loadedScript = false;
+            while (System.currentTimeMillis() < loadUntil) {
+                loadedScript = frame.sqlPage().logPanel().text().contains("并发生成.sql");
+                if (loadedScript) {
+                    break;
+                }
+                closeMessageDialogs();
+                Thread.sleep(30);
+            }
+            if (!loadedScript) {
+                problems.add("前置：SQL 页没把这份脚本读进列表，后面那颗生成按钮不会起任务："
+                        + tail(frame.sqlPage().logPanel().text()));
+                forceCloseDialogs();
+                return;
+            }
+            if (!waitTasks(frame, 0, 30)) {
+                problems.add("前置：SQL 页读脚本的任务没收尾：" + taskLine(frame));
+                forceCloseDialogs();
+                return;
+            }
+
+            // 起任务这两步都用 invokeLater 丢过去，不等它：非模态那条路本来就该"点下去就返回"。
+            // 用 invokeAndWait 的话，进度框一旦退回模态，调用方会被那颗框按死在这里——
+            // 报出来的就是"闸门挂住十五分钟"而不是"用例红了"，证据直接丢掉
+            //（变异抽查实测踩过：模态那一版把整道自检拖死，连一行输出都没有）
+            fireUi(() -> frame.addFilesAsync(xlsx));                 // A：Excel 页解析
+            fireUi(() -> frame.sqlPage().generateExcel(true, genRoot));   // B：SQL 页写盘
+            // 25 秒不是"任务要跑这么久"，是给事件分发线程留的余量：两条 invokeLater 排在
+            // 解析任务的日志刷新后面，机器上同时跑着别的用例集时，第二个体会被延后好几秒
+            // 才执行——八秒的窗口在闸门里红过一次，就是这么红的
+            if (!waitTasks(frame, 2, 25)) {
+                problems.add("两个真任务没能同时在跑（这一条就是「不互相阻塞」本身）："
+                        + taskLine(frame));
+                forceCloseDialogs();
+                return;
+            }
+            final List<MainFrame.Task> both = frame.runningTasks();
+            MainFrame.Task a = null;
+            MainFrame.Task b = null;
+            for (MainFrame.Task t : both) {
+                if (MainFrame.RES_EXCEL.equals(t.resources[0])) {
+                    a = t;
+                } else if (MainFrame.RES_SQL.equals(t.resources[0])) {
+                    b = t;
+                }
+            }
+            if (a == null || b == null) {
+                problems.add("同时在跑的两条任务认不出归属：" + taskLine(frame));
+                return;
+            }
+            // 同一页再点一次该被挡下——这一步要趁两条都还在跑就做，而且排在取样之前：
+            // 写盘那条两秒就完了，晚一步点下去资源位已经空出来，"挡下"这件事就根本不会发生
+            //（上一轮 flat 空成 "" 就是这个原因）。点的也不是那颗生成按钮——任务在跑时
+            // 它本来就是灰的，doClick 空转；「添加 SQL 文件」才是用户真会做的动作。
+            // 弹窗是模态的，会把事件分发线程按在嵌套循环里，所以这一步用 invokeLater 丢过去，
+            // 由这边轮那句话写出来没有，一看到就抄下来，再替用户把弹窗点掉。
+            SwingUtilities.invokeLater(() -> frame.sqlPage().addFiles(
+                    java.util.Collections.singletonList(script2.getPath())));
+            long until = System.currentTimeMillis() + 5000;
+            String flat = "";
+            while (System.currentTimeMillis() < until) {
+                String rec = frame.lastDialogText().replace((char) 10, ' ').replace(" ", "");
+                if (rec.contains("已有任务在跑")) {
+                    flat = rec;
+                    break;
+                }
+                Thread.sleep(50);
+            }
+            // 弹窗正文是按 56 列折过存的那一份，长短语会在中间断行；日志那一份又会被
+            // 生成任务的刷屏挤掉（每个文件两行）。比之前把空白去掉，两边都不受排版影响
+            if (!flat.contains("已有任务在跑")
+                    || !flat.contains("SQL脚本改名入库页的脚本列表")) {
+                problems.add("SQL 页第二个动作被挡下时没点名共用的是这一页的脚本列表："
+                        + tail(flat));
+            }
+            if (frame.runningTasks().size() != 2) {
+                problems.add("被挡下的那一步改变了在跑的任务数：" + taskLine(frame));
+            }
+            closeMessageDialogs();
+
+            for (MainFrame.Task t : both) {
+                if (t.dialog == null || !t.dialog.isShowing() || t.dialog.isModal()) {
+                    problems.add("任务在跑时它那个进度框不在屏上、或是模态的：" + t.describe());
+                }
+            }
+            int pa = a.getDone();
+            int pb = b.getDone();
+            long p0 = System.currentTimeMillis();
+            invokeUi(() -> { });
+            final long pingMs = System.currentTimeMillis() - p0;
+            Thread.sleep(1200);
+            int pa2 = a.getDone();
+            int pb2 = b.getDone();
+            if (pa2 <= pa || pb2 <= pb) {
+                // 断的是计项数而不是百分比：六百项的写盘任务里，冷启动头一个文件
+                // 就要占掉几百毫秒，窗口给小了会采不到样
+                problems.add("两条任务不是都在推进：" + pa + "→" + pa2 + " / "
+                        + pb + "→" + pb2);
+            }
+            if (pingMs > 500) {
+                problems.add("两条任务在跑时事件分发线程回应一次要 " + pingMs
+                        + " 毫秒（界面等于没转）");
+            }
+            // 掐掉解析那条：Java 这边它是稳的几秒（八个文件 41 项），写盘那条两秒就跑完，
+            // 取消要落在还在干活的线程上才有意义。而且这一步趁两条都还在跑就做——
+            // 先等一条自然收尾，另一条常在弹窗派发里跟着做完，用例就退化成"没验到取消"
+            List<MainFrame.Task> live = frame.runningTasks();
+            if (live.size() < 2) {
+                problems.add("该有两条在跑时只剩 " + live.size() + " 条：" + taskLine(frame));
+                return;
+            }
+            MainFrame.Task victim = null;
+            MainFrame.Task other = null;
+            for (MainFrame.Task t : live) {
+                if (MainFrame.RES_EXCEL.equals(t.resources[0])) {
+                    victim = t;
+                } else {
+                    other = t;
+                }
+            }
+            if (victim == null) {
+                problems.add("没找到还在跑的解析任务：" + taskLine(frame));
+                return;
+            }
+            if (victim.remaining() <= 0) {
+                problems.add("取消没落在还在干活的线程上（夹具快过了用例）："
+                        + victim.describe());
+                return;
+            }
+            victim.cancel();
+            // 等它退出台账，这一段故意不点弹窗：取消后的结果弹窗也是模态的，
+            // 用户没点确定那段时间里，这条已经收摊的任务必须先把资源位还出来——
+            // 收尾顺序一旦退回"先弹结果再放位"，这里就会等到超时
+            long quiet = System.currentTimeMillis() + 40000;
+            while (System.currentTimeMillis() < quiet && frame.runningTasks().contains(victim)) {
+                Thread.sleep(50);
+            }
+            if (frame.runningTasks().contains(victim)) {
+                problems.add("被掐掉那条的弹窗还开着时，它没把资源位还出来："
+                        + victim.describe());
+            }
+            // 留痕要再等一步：资源位是先还的、收尾日志是随后写的，
+            // 只在"退出台账"那一刻读一次必然读到空的（上一轮那条红就是这个意思）
+            String own = "";
+            long note = System.currentTimeMillis() + 20000;
+            while (System.currentTimeMillis() < note) {
+                own = victim.logView.text() + " | " + frame.lastDialogText();
+                if (own.contains("已取消")) {
+                    break;
+                }
+                closeMessageDialogs();
+                Thread.sleep(50);
+            }
+            if (!own.contains("已取消")) {
+                problems.add("被掐掉的那条没如实标注只完成部分：" + tail(own));
+            }
+            closeMessageDialogs();
+            // 没被掐的那条：照常推进到跑完，结果按事实落地
+            if (!waitTasks(frame, 0, 90)) {
+                problems.add("另一条没能自己跑完：" + taskLine(frame));
+            }
+            if (other != null) {
+                int o1 = other.getDone();
+                if (o1 < other.getTotal()) {
+                    // 台账已经空了说明这条也走完了收尾；这里再按计项核一遍，
+                    // 防止"任务被摘掉但活没干完"这种假收尾。
+                    // "有没有继续推进"不在这里断——那件事由取样那一步管，
+                    // 这一条只看结果：另一条可能在被掐之前就已经做完了，做完了自然不再推进
+                    problems.add("另一条没跑完自己的项数：" + other.describe());
+                }
+            }
+            if (MainFrame.RES_EXCEL.equals(victim.resources[0])
+                    && countXlsx(new java.io.File(genRoot)) <= 0) {
+                problems.add("取消解析把写盘那条的成果一起弄丢了");
+            }
+            if (MainFrame.RES_SQL.equals(victim.resources[0]) && frame.tables().size() != 8) {
+                problems.add("取消写盘把解析那条的成果一起弄丢了：表 " + frame.tables().size()
+                        + " 张");
+            }
+        } finally {
+            MainFrame.modalProgress = false;
+            forceCloseDialogs();
+        }
+    }
+
+    /** 丢给事件分发线程执行但不等它：起任务那一步必须"点下去就返回"才叫不互相阻塞。 */
+    private static void fireUi(Runnable action) {
+        SwingUtilities.invokeLater(action);
+    }
+
+    /**
+     * 收摊用的强制版：进度框也一起关掉。
+     * 一旦进度框回归成模态，那颗框会一直开着把事件分发线程按在嵌套循环里，
+     * 用例要的是"红得出来"，不是一台谁都退不掉的窗口。
+     */
+    private static void forceCloseDialogs() {
+        SwingUtilities.invokeLater(() -> {
+            for (java.awt.Window w : java.awt.Window.getWindows()) {
+                if (w instanceof javax.swing.JDialog && w.isVisible()) {
+                    w.dispose();
+                }
+            }
+        });
+    }
+
+    /** 在事件分发线程上跑一步，跑完才回来：起任务这类动作本来就该由"用户点按钮"那个线程做。 */
+    private static void invokeUi(final Runnable action) throws Exception {
+        SwingUtilities.invokeAndWait(action);
+    }
+
+    /** 等任务清单变成 wanted 个；超时返回 false，让用例红而不是抛出去把整轮带崩。 */
+    private static boolean waitTasks(MainFrame frame, int wanted, int seconds)
+            throws Exception {
+        long deadline = System.currentTimeMillis() + seconds * 1000L;
+        while (System.currentTimeMillis() < deadline) {
+            if (frame.runningTasks().size() == wanted) {
+                return true;
+            }
+            // 结果弹窗是模态的：自检里也得像人一样把它点掉，否则那条任务的收尾永远走不完
+            closeMessageDialogs();
+            Thread.sleep(60);
+        }
+        return frame.runningTasks().size() == wanted;
+    }
+
+
+    private static String taskLine(MainFrame frame) {
+        StringBuilder sb = new StringBuilder();
+        for (MainFrame.Task t : frame.runningTasks()) {
+            if (sb.length() > 0) {
+                sb.append(" || ");
+            }
+            sb.append(t.describe());
+        }
+        return sb.length() == 0 ? "（没有在跑的任务）" : sb.toString();
+    }
+
+    /**
+     * 造一张 rows 行的 xlsx 夹具（六列，混着文本/数值/日期串），让解析真要读上一秒把。
+     * 用流式 API：八个两万行是十六万行，XSSFWorkbook 全量进内存会把自检撑爆。
+     */
+    private static String bigFixture(java.io.File to, int rows) throws Exception {
+        org.apache.poi.ss.usermodel.Workbook wb =
+                new org.apache.poi.xssf.streaming.SXSSFWorkbook(100);
+        org.apache.poi.ss.usermodel.Sheet sheet = wb.createSheet("数据");
+        String[] head = {"编号", "名称", "金额", "数量", "日期", "备注"};
+        org.apache.poi.ss.usermodel.Row h = sheet.createRow(0);
+        for (int c = 0; c < head.length; c++) {
+            h.createCell(c).setCellValue(head[c]);
+        }
+        for (int i = 0; i < rows; i++) {
+            org.apache.poi.ss.usermodel.Row r = sheet.createRow(i + 1);
+            r.createCell(0).setCellValue(String.format("N%08d", i));
+            r.createCell(1).setCellValue("名称" + i);
+            r.createCell(2).setCellValue(3.14 + i % 100);
+            r.createCell(3).setCellValue(i % 997);
+            r.createCell(4).setCellValue(String.format("2026-03-%02d", i % 28 + 1));
+            r.createCell(5).setCellValue("备注" + i % 50);
+        }
+        writeWorkbook(wb, to);
+        return to.getPath();
+    }
+
+    private static int countXlsx(java.io.File root) {
+        int n = 0;
+        java.io.File[] kids = root.listFiles();
+        if (kids == null) {
+            return 0;
+        }
+        for (java.io.File f : kids) {
+            if (f.isDirectory()) {
+                n += countXlsx(f);
+            } else if (f.getName().endsWith(".xlsx")) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * 收掉自检里弹出来的消息框：真那条路的消息框是会开嵌套循环的，
+     * 留着它后面的步骤就一直在别人的弹窗里看数据。进度框不算消息框，别误关。
+     */
+    private static void closeMessageDialogs() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            for (java.awt.Window w : java.awt.Window.getWindows()) {
+                if (w instanceof javax.swing.JDialog && w.isVisible()
+                        && w.getClass().getName().endsWith("MessageDialog")) {
+                    w.dispose();
+                }
+            }
+        });
     }
 
     /**
