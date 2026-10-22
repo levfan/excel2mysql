@@ -724,6 +724,19 @@ def read_sql_text(path):
     return raw.decode("utf-8", errors="replace")
 
 
+def ensure_parsed(record):
+    """这张记录的"表名 → 字段定义"：读入时已算好就直接取，没算过才现解析一次并存回去。
+
+    sql_load_task 走的是前者；手工塞进列表的记录（用例、改名撞车后被丢掉的）走后者。
+    表格刷新与元数据弹窗都靠它，不再各自回扫整份脚本。
+    """
+    parsed = record.get("parsed")
+    if parsed is None:
+        parsed = {t["table_name"]: t for t in parse_create_tables(record["text"])}
+        record["parsed"] = parsed
+    return parsed
+
+
 def sql_load_task(paths, duplicates, sink):
     """读入 SQL 脚本文本并提取表名：几十万行的脚本读盘 + 正则扫描都在这里。
 
@@ -767,9 +780,11 @@ def sql_load_task(paths, duplicates, sink):
 def rekey_parsed(parsed, renames):
     """脚本正文里改了表名，把 sql_load_task 存的解析缓存按新名重挂。
 
-    改表名不动列定义，缓存里那一格换个键还是对的；只要有一种情况成立就
-    返回 None 丢掉整份（下次点开元数据时现解析一次）：要改的名字不在缓存里、
-    新名字和缓存里另一张表撞车。宁可慢那一次，也不能显示旧表名下的字段。
+    改表名不动列定义，缓存里那一格换个键还是对的。两种情况另外处理：
+    要改的名字压根不在缓存里 → 缓存本来就不全，返回 None 丢掉整份，下次用时现解析；
+    新名字与缓存里另一张表撞车 → 留先出现的那一张（与「同名表只按第一处导出」同一条规则），
+    缓存仍然可用。撞车不丢整份，是因为刷新清单也要读这张缓存，
+    丢了就等于把几十万行的重解析搬回主线程，正好是这次要治的那一下卡顿。
     """
     if parsed is None or not set(renames) <= set(parsed):
         return None
@@ -777,7 +792,7 @@ def rekey_parsed(parsed, renames):
     for name, table in parsed.items():
         new = renames.get(name, name)
         if new in out:
-            return None
+            continue
         if new != name:
             table = dict(table)
             table["table_name"] = new
@@ -1637,15 +1652,19 @@ class MainWindow(QWidget):
 
         self.sql_table = QTableWidget(0, 5)
         style_table_font(self.sql_table)
+        # 「CREATE 出现次数」这一列去掉：同一份脚本里一张表被写两遍，日志已经逐条点名，
+        # 现场清单里那一列全是 1，占着宽度只让人以为坏了；表注释是"这张表是干什么的"，
+        # 与「Excel 导入」那页同一列同名同位置，导入前先在这张表上就能核对
         self.sql_table.setHorizontalHeaderLabels(
-            ["序号", "文件", "原表名", "CREATE 出现次数", "当前表名"])
+            ["序号", "文件", "原表名", "当前表名", "表注释"])
         header = self.sql_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
         self.sql_table.setColumnWidth(0, 54)
         self.sql_table.setColumnWidth(1, 300)
         self.sql_table.setColumnWidth(2, 260)
-        self.sql_table.setColumnWidth(3, 130)
+        self.sql_table.setColumnWidth(3, 200)
+        self.sql_table.setColumnWidth(4, 280)
         self.sql_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sql_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.sql_table.itemDoubleClicked.connect(self.on_sql_table_double_clicked)
@@ -1755,6 +1774,7 @@ class MainWindow(QWidget):
                 base = os.path.basename(s["path"])
                 rev = {v: k for k, v in s["rename_map"].items()}
                 display_map = s.get("display_map") or {}
+                parsed = ensure_parsed(s)
                 # 表名清单在读取/改写时就已算好，几十万行的脚本不再回扫一遍
                 for t in s.get("tabs") or extract_create_tables(s["text"]):
                     rows.append({"path": s["path"], "base": base,
@@ -1762,19 +1782,22 @@ class MainWindow(QWidget):
                                  "actual": t["name"],
                                  "display": self._sql_display_name(
                                      display_map.get(t["name"], t["name"])),
-                                 "count": str(t["count"])})
+                                 "count": str(t["count"]),
+                                 "comment": (parsed.get(t["name"]) or {})
+                                 .get("table_comment") or ""})
             self._sql_rows = rows
             self._sql_display_names = [r["display"] for r in rows]
             self.sql_table.setRowCount(len(rows))
             for i, row in enumerate(rows):
                 items = [QTableWidgetItem(str(i + 1)), QTableWidgetItem(row["base"]),
-                         QTableWidgetItem(row["orig"]), QTableWidgetItem(row["count"]),
-                         QTableWidgetItem(row["display"])]
+                         QTableWidgetItem(row["orig"]), QTableWidgetItem(row["display"]),
+                         QTableWidgetItem(row["comment"])]
                 items[1].setData(Qt.UserRole, row["path"])
                 items[1].setToolTip(row["path"])
+                items[4].setToolTip(row["comment"])
                 for j, it in enumerate(items):
                     flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                    if j == 4:
+                    if j == 3:
                         flags |= Qt.ItemIsEditable
                     it.setFlags(flags)
                 for j, it in enumerate(items):
@@ -1783,15 +1806,14 @@ class MainWindow(QWidget):
             self._refreshing_sql_table = False
 
     def on_sql_table_double_clicked(self, item):
-        """当前表名列交给编辑器；其余列只是查看这一行对应表的元数据。"""
+        """当前表名列交给编辑器；其余列（含表注释）只是查看这一行对应表的元数据。"""
         if item is None or self.task_busy((self.RES_SQL,)):
             return
         row = item.row()
-        if item.column() == 4:
+        if item.column() == 3:
             self.sql_table.editItem(item)
             return
-        if item.column() < 4:
-            self.show_sql_table_metadata(row)
+        self.show_sql_table_metadata(row)
 
     def show_sql_table_metadata(self, row_index):
         dlg = self._build_sql_metadata_dialog(row_index)
@@ -1806,13 +1828,8 @@ class MainWindow(QWidget):
         if record is None:
             return None
         # 读入时已经整份解析过（sql_load_task），这里只按脚本里现在这个名字取那一张；
-        # 缓存不在（手工塞进列表的记录、改名撞车后被丢掉的）才现解析一次并补回去，
-        # 补回去这一步让"第二次点同一份脚本"不用再等 1.8 秒
-        parsed = record.get("parsed")
-        if parsed is None:
-            parsed = {t["table_name"]: t for t in parse_create_tables(record["text"])}
-            record["parsed"] = parsed
-        table = parsed.get(row["actual"])
+        # 补回去那一步让"第二次点同一份脚本"不用再等 1.8 秒
+        table = ensure_parsed(record).get(row["actual"])
         if table is None:
             append_log(self.sql_log, 
                 "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
@@ -1822,7 +1839,7 @@ class MainWindow(QWidget):
 
     def on_sql_table_item_changed(self, item):
         """只有手动编辑「当前表名」会到这里；同步改脚本引用，日志说清改了多少处。"""
-        if self._refreshing_sql_table or item.column() != 4:
+        if self._refreshing_sql_table or item.column() != 3:
             return
         row_index = item.row()
         if row_index >= len(self._sql_rows):

@@ -100,8 +100,13 @@ public final class SqlPage extends JPanel {
         }
     }
 
+    /**
+     * 「CREATE 出现次数」这一列去掉：同一份脚本里一张表被写两遍，日志已经逐条点名，
+     * 现场清单里那一列全是 1，占着宽度只让人以为坏了；表注释与「Excel 导入」页
+     * 同一列同名同位置，导入前先在这张表上就能核对（列序与 Python 侧一致）。
+     */
     private static final String[] COLUMNS =
-            {"序号", "文件", "原表名", "CREATE 出现次数", "当前表名"};
+            {"序号", "文件", "原表名", "当前表名", "表注释"};
 
     /**
      * 交给子线程的输入快照：改写期间主线程可能继续动列表，子线程只读这份拷贝。
@@ -230,14 +235,14 @@ public final class SqlPage extends JPanel {
         model = new DefaultTableModel(COLUMNS, 0) {
             @Override
             public boolean isCellEditable(int row, int col) {
-                return col == 4;
+                return col == 3;
             }
 
             @Override
             public void setValueAt(Object value, int row, int col) {
-                Object old = col == 4 && row >= 0 && row < getRowCount() ? getValueAt(row, col) : null;
+                Object old = col == 3 && row >= 0 && row < getRowCount() ? getValueAt(row, col) : null;
                 super.setValueAt(value, row, col);
-                if (col == 4 && !editingRowName && !String.valueOf(old).equals(String.valueOf(value))) {
+                if (col == 3 && !editingRowName && !String.valueOf(old).equals(String.valueOf(value))) {
                     renameRow(row, String.valueOf(value));
                 }
             }
@@ -249,7 +254,8 @@ public final class SqlPage extends JPanel {
         table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(54));
         table.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(300));
         table.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(260));
-        table.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(130));
+        table.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(200));
+        table.getColumnModel().getColumn(4).setPreferredWidth(UiScale.px(280));
         // 「文件」列挂完整路径：脚本同名时只靠文件名分不出是哪个目录里的那份（同 Python 的 tooltip）
         table.getColumnModel().getColumn(1).setCellRenderer(new javax.swing.table.DefaultTableCellRenderer() {
             @Override
@@ -265,7 +271,8 @@ public final class SqlPage extends JPanel {
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() == 2) {
                     int column = table.columnAtPoint(e.getPoint());
-                    if (column >= 0 && column <= 3) {
+                    // 「当前表名」那列交给表格自带的编辑器；其余列（含表注释）只是看这一行的元数据
+                    if (column >= 0 && column != 3) {
                         showMetadataAtRow(table.rowAtPoint(e.getPoint()));
                     }
                 }
@@ -574,15 +581,25 @@ public final class SqlPage extends JPanel {
     }
 
     public String sqlRowDisplayName(int row) {
-        return row < 0 || row >= rowActual.size() ? null : String.valueOf(model.getValueAt(row, 4));
+        return row < 0 || row >= rowActual.size() ? null : String.valueOf(model.getValueAt(row, 3));
     }
 
     public boolean sqlRowNameEditable(int row) {
-        return row >= 0 && row < model.getRowCount() && model.isCellEditable(row, 4);
+        return row >= 0 && row < model.getRowCount() && model.isCellEditable(row, 3);
     }
 
     public void setSqlRowName(int row, String name) {
-        model.setValueAt(name, row, 4);
+        model.setValueAt(name, row, 3);
+    }
+
+    /** 表注释那一列现在显示的是什么（脚本里那张表的 CREATE TABLE ... COMMENT）。 */
+    public String sqlRowComment(int row) {
+        return row < 0 || row >= model.getRowCount() ? null : String.valueOf(model.getValueAt(row, 4));
+    }
+
+    /** 自检用：某一格能不能直接编辑。 */
+    public boolean cellEditable(int row, int col) {
+        return row >= 0 && row < model.getRowCount() && model.isCellEditable(row, col);
     }
 
     public void showMetadata(int row) {
@@ -595,7 +612,7 @@ public final class SqlPage extends JPanel {
         }
         for (Entry e : entries) {
             if (e.path.equals(rowPath.get(row))) {
-                return parsedOf(e, rowActual.get(row));
+                return tableOf(e, rowActual.get(row));
             }
         }
         return null;
@@ -604,10 +621,10 @@ public final class SqlPage extends JPanel {
     /**
      * 一张表的字段定义：先取读入时缓存的那一份，取不到才现解析一次并补回缓存。
      *
-     * 补回去这一步让"第二次点同一份脚本"不用再等 1.8 秒——缓存被改名撞车丢掉时，
+     * 补回去这一步让"第二次点同一份脚本"不用再等整份解析——缓存被改名撞车丢掉时，
      * 慢的只有点开的那一次。
      */
-    private SqlScript.ParsedTable parsedOf(Entry e, String name) {
+    private Map<String, SqlScript.ParsedTable> parsedOf(Entry e) {
         if (e.parsed == null) {
             Map<String, SqlScript.ParsedTable> map =
                     new LinkedHashMap<String, SqlScript.ParsedTable>();
@@ -616,18 +633,25 @@ public final class SqlPage extends JPanel {
             }
             e.parsed = map;
         }
-        return e.parsed.get(name);
+        return e.parsed;
+    }
+
+    private SqlScript.ParsedTable tableOf(Entry e, String name) {
+        return parsedOf(e).get(name);
     }
 
     /**
-     * 脚本正文里改了表名，把解析缓存按新名重挂。
+     * 脚本正文里改了表名，把读入时存的解析缓存按新名重挂。
      *
-     * 改表名不动列定义，缓存里那一格换个键还是对的；只要有一种情况成立就返回 null
-     * 丢掉整份：要改的名字不在缓存里、新名字和缓存里另一张表撞车。
-     * 宁可下次点开慢那一次，也不能让元数据弹窗显示旧表名下的字段。
+     * 改表名不动列定义，缓存里那一格换个键还是对的。两种情况另外处理：要改的名字
+     * 压根不在缓存里 → 缓存本来就不全，返回 null 丢掉整份；新名字与缓存里另一张表
+     * 撞车 → 留先出现的那一张（与「同名表只按第一处导出」同一条规则），缓存仍然可用。
+     * 撞车不丢整份，是因为刷新清单也要读这张缓存，丢了就等于把整份重解析搬回事件
+     * 分发线程，正好是这次要治的那一下卡顿。
      */
     public static Map<String, SqlScript.ParsedTable> rekeyParsed(
-            Map<String, SqlScript.ParsedTable> parsed, Map<String, String> renames) {        if (parsed == null || !parsed.keySet().containsAll(renames.keySet())) {
+            Map<String, SqlScript.ParsedTable> parsed, Map<String, String> renames) {
+        if (parsed == null || !parsed.keySet().containsAll(renames.keySet())) {
             return null;
         }
         Map<String, SqlScript.ParsedTable> out =
@@ -640,7 +664,7 @@ public final class SqlPage extends JPanel {
                 en.getValue().tableName = name;
             }
             if (out.containsKey(name)) {
-                return null;
+                continue;   // 撞名只留先出现的那一张（没被改名的那张也算在内）
             }
             out.put(name, en.getValue());
         }
@@ -1259,9 +1283,11 @@ public final class SqlPage extends JPanel {
                             break;
                         }
                     }
+                    SqlScript.ParsedTable pt = tableOf(e, name);
                     model.addRow(new Object[]{String.valueOf(rowPath.size() + 1),
-                            baseName(e.path), origin, String.valueOf(t.get("count")),
-                            displayName(displayBase(e, name))});
+                            baseName(e.path), origin,
+                            displayName(displayBase(e, name)),
+                            pt == null || pt.tableComment == null ? "" : pt.tableComment});
                     rowPath.add(e.path);
                     rowOrigin.add(origin);
                     rowActual.add(name);
