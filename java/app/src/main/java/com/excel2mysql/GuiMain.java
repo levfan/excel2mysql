@@ -71,6 +71,13 @@ public final class GuiMain {
                 }
             }
         }
+        // 主窗口固定在"没有 conn.ini"的口径下建：包内冒烟时 jar 同级就带着随包 conn.ini，
+        // 候选路径不钉住的话，"没找到就说明按默认值起界面"那条断言会随运行目录变红。
+        // 后面 good.ini / bad.ini 两个场景各自换候选路径再建窗，不受这里影响。
+        final List<String> keepCandidates = com.excel2mysql.gui.MainFrame.connCandidates;
+        com.excel2mysql.gui.MainFrame.connCandidates =
+                java.util.Collections.singletonList(
+                        new File(folder, "no-such-conn.ini").getPath());
         // 关掉模态框：任务原地跑完。测的是线上那同一个工作函数与同一个回报接口，
         // 不是它的复印件（对应 main.py:137 的 MODAL_PROGRESS）。
         // 模态那一支两条线都没有自动化覆盖，交付前手工点一次，见 GUI-对齐清单.md 第 10 节。
@@ -87,6 +94,7 @@ public final class GuiMain {
             MainFrame frame = null;
             try {
                 frame = new MainFrame();   // 建窗也在 try 里：构造期抛异常要让自检拿到退出码，而不是把闸门挂死
+                com.excel2mysql.gui.MainFrame.connCandidates = keepCandidates;
                 holder[0] = frame;
                 if (!frame.initialsBox().isSelected() || !frame.upperBox().isSelected()) {
                     problems.add("两颗命名开关应默认勾选（取拼音首字母 / 转大写）");
@@ -2768,6 +2776,28 @@ public final class GuiMain {
         if (!title.contains("v") || !title.contains(
                 com.excel2mysql.core.AppInfo.load().versionText())) {
             problems.add("窗口标题没带版本号：" + title);
+        }
+        // 命令行与界面必须同源同版：以前 Main.java 另写一份常量，升版本只改到界面，
+        // --version 和启动日志会一直报旧号。这里直接跑一次 --version 把两边对上。
+        String wantVersion = com.excel2mysql.core.AppInfo.load().versionText();
+        java.io.PrintStream oldOut = System.out;
+        String cliVersion;
+        try {
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            System.setOut(new java.io.PrintStream(buf, true, "UTF-8"));
+            int code = Main.run(new String[]{"--version"});
+            cliVersion = new String(buf.toByteArray(), "UTF-8").trim();
+            if (code != 0) {
+                problems.add("命令行 --version 的退出码是 " + code);
+            }
+        } catch (Exception e) {
+            cliVersion = "";
+            problems.add("命令行 --version 跑不起来：" + e);
+        } finally {
+            System.setOut(oldOut);
+        }
+        if (!cliVersion.contains(wantVersion)) {
+            problems.add("命令行 --version 与界面版本不同源：" + cliVersion);
         }
         com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
         try {
