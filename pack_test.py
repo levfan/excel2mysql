@@ -183,12 +183,6 @@ class _RecDialog:
     def setStandardButtons(self, buttons):
         pass
 
-    def setMinimumWidth(self, width):
-        self.min_width = width
-
-    def setMinimumHeight(self, height):
-        self.min_height = height
-
     def findChildren(self, cls):
         return []
 
@@ -4601,35 +4595,55 @@ else:
 
 section("U 弹窗尺寸与折行（首次打开就得看得见全部文字）")
 
-# 期望值一律写死成契约数字，不写 POPUP_WRAP_COLS 这类常量本身——
-# 拿常量当期望值的断言是恒真的：把预算改成 400，断言照样绿，洞还在。
+# 折行不再自己算：正文原样交给弹窗，折点由内容区的实际宽度决定，装不下就出滚动条。
+# 所以这一组量的是真弹窗里的真控件，期望值全是量出来的相对关系，不引用产品常量。
 _LONG_ONE_LINE = ("任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息"
                   "（dim_air_raid_siren）.xlsx 时失败，内部单元格 D17 的类型与推断结果冲突，"
                   "需要人工确认这一列到底是文本还是数字，详见日志里的完整堆栈信息。")
 _TALL_TEXT = "\n".join("第 %d 行：这一行本身就不短，加上中文标点和路径信息会更长一些一些一些。"
                        % i for i in range(1, 31))
-_COLS = lambda s: sum(app_main._display_cols(c) for c in s)
+from PySide6.QtWidgets import QScrollArea as _QScrollArea
 
-check("U1 折行预算与上限钉死在 72 列 / 24 行",
-      app_main.POPUP_WRAP_COLS == 72 and app_main.POPUP_MAX_LINES == 24,
-      (app_main.POPUP_WRAP_COLS, app_main.POPUP_MAX_LINES))
-_w1 = app_main.wrap_popup_text(_LONG_ONE_LINE)
-check("U2 一条长文被折进列预算里（不再靠控件库横向撑宽）",
-      all(_COLS(ln) <= 72 for ln in _w1.split("\n")) and len(_w1.split("\n")) > 1,
-      [_COLS(ln) for ln in _w1.split("\n")])
-check("U3 折行只加换行、不改字",
-      _w1.replace("\n", "") == _LONG_ONE_LINE.replace("\n", ""), _w1[:60])
-_w2 = app_main.wrap_popup_text(_TALL_TEXT)
-check("U4 放不下的正文换成一句『去日志看』，行数不超 24",
-      len(_w2.split("\n")) <= 24 and "完整内容见底部日志" in _w2,
-      len(_w2.split("\n")))
-check("U5 未截断时原文的分段被保留",
-      app_main.wrap_popup_text("第一行\n第二行").replace("\n", "") == "第一行第二行",
-      app_main.wrap_popup_text("第一行\n第二行"))
+
+def _popup_shown(text, kind="information", title="执行完成"):
+    """把真弹窗摆出来，返回窗口与装正文的那个标签（用例桩会绕过真控件，量不到折行）。"""
+    box = app_main.build_popup_box(None, title, text, kind, box_class=_REAL_POPUP_BOX)
+    box.show()
+    _app.processEvents()
+    return box, box.body_label()
+
+
+_box1, _lab1 = _popup_shown(_LONG_ONE_LINE)
+_fm1 = _lab1.fontMetrics()
+check("U1 弹窗显示的正文就是原文（不预先插换行，窗口拉大才会跟着重排）",
+      _lab1.text() == _LONG_ONE_LINE, _lab1.text()[:60])
+check("U2 长句不靠横向撑宽窗口：弹窗仍在设计宽内，标签必须靠折行放字",
+      _box1.width() <= 880 and _lab1.width() < _fm1.horizontalAdvance(_LONG_ONE_LINE),
+      (_box1.width(), _lab1.width(), _fm1.horizontalAdvance(_LONG_ONE_LINE)))
+check("U3 折点贴着右边界（最宽一行不小于内容区宽的 90%，不再空着半幅）",
+      max(_fm1.horizontalAdvance(ln) for ln in _lab1.text().split("\n"))
+      >= 0.9 * _lab1.width(),
+      (max(_fm1.horizontalAdvance(ln) for ln in _lab1.text().split("\n")), _lab1.width()))
+_box1.close()
+_box1.deleteLater()
+
+_box2, _lab2 = _popup_shown(_TALL_TEXT, "critical", "任务异常")
+check("U4 30 行长报错整份都在弹窗里，不再换成一句『见日志』",
+      "见底部日志" not in _lab2.text()
+      and all(("第 %d 行" % i) in _lab2.text() for i in (1, 15, 30)),
+      _lab2.text()[-60:])
+check("U5 正文装在滚动区里，弹窗高度夹在 420~640 之间",
+      bool(_box2.findChildren(_QScrollArea))
+      and 420 <= _box2.height() <= 640, _box2.height())
+_box2.close()
+_box2.deleteLater()
+
+_box3, _lab3 = _popup_shown("请先添加 Excel 文件或 ZIP 压缩包。", "warning", "提示")
 check("U6 短文案原样不动（不给正常提示加多余换行）",
-      app_main.wrap_popup_text("请先添加 Excel 文件或 ZIP 压缩包。")
-      == "请先添加 Excel 文件或 ZIP 压缩包。",
-      app_main.wrap_popup_text("请先添加 Excel 文件或 ZIP 压缩包。"))
+      _lab3.text() == "请先添加 Excel 文件或 ZIP 压缩包。", _lab3.text())
+_box3.close()
+_box3.deleteLater()
+_app.processEvents()
 
 _geo = _app.primaryScreen().availableGeometry()
 _suites = [("主窗口", app_main.MainWindow(), "1100x780"),
@@ -4648,13 +4662,6 @@ for _nm, _win, _want in _suites:
     _win.deleteLater()
 _app.processEvents()
 
-POPUPS.clear()
-app_main.popup_box(None, "任务异常", _LONG_ONE_LINE, "critical")
-_shown = POPUPS[-1][1] if POPUPS else ""
-check("U8 消息弹窗真的走了折行那一道（首屏不会横向撑出屏外）",
-      "\n" in _shown and all(_COLS(ln) <= 72 for ln in _shown.split("\n")), _shown[:60])
-check("U9 折行后说的话与原来同一句",
-      _shown.replace("\n", "") == _LONG_ONE_LINE, _shown[:60])
 _copy_box = app_main.build_popup_box(
     None, "生成结果",
     "已生成 124 个文件（共 124 张表）。\n目录：\n"
@@ -4662,12 +4669,12 @@ _copy_box = app_main.build_popup_box(
     "information", box_class=_REAL_POPUP_BOX)
 _copy_box.show()
 _app.processEvents()
-_copy_labels = [x for x in _copy_box.findChildren(QLabel) if x.text()]
-check("U11 结果弹窗正文可用鼠标选中并 Ctrl+C 复制",
-      _copy_labels and all(
-          bool(x.textInteractionFlags() & _Qt.TextSelectableByMouse) for x in _copy_labels),
-      [(x.text()[:12], str(x.textInteractionFlags())) for x in _copy_labels])
-check("U11b 结果弹窗至少 820x420，产物路径与文件清单看得完整",
+_copy_body = _copy_box.body_label()
+check("U8 结果弹窗正文可用鼠标选中并 Ctrl+C 复制",
+      bool(_copy_body.textInteractionFlags() & _Qt.TextSelectableByMouse)
+      and _copy_body.text().startswith("已生成 124 个文件"),
+      (_copy_body.text()[:12], str(_copy_body.textInteractionFlags())))
+check("U8b 结果弹窗至少 820x420，产物路径与文件清单看得完整",
       _copy_box.width() >= 820 and _copy_box.height() >= 420,
       (_copy_box.width(), _copy_box.height()))
 _copy_box.close()

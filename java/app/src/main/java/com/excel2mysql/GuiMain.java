@@ -1746,7 +1746,9 @@ public final class GuiMain {
             problems.add("结果弹窗正文字号不是 Python 默认 9pt 折算的 " + wantPopupPx
                     + "px：" + copyBody.getFont());
         }
-        StringBuilder longText = new StringBuilder("任务异常：以下文件未能读入。");
+        StringBuilder longText = new StringBuilder("任务异常：以下文件未能读入。这一句故意写得很长很长，"
+                + "是为了验证正文控件真的按内容区的右边界把一行折下去，"
+                + "而不是把窗口横向撑宽、也不是提前半幅就断行，所以还得再续一段才够长。");
         for (int i = 0; i < 40; i++) {
             longText.append("\n[读取失败] C:\\data\\第").append(i)
                     .append("批\\很长的文件名用来验证滚动与复制.sql：编码无法识别");
@@ -1757,9 +1759,9 @@ public final class GuiMain {
                 || !((javax.swing.JTextArea) longArea).getText().contains("第39批")) {
             problems.add("弹窗正文这条线仍按 24 行截断，后面的报错看不到");
         }
-        String shown = com.excel2mysql.gui.PopupText.wrapAll(longText.toString());
+        String shown = frame.popupBodyText(longText.toString());
         com.excel2mysql.gui.MessageDialog md = com.excel2mysql.gui.MessageDialog.create(
-                frame, "任务异常", shown, longText.toString(),
+                frame, "任务异常", shown, null,
                 javax.swing.JOptionPane.ERROR_MESSAGE);
         if (!com.excel2mysql.gui.MessageDialog.hasScrollPane(md.textArea())) {
             problems.add("结果弹窗正文没装进滚动区，超出部分无处可看");
@@ -1779,6 +1781,26 @@ public final class GuiMain {
         }
         if (md.fullText().length() <= 0 || !md.fullText().contains("第39批")) {
             problems.add("「复制全部」拿到的不是完整原文");
+        }
+        // 正文里不许出现原文没有的换行：折行是排版的活，写进文本就再也追不上窗口宽度
+        if (!shown.equals(longText.toString()) || !md.displayText().equals(shown)) {
+            problems.add("弹窗正文被预先插了换行，窗口拉大也不会重排："
+                    + firstLine(md.displayText()));
+        }
+        // 折行交给控件：控件必须开着按词折，而且样本里得真有一段宽过内容区，
+        // 否则这条判据在这台机器上咬不住东西（宁可显式说它没咬到）
+        javax.swing.JTextArea body = md.textArea();
+        java.awt.FontMetrics bfm = body.getFontMetrics(body.getFont());
+        int widest = 0;
+        for (String para : longText.toString().split("\n", -1)) {
+            widest = Math.max(widest, bfm.stringWidth(para));
+        }
+        if (!body.getLineWrap() || !body.getWrapStyleWord()) {
+            problems.add("正文控件没开按词折行，长句只能横向挤着看");
+        }
+        if (widest <= body.getWidth()) {
+            problems.add("样本里没有宽过内容区的段落，折行这条判据咬不住东西：最宽段 "
+                    + widest + "px / 控件宽 " + body.getWidth());
         }
         if (md.getWidth() < UiScale.px(820) || md.getHeight() < UiScale.px(420)) {
             problems.add("结果弹窗本身小于按 DPI 折算的 "
@@ -2880,10 +2902,12 @@ public final class GuiMain {
     }
 
     /**
-     * 折行规则自己的红线：预算、行数、不丢字、截断时留话。
+     * 进度框那条折行规则的红线：预算、行数、不丢字、截断时留话。
      *
-     * 这条规则决定弹窗里到底看得见哪些字，两边各写一份迟早会飘，
-     * 所以除了对撞器比整串折行结果，这边再钉一遍绝对约束。
+     * <p>结果弹窗已经不再自己折行（正文原样交给 JTextArea 按右边界折），
+     * 这套列预算现在只管进度框那一小段文字——进度框尺寸固定、没有滚动条，
+     * 折与截都得自己算。它决定用户看得见哪些字，所以除了常量本身，
+     * 再钉一遍绝对约束。
      */
     private static void checkPopupWrap(java.util.List<String> problems) {
         // 期望值写死成契约数字：拿常量当期望值的断言是恒真的，

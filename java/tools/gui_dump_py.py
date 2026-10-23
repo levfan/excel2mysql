@@ -57,12 +57,6 @@ class _StubBox(object):
     def setStandardButtons(self, buttons):
         pass
 
-    def setMinimumWidth(self, width):
-        pass
-
-    def setMinimumHeight(self, height):
-        pass
-
     def findChildren(self, cls):
         return []
 
@@ -273,16 +267,20 @@ def find_layout(root, target):
 
 
 def popup_body(text):
-    """弹窗正文去掉折行引入的换行，只留内容（与 Java 侧 popupBody 同一件事）。"""
+    """弹窗正文去掉换行，只留内容（与 Java 侧 popupBody 同一件事）。
+
+    这里的换行就是写文案的人自己分的段（正文不再被折行改写），
+    比"说的话"时不连分段一起比。
+    """
     return (text or "").replace("\n", "")
 
 
 def popup_text():
     """最近一次弹窗的"图标|标题|正文"，没弹就是空串。
 
-    正文去掉换行再比：换行位置由折行规则按字符宽度算，而两边弹窗里带的产物目录
-    长度本来就不一样，折出来的行也不同。排版本身另有 wrap.single / wrap.path /
-    wrap.tall 三个键钉住（同样的输入必须折出同样的串），这里只比"说的话"。
+    两边显示的是同一份原文：横向折行交给各自的控件按内容区右边界做，
+    所以这里只比"说的话"。排版本身由 popup.display.raw 那一把键钉住
+    （显示的必须就是原文，谁都不许预先往里插换行）。
     """
     if not POPUPS:
         return ""
@@ -492,18 +490,14 @@ def main():
     app.processEvents()
     put("file.rename.restored", "%s|%s" % (
         win.tables[0]["table_name"], win.tables[0]["base_table_name"]))
-    # 折行规则本身也要跨线比：同一段最坏文案，两边必须折出同一个字符串
-    put("wrap.single", m.wrap_popup_text(
-        "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"
-        "内部单元格 D17 的类型与推断结果冲突，需要人工确认这一列到底是文本还是数字，"
-        "详见日志里的完整堆栈信息。"))
-    put("wrap.path", m.wrap_popup_text(
-        "已生成 24 个文件（共 158 张表）。\n目录：\n"
-        "D:\\00.personal\\4.code\\excel2mysql\\java\\dist\\excel2mysql-java-1.0.1-win64"
-        "\\app\\meta_data_file_20261014"))
-    put("wrap.tall", m.wrap_popup_text("\n".join(
-        "第 %d 行：这一行本身就不短，加上中文标点和路径信息会更长一些一些一些。" % i
-        for i in range(1, 31))))
+    # 弹窗显示的正文必须就是原文：折行是排版的活，谁都不许预先往文本里插换行
+    _worst = ("任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"
+              "内部单元格 D17 的类型与推断结果冲突，需要人工确认这一列到底是文本还是数字，"
+              "详见日志里的完整堆栈信息。")
+    _raw_box = m.build_popup_box(None, "任务异常", _worst, "critical",
+                                 box_class=m.PopupMessageBox)
+    put("popup.display.raw", "原文" if _raw_box.text() == _worst else "被改写过")
+    _raw_box.deleteLater()
     # 双击不是"接了信号"就算数，要真的建出那一张表的结构窗口。
     # 真窗口是模态的，离屏 exec() 会挂住进程，所以只把 exec 换成"记一笔、返回取消"，
     # 构造过程走真代码。

@@ -292,24 +292,16 @@ public final class GuiDump {
                 frame.fileModel().setValueAt(renameOld, 0, 2);
                 put("file.rename.restored", frame.tables().get(0).tableName + "|"
                         + frame.tables().get(0).baseTableName);
-                // 折行规则本身也要跨线比：同一段最坏文案，两边必须折出同一个字符串
-                put("wrap.single", com.excel2mysql.gui.PopupText.wrap(
-                        "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"
+                // 弹窗显示的正文必须就是原文：折行是排版的活，谁都不许预先往文本里插换行
+                String worst = "任务异常：读取 C:/数据/很长的一个文件名防空警报试鸣信息（dim_air_raid_siren）.xlsx 时失败，"
                         + "内部单元格 D17 的类型与推断结果冲突，需要人工确认这一列到底是文本还是数字，"
-                        + "详见日志里的完整堆栈信息。"));
-                put("wrap.path", com.excel2mysql.gui.PopupText.wrap(
-                        "已生成 24 个文件（共 158 张表）。\n目录：\n"
-                        + "D:\\00.personal\\4.code\\excel2mysql\\java\\dist"
-                        + "\\excel2mysql-java-1.0.1-win64\\app\\meta_data_file_20261014"));
-                StringBuilder tall = new StringBuilder();
-                for (int i = 1; i <= 30; i++) {
-                    if (i > 1) {
-                        tall.append('\n');
-                    }
-                    tall.append("第 ").append(i)
-                            .append(" 行：这一行本身就不短，加上中文标点和路径信息会更长一些一些一些。");
-                }
-                put("wrap.tall", com.excel2mysql.gui.PopupText.wrap(tall.toString()));
+                        + "详见日志里的完整堆栈信息。";
+                com.excel2mysql.gui.MessageDialog wdlg =
+                        com.excel2mysql.gui.MessageDialog.create(
+                                frame, "任务异常", worst, null,
+                                javax.swing.JOptionPane.ERROR_MESSAGE);
+                put("popup.display.raw", worst.equals(wdlg.displayText()) ? "原文" : "被改写过");
+                wdlg.dispose();
                 frame.startImport();
                 put("guard.nodb.import", popup());
 
