@@ -1523,24 +1523,28 @@ public final class GuiMain {
         if (!"nowrap".equals(frame.sqlRunWrap())) {
             problems.add("SQL 编辑区应不折行（折行后分号要数着看），实际 " + frame.sqlRunWrap());
         }
-        // 编辑区与结果区都是第三页给人读的主区域：等宽、同档 16 号，表格才不会错行
+        // 编辑区与结果区都是第三页给人读的主区域：等宽，字号与第一页日志同档
         java.awt.Font resultFont = frame.sqlRunLogPanel().getFont();
         java.awt.Font inputFont = frame.sqlRunInputFont();
-        int want16 = wantFontPx(16);
+        int wantLog = frame.logPanel().getFont().getSize();
+        if (wantLog != wantFontPx(LogPanel.DEFAULT_FONT_SIZE)) {
+            problems.add("第一页日志字号不是日志档折算的 " + wantFontPx(LogPanel.DEFAULT_FONT_SIZE)
+                    + "px：" + wantLog);
+        }
         if (resultFont == null || !"Monospaced".equals(resultFont.getFamily())) {
             problems.add("结果区不是等宽字体："
                     + (resultFont == null ? "无字体" : resultFont.getFamily()));
         }
-        if (resultFont == null || resultFont.getSize() != want16) {
-            problems.add("结果区字号不是 16pt 折算的 " + want16 + "px："
+        if (resultFont == null || resultFont.getSize() != wantLog) {
+            problems.add("结果区字号与第一页日志不同档（期望 " + wantLog + "px）："
                     + (resultFont == null ? "无字体" : resultFont.getSize()));
         }
         if (inputFont == null || !"Monospaced".equals(inputFont.getFamily())) {
             problems.add("编辑区不是等宽字体："
                     + (inputFont == null ? "无字体" : inputFont.getFamily()));
         }
-        if (inputFont == null || inputFont.getSize() != want16) {
-            problems.add("编辑区字号不是 16pt 折算的 " + want16 + "px："
+        if (inputFont == null || inputFont.getSize() != wantLog) {
+            problems.add("编辑区字号与第一页日志不同档（期望 " + wantLog + "px）："
                     + (inputFont == null ? "无字体" : inputFont.getSize()));
         }
         if (resultFont != null && inputFont != null
