@@ -2267,8 +2267,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         final javax.swing.JList<String> list = sqlRunSamplesList;
         sqlRunPreview = new javax.swing.JTextArea(12, 60);
         sqlRunPreview.setEditable(false);
+        // 左边清单是界面基准 9 号，右边全文按日志档 10 号（LogPanel.DEFAULT_FONT_SIZE），
+        // 不跟编辑区那档 16 号——这是照着挑的阅读弹窗，16 号在并排清单旁边显得突兀
         sqlRunPreview.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
-                UiScale.fontPt(SQL_RUN_FONT_SIZE)));
+                UiScale.fontPt(LogPanel.DEFAULT_FONT_SIZE)));
         sqlRunPreview.setText(SqlSamples.ALL[0].sql);
         final javax.swing.JTextArea preview = sqlRunPreview;
         final javax.swing.JScrollPane previewScroll = new javax.swing.JScrollPane(preview);

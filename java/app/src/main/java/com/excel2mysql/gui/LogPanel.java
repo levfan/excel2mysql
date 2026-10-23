@@ -26,7 +26,7 @@ public final class LogPanel extends javax.swing.JTextPane {
     /** 9pt 现场判过小，14pt 在默认窗口里只露出三行；日志这一档定在 10pt（同 Python），
      *  取控制台/IDE 的常见档位。表格那一档见 gui/Tables.POINT_SIZE（11pt），
      *  两处各自写死、由对撞键核同值。 */
-    static final int DEFAULT_FONT_SIZE = 10;
+    public static final int DEFAULT_FONT_SIZE = 10;
     /**
      * 日志框至少看得见 4 行它自己的字。按"行数"而不是像素约定：
      * 同一档字号在 Qt 与 Swing 里量出来的行高本就不同，写同一个像素数

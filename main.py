@@ -3215,7 +3215,9 @@ class SqlSamplesDialog(QDialog):
             self.list.addItem("【%s】%s" % (group, desc))
         self.preview = QPlainTextEdit(SQL_SAMPLES[0][2])
         self.preview.setReadOnly(True)
-        self.preview.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
+        # 左边清单是界面基准 9 号，右边全文按日志档 10 号：这是照着挑的阅读弹窗，
+        # 不吃编辑区那档 16 号（16 号在并排清单旁边显得突兀）
+        self.preview.setFont(QFont("Consolas", LOG_FONT_SIZE))
         self.list.currentRowChanged.connect(self._on_pick)
 
         left = QWidget()
