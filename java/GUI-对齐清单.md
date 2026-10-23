@@ -3110,3 +3110,28 @@ SHA-1 核过 `main.py`（`8878ff47…`）、`MainFrame.java`（`e46ba52b…`）�
 
 版本号：只改默认分栏比例与文档措辞，输入输出形状没变，按 patch 从 1.1.2 升到 1.1.3；
 `T15` 的 8 个写死位置逐处核过。
+
+## 65. 日志时间戳补上年月日（两栈）
+
+用户："日志时间戳，应该有年月日。"
+
+- 形状从 `[时:分:秒] 符号 [级别] 正文` 改成 `[年-月-日 时:分:秒] 符号 [级别] 正文`，
+  与命令行写进日志文件的 `[YYYY-MM-DD HH:MM:SS]` 同一形状。Python `core/log_text.py`
+  的 `LOG_TIME_FORMAT` 改成 `%Y-%m-%d %H:%M:%S`，Java `core/LogText.java` 的
+  `TIME_FORMAT` 改成 `yyyy-MM-dd HH:mm:ss`；两栈仍各自只在这一处取时间戳。
+- 只改首行前缀：续行缩进规则、定级表、颜色都没动；`GuiMain.log_line_shape`
+  的整页全量扫与 `pack_test.py` 的 F12b / F26b / J13e / Q25c2 一起把日期形状咬住。
+- 对撞器 `tools/gui_parity.py` 的 `CLOCK_RE` 同步认 `[年-月-日 时:分:秒]`，
+  仍只抹时间戳不抹级别，同一条日志跨线不同级照样当场不等。
+- 守卫与变异抽查：Python 把 `LOG_TIME_FORMAT` 改回 `%H:%M:%S` → F12b/c/d/h、
+  F26b、J13e、N7c、N8b、Q25c2 共 9 条红，682 / 9 / 5、退出码 1；Java 把
+  `TIME_FORMAT` 改回 `HH:mm:ss` → 第 10 步自检报 5 条"日志行首不是…"与
+  "日志里有不合形状的一行"，退出码 1。两处都按备份逐字节还原，
+  SHA-256 与改前一致（Python `f2e9b856…`，Java `fa576975…`）。
+- 文档：README 与 `help_doc.py` 的日志形状及全部示例补上年月日，`HelpDoc.java`
+  由 `java/tools/export_help_java.py` 重出（15 节），`tools/check_generated.py` 退出码 0。
+- 本轮实测：`pack_test.py` 691 / 0 / 5；`pack_test38.py` 3.8 栈 259 / 0 / 1、
+  3.12 栈 250 / 0 / 4；`构建验证.bat` 十步全过；`界面双端对撞.bat` 262 键逐键一致。
+- 版本号：只改日志时间戳的可见格式，导入导出形状没变，按 patch 从 1.1.3 升到 1.1.4；
+  `T15` 的写死版本位置逐处核过。
+- 未覆盖：本轮未重新打包，桌面 `excel2mysql-1023-三端产物` 仍是 1.1.3 的旧包。
