@@ -1186,10 +1186,10 @@ check("F33 条目文案为「【分组】说明」，打开即选中第一条",
       _dlg.list.item(0).text() == "【建库与选库】%s" % app_main.SQL_SAMPLES[0][1]
       and _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[0][2],
       _dlg.list.item(0).text())
-check("F33b 示例全文与编辑区同一支等宽字体、同一档 16 号字",
+check("F33b 示例全文是日志档 10 号等宽字体（与左侧清单同观感，不吃编辑区那档 16 号）",
       _dlg.preview.font().family() == w.sql_run_input.font().family()
-      and _dlg.preview.font().pointSize() == w.sql_run_input.font().pointSize()
-      and _dlg.preview.font().pointSize() == 16,
+      and _dlg.preview.font().pointSize() == w.log.font().pointSize()
+      and _dlg.preview.font().pointSize() == 10,
       (_dlg.preview.font().family(), _dlg.preview.font().pointSize()))
 check("F34 每条示例都能切成至少一句可执行语句",
       all(split_sql_statements(s[2]) for s in app_main.SQL_SAMPLES),

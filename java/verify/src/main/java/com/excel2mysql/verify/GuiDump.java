@@ -162,6 +162,9 @@ public final class GuiDump {
                 put("samples.count", String.valueOf(frame.sqlSamplesCount()));
                 put("samples.item.0", norm(frame.sqlSamplesItemText(0)));
                 put("samples.preview.0", frame.sqlSamplesPreviewText());
+                // 全文预览的字号也是界面事实：这是与左侧清单并排的阅读面，不吃编辑区那档 16 号
+                put("samples.preview.font.pt", String.valueOf(UiScale.fontPxToPt(
+                        frame.sqlRunPreviewFont().getSize())));
                 frame.setSqlSamplesRow(7);
                 put("samples.preview.7", frame.sqlSamplesPreviewText());
                 // 不比对「复制到剪贴板」的那句回执：剪贴板可能被别的进程占用，

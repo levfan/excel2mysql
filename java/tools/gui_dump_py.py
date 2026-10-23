@@ -391,6 +391,8 @@ def main():
     put("samples.count", _sd.list.count())
     put("samples.item.0", norm(_sd.list.item(0).text()))
     put("samples.preview.0", _sd.preview.toPlainText())
+    # 全文预览的字号也是界面事实：这是与左侧清单并排的阅读面，不吃编辑区那档 16 号
+    put("samples.preview.font.pt", str(_sd.preview.font().pointSize()))
     _sd.list.setCurrentRow(7)
     put("samples.preview.7", _sd.preview.toPlainText())
     # 不比对「复制到剪贴板」的那句回执：剪贴板可能被别的进程占用，

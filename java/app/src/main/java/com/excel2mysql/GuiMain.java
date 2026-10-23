@@ -2,6 +2,7 @@ package com.excel2mysql;
 
 import com.excel2mysql.gui.MainFrame;
 import com.excel2mysql.gui.UiScale;
+import com.excel2mysql.gui.LogPanel;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
@@ -1589,12 +1590,13 @@ public final class GuiMain {
             problems.add("「示例 (?)」点了没开出对话框");
         }
         java.awt.Font previewFont = frame.sqlRunPreviewFont();
+        int wantPreviewPx = wantFontPx(LogPanel.DEFAULT_FONT_SIZE);
         if (previewFont == null || !"Monospaced".equals(previewFont.getFamily())
-                || previewFont.getSize() != want16) {
-            problems.add("示例全文不是 16pt 折算的等宽字体："
+                || previewFont.getSize() != wantPreviewPx) {
+            problems.add("示例全文不是日志档 10pt 折算的等宽字体："
                     + (previewFont == null ? "无字体"
                     : previewFont.getFamily() + "/" + previewFont.getSize()
-                    + "，期望 " + want16 + "px"));
+                    + "，期望 " + wantPreviewPx + "px"));
         }
         if (!"SQL 示例（100 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
