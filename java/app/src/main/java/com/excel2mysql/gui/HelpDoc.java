@@ -402,10 +402,10 @@ public final class HelpDoc {
                     "<table class=\"t\">" + NL +
                     "<tr><th>数据特征</th><th>推断结果</th></tr>" + NL +
                     "<tr><td>日期时间对象，或含时间的字符串</td><td><code>DATETIME</code></td></tr>" + NL +
-                    "<tr><td><b>表头含金额语义的数值列</b></td><td><code>DECIMAL(16,2)</code>（样本是整数也不用 INT）</td></tr>" + NL +
-                    "<tr><td>纯整数</td><td><code>INT</code>，溢出则 <code>BIGINT</code></td></tr>" + NL +
+                    "<tr><td><b>表头含金额语义的数值列</b></td><td><code>DECIMAL(16,2)</code>（样本是整数也不用 INT；实测位数更多时放宽）</td></tr>" + NL +
+                    "<tr><td>纯整数</td><td><code>INT</code>，溢出则 <code>BIGINT</code>，再大则 <code>DECIMAL(n,0)</code></td></tr>" + NL +
                     "<tr><td>日期对象或带分隔符的日期串</td><td><code>DATE</code></td></tr>" + NL +
-                    "<tr><td>含小数</td><td><code>DECIMAL(p,s)</code> 按实测位数定宽</td></tr>" + NL +
+                    "<tr><td>含小数</td><td><code>DECIMAL(p,s)</code> 按实测位数定宽（MySQL 上限：总精度 65、小数 30；装不下退文本）</td></tr>" + NL +
                     "<tr><td>文本</td><td><code>VARCHAR(n)</code>，按全量最大 UTF-8 字节 + 20% 余量取档位</td></tr>" + NL +
                     "<tr><td><b>整列没有值</b>（采集模板还没填数）</td><td>按字段名关键字定：日期→<code>DATE</code>、" + NL +
                     "时间→<code>DATETIME</code>、金额→<code>DECIMAL(16,2)</code>、是否/标志→<code>TINYINT(1)</code>、" + NL +
@@ -442,7 +442,9 @@ public final class HelpDoc {
                     "否则 4 位小数被压成 2 位，数据就改了）</li>" + NL +
                     "<li><b>绝不截断实测精度</b>：<code>结算金额</code> 实测有 4 位小数就给" + NL +
                     "<code>DECIMAL(18,4)</code>；经纬度 <code>39.9046897</code> 保住 7 位给" + NL +
-                    "<code>DECIMAL(11,7)</code>；科学计数法大数按展开后的位数放宽</li>" + NL +
+                    "<code>DECIMAL(11,7)</code>；科学计数法大数按展开后的位数放宽。总精度按 MySQL" + NL +
+                    "的真实上限 65（小数 30），不再硬压到 30——那会把 14 位整数 + 18 位小数挤成" + NL +
+                    "<code>DECIMAL(30,18)</code>，写入时报 <code>1264 Out of range</code></li>" + NL +
                     "<li><b>8 位纯数字</b>（如 <code>20230101</code>）按数值处理，编码列不会误判成日期</li>" + NL +
                     "<li><b>带前导零的整数串</b>（如 <code>007</code>）保持文本，不丢前导零</li>" + NL +
                     "<li><b>行内字节预算</b>：utf8mb4 下每个 <code>VARCHAR(n)</code> 计 4n 字节，" + NL +
@@ -450,12 +452,12 @@ public final class HelpDoc {
                     "保证建表不报 Row size too large</li>" + NL +
                     "<li>数值列中无法转换的值按 NULL 写入，并在日志里汇总告警（列名、数量、行号示例），" + NL +
                     "不静默丢数据</li>" + NL +
-                    "<li><b>装不进 BIGINT 的整数会被整张表拒绝</b>：推断只能给到 <code>BIGINT</code>，" + NL +
-                    "超过 <code>±9223372036854775807</code> 时 MySQL 报" + NL +
-                    "<code>1264 Out of range value</code>，该表事务回滚、其余表继续，不会把一个变过样的数写进库。" + NL +
+                    "<li><b>超大整数也有去处</b>：整数超过 BIGINT 范围时改用" + NL +
+                    "<code>DECIMAL(n,0)</code>，超过 MySQL 65 位精度才退为文本并留痕；" + NL +
+                    "不会建出装不下数据的列、等第一条超界数据再报 <code>1264</code> 回滚。" + NL +
                     "Excel 的数值单元格本身是双精度浮点，<code>9223372036854775807</code> 存进去就已经变成" + NL +
-                    "<code>2^63</code>，所以要落这种量级的数，得在结构定义 Sheet 里把该列写成" + NL +
-                    "<code>DECIMAL(20,0)</code>，或者当文本列导</li>" + NL +
+                    "<code>2^63</code>，这种量级的数建议当文本列导，或在结构定义 Sheet 里写成" + NL +
+                    "<code>DECIMAL(20,0)</code></li>" + NL +
                     "</ul>" + NL +
                     "<p>所有推断结果都可以在<b>「生成表结构预览」</b>里逐列改。</p>"
         ),

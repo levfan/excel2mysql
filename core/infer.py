@@ -84,6 +84,10 @@ _RATE_CN = ("率", "比例", "百分比", "占比", "增速", "幅度")
 _RATE_EN = re.compile(r"(?:rate|ratio|percent|percentage|pct|share)", re.IGNORECASE)
 _MONEY_SCALE = 2                # 金额固定保留 2 位小数（精确到分）
 _MONEY_PRECISION = 16           # 金额默认 DECIMAL(16,2)
+_INT_MAX = 2147483647
+_BIGINT_MAX = 9223372036854775807
+_DECIMAL_MAX_PRECISION = 65     # MySQL DECIMAL 总精度上限
+_DECIMAL_MAX_SCALE = 30         # MySQL DECIMAL 小数位上限
 
 
 def _is_money(comment: str, field: str) -> bool:
@@ -235,11 +239,14 @@ def _num_shape(v):
 
 
 def _decimal_type(int_digits: int, scale: int, floor_int: int,
-                  money: bool) -> str:
+                  money: bool) -> Optional[str]:
     """按观测数据定 DECIMAL 精度，必要时放宽，绝不截断。
 
     金额列默认 DECIMAL(16,2)；非金额列整数位留 2 位增长余量、最少 4 位。
-    MySQL DECIMAL 总精度上限 65，这里再压到 30 以避开异常数据造出的荒谬宽度。
+    早先按"异常数据造出的宽度太荒谬"把总精度压到 30，结果是把实测到的整数位
+    挤掉了（14 位整数 + 18 位小数 → DECIMAL(30,18) 只剩 12 位整数），
+    写入时正是 1264 Out of range。这里改用 MySQL 的真实上限：总精度 65、小数 30；
+    仍装不下时返回 None，由调用方退回文本类型，绝不给出装不下数据的列。
     """
     if money:
         scale = max(scale, _MONEY_SCALE)
@@ -248,9 +255,40 @@ def _decimal_type(int_digits: int, scale: int, floor_int: int,
         int_digits = max(int_digits + 2, floor_int)
     int_digits = max(int_digits, 1)
     scale = max(scale, 0)
-    precision = min(int_digits + scale, 30)
-    int_digits = precision - scale
+    precision = int_digits + scale
+    if scale > _DECIMAL_MAX_SCALE or precision > _DECIMAL_MAX_PRECISION:
+        return None
     return f"DECIMAL({precision},{scale})"
+
+
+def _int_decimal_type(int_digits: int) -> Optional[str]:
+    """超出 BIGINT 的整数列：用 DECIMAL(n,0) 装，n 不超过 MySQL 的 65。"""
+    if int_digits > _DECIMAL_MAX_PRECISION:
+        return None
+    return f"DECIMAL({min(max(int_digits + 2, 20), _DECIMAL_MAX_PRECISION)},0)"
+
+
+def _int_magnitude(v):
+    """整数候选值的绝对值（Decimal）；不是整数值或不是有限数时返回 None。
+
+    不能走 int(str(v))：Excel 的整数常以 2200000000.0 这样的浮点进来，
+    int("2200000000.0") 会失败，旧逻辑把它当成"没溢出"，建出 INT 后写入 1264。
+    """
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, str):
+        s = v.strip().replace(",", "").replace("，", "")
+    else:
+        s = str(v)
+    if s == "":
+        return None
+    try:
+        d = Decimal(s)
+    except (InvalidOperation, ValueError):
+        return None
+    if not d.is_finite() or d != d.to_integral_value():
+        return None
+    return abs(d)
 
 
 def _varchar_tier(needed: int) -> int:
@@ -594,42 +632,55 @@ def infer_columns(df: pd.DataFrame, initials: bool = False,
             if shape:
                 obs_int = max(obs_int, shape[0])
                 obs_scale = max(obs_scale, shape[1])
+        typ = None
         if has_value and all_dt:
             typ = "DATETIME"
         elif has_value and money and (all_int or all_dec) and not all_da:
             # 金额列一律 DECIMAL：样本恰好是整数（Excel 常把 100 存成 100.0）
             # 也不能判成 INT，否则后续带小数的数据会被砍掉或写入报错
             typ = _decimal_type(obs_int, obs_scale, 4, money=True)
-            if all_int:
+            if typ is None:
+                col_note = (f"表头「{h}」含金额语义，但数值精度超出 MySQL DECIMAL 上限"
+                            f"（总精度 {_DECIMAL_MAX_PRECISION}、小数 {_DECIMAL_MAX_SCALE}），"
+                            f"按文本保存")
+            elif all_int:
                 col_note = (f"表头「{h}」含金额语义，样本值虽为整数，"
                             f"仍按 {typ} 而非整数类型")
         elif has_value and all_int:
-            # 检查是否溢出 INT 范围（带 break，避免全列无谓遍历）
-            overflow = False
+            # 按数值解析而不是 int(str(v))：Excel 的整数常以 2200000000.0
+            # 这样的浮点进来，旧写法解析失败就当没溢出，建出 INT 后写入 1264
+            extreme = Decimal(0)
             for v in coldata:
-                if v is None or (isinstance(v, float) and pd.isna(v)):
-                    continue
-                try:
-                    iv = int(str(v).replace(",", "").replace("，", ""))
-                    if abs(iv) > 2147483647:
-                        overflow = True
-                        break
-                except Exception:
-                    pass
-            typ = "BIGINT" if overflow else "INT"
+                mag = _int_magnitude(v)
+                if mag is not None and mag > extreme:
+                    extreme = mag
+            if extreme > _BIGINT_MAX:
+                typ = _int_decimal_type(obs_int)
+                if typ is None:
+                    col_note = (f"整数位数超出 MySQL DECIMAL 上限"
+                                f"（总精度 {_DECIMAL_MAX_PRECISION}），按文本保存")
+                else:
+                    col_note = f"整数超出 BIGINT 范围，按 {typ} 保存"
+            elif extreme > _INT_MAX:
+                typ = "BIGINT"
+            else:
+                typ = "INT"
         elif has_value and all_da:
             typ = "DATE"
         elif has_value and all_dec:
             typ = _decimal_type(obs_int, obs_scale, 4, money=money)
+            if typ is None:
+                col_note = (f"数值精度超出 MySQL DECIMAL 上限"
+                            f"（总精度 {_DECIMAL_MAX_PRECISION}、小数 {_DECIMAL_MAX_SCALE}），"
+                            f"按文本保存")
         elif named is not None:
             typ, col_note = named
-        else:
+        if typ is None:
             # 文本列：需求字节 = 全量最大字节 + 20% 余量；
             # 具体长度在第二遍按全表 VARCHAR 预算分配
             headroom = max(16, max_len // 5)
             needed = max_len + headroom
             if needed <= _VARCHAR_MAX_CHARS:
-                typ = None
                 pending_n = _varchar_tier(needed)
             else:
                 typ = "TEXT" if needed <= 65535 else "MEDIUMTEXT"

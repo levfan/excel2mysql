@@ -303,6 +303,8 @@ public final class GuiMain {
                 checkLogPanelThreadSafe(problems);
                 // 超出 BIGINT 的整数要原样发进库，不能让驱动截成负数
                 checkBigIntWire(problems);
+                // 1264 回归：浮点整数溢出、金额精度被压、字符串金额经 float 进位
+                checkInfer1264(frame.names(), problems);
                 // 「生成标准/简易 excel 文件」两颗按钮：落点、产物形状、回读与日志弹窗
                 meta_export(frame, files, problems);
                 // 标题版本号、说明窗口与关于框
@@ -3565,6 +3567,81 @@ public final class GuiMain {
                 new java.math.BigInteger("-9223372036854775809"));
         if (!(under instanceof java.math.BigDecimal)) {
             problems.add("低于 BIGINT 下界的整数没按原值发出去：" + under);
+        }
+    }
+
+    /**
+     * 1264 回归：推断给出的列必须装得下实测数据。
+     *
+     * 现场报错 "Out of range value for column 'unit_price_amount'"，根因有三条：
+     * 浮点整数（2200000000.0）解析失败被当成没溢出 → INT；DECIMAL 总精度被压到 30，
+     * 把实测的 14 位整数挤成 12 位；18 位金额字符串先转 double → 1e18 多一位。
+     * 三条都要在自检里各断一次，缺一条就还会回来。
+     */
+    private static void checkInfer1264(com.excel2mysql.core.Names names,
+                                       List<String> problems) {
+        com.excel2mysql.core.Infer infer = new com.excel2mysql.core.Infer(names);
+
+        List<java.util.List<Object>> big = new ArrayList<java.util.List<Object>>();
+        big.add(Arrays.<Object>asList(Double.valueOf(1.0)));
+        big.add(Arrays.<Object>asList(Double.valueOf(2.2e9)));
+        String t = infer.inferColumns(Arrays.<Object>asList("order_id"), big).get(0).type;
+        if (!"BIGINT".equals(t)) {
+            problems.add("浮点整数超 INT 没判成 BIGINT（旧版 int(str(v)) 解析失败漏判）：" + t);
+        }
+
+        List<java.util.List<Object>> money = new ArrayList<java.util.List<Object>>();
+        money.add(Arrays.<Object>asList(Double.valueOf(1e-18)));
+        money.add(Arrays.<Object>asList(Double.valueOf(12345678901234.5)));
+        com.excel2mysql.core.Infer.Column mc =
+                infer.inferColumns(Arrays.<Object>asList("unit_price_amount"), money).get(0);
+        if (!"DECIMAL(32,18)".equals(mc.type)) {
+            problems.add("金额列实测 14 位整数 + 18 位小数没得到 DECIMAL(32,18)：" + mc.type);
+        }
+
+        List<java.util.List<Object>> hugeStr = new ArrayList<java.util.List<Object>>();
+        hugeStr.add(Arrays.<Object>asList("999999999999999999.99"));
+        com.excel2mysql.core.Infer.Column hc =
+                infer.inferColumns(Arrays.<Object>asList("unit_price_amount"), hugeStr).get(0);
+        if (!"DECIMAL(20,2)".equals(hc.type)) {
+            problems.add("18 位金额字符串的列宽不对：" + hc.type);
+        }
+        com.excel2mysql.core.Ddl.Converted cv =
+                com.excel2mysql.core.Ddl.convert("999999999999999999.99", hc.type);
+        if (!(cv.value instanceof java.math.BigDecimal)
+                || !"999999999999999999.99".equals(cv.value.toString())) {
+            problems.add("金额字符串没按 BigDecimal 原值转换（float 往返会多一位）：" + cv.value);
+        }
+
+        List<java.util.List<Object>> over = new ArrayList<java.util.List<Object>>();
+        over.add(Arrays.<Object>asList(Double.valueOf(9.3e18)));
+        String ot = infer.inferColumns(Arrays.<Object>asList("id"), over).get(0).type;
+        if (!"DECIMAL(21,0)".equals(ot)) {
+            problems.add("超出 BIGINT 的整数没改用 DECIMAL(n,0)：" + ot);
+        }
+
+        List<java.util.List<Object>> digits = new ArrayList<java.util.List<Object>>();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 70; i++) {
+            sb.append('9');
+        }
+        digits.add(Arrays.<Object>asList(sb.toString()));
+        com.excel2mysql.core.Infer.Column dc =
+                infer.inferColumns(Arrays.<Object>asList("id"), digits).get(0);
+        if (dc.type == null || !dc.type.startsWith("VARCHAR")
+                || dc.typeNote == null || !dc.typeNote.contains("DECIMAL")) {
+            problems.add("超过 65 位的整数没退文本并留痕：" + dc.type + " / " + dc.typeNote);
+        }
+
+        com.excel2mysql.core.Ddl.Converted nan =
+                com.excel2mysql.core.Ddl.convert("NaN", "DECIMAL(10,2)");
+        if (nan.value != null || nan.error == null) {
+            problems.add("NaN 文本没按非法数字拦下：" + nan.value + " / " + nan.error);
+        }
+        com.excel2mysql.core.Ddl.Converted inf =
+                com.excel2mysql.core.Ddl.convert("1e400", "DOUBLE");
+        if (inf.value != null || inf.error == null) {
+            problems.add("超出 double 范围的值没按非法数字拦下：" + inf.value + " / " + inf.error);
         }
     }
 

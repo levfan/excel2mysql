@@ -491,6 +491,16 @@ check("B26 含时间的字符串 → DATETIME",
 check("B27 INT 溢出 → BIGINT",
       infer_columns(pd.DataFrame({"大数": [9999999999, 1111111111]}))[0]["type"] == "BIGINT",
       infer_columns(pd.DataFrame({"大数": [9999999999]}))[0]["type"])
+check("B27b 浮点整数超 INT → BIGINT（2.2e9 不能被 int(str(v)) 漏判）",
+      infer_columns(pd.DataFrame({"单据号": [1.0, 2200000000.0]}))[0]["type"] == "BIGINT",
+      infer_columns(pd.DataFrame({"单据号": [1.0, 2200000000.0]}))[0]["type"])
+check("B27c 整数超 BIGINT → DECIMAL(n,0)，不是装不下的 BIGINT",
+      infer_columns(pd.DataFrame({"大数": [9.3e18]}))[0]["type"] == "DECIMAL(21,0)",
+      infer_columns(pd.DataFrame({"大数": [9.3e18]}))[0]["type"])
+_big70 = infer_columns(pd.DataFrame({"大数": ["9" * 70]}))[0]
+check("B27d 超过 DECIMAL 65 位的整数退文本并写明原因",
+      _big70["type"].startswith("VARCHAR") and "DECIMAL" in _big70.get("type_note", ""),
+      (_big70["type"], _big70.get("type_note")))
 check("B28 表名全拼超 64 字符时整名降级为首字母（仿字段规则，每个汉字都还在名字里）",
       sanitize_table_name("北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表")
       == "bjshdqswjxsdxsksngcjcxxhzb"
@@ -1928,6 +1938,25 @@ check("L9d 非数值内容不参与位数统计", one({"混合": ["abc", "def"]}
 check("L9e 千分位字符串按去逗号后的位数算（整数 4 位 + 2 位余量 + 2 位小数）",
       one({"含千分位": ["1,234.56", "12.3"]})[0] == "DECIMAL(8,2)",
       one({"含千分位": ["1,234.56"]})[0])
+check("L9f 金额列同时有极小小数与 14 位整数时不被 30 位上限挤掉整数位（曾在写入时报 1264）",
+      one({"unit_price_amount": [1e-18, 12345678901234.5]})[0] == "DECIMAL(32,18)",
+      one({"unit_price_amount": [1e-18, 12345678901234.5]})[0])
+check("L9g 18 位金额字符串按字面位数定宽",
+      one({"unit_price_amount": ["999999999999999999.99"]})[0] == "DECIMAL(20,2)",
+      one({"unit_price_amount": ["999999999999999999.99"]})[0])
+_l9h = one({"单价": [0.00000000000000000000000000000000000000001]})
+check("L9h 小数位超 30 位退文本并留痕（DECIMAL 装不下就别硬塞）",
+      _l9h[0].startswith("VARCHAR") and "DECIMAL" in _l9h[1], _l9h)
+
+from core.mysql_io import _convert as _conv
+_dv, _de = _conv("999999999999999999.99", "DECIMAL(20,2)")
+check("L9i DECIMAL 字符串按 Decimal 转换，不经 float 进位",
+      _de is None and str(_dv) == "999999999999999999.99", (_dv, _de))
+check("L9j NaN 文本在转换阶段就按非法数字告警（不交给 MySQL 报 1366）",
+      _conv("NaN", "DECIMAL(10,2)") == (None, "值 'NaN' 不是合法数字"),
+      _conv("NaN", "DECIMAL(10,2)"))
+check("L9k 无穷大数值按非法数字告警（避免 Out of range）",
+      _conv(float("inf"), "DOUBLE")[0] is None, _conv(float("inf"), "DOUBLE"))
 check("L10 _is_money 直接判定符合预期",
       _is_money("订单金额", "dingdanjine") and not _is_money("员工编号", "yuangongbianhao"))
 
@@ -5164,6 +5193,46 @@ else:
         check("G6b 小数位不足时服务端静默四舍五入(3.125→3.13)；类型推断按实测给 3 位不踩这个坑",
               rounded == 3.13 and wide["金额"].endswith(",3)"), (rounded, wide["金额"]))
         create_table(conn, f"DROP TABLE IF EXISTS `{tname}_sc`")
+        # G6c 1264 回归：旧推断把 2.2e9 判成 INT、把 14 位整数 + 18 位小数压成
+        # DECIMAL(30,18)，建表都成功，第一条超界数据才报 "Out of range value"，
+        # 现场看到的就是"有时候"导入失败
+        _t1264 = tname + "_1264"
+        _df1264 = pd.DataFrame({"order_id": [1.0, 2200000000.0],
+                                "unit_price_amount": [1e-18, 12345678901234.5]})
+        _cols1264 = infer_columns(_df1264)
+        create_table(conn, build_ddl(_t1264, "1264回归", _cols1264, False))
+        try:
+            _n1264 = insert_data(conn, _t1264, _cols1264, _df1264, batch=10)
+            with conn.cursor() as c:
+                c.execute(f"SELECT `order_id`, `unit_price_amount` FROM `{_t1264}` "
+                          f"ORDER BY `order_id`")
+                _rows1264 = c.fetchall()
+            check("G6c 浮点整数溢出与金额精度不再触发 1264",
+                  _n1264 == 2 and [int(r[0]) for r in _rows1264] == [1, 2200000000],
+                  _rows1264)
+        except Exception as e:
+            conn.rollback()
+            check("G6c 浮点整数溢出与金额精度不再触发 1264", False,
+                  app_main.describe_db_error(e)[:160])
+        finally:
+            create_table(conn, f"DROP TABLE IF EXISTS `{_t1264}`")
+        _t1264s = tname + "_1264s"
+        _df1264s = pd.DataFrame({"unit_price_amount": ["999999999999999999.99"]})
+        _cols1264s = infer_columns(_df1264s)
+        create_table(conn, build_ddl(_t1264s, "1264字符串金额", _cols1264s, False))
+        try:
+            insert_data(conn, _t1264s, _cols1264s, _df1264s, batch=10)
+            with conn.cursor() as c:
+                c.execute(f"SELECT `unit_price_amount` FROM `{_t1264s}`")
+                _v1264 = c.fetchone()[0]
+            check("G6d 18 位金额字符串按字面值落库（不经 float 进位）",
+                  str(_v1264) == "999999999999999999.99", _v1264)
+        except Exception as e:
+            conn.rollback()
+            check("G6d 18 位金额字符串按字面值落库（不经 float 进位）", False,
+                  app_main.describe_db_error(e)[:160])
+        finally:
+            create_table(conn, f"DROP TABLE IF EXISTS `{_t1264s}`")
         bad_cols = [{"field": "id", "comment": "主键ID", "type": "INT", "primary_key": True},
                     {"field": "v", "comment": "值", "type": "VARCHAR(2)"}]
         try:

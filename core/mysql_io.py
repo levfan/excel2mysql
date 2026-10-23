@@ -1,6 +1,8 @@
 """DDL 生成与 MySQL 导入。"""
+import math
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 import pymysql
 
@@ -71,17 +73,33 @@ def _convert(v, typ: str):
                 return int(s.replace(",", "").replace("，", "")), None
             except Exception:
                 return None, f"值 {s!r} 不是合法整数"
-        if typ.upper().startswith(("DECIMAL", "NUMERIC", "FLOAT", "DOUBLE")):
+        t = typ.upper()
+        if t.startswith(("DECIMAL", "NUMERIC")):
+            # 不能先转 float：999999999999999999.99 会变成 1e18，
+            # 整数位凭空多一位，写 DECIMAL(20,2) 直接 1264；Decimal 原样保留字面值
             try:
-                return float(s.replace(",", "").replace("，", "")), None
-            except Exception:
+                d = Decimal(s.replace(",", "").replace("，", ""))
+            except (InvalidOperation, ValueError):
                 return None, f"值 {s!r} 不是合法数字"
+            if not d.is_finite():
+                return None, f"值 {s!r} 不是合法数字"
+            return d, None
+        if t.startswith(("FLOAT", "DOUBLE")):
+            try:
+                f = float(s.replace(",", "").replace("，", ""))
+            except (ValueError, OverflowError):
+                return None, f"值 {s!r} 不是合法数字"
+            if not math.isfinite(f):
+                return None, f"值 {s!r} 不是合法数字"
+            return f, None
         return s, None
     t = typ.upper()
     if "INT" in t and isinstance(v, bool):
         return int(v), None
     if t.startswith(("DECIMAL", "NUMERIC", "FLOAT", "DOUBLE")) and isinstance(v, bool):
         return float(v), None
+    if isinstance(v, float) and not math.isfinite(v):
+        return None, f"值 {v!r} 不是合法数字"
     return v, None
 
 

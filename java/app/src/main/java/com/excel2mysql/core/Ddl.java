@@ -1,5 +1,6 @@
 package com.excel2mysql.core;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -97,6 +98,10 @@ public final class Ddl {
         if (v == null || (v instanceof Double && Double.isNaN(((Double) v).doubleValue()))) {
             return new Converted(null, null);
         }
+        if (v instanceof Double && Double.isInfinite(((Double) v).doubleValue())) {
+            return new Converted(null, "值 " + PyNumber.repr(((Double) v).doubleValue())
+                    + " 不是合法数字");
+        }
         String t = typ == null ? "" : typ.toUpperCase();
         if (v instanceof String) {
             String s = Names.pyStrip((String) v);
@@ -118,11 +123,22 @@ public final class Ddl {
                     return new Converted(null, "值 " + repr(s) + " 不是合法整数");
                 }
             }
-            if (t.startsWith("DECIMAL") || t.startsWith("NUMERIC")
-                    || t.startsWith("FLOAT") || t.startsWith("DOUBLE")) {
+            if (t.startsWith("DECIMAL") || t.startsWith("NUMERIC")) {
+                // 不能先转 double：999999999999999999.99 会变成 1e18，整数位凭空多一位，
+                // 写 DECIMAL(20,2) 直接 1264；BigDecimal 原样保留字面值
                 try {
-                    return new Converted(Double.valueOf(
-                            Double.parseDouble(s.replace(",", "").replace("，", ""))), null);
+                    return new Converted(new BigDecimal(s.replace(",", "").replace("，", "")), null);
+                } catch (NumberFormatException e) {
+                    return new Converted(null, "值 " + repr(s) + " 不是合法数字");
+                }
+            }
+            if (t.startsWith("FLOAT") || t.startsWith("DOUBLE")) {
+                try {
+                    double d = Double.parseDouble(s.replace(",", "").replace("，", ""));
+                    if (Double.isNaN(d) || Double.isInfinite(d)) {
+                        return new Converted(null, "值 " + repr(s) + " 不是合法数字");
+                    }
+                    return new Converted(Double.valueOf(d), null);
                 } catch (NumberFormatException e) {
                     return new Converted(null, "值 " + repr(s) + " 不是合法数字");
                 }

@@ -3337,3 +3337,97 @@ SHA-1 核过 `main.py`（`8878ff47…`）、`MainFrame.java`（`e46ba52b…`）�
 - 版本号：文案订正、用户可见，按 patch 从 2.0.1 升到 2.0.2；`HelpDoc.java` 重出（15 节）。
 - 未覆盖：本轮未重新打包，桌面交付包仍是 1.1.3；未跑 `pack_test.py` / `pack_test38.py` /
   十步闸门（用户对这类改动明确豁免，下次打包时会一并覆盖）。
+
+## 72. 第二页覆盖开关、底部动作条与两页日志默认最小高度
+
+用户三条要求：第二页要有「覆盖已存在表（先 DROP 再建）」开关；第二页的第二行按钮
+搬到底部，与第一页布局对齐；日志默认高度就是当前的最小高度，但仍然可以自由拖动。
+明确边界：「2 个 tab 的按钮数量以及功能不一样，不要给第 2 个 tab 页加按钮。我只是让你调整布局。」
+
+- 覆盖开关（`main.py` 的 `chk_sql_drop`、`SqlPage.dropExistingBox()`）：默认不勾选，
+  文案「覆盖已存在表（先 DROP 再建）」两栈逐字一致。勾选只影响**执行副本**：
+  `core/sql_script.py::prepend_drop_tables` / `SqlScript.prependDropTables` 在原文前
+  按建表目标出现顺序**倒排**补 `DROP TABLE IF EXISTS`，空一行再接原脚本；脚本正文、
+  保存副本、两份生成件都不变。判据只认整句以 `CREATE TABLE` 开头的语句
+  （`_mask_comments` / `maskComments` 屏蔽注释与字符串里的建表），schema 限定名整段保留，
+  同一目标只删一次，执行日志用 `[覆盖]` 逐一点名。
+- 布局：第二页与第一页同形——分隔条内三段（拖拽区 / 表格 + 前缀行 + 第一行按钮 / 日志），
+  `保存修改后ddl脚本`、`执行修改后ddl脚本到当前库`、`生成标准excel文件`、`生成简易excel文件`
+  与覆盖开关一起放在底部固定动作条（开关最左、四颗按钮贴右），
+  `清除日志` 移到日志框上方。四颗按钮总宽比第一页多两颗，套了横向滚动区
+  （`QScrollArea`），正常宽度贴右排开、窄屏才出滚动条，整窗最小宽度仍能落在屏幕内。
+- 日志默认最小高：两页都是「拖拽区=窗口高×110/670，表格拿其余，日志段正好等于自己的最小高度」。
+  Qt 侧 `LogMinPlacer` 在用户拖把手之前每次 Resize 都按绝对高度重摆（`splitterMoved` 后停手）；
+  Swing 侧 `MainFrame.applySplitProportions` / `SqlPage.applySplitProportions` 由
+  `ComponentListener` 每轮重摆，给 Divider 挂 `MouseListener` 检测用户拖过
+  （`splitUserMoved`），并用 `splitAdjusting` 防重入。两栈都保留自由拖动。
+  Java 原实现用 `splitPlaced` 一次性锁死，离屏构造时会在未足尺的布局上摆一次，
+  之后窗口长高也不补，导致对撞键 `split.*.logmin` 一边 1 一边 0——本轮改成逐 Resize 重摆。
+- 对撞器：Python `find_layout` 现在会下钻 `QScrollArea.widget().layout()`（否则看不到
+  底部条里的四颗按钮）；新增/更新键 `sql_drop_existing`、`bar.sql.rows`、
+  `split.excel.logmin`、`split.sql.logmin`，两边都量**日志段**而不是里面的文本框
+  （`max(minimumHeight, minimumSizeHint)`，±4px 容差）。
+  最终 271 键逐键一致、退出码 0。
+- 用例：K0b/K11c 改量 `sp.widget(2)`/`sp2.widget(2)` 的最小高度；K21 拆开
+  `QScrollArea` 后断言底部条 = [覆盖开关] + [四颗按钮]，第一行按钮不在底部条里；
+  V1/V2/V4 用 `newline=""` 写脚本，避免 Windows 文本模式把 LF 变成 CRLF。
+- 变异抽查（逐字节还原后核 SHA-256）：
+  - 去掉 `prepend_drop_tables` 的去重 → 探针报 `['t3', 't3']`，退出码 1；
+    还原后 `core/sql_script.py` SHA-256 `8abfdebd…`。
+  - 停用 `LogMinPlacer.eventFilter` → 日志高 174/166（最小 78），退出码 1；
+    还原后 `main.py` SHA-256 `02792c4e…`。
+  - Java `prependDropTables` 正序输出 → 自检两条 ERROR（执行副本与判据），退出码 1；
+    还原后 `SqlScript.java` SHA-256 `cafb3214…`。
+  - Java 摆位不减日志最小高 → 自检报「第一页日志默认没有压到最小高度：高 0 / 最小 147」，
+    退出码 1；还原后 `MainFrame.java` SHA-256 `0fe560f4…`。
+- 本轮全量验证：`pack_test.py`（带真库凭据）通过 725 / 失败 0 / 跳过 5
+  （跳过项只有 PT_XLS、CORPUS_DDL、冻结态取证，凭据相关一项没跳）；
+  `pack_test38.py` 3.12 线 252/0/4、3.8 线 261/0/1；
+  Java `mvn clean package` 与 `--selftest` 退出码 0、0 条 ERROR；
+  TypeDiffer 两份金标准不一致 0 处；GUI 对撞 271 键一致。
+- 版本号：本轮（含 73 节的 1264 修复）按 patch 从 2.0.2 升到 2.0.3；
+  `version.py`、三个 pom、`构建验证.bat`、`help_doc.py`、`conn.ini`、`HelpDoc.java`、README 同步。
+- 未覆盖：未重新打包，桌面交付包仍是 1.1.3。
+
+## 73. 批量导入偶发 1264：整数溢出与金额 DECIMAL 精度
+
+用户报错：「BatchUpdateException: Data truncation(Mysql 错误码 1264)：
+Data truncation:Out of range value for column 'unit_price_amount' at row1」。
+
+根因有三处，都会让推断出的列宽装不下后来那条数据：
+
+1. 金额列旧实现在总精度超 30 时把 `DECIMAL(p,s)` 硬压到 `DECIMAL(30,s)`
+   （14 位整数 + 18 位小数 → `DECIMAL(30,18)` 只剩 12 位整数），
+   实测样本里最大的整数位被挤掉，写入即 1264。
+2. 整数溢出判断走 `int(str(v))`：Excel 里 `2200000000.0` 这种浮点整数字符串
+   解析失败，被当成"没溢出"，建出 `INT` 后写入 1264；超过 BIGINT 的值也只会继续给 BIGINT。
+3. `DECIMAL` 列的值先转 `float`：`999999999999999999.99` 变成 `1e18`，
+   整数位凭空多一位，写 `DECIMAL(20,2)` 直接超界。
+
+修复（Python / Java 同语义）：
+
+- `core/infer.py`：`_INT_MAX` / `_BIGINT_MAX` / `_DECIMAL_MAX_PRECISION=65` /
+  `_DECIMAL_MAX_SCALE=30`；`_decimal_type` 用 MySQL 真实上限，装不下返回 None
+  由调用方退文本并写 `type_note`，绝不再压缩实测位数；新增 `_int_magnitude`
+  按 `Decimal` 判断整数溢出（浮点整数、千分位都能认）；超 BIGINT 走
+  `_int_decimal_type` → `DECIMAL(n,0)`（n≤65），再超退文本。
+- `core/mysql_io.py`：`DECIMAL`/`NUMERIC` 的字符串按 `Decimal` 转换，不经 float；
+  `FLOAT`/`DOUBLE` 用 `math.isfinite` 拒掉 inf/NaN 并计入告警。
+- Java `core/Infer.java`：`BigDecimal` 版 `_decimalType` / `intDecimalType` /
+  `intMagnitude`，常量和判定逐条对齐；`core/Ddl.java::convert` 用 `new BigDecimal`
+  转 DECIMAL 字符串，`Double.isInfinite`/`isNaN` 拒绝。
+- 测试：B27b（2.2e9→BIGINT）、B27c（9.3e18→DECIMAL(21,0)）、
+  B27d（70 位整数退文本并留痕）、L9f（金额 14 位整数+18 位小数→`DECIMAL(32,18)`）、
+  L9g（18 位金额字符串按字面位数）、L9h（小数位超 30 退文本）、
+  L9i（Decimal 精确转换）、L9j/L9k（NaN / inf 告警）、
+  G6c/G6d 打到真库：旧实现报 1264 的两种数据现在落库成功且逐值回查。
+- 金标准：两份 `jsonl.gz` 只重出预期类型变化与 `sha256` 字段（生成器文档明说
+  sha256 不参与比较），夹具文件一个字节没动；TypeDiffer 两份均 0 处不一致。
+- 变异抽查（逐字节还原后核 SHA-256）：
+  - `_decimal_type` 的 65 上限改回 30 → 探针报金额列变 `VARCHAR(64)`，退出码 1；
+    还原后 `core/infer.py` SHA-256 `efca6cd0…`。
+  - `mysql_io` 的 DECIMAL 字符串改成经 float → 探针报 `Decimal('1E+18')`，退出码 1；
+    还原后 `core/mysql_io.py` SHA-256 `280f3e72…`。
+  - Java `intDecimalType` 上限改 18 → 自检报「超出 BIGINT 的整数没改用 DECIMAL(n,0)：VARCHAR(64)」，
+    退出码 1；还原后 `Infer.java` SHA-256 `29df5d62…`。
+- 验证与版本号同 72 节；桌面交付包未重打。

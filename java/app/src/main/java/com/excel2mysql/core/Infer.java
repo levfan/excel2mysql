@@ -1,5 +1,6 @@
 package com.excel2mysql.core;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.Charset;
 import java.time.LocalDate;
@@ -26,6 +27,10 @@ public final class Infer {
     private static final int COL_ROW_COST = 16;
     private static final int MONEY_SCALE = 2;
     private static final int MONEY_PRECISION = 16;
+    private static final BigDecimal INT_MAX = BigDecimal.valueOf(2147483647L);
+    private static final BigDecimal BIGINT_MAX = new BigDecimal("9223372036854775807");
+    private static final int DECIMAL_MAX_PRECISION = 65;
+    private static final int DECIMAL_MAX_SCALE = 30;
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
 
@@ -245,6 +250,13 @@ public final class Infer {
         return en.matcher(fl).find();
     }
 
+    /**
+     * 按观测数据定 DECIMAL 精度，必要时放宽，绝不截断。
+     * 早先按"异常数据造出的宽度太荒谬"把总精度压到 30，结果把实测到的整数位挤掉了
+     * （14 位整数 + 18 位小数 → DECIMAL(30,18) 只剩 12 位整数），写入正是 1264。
+     * 这里改用 MySQL 的真实上限（总精度 65、小数 30）；装不下返回 null，
+     * 由调用方退回文本类型，绝不给出装不下数据的列。
+     */
     public static String decimalType(int intDigits, int scale, int floorInt, boolean money) {
         if (money) {
             scale = Math.max(scale, MONEY_SCALE);
@@ -254,9 +266,19 @@ public final class Infer {
         }
         intDigits = Math.max(intDigits, 1);
         scale = Math.max(scale, 0);
-        int precision = Math.min(intDigits + scale, 30);
-        intDigits = precision - scale;
+        int precision = intDigits + scale;
+        if (scale > DECIMAL_MAX_SCALE || precision > DECIMAL_MAX_PRECISION) {
+            return null;
+        }
         return "DECIMAL(" + precision + "," + scale + ")";
+    }
+
+    /** 超出 BIGINT 的整数列：用 DECIMAL(n,0) 装，n 不超过 MySQL 的 65。 */
+    public static String intDecimalType(int intDigits) {
+        if (intDigits > DECIMAL_MAX_PRECISION) {
+            return null;
+        }
+        return "DECIMAL(" + Math.min(Math.max(intDigits + 2, 20), DECIMAL_MAX_PRECISION) + ",0)";
     }
 
     public static int varcharTier(int needed) {
@@ -412,24 +434,47 @@ public final class Infer {
                 col.type = "DATETIME";
             } else if (hasValue && money && (allInt || allDec) && !allDa) {
                 col.type = decimalType(obsInt, obsScale, 4, true);
-                if (allInt) {
+                if (col.type == null) {
+                    col.typeNote = "表头「" + h + "」含金额语义，但数值精度超出 MySQL DECIMAL 上限"
+                            + "（总精度 " + DECIMAL_MAX_PRECISION + "、小数 " + DECIMAL_MAX_SCALE
+                            + "），按文本保存";
+                } else if (allInt) {
                     col.typeNote = "表头「" + h + "」含金额语义，样本值虽为整数，仍按 "
                             + col.type + " 而非整数类型";
                 }
             } else if (hasValue && allInt) {
-                col.type = intOverflow(rows, i) ? "BIGINT" : "INT";
+                // 按数值解析而不是 str(v)：Excel 的整数常以 2200000000.0 这样的浮点进来，
+                // 旧写法 new BigInteger("2200000000.0") 失败就当没溢出，建出 INT 后写入 1264
+                BigDecimal extreme = intExtreme(rows, i);
+                if (extreme.compareTo(BIGINT_MAX) > 0) {
+                    col.type = intDecimalType(obsInt);
+                    col.typeNote = col.type == null
+                            ? "整数位数超出 MySQL DECIMAL 上限（总精度 " + DECIMAL_MAX_PRECISION
+                              + "），按文本保存"
+                            : "整数超出 BIGINT 范围，按 " + col.type + " 保存";
+                } else if (extreme.compareTo(INT_MAX) > 0) {
+                    col.type = "BIGINT";
+                } else {
+                    col.type = "INT";
+                }
             } else if (hasValue && allDa) {
                 col.type = "DATE";
             } else if (hasValue && allDec) {
                 col.type = decimalType(obsInt, obsScale, 4, money);
+                if (col.type == null) {
+                    col.typeNote = "数值精度超出 MySQL DECIMAL 上限"
+                            + "（总精度 " + DECIMAL_MAX_PRECISION + "、小数 " + DECIMAL_MAX_SCALE
+                            + "），按文本保存";
+                }
             } else if (named != null) {
                 col.type = named[0];
                 col.typeNote = named[1];
-            } else {
+            }
+            if (col.type == null) {
+                // 文本列（整列都没命中的列，以及 DECIMAL 装不下的数值列）
                 long headroom = Math.max(16, maxLen / 5);
                 long needed = maxLen + headroom;
                 if (needed <= VARCHAR_MAX_CHARS) {
-                    col.type = null;
                     col.varcharN = Integer.valueOf(varcharTier((int) needed));
                 } else {
                     col.type = needed <= 65535 ? "TEXT" : "MEDIUMTEXT";
@@ -456,29 +501,50 @@ public final class Infer {
         return cols;
     }
 
-    /** 对齐 Python 的溢出探测：逐值取 int(str(v))，超过 INT 范围就换 BIGINT。 */
-    private static boolean intOverflow(List<List<Object>> rows, int i) {
+    /**
+     * 对齐 Python 的 _int_magnitude：整数候选值的绝对量级。
+     * 不能走 new BigInteger(str(v))：Excel 的整数常以 2200000000.0 进来，
+     * 带小数点/科学计数法会让解析失败，旧逻辑把它当成"没溢出"，建出 INT 后写入 1264。
+     */
+    static BigDecimal intMagnitude(Object v) {
+        if (v == null || v instanceof Boolean) {
+            return null;
+        }
+        String s;
+        if (v instanceof String) {
+            s = Names.pyStrip((String) v).replace(",", "").replace("，", "");
+        } else if (v instanceof Double) {
+            s = PyNumber.repr(((Double) v).doubleValue());
+        } else {
+            s = v.toString();
+        }
+        if (s.isEmpty()) {
+            return null;
+        }
+        BigDecimal d;
+        try {
+            d = new BigDecimal(s);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (d.signum() == 0) {
+            return BigDecimal.ZERO;
+        }
+        if (d.stripTrailingZeros().scale() > 0) {
+            return null;
+        }
+        return d.abs();
+    }
+
+    private static BigDecimal intExtreme(List<List<Object>> rows, int i) {
+        BigDecimal max = BigDecimal.ZERO;
         for (List<Object> row : rows) {
-            Object v = i < row.size() ? row.get(i) : null;
-            if (isNullish(v)) {
-                continue;
-            }
-            String s;
-            if (v instanceof String) {
-                s = Names.pyStrip((String) v).replace(",", "").replace("，", "");
-            } else {
-                s = pyStr(v);
-            }
-            try {
-                BigInteger bi = new BigInteger(s.trim());
-                if (bi.abs().compareTo(BigInteger.valueOf(2147483647L)) > 0) {
-                    return true;
-                }
-            } catch (NumberFormatException e) {
-                // Python 那边 int() 失败是 except pass，不因此判溢出
+            BigDecimal mag = intMagnitude(i < row.size() ? row.get(i) : null);
+            if (mag != null && mag.compareTo(max) > 0) {
+                max = mag;
             }
         }
-        return false;
+        return max;
     }
 
     public static boolean pkTypeOk(String typ) {
