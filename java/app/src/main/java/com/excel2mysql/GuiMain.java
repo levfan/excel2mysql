@@ -2726,6 +2726,34 @@ public final class GuiMain {
             problems.add("无扩展名时副本名没补 .sql");
         }
 
+        // 真实 dump 的编码场景：UTF-8 正文里夹着原样导出的二进制字段，第二页表格里的
+        // 表注释必须是中文。整份回落 GBK 时这里会显示「瀵嗛挜」。
+        try {
+            java.io.File mixedFile = new java.io.File(dir, "mixed.sql");
+            byte[] head = ("CREATE TABLE `enc_mixed` (`id` INT COMMENT '密钥')"
+                    + " COMMENT='密钥表';" + nl).getBytes("UTF-8");
+            byte[] blob = new byte[] {(byte) 0xCE, 0x4E, 0x5E, 0x5C, 0x30,
+                    0x00, 0x02, (byte) 0xFF, (byte) '\n'};
+            byte[] mixedBytes = new byte[head.length + blob.length];
+            System.arraycopy(head, 0, mixedBytes, 0, head.length);
+            System.arraycopy(blob, 0, mixedBytes, head.length, blob.length);
+            java.nio.file.Files.write(mixedFile.toPath(), mixedBytes);
+            com.excel2mysql.gui.SqlPage encPage = new com.excel2mysql.gui.SqlPage(frame);
+            encPage.addFiles(java.util.Collections.singletonList(mixedFile.getPath()));
+            String encComment = encPage.rowCount() == 1 ? encPage.cellText(0, 4) : "";
+            if (!"密钥表".equals(encComment)) {
+                problems.add("夹二进制字段的 UTF-8 脚本，表注释读成了乱码：" + encComment);
+            }
+            com.excel2mysql.core.SqlScript.ParsedTable encParsed = encPage.metadataAtRow(0);
+            String encFieldComment = encParsed == null || encParsed.columns.isEmpty()
+                    ? "" : encParsed.columns.get(0).comment;
+            if (!"密钥".equals(encFieldComment)) {
+                problems.add("夹二进制字段的 UTF-8 脚本，字段注释读成了乱码：" + encFieldComment);
+            }
+        } catch (java.io.IOException e) {
+            problems.add("建混合编码脚本夹具失败：" + e);
+        }
+
         String hint = page.execute();
         if (hint == null || !hint.contains("未选择目标库")) {
             problems.add("没选库时执行应当拦下并说明：" + hint);

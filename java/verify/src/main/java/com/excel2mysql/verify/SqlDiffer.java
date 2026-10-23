@@ -4,12 +4,15 @@ import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.Prefix;
+import com.excel2mysql.core.SqlRunner;
 import com.excel2mysql.core.SqlScript;
 import com.excel2mysql.core.TableOps;
 import com.excel2mysql.pinyin.PinyinConverter;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.math.BigInteger;
@@ -31,8 +34,10 @@ public final class SqlDiffer {
     private static int checked;
     private static int bad;
     private static final List<String> shown = new ArrayList<String>();
+    private static final Charset UTF8 = Charset.forName("UTF-8");
 
     public static void main(String[] args) throws IOException {
+        checkScriptEncoding();
         String sqlGolden = args.length > 0 ? args[0] : "java/verify/golden/sql.jsonl.gz";
         String excelGolden = args.length > 1 ? args[1] : "java/verify/golden/excel.jsonl.gz";
         Map<String, TableOps.Table> byFile = loadTables(excelGolden);
@@ -184,10 +189,54 @@ public final class SqlDiffer {
             System.out.println(s);
         }
         if (bad > 0) {
-            System.out.println("x [ERROR] SQL-DIFF | SQL 脚本线或 DDL 线与 Python 不等价");
+            System.out.println("x [ERROR] SQL-DIFF | 编码判定、SQL 脚本线或 DDL 线与 Python 不等价");
             System.exit(1);
         }
-        System.out.println("+ [OK] SQL-DIFF | 表名提取、语句切分、前缀改写、DDL 生成、按类型转值逐条一致");
+        System.out.println("+ [OK] SQL-DIFF | 编码判定、表名提取、语句切分、前缀改写、DDL 生成、按类型转值逐条一致");
+    }
+
+    /**
+     * 真实 dump 的编码场景：UTF-8 正文里原样夹着二进制字段，严格 UTF-8 到坏字节处会失败。
+     * 早先这里整份回落 GBK，表注释与字段注释全变成「瀵嗛挜」；用合成夹具把口径钉住。
+     */
+    private static void checkScriptEncoding() throws IOException {
+        String chinese = "密钥";
+        byte[] head = ("-- 中文注释\nCREATE TABLE `enc_mixed` (`id` INT COMMENT '"
+                + chinese + "');\n").getBytes(UTF8);
+        // 既不是合法 UTF-8、也不是合法 GBK：模拟 dump 里未转义的二进制值
+        byte[] blob = new byte[] {(byte) 0xCE, 0x4E, 0x5E, 0x5C, 0x30,
+                0x00, 0x02, (byte) 0xFF, '\n'};
+        byte[] mixed = new byte[head.length + blob.length];
+        System.arraycopy(head, 0, mixed, 0, head.length);
+        System.arraycopy(blob, 0, mixed, head.length, blob.length);
+        String got = readTempScript(mixed);
+        checked++;
+        report("encoding-mixed", "UTF-8 正文 + 二进制字段",
+                got.contains(chinese) && !got.contains("瀵嗛挜"), abbrev(got), chinese);
+
+        String gbkText = "-- 记事本 ANSI\nCREATE TABLE `enc_gbk` (`id` INT COMMENT '编号');\n";
+        String gotGbk = readTempScript(gbkText.getBytes(Charset.forName("GBK")));
+        checked++;
+        report("encoding-gbk", "GBK 脚本", gotGbk.contains("编号"), abbrev(gotGbk), "编号");
+
+        String withFffd = "-- 原正文里就有替换字符 \uFFFD\n"
+                + "CREATE TABLE `enc_fffd` (`id` INT);\n";
+        String gotFffd = readTempScript(withFffd.getBytes(UTF8));
+        checked++;
+        report("encoding-fffd", "UTF-8 正文含 U+FFFD", gotFffd.equals(withFffd),
+                abbrev(gotFffd), abbrev(withFffd));
+    }
+
+    private static String readTempScript(byte[] bytes) throws IOException {
+        File f = File.createTempFile("e2m-enc-", ".sql");
+        f.deleteOnExit();
+        FileOutputStream out = new FileOutputStream(f);
+        try {
+            out.write(bytes);
+        } finally {
+            out.close();
+        }
+        return SqlRunner.readScript(f);
     }
 
     private static Map<String, TableOps.Table> loadTables(String path) throws IOException {

@@ -580,6 +580,23 @@ open(bom, "wb").write(b"\xef\xbb\xbf" + "SET NAMES utf8mb4;".encode("utf-8"))
 check("B33 UTF-8 BOM 脚本可读取（BOM 不残留）",
       app_main.read_sql_text(bom).startswith("SET NAMES"))
 
+# 真实 dump 里会夹着原样导出的二进制字段：整份不再是合法 UTF-8，但正文里的中文
+# 仍是 UTF-8 编的。这时必须按 UTF-8 替换坏字节；整份回落 GBK 会把表注释、字段注释
+# 全变成「瀵嗛挜」。坏字节同时也不是合法 GBK（尾部 0xFF）。
+mixed = os.path.join(_tmpdir, "mixed.sql")
+mixed_head = ("CREATE TABLE `enc_mixed` (`id` INT COMMENT '密钥') COMMENT='密钥表';\n"
+              .encode("utf-8"))
+mixed_blob = bytes((0xCE, 0x4E, 0x5E, 0x5C, 0x30, 0x00, 0x02, 0xFF, 0x0A))
+with open(mixed, "wb") as fh:
+    fh.write(mixed_head + mixed_blob)
+mixed_tabs = app_main.parse_create_tables(app_main.read_sql_text(mixed))
+mixed_cols = mixed_tabs[0]["columns"] if mixed_tabs else []
+check("B34 夹二进制字段的 UTF-8 脚本按 UTF-8 替换坏字节，不整份回落 GBK",
+      len(mixed_tabs) == 1 and mixed_tabs[0]["table_comment"] == "密钥表"
+      and mixed_cols and mixed_cols[0]["comment"] == "密钥",
+      f"{mixed_tabs[0]['table_comment'] if mixed_tabs else '无表'} | "
+      f"{mixed_cols[0]['comment'] if mixed_cols else '无字段'}")
+
 
 # ---------------------------------------------------------------------------
 section("C 主键自动选择与校验")
