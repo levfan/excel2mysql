@@ -398,15 +398,15 @@ public final class SqlPage extends JPanel {
         logScroll.setMinimumSize(new Dimension(UiScale.px(300),
                 logPanel.getMinimumSize().height));
 
-        // 三段纵向分栏，段数与比例照 main.py 的 setSizes([110, 230, 330])：
-        // 拖拽区不参与拉伸，剩下 2:3 给表格与日志（与第一页同一套做法）
+        // 三段纵向分栏，段数与比例照 main.py 的 setSizes([110, 360, 200])：
+        // 拖拽区不参与拉伸，多出来的高度由表格拿大头（与第一页同一套做法）
         sqlDrop.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(60)));
         upper.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(80)));
         split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
         split.setDividerSize(UiScale.px(6));
-        // Qt 的 setStretchFactor(1, 3) 换到 Swing 就是"上段拿 1/(1+3) 的余量"
-        split.setResizeWeight(0.25);
-        split.setDividerLocation(UiScale.px(230));
+        // Qt 的 setStretchFactor(3, 2) 换到 Swing 就是"上段拿 3/(3+2) 的余量"
+        split.setResizeWeight(0.6);
+        split.setDividerLocation(UiScale.px(360));
         split.setContinuousLayout(true);
         outerSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, sqlDrop, split);
         outerSplit.setDividerSize(UiScale.px(6));
@@ -521,7 +521,7 @@ public final class SqlPage extends JPanel {
     private java.awt.Component sqlLog;
     private boolean splitPlaced;
 
-    /** 表格与日志按 230:330 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
+    /** 表格与日志按 360:200 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
     public void applySplitProportions() {
         if (splitPlaced || outerSplit == null || split == null
                 || outerSplit.getHeight() < UiScale.px(200)
@@ -529,12 +529,12 @@ public final class SqlPage extends JPanel {
             return;
         }
         splitPlaced = true;
-        // 与第一页同一个算法：外层先按 110:640 给拖拽区，剩下的再按 230:330 分给表格与日志
+        // 与第一页同一个算法：外层先按 110:670 给拖拽区，剩下的再按 360:200 分给表格与日志
         int first = (int) Math.round(outerSplit.getHeight() * 110.0 / 670.0);
         outerSplit.setDividerLocation(Math.max(first, sqlDrop.getMinimumSize().height));
         int rest = outerSplit.getHeight() - outerSplit.getDividerLocation()
                 - outerSplit.getDividerSize();
-        int second = (int) Math.round(rest * 230.0 / 560.0);
+        int second = (int) Math.round(rest * 360.0 / 560.0);
         split.setDividerLocation(Math.max(second, sqlUpper.getMinimumSize().height));
     }
 

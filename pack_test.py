@@ -747,6 +747,23 @@ check("F6j 点「收起」回到一条状态栏",
 check("F6k 收起的只是表单本体，页签与表格不受牵连",
       _wc.file_table.isVisible() and _wc.main_tabs.isVisible(),
       (_wc.file_table.isVisible(), _wc.main_tabs.isVisible()))
+# 默认窗口首屏的高度分配（用户口径：日志区低一些、主表格高一些）。
+# 断实测视口而不是只断配置值：文件表那段还装着组框标题与两排操作按钮，
+# 只按比例给高度时表格视口可能只剩一两行，那正是这次要治的样子。
+check("F6k1 默认窗口首屏：Excel 页表格段高于日志段，表格视口至少露 5 行",
+      _wc.excel_split.sizes()[1] > _wc.excel_split.sizes()[2]
+      and _wc.file_table.viewport().height()
+      >= 5 * _wc.file_table.verticalHeader().defaultSectionSize(),
+      (_wc.excel_split.sizes(), _wc.file_table.viewport().height(),
+       _wc.file_table.verticalHeader().defaultSectionSize()))
+_wc.main_tabs.setCurrentIndex(1)
+_app.processEvents()
+check("F6k2 默认窗口首屏：SQL 页同样表格段高于日志段、表格视口至少露 5 行",
+      _wc.sql_split.sizes()[1] > _wc.sql_split.sizes()[2]
+      and _wc.sql_table.viewport().height()
+      >= 5 * _wc.sql_table.verticalHeader().defaultSectionSize(),
+      (_wc.sql_split.sizes(), _wc.sql_table.viewport().height(),
+       _wc.sql_table.verticalHeader().defaultSectionSize()))
 _wc.close()
 _wc.deleteLater()
 _app.processEvents()
@@ -773,9 +790,6 @@ check("F10b 三个日志框的最小高度都至少装得下 4 行（截图复�
           for v in (w.log, w.sql_log, w.sql_run_log)),
       [(v.minimumHeight(), v.fontMetrics().height())
        for v in (w.log, w.sql_log, w.sql_run_log)])
-check("F10c 默认分栏把日志段给到不小于拖拽区那一段（110:200:330）",
-      w.excel_split.sizes()[2] >= w.excel_split.sizes()[0],
-      w.excel_split.sizes())
 
 from PySide6.QtWidgets import QPlainTextEdit
 from PySide6.QtGui import QTextCursor, QColor
@@ -1624,6 +1638,12 @@ check("K2 三段依次是拖拽区 / 待导入文件表 / 日志面板",
       [type(sp.widget(i)).__name__ for i in range(3)])
 check("K3 不允许把任何一段拖到 0 高", sp.childrenCollapsible() is False)
 check("K4 拖拽手柄可见（宽度 6）", sp.handleWidth() == 6, sp.handleWidth())
+check("K0 首屏默认：表格段高于日志段，表格视口至少露 5 行（用户报过表格只剩不到两行）",
+      sp.sizes()[1] > sp.sizes()[2]
+      and w.file_table.viewport().height()
+      >= 5 * w.file_table.verticalHeader().defaultSectionSize(),
+      (sp.sizes(), w.file_table.viewport().height(),
+       w.file_table.verticalHeader().defaultSectionSize()))
 
 sp.setSizes([100, 600, 100])
 _app.processEvents()
@@ -1660,6 +1680,12 @@ check("K11 三段正是拖拽区、待处理文件表与 SQL 日志（顺序与�
       and sp2.widget(1).findChild(QTableWidget) is w.sql_table
       and sp2.widget(2) is w.sql_log,
       [type(sp2.widget(i)).__name__ for i in range(3)])
+check("K11b SQL 页首屏默认：表格段高于日志段，表格视口至少露 5 行",
+      sp2.sizes()[1] > sp2.sizes()[2]
+      and w.sql_table.viewport().height()
+      >= 5 * w.sql_table.verticalHeader().defaultSectionSize(),
+      (sp2.sizes(), w.sql_table.viewport().height(),
+       w.sql_table.verticalHeader().defaultSectionSize()))
 sp2.setSizes([100, 600, 100])
 _app.processEvents()
 u = [sp2.widget(i).height() for i in range(3)]

@@ -1479,11 +1479,12 @@ class MainWindow(QWidget):
         self.excel_split.addWidget(file_box)
         self.excel_split.addWidget(log_panel)
         self.excel_split.setStretchFactor(0, 0)
-        self.excel_split.setStretchFactor(1, 2)
-        self.excel_split.setStretchFactor(2, 3)
-        # 日志段给到最大：三段按 670 分时会等比缩，日志只落到 90px（实测两行）；
-        # 110:200:330 让日志在默认窗口里拿到约八行，拖拽区与表格仍够用
-        self.excel_split.setSizes([110, 200, 330])
+        self.excel_split.setStretchFactor(1, 3)
+        self.excel_split.setStretchFactor(2, 2)
+        # 表格是主工作面：文件表那段还要装组框标题与两排操作按钮，110:200:330 时
+        # 默认窗口里表格视口实测只剩 37px（不到两行）。110:360:200 把表格抬到约八行、
+        # 日志留约十一行；窗口再放大时多出来的高度由表格拿大头
+        self.excel_split.setSizes([110, 360, 200])
         excel_lay.addWidget(self.excel_split, 1)
 
         # 6. 操作（贴在窗口底部的动作条）
@@ -1854,7 +1855,7 @@ class MainWindow(QWidget):
         self.sql_log.setMinimumHeight(log_min_height(self.sql_log))
 
         # 三段可上下拖拽，与「Excel 导入」那页同一形状：拖拽区 / 表格与它的三行操作条 / 日志。
-        # 把手 6px、任何一段都不许拖到 0 高；日志段给到最大，理由与第一页那条一样。
+        # 把手 6px、任何一段都不许拖到 0 高；表格段给到最大，理由与第一页那条一样。
         # 表格区套一层组框，标题就是这张表的标识——与第一页「待导入文件」同一做法
         sql_upper = QGroupBox(SQL_TABLE_TITLE)
         up_lay = QVBoxLayout(sql_upper)
@@ -1871,10 +1872,10 @@ class MainWindow(QWidget):
         self.sql_split.addWidget(sql_upper)
         self.sql_split.addWidget(self.sql_log)
         self.sql_split.setStretchFactor(0, 0)
-        self.sql_split.setStretchFactor(1, 2)
-        self.sql_split.setStretchFactor(2, 3)
-        # 110 是拖拽区的四行字，230 给表格加它自己那三行，剩下的给日志（同第一页的 110:200:330）
-        self.sql_split.setSizes([110, 230, 330])
+        self.sql_split.setStretchFactor(1, 3)
+        self.sql_split.setStretchFactor(2, 2)
+        # 110 是拖拽区的四行字，360 给表格加它自己那几行操作条，日志留 200（同第一页）
+        self.sql_split.setSizes([110, 360, 200])
         lay.addWidget(self.sql_split, 1)
         return page
 

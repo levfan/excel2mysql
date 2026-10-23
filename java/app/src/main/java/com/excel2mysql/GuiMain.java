@@ -252,6 +252,8 @@ public final class GuiMain {
                 import_finish(frame, files, problems);
                 // 「开始导入」的两道闸：没表不管、没选库弹窗，且都不许把任务位占死
                 import_guard(frame, files, problems);
+                // 首屏分栏：表格是主工作面，表格段要比日志段高
+                split_defaults(frame, problems);
                 // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
                 sql_page(frame, problems);
                 // 第三个页签「SQL 执行器」：编辑区、示例清单与空输入那道闸
@@ -2460,6 +2462,18 @@ public final class GuiMain {
         return lines.length > 1 ? lines[1] : "";
     }
 
+    /**
+     * 首屏分栏：日志区要给主表格让位（用户口径"日志区低一些、主表格高一些"）。
+     * 离屏环境量不准实际高度，这里断配置值——表格 360 : 日志 200、余量 3:2。
+     */
+    private static void split_defaults(MainFrame frame, List<String> problems) {
+        if (Math.abs(frame.excelLowerResizeWeight() - 0.6) > 0.001
+                || frame.excelLowerDividerLocation() != wantPx(360)) {
+            problems.add("第一页分栏默认没有让表格高于日志（360:200）："
+                    + frame.excelLowerResizeWeight() + " / " + frame.excelLowerDividerLocation());
+        }
+    }
+
     private static void sql_page(MainFrame frame, List<String> problems) {
         List<String> titles = frame.tabTitles();
         if (!titles.contains("Excel 导入") || !titles.contains("SQL 脚本改名入库")) {
@@ -2470,15 +2484,16 @@ public final class GuiMain {
             problems.add("界面上没有「SQL 脚本改名入库」页");
             return;
         }
-        // 分栏配置照 Python：把手 6px、余量 1:3 给日志、初始 230（设计值按 DPI 折算）
+        // 分栏配置照 Python：把手 6px、余量按 3:2 给表格与日志、初始 360（设计值按 DPI 折算）
         if (page.splitDividerSize() != wantPx(6)) {
             problems.add("SQL 页分栏把手宽度不是 " + wantPx(6) + "px：" + page.splitDividerSize());
         }
-        if (Math.abs(page.splitResizeWeight() - 0.25) > 0.001) {
-            problems.add("SQL 页分栏拉伸比例不对，应为 1:3：" + page.splitResizeWeight());
+        if (Math.abs(page.splitResizeWeight() - 0.6) > 0.001) {
+            problems.add("SQL 页分栏拉伸比例不对，应为 3:2（表格多于日志）："
+                    + page.splitResizeWeight());
         }
-        if (page.splitDividerLocation() != wantPx(230)) {
-            problems.add("SQL 页分栏初始位置不是 " + wantPx(230) + "："
+        if (page.splitDividerLocation() != wantPx(360)) {
+            problems.add("SQL 页分栏初始位置不是 " + wantPx(360) + "："
                     + page.splitDividerLocation());
         }
         // 三段结构与「Excel 导入」那页一致：拖拽区在最上、表格区在中、日志在下
