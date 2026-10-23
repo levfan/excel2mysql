@@ -77,7 +77,7 @@ Excel 页说"数据将导入到这个库"，「SQL 脚本改名入库」页说"�
 <code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。
 想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>
 <li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-1.1.5.jar --check</code>。</li>
+<code>jre\\bin\\java.exe -jar excel2mysql-1.1.6.jar --check</code>。</li>
 <li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。
 双击 jar 文件本身不会有任何反应。</li>
 </ul>
@@ -589,7 +589,8 @@ Excel 的数值单元格本身是双精度浮点，<code>9223372036854775807</co
 生成不了元数据，日志点名后跳过</li>
 <li>语句切分能正确跳过字符串 / 反引号 / 注释中的分号</li>
 <li><b>不支持</b>含 <code>DELIMITER</code> 的存储过程脚本</li>
-<li>文件编码自动尝试 UTF-8 / UTF-8-BOM / GBK</li>
+<li>文件编码按 UTF-8（含 BOM）→ GBK 依次尝试；dump 里夹着原样二进制字段、整份不再是
+合法 UTF-8 时，按 UTF-8 替换坏字节，中文表名、表注释与字段注释不会整份变成 GBK 乱码</li>
 <li>注意 MySQL 的 <code>CREATE/DROP/ALTER</code> 等 DDL 会<b>隐式提交</b>，
 无法随事务回滚；回滚只对其后的数据操作生效</li>
 <li>Excel 导入同样是事务语义：每张表先开启事务，数据插入成功后提交，

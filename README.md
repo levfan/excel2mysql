@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v1.1.5** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v1.1.6** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -268,7 +268,9 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
   日志写明"第 几/共几条"、出错语句原文，并接着执行**下一个文件**（不阻断同批）
 - **前缀改写**与 GUI 那两个按钮同源：`--prefix ads_` 会同步改 `CREATE` / `DROP` / `INSERT` / `ALTER` / `TRUNCATE`
   里的引用，已带该前缀的表自动跳过（重复跑是幂等的）；`--swap-prefix dim` 换首段，名里没下划线的不改并列出
-- **编码回退**按 `utf-8-sig → utf-8 → gbk` 依次尝试，记事本"另存为 ANSI"的脚本照样读得开
+- **编码回退**按 `utf-8-sig → utf-8 → gbk` 依次尝试，记事本"另存为 ANSI"的脚本照样读得开；
+  dump 里夹着原样二进制字段、整份不再是合法 UTF-8 时按 UTF-8 替换坏字节，不会整份回落 GBK
+  把中文表名与注释变成乱码
 - 没加 `--run-sql` 时 `.sql` 只登记并打一条 `! [WARN]`，**绝不静默执行**（也不静默忽略）
 - `--check` 与 `--run-sql` 互斥：`--check` 到"列出库名"就返回了，真同时要执行会被判用法错误，不猜意图
 
@@ -282,7 +284,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.1.5` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.1.6` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -376,9 +378,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-1.1.5-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-1.1.5-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-1.1.5-win64\excel2mysql-1.1.5.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-1.1.6-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-1.1.6-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-1.1.6-win64\excel2mysql-1.1.6.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -507,7 +509,7 @@ dist_packtest\packtest\packtest.exe
 | 组 | 覆盖内容 |
 | --- | --- |
 | A 依赖与静态资源 | 全部三方库可导入、pypinyin 词典懒加载、pandas 时区（tzdata）、openpyxl 读写 xlsx、`app_icon.ico` 在包内且能被 Qt 解码、Qt 平台插件可建 QApplication |
-| B Excel 解析与类型推断 | 普通表 / 结构定义表 / `（英文表名）` 括号解析、元数据 Sheet 不在首位、INT/BIGINT 溢出/DECIMAL/DATE/DATETIME/VARCHAR/TEXT/MEDIUMTEXT 全分支、前导零保持文本、8 位数字不误判日期、VARCHAR 行内预算退化、全空行剔除、具名空列保留而 Unnamed 垃圾空列剔除、只有表头的空模板不再被拒、表头整行没写字按列宽兜底成 `col`/`col_2`、必填星号不进字段名、多余列忽略、缺失列补 NULL、只有定义建空表、表名 64 字符截断、重名字段与重名表去重、前缀应用/切换/移除、GBK 与 UTF-8 BOM 脚本读取 |
+| B Excel 解析与类型推断 | 普通表 / 结构定义表 / `（英文表名）` 括号解析、元数据 Sheet 不在首位、INT/BIGINT 溢出/DECIMAL/DATE/DATETIME/VARCHAR/TEXT/MEDIUMTEXT 全分支、前导零保持文本、8 位数字不误判日期、VARCHAR 行内预算退化、全空行剔除、具名空列保留而 Unnamed 垃圾空列剔除、只有表头的空模板不再被拒、表头整行没写字按列宽兜底成 `col`/`col_2`、必填星号不进字段名、多余列忽略、缺失列补 NULL、只有定义建空表、表名 64 字符截断、重名字段与重名表去重、前缀应用/切换/移除、GBK 与 UTF-8 BOM 脚本读取、夹二进制字段的 UTF-8 dump 读取 |
 | C 主键 | 自动选唯一且语义明确的列、无合适字段不设主键、组合值重复拒绝、含空值拒绝、TEXT 不能作主键、组合主键通过、全不勾选放行、空表手工指定合法主键放行且非法类型仍拒绝、空表不自动选主键 |
 | D DDL 生成 | DROP 开关、表/字段中文注释、主键与 NOT NULL 规则、InnoDB+utf8mb4+排序规则、组合主键单约束、注释内单引号转义、INSERT 模板列数与占位符数一致 |
 | E SQL 脚本处理 | `CREATE TABLE` 表名提取与计数、反引号与语句头裸名改写、schema 限定名不改写、字符串内分号不误伤、重复应用前缀不叠加、行注释/块注释/反引号内分号不切、空语句忽略 |
@@ -892,7 +894,8 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
   先开启事务，逐条执行，任一语句失败立即回滚整个事务并在日志报错（后续语句不再执行），
   全部成功才提交；注意 MySQL 的 CREATE/DROP/ALTER 等 DDL 会隐式提交，无法随事务回滚；
   语句切分能正确跳过字符串/反引号/注释中的分号；不支持含 DELIMITER 的存储过程脚本；
-  文件编码自动尝试 UTF-8 / GBK；执行结果弹窗先写成功/失败文件数，再列目标库与每个脚本的
+  文件编码按 UTF-8（含 BOM）→ GBK 依次尝试，dump 里夹二进制字段时按 UTF-8 替换坏字节，
+  中文表名、表注释与字段注释不会变成乱码；执行结果弹窗先写成功/失败文件数，再列目标库与每个脚本的
   完整路径、结局（成功/失败/跳过/已取消）及失败位置
 - **生成标准excel文件 / 生成简易excel文件**：排在「执行修改后ddl脚本到当前库」右侧，与「Excel 导入」页
   那两颗同名按钮产物形状完全一致（程序同级建 `sql_meta_data_file_年月日` /

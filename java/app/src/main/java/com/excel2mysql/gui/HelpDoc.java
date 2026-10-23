@@ -94,7 +94,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.5.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.6.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -598,7 +598,8 @@ public final class HelpDoc {
                     "生成不了元数据，日志点名后跳过</li>" + NL +
                     "<li>语句切分能正确跳过字符串 / 反引号 / 注释中的分号</li>" + NL +
                     "<li><b>不支持</b>含 <code>DELIMITER</code> 的存储过程脚本</li>" + NL +
-                    "<li>文件编码自动尝试 UTF-8 / UTF-8-BOM / GBK</li>" + NL +
+                    "<li>文件编码按 UTF-8（含 BOM）→ GBK 依次尝试；dump 里夹着原样二进制字段、整份不再是" + NL +
+                    "合法 UTF-8 时，按 UTF-8 替换坏字节，中文表名、表注释与字段注释不会整份变成 GBK 乱码</li>" + NL +
                     "<li>注意 MySQL 的 <code>CREATE/DROP/ALTER</code> 等 DDL 会<b>隐式提交</b>，" + NL +
                     "无法随事务回滚；回滚只对其后的数据操作生效</li>" + NL +
                     "<li>Excel 导入同样是事务语义：每张表先开启事务，数据插入成功后提交，" + NL +
