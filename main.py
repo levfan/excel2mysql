@@ -1276,6 +1276,10 @@ class MainWindow(QWidget):
         self._tasks = []
         self._import_task = None   # 导入这条长任务单独留一份引用，收尾收它自己的框
         self._cfg_db = ""          # conn.ini 里写的目标库，库列表加载出来后按它预选
+        # 连接表单的展开态自己记，不拿 conn_form.isVisible() 反查：
+        # 窗口还没 show 过的时候 Qt 的 isVisible() 一律给 false，
+        # 首屏那句话就会让人去点一颗此刻恰好藏着的「修改连接」
+        self._conn_expanded = True
 
         self._build_ui()
         self._load_default_conn()
@@ -1308,9 +1312,27 @@ class MainWindow(QWidget):
         head.addWidget(self.btn_help)
         root.addLayout(head)
 
-        # 1. 连接配置（公共区域，常驻在功能页签上方）
-        conn_box = QGroupBox("MySQL 连接信息")
-        f = QFormLayout(conn_box)
+        # 1. 连接区：业务时只关心"现在是哪个库"，五行环境信息平时收起成一条状态栏，
+        #    要改连接/测连接/换库时点「修改连接」展开（用户口径：运行时常驻展示作用不大）
+        conn = QWidget()
+        conn_lay = QVBoxLayout(conn)
+        conn_lay.setContentsMargins(0, 0, 0, 0)
+        conn_lay.setSpacing(2)
+
+        self.conn_bar = QWidget()
+        bar_lay = QHBoxLayout(self.conn_bar)
+        bar_lay.setContentsMargins(6, 0, 0, 0)
+        self.lbl_conn_state = QLabel()
+        self.lbl_conn_state.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.btn_conn_edit = QPushButton("修改连接")
+        self.btn_conn_edit.setToolTip("展开填写主机 / 端口 / 用户名 / 密码，并测试连接与选择数据库")
+        self.btn_conn_edit.clicked.connect(lambda: self.set_conn_expanded(True))
+        bar_lay.addWidget(self.lbl_conn_state, 1)
+        bar_lay.addWidget(self.btn_conn_edit)
+        conn_lay.addWidget(self.conn_bar)
+
+        self.conn_form = QGroupBox("MySQL 连接信息")
+        f = QFormLayout(self.conn_form)
         self.ed_host = QLineEdit("127.0.0.1")
         self.ed_port = QSpinBox(); self.ed_port.setRange(1, 65535); self.ed_port.setValue(3306)
         self.ed_user = QLineEdit("root")
@@ -1318,15 +1340,20 @@ class MainWindow(QWidget):
         self.cb_db = QComboBox(); self.cb_db.setEnabled(False)
         self.btn_load_db = QPushButton("连接并加载库")
         self.btn_load_db.clicked.connect(self.on_load_databases)
+        self.btn_conn_collapse = QPushButton("收起")
+        self.btn_conn_collapse.setToolTip("收起连接信息，只保留当前库")
+        self.btn_conn_collapse.clicked.connect(lambda: self.set_conn_expanded(False))
         h = QHBoxLayout()
         h.addWidget(self.cb_db, 1)
         h.addWidget(self.btn_load_db)
+        h.addWidget(self.btn_conn_collapse)
         f.addRow("主机：", self.ed_host)
         f.addRow("端口：", self.ed_port)
         f.addRow("用户名：", self.ed_user)
         f.addRow("密码：", self.ed_pass)
         f.addRow("目标库：", h)
-        root.addWidget(conn_box)
+        conn_lay.addWidget(self.conn_form)
+        root.addWidget(conn)
 
         # 2. 功能页签：Excel 导入 / SQL 脚本改名入库 / SQL 执行器（位于数据库信息下方）
         self.main_tabs = QTabWidget()
@@ -1498,38 +1525,59 @@ class MainWindow(QWidget):
         self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本改名入库")
         self.main_tabs.addTab(self._build_sql_run_page(), "SQL 执行器")
         root.addWidget(self.main_tabs, 1)
-        # 切页签 / 切换目标库 / 改主机端口时，刷新三页顶部各自的当前数据库信息条
-        #（信息条文案含 host:port，改了主机端口必须同步，否则显示的是旧地址）
+        # 切页签 / 切换目标库 / 改主机端口时，刷新状态栏与三页顶部那条指向
+        #（host:port 只在状态栏的悬停提示里，改了主机端口要同步，否则提示的是旧地址）
         self.main_tabs.currentChanged.connect(self._on_tab_changed)
         self.cb_db.currentIndexChanged.connect(self._on_db_changed)
         self.ed_host.textChanged.connect(self._refresh_db_labels)
         self.ed_port.valueChanged.connect(self._refresh_db_labels)
+        # 启动时还没有目标库，正是需要填的时候 → 展开；选定库之后自动收起
+        self.set_conn_expanded(True)
         self._refresh_db_labels()
 
-    # -------------------- 当前目标库状态条（三个页签各一条，同源刷新） --------------------
+    # -------------------- 当前目标库状态条（一条总状态 + 三页各一条动作指向） --------------------
+    def set_conn_expanded(self, expanded):
+        """连接表单展开/收起：收起后整块环境信息只剩一条"当前是哪个库"的状态栏。"""
+        self._conn_expanded = bool(expanded)
+        self.conn_form.setVisible(expanded)
+        self.btn_conn_edit.setVisible(not expanded)
+        # 状态栏那句告警要跟着换说法：展开时让人往下填，收起时才让人点「修改连接」
+        self._refresh_db_labels()
+
     def _on_tab_changed(self, index):
         self._refresh_db_labels()
 
     def _on_db_changed(self, _index):
         self._refresh_db_labels()
+        # 选定库之后环境信息就没用了，自动收起；要换库再点「修改连接」
+        if self.cb_db.currentData() or self.cb_db.currentText().strip():
+            self.set_conn_expanded(False)
 
     def _refresh_db_labels(self):
         cfg = self._conn_cfg()
         db = self.cb_db.currentData() or self.cb_db.currentText().strip()
         if db:
-            head = f"当前目标库：{db}（{cfg['host']}:{cfg['port']}）——"
-            self.lbl_imp_db.setText(head + "Excel 数据将导入到这个库")
-            self.lbl_sql_db.setText(head + "SQL 脚本将执行到这个库")
-            self.lbl_run_db.setText(head + "编辑区里的 SQL 将执行到这个库")
-            style = "color: #1a7f37; font-weight: bold;"
+            self.lbl_conn_state.setText("● 目标库 %s" % db)
+            self.lbl_conn_state.setToolTip("%s@%s:%s（用户 %s）"
+                                           % (db, cfg["host"], cfg["port"], cfg["user"]))
+            state_style = "color: #1a7f37; font-weight: bold;"
+            head = "目标库：%s —— " % db
+            tails = ["Excel 数据将导入到这个库", "SQL 脚本将执行到这个库",
+                     "编辑区里的 SQL 将执行到这个库"]
         else:
-            self.lbl_imp_db.setText("⚠ " + NO_DB_HINT)
-            self.lbl_sql_db.setText("⚠ " + NO_DB_HINT)
-            self.lbl_run_db.setText("⚠ " + NO_DB_HINT)
-            style = "color: #c62828; font-weight: bold;"
-        self.lbl_imp_db.setStyleSheet(style)
-        self.lbl_sql_db.setStyleSheet(style)
-        self.lbl_run_db.setStyleSheet(style)
+            # 告警条的说法要看当前是展开还是收起：让人去点的那颗按钮必须真的在界面上
+            if self._conn_expanded:
+                self.lbl_conn_state.setText("⚠ 未选择目标库——填好下面连接信息后点「连接并加载库」")
+            else:
+                self.lbl_conn_state.setText("⚠ 未选择目标库——点右侧「修改连接」展开后填写")
+            self.lbl_conn_state.setToolTip(NO_DB_HINT)
+            state_style = "color: #c62828; font-weight: bold;"
+            head = "⚠ "
+            tails = [NO_DB_HINT, NO_DB_HINT, NO_DB_HINT]
+        self.lbl_conn_state.setStyleSheet(state_style)
+        for lbl, tail in zip((self.lbl_imp_db, self.lbl_sql_db, self.lbl_run_db), tails):
+            lbl.setText(head + tail)
+            lbl.setStyleSheet(state_style)
 
     # -------------------- 使用说明 / 关于 --------------------
     def on_help(self):
