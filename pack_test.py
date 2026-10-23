@@ -4498,6 +4498,40 @@ _i = _ai.build_info()
 check("T1 版本号是 X.Y.Z 语义化格式，且只有一个来源",
       _re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+", APP_VERSION) is not None, APP_VERSION)
 check("T2 appinfo 报的版本与 version.py 一致", _ai.build_info()["version"] == APP_VERSION)
+
+# 版本号除了 version.py，还写死在三个 pom、构建脚本里的 jar 名、随包说明那句命令里。
+# 改版本漏一处就会出现"关于框 1.0.3、jar 还叫 1.0.2"这种交付事故，所以逐处核回来。
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+_VERSION_SITES = [
+    ("java/pom.xml", r"<app\.version>\s*([0-9][.\d]*)\s*</app\.version>"),
+    ("java/pom.xml", r"<project[\s\S]{0,400}?<version>\s*([0-9][.\d]*)\s*</version>"),
+    ("java/app/pom.xml", r"<parent>[\s\S]{0,200}?<version>\s*([0-9][.\d]*)\s*</version>"),
+    ("java/verify/pom.xml", r"<parent>[\s\S]{0,200}?<version>\s*([0-9][.\d]*)\s*</version>"),
+    ("java/构建验证.bat", r"excel2mysql-([0-9][.\d]*)\.jar"),
+    ("help_doc.py", r"excel2mysql-([0-9][.\d]*)\.jar"),
+    ("java/assets/conn.ini", r"excel2mysql-([0-9][.\d]*)\.jar"),
+    ("README.md", r"当前版本 v([0-9][.\d]*)"),
+    ("README.md", r"excel2mysql-java-([0-9][.\d]*)-win64"),
+    ("README.md", r"excel2mysql-([0-9][.\d]*)\.jar"),
+]
+_drift = []
+_missing_site = []
+for _vf, _pat in _VERSION_SITES:
+    _vp = os.path.join(_ROOT, *_vf.split("/"))
+    if not os.path.isfile(_vp):
+        _missing_site.append(_vf)          # 冻结态里没有源码，这条按未覆盖记账
+        continue
+    _txt = open(_vp, encoding="utf-8").read()
+    _got = _re.findall(_pat, _txt)
+    if not _got:
+        _drift.append("%s 里找不到版本号写法" % _vf)
+    elif any(v != APP_VERSION for v in _got):
+        _drift.append("%s=%s" % (_vf, "/".join(_got)))
+if _missing_site:
+    skip("T15 各处写死的版本号与 version.py 同值", "冻结态不含 %s" % "、".join(_missing_site))
+else:
+    check("T15 各处写死的版本号与 version.py 同值（漏改一处就是交付事故）",
+          not _drift, _drift)
 tw = app_main.MainWindow()
 check("T3 窗口标题带版本号", APP_VERSION in tw.windowTitle(), tw.windowTitle())
 check("T4 「i」按钮存在且提示写明是关于",
