@@ -57,7 +57,8 @@ public final class HelpDoc {
                     "（展开时也可以点<b>「收起」</b>手动收回去）。" + NL +
                     "三个页签顶部各还有一条指向：绿色写 <code>目标库：库名 —— …</code>，最后一句按页分工——" + NL +
                     "Excel 页说\"数据将导入到这个库\"，「SQL 脚本改名入库」页说\"脚本将执行到这个库\"，" + NL +
-                    "「SQL 执行器」页说\"编辑区里的 SQL 将执行到这个库\"。状态栏和这三条同源刷新，" + NL +
+                    "「SQL 执行器」页说\"编辑区里的 SQL 将执行到这个库\"。没选库时这三条先隐藏，" + NL +
+                    "唯一的红色告警留在最上方那条状态栏，不会同一句话在屏幕上说两遍。状态栏和这三条同源刷新，" + NL +
                     "切库会一起变，不会在某个页签停在\"上一个库\"；导入前扫一眼能确认没写错库。</p>"
         ),
         new Section("lines", "三条线与选型",
@@ -89,7 +90,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.1.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.2.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -609,7 +610,8 @@ public final class HelpDoc {
                     "<table class=\"t\">" + NL +
                     "<tr><th>控件</th><th>作用</th></tr>" + NL +
                     "<tr><td>页顶的目标库指向条</td><td>与最上方那条连接状态栏同一次刷新：绿色写" + NL +
-                    "<code>目标库：库名 —— 编辑区里的 SQL 将执行到这个库</code>，没选库时红色告警。" + NL +
+                    "<code>目标库：库名 —— 编辑区里的 SQL 将执行到这个库</code>；没选库时整条隐藏，" + NL +
+                    "未选库的告警只由顶部状态栏说一次。" + NL +
                     "主机和端口不在这条里（收在状态栏的悬停提示）。这一页点的每条语句都落在这个库里，" + NL +
                     "动手前先看这一行</td></tr>" + NL +
                     "<tr><td>示例 (?)</td><td>打开示例清单（100 条，分 12 组：建库与选库、建表与改表、" + NL +
