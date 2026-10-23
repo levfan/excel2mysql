@@ -700,9 +700,18 @@ _wc = app_main.MainWindow()
 _wc.resize(1100, 780)
 _wc.show()
 _app.processEvents()
-check("F6f 启动时连接表单是展开的（那时还没有目标库，正是要填的时候）",
-      _wc.conn_form.isVisible() and not _wc.btn_conn_edit.isVisible(),
-      (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible()))
+check("F6f 启动即收起连接区：首屏只留状态栏，告警直接指向「设置数据源信息」",
+      not _wc.conn_form.isVisible() and _wc.btn_conn_edit.isVisible()
+      and "设置数据源信息" in _wc.lbl_conn_state.text(),
+      (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible(),
+       _wc.lbl_conn_state.text()))
+_wc.btn_conn_edit.click()
+_app.processEvents()
+check("F6f2 点「设置数据源信息」展开五行表单，那颗按钮让位给「收起」",
+      _wc.conn_form.isVisible() and not _wc.btn_conn_edit.isVisible()
+      and _wc.btn_conn_collapse.isVisible(),
+      (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible(),
+       _wc.btn_conn_collapse.isVisible()))
 _wc.cb_db.addItem("testdb", "testdb")      # 走真信号：选定库应当自动收起
 _app.processEvents()
 check("F6g 选定目标库后自动收起，状态栏只报库名",
@@ -715,7 +724,7 @@ check("F6h 收起后 host:port 与用户名退到悬停提示里，信息没丢"
       _wc.lbl_conn_state.toolTip())
 _wc.btn_conn_edit.click()
 _app.processEvents()
-check("F6i 点「修改连接」重新展开填表，那颗按钮自己让位给「收起」",
+check("F6i 点「设置数据源信息」重新展开填表，那颗按钮自己让位给「收起」",
       _wc.conn_form.isVisible() and not _wc.btn_conn_edit.isVisible()
       and _wc.btn_conn_collapse.isVisible(),
       (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible(),
@@ -2803,7 +2812,7 @@ from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "开始导入", "移除选中文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
-           "示例 (?)", "清空编辑区", "清空结果区", "修改连接", "收起"]
+           "示例 (?)", "清空编辑区", "清空结果区", "设置数据源信息", "收起"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
 _absent = [t for t in _labels if t not in _btns]
 check("P15 说明里点名的按钮在界面上确实存在", not _absent, _absent)
@@ -2927,6 +2936,11 @@ app_main.connect = _fake_connect
 
 # ---- 连接并加载库：成功路径 ----
 qw = app_main.MainWindow()
+# 启动默认收起；先点开，才能验证"重新填列表不算选定、不该收起"
+check("Q0 未做任何操作时连接区是收起的",
+      qw.conn_form.isHidden() and not qw.btn_conn_edit.isHidden(),
+      (qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden()))
+qw.btn_conn_edit.click()
 qw.on_load_databases()
 _dbs = [qw.cb_db.itemText(i) for i in range(qw.cb_db.count())]
 check("Q1 「连接并加载库」成功后下拉框填充并可用",

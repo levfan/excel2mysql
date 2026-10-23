@@ -1268,6 +1268,16 @@ public final class GuiMain {
         if (frame.databaseChooserEnabled()) {
             problems.add("还没连接就能选库，库名只能靠猜");
         }
+        // 启动默认收起（用户口径）：首屏只留一条状态栏，告警直接指向「设置数据源信息」
+        if (frame.isConnExpanded() || !frame.connEditVisible()
+                || !frame.connStateText().contains("设置数据源信息")) {
+            problems.add("启动时连接区没有默认收起，或告警没指向「设置数据源信息」："
+                    + frame.connStateText());
+        }
+        frame.setConnExpanded(true);
+        if (!frame.isConnExpanded() || frame.connEditVisible()) {
+            problems.add("点「设置数据源信息」没能展开连接表单");
+        }
         if (!frame.excelHintText().contains("未选择目标数据库") || frame.excelHintIsOk()) {
             problems.add("未选库时 Excel 页提示条没按红级说明：" + frame.excelHintText());
         }
@@ -1309,7 +1319,7 @@ public final class GuiMain {
         }
         frame.setConnExpanded(true);
         if (!frame.isConnExpanded() || frame.connEditVisible()) {
-            problems.add("点「修改连接」没能展开表单，或那颗按钮没让位给「收起」");
+            problems.add("点「设置数据源信息」没能展开表单，或那颗按钮没让位给「收起」");
         }
         frame.setConnExpanded(false);
         if (frame.isConnExpanded() || !frame.connEditVisible()) {
@@ -2802,7 +2812,7 @@ public final class GuiMain {
                     "预览 DDL", "开始导入", "移除选中文件", "保存修改后ddl脚本",
                     "执行修改后ddl脚本到当前库", "连接并加载库",
                     "生成标准excel文件", "生成简易excel文件", "示例 (?)",
-                    "清空编辑区", "清空结果区", "修改连接", "收起"};
+                    "清空编辑区", "清空结果区", "设置数据源信息", "收起"};
             for (String n : named) {
                 if (!onUi.contains(n)) {
                     problems.add("说明里点名的按钮界面上不存在：" + n);

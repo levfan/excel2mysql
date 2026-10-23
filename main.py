@@ -1278,8 +1278,8 @@ class MainWindow(QWidget):
         self._cfg_db = ""          # conn.ini 里写的目标库，库列表加载出来后按它预选
         # 连接表单的展开态自己记，不拿 conn_form.isVisible() 反查：
         # 窗口还没 show 过的时候 Qt 的 isVisible() 一律给 false，
-        # 首屏那句话就会让人去点一颗此刻恰好藏着的「修改连接」
-        self._conn_expanded = True
+        # 首屏那句话就会让人去点一颗此刻恰好藏着的「设置数据源信息」
+        self._conn_expanded = False
 
         self._build_ui()
         self._load_default_conn()
@@ -1313,7 +1313,7 @@ class MainWindow(QWidget):
         root.addLayout(head)
 
         # 1. 连接区：业务时只关心"现在是哪个库"，五行环境信息平时收起成一条状态栏，
-        #    要改连接/测连接/换库时点「修改连接」展开（用户口径：运行时常驻展示作用不大）
+        #    要改连接/测连接/换库时点「设置数据源信息」展开（用户口径：运行时常驻展示作用不大）
         conn = QWidget()
         conn_lay = QVBoxLayout(conn)
         conn_lay.setContentsMargins(0, 0, 0, 0)
@@ -1324,7 +1324,7 @@ class MainWindow(QWidget):
         bar_lay.setContentsMargins(6, 0, 0, 0)
         self.lbl_conn_state = QLabel()
         self.lbl_conn_state.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.btn_conn_edit = QPushButton("修改连接")
+        self.btn_conn_edit = QPushButton("设置数据源信息")
         self.btn_conn_edit.setToolTip("展开填写主机 / 端口 / 用户名 / 密码，并测试连接与选择数据库")
         self.btn_conn_edit.clicked.connect(lambda: self.set_conn_expanded(True))
         bar_lay.addWidget(self.lbl_conn_state, 1)
@@ -1531,8 +1531,9 @@ class MainWindow(QWidget):
         self.cb_db.currentIndexChanged.connect(self._on_db_changed)
         self.ed_host.textChanged.connect(self._refresh_db_labels)
         self.ed_port.valueChanged.connect(self._refresh_db_labels)
-        # 启动时还没有目标库，正是需要填的时候 → 展开；选定库之后自动收起
-        self.set_conn_expanded(True)
+        # 启动即收起（用户口径：默认收起连接数据源信息）；要填连接点「设置数据源信息」展开，
+        # 选定库之后也自动收起
+        self.set_conn_expanded(False)
         self._refresh_db_labels()
 
     # -------------------- 当前目标库状态条（一条总状态 + 三页各一条动作指向） --------------------
@@ -1541,7 +1542,7 @@ class MainWindow(QWidget):
         self._conn_expanded = bool(expanded)
         self.conn_form.setVisible(expanded)
         self.btn_conn_edit.setVisible(not expanded)
-        # 状态栏那句告警要跟着换说法：展开时让人往下填，收起时才让人点「修改连接」
+        # 状态栏那句告警要跟着换说法：展开时让人往下填，收起时才让人点「设置数据源信息」
         self._refresh_db_labels()
 
     def _on_tab_changed(self, index):
@@ -1549,7 +1550,7 @@ class MainWindow(QWidget):
 
     def _on_db_changed(self, _index):
         self._refresh_db_labels()
-        # 选定库之后环境信息就没用了，自动收起；要换库再点「修改连接」
+        # 选定库之后环境信息就没用了，自动收起；要换库再点「设置数据源信息」
         if self.cb_db.currentData() or self.cb_db.currentText().strip():
             self.set_conn_expanded(False)
 
@@ -1569,7 +1570,7 @@ class MainWindow(QWidget):
             if self._conn_expanded:
                 self.lbl_conn_state.setText("⚠ 未选择目标库——填好下面连接信息后点「连接并加载库」")
             else:
-                self.lbl_conn_state.setText("⚠ 未选择目标库——点右侧「修改连接」展开后填写")
+                self.lbl_conn_state.setText("⚠ 未选择目标库——点右侧「设置数据源信息」展开后填写")
             self.lbl_conn_state.setToolTip(NO_DB_HINT)
             state_style = "color: #c62828; font-weight: bold;"
             head = "⚠ "

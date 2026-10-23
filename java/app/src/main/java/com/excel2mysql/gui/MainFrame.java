@@ -114,7 +114,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JPasswordField passField;
     private javax.swing.JComboBox<String> dbCombo;
     private HintLabel impHint;
-    /** 连接区收起后的那一条状态栏（只报当前库），与「修改连接」按钮一起常驻顶部。 */
+    /** 连接区收起后的那一条状态栏（只报当前库），与「设置数据源信息」按钮一起常驻顶部。 */
     private HintLabel connState;
     private JButton btnConnEdit;
     private JButton btnConnCollapse;
@@ -270,15 +270,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 连接区：一条状态栏（只报当前是哪个库）+ 可收起的连接表单。
      *
      * <p>用户口径：跑业务的时候这块环境信息一直常驻展示作用不大，只需要看到库名；
-     * 要改连接、测连接、换库时点「修改连接」展开。Python 侧同一形状（main.py 的
-     * conn_bar / conn_form），启动时都展开（那时还没有目标库），选定库后自动收起。
+     * 要改连接、测连接、换库时点「设置数据源信息」展开。Python 侧同一形状（main.py 的
+     * conn_bar / conn_form），启动即收起（用户口径：默认收起连接数据源信息），选定库后也自动收起。
      * 口令只进 JPasswordField，全程不落文件、不进日志。
      */
     private JPanel buildConnectionBar() {
         JPanel outer = new JPanel(new BorderLayout(0, UiScale.px(2)));
 
         connState = new HintLabel();
-        btnConnEdit = new JButton("修改连接");
+        btnConnEdit = new JButton("设置数据源信息");
         btnConnEdit.setToolTipText("展开填写主机 / 端口 / 用户名 / 密码，并测试连接与选择数据库");
         btnConnEdit.addActionListener(e -> setConnExpanded(true));
         JPanel statusBar = new JPanel(new BorderLayout(UiScale.px(6), 0));
@@ -335,7 +335,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         dbCombo.setPreferredSize(new Dimension(UiScale.px(180), UiScale.px(24)));
         dbCombo.addActionListener(e -> {
             refreshDbLabels();
-            // 选定库之后环境信息就没用了，自动收起；要换库再点「修改连接」。
+            // 选定库之后环境信息就没用了，自动收起；要换库再点「设置数据源信息」。
             // 重新填列表不算"选定"：Swing 里 addItem 会把第一项选上，那样一加载就收起，
             // 等于把用户下一步要用那颗下拉藏起来（Python 那边是 blockSignals 填的，天然不触发）
             if (!dbListReloading && !selectedDatabase().isEmpty()) {
@@ -374,8 +374,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
         bar.add(fields, BorderLayout.CENTER);
         outer.add(bar, BorderLayout.CENTER);
-        // 启动时还没有目标库，正是需要填的时候 → 展开；选定库之后自动收起
-        setConnExpanded(true);
+        // 启动即收起（用户口径：默认收起连接数据源信息）；要填连接点「设置数据源信息」展开，
+        // 选定库之后也自动收起
+        setConnExpanded(false);
         return outer;
     }
 
@@ -399,7 +400,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return connState == null ? "" : connState.hintText();
     }
 
-    /** 「修改连接」那颗此刻显不显示（展开态由「收起」负责，两颗不会同时出现）。 */
+    /** 「设置数据源信息」那颗此刻显不显示（展开态由「收起」负责，两颗不会同时出现）。 */
     public boolean connEditVisible() {
         return btnConnEdit != null && btnConnEdit.isVisible();
     }
@@ -732,7 +733,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 告警条的说法要看当前是展开还是收起：让人去点的那颗按钮必须真的在界面上
             connState.setBad(isConnExpanded()
                     ? "⚠ 未选择目标库——填好下面连接信息后点「连接并加载库」"
-                    : "⚠ 未选择目标库——点右侧「修改连接」展开后填写");
+                    : "⚠ 未选择目标库——点右侧「设置数据源信息」展开后填写");
             connState.setToolTipText(LogText.NO_DB_HINT);
             String text = "⚠ " + LogText.NO_DB_HINT;
             impHint.setBad(text);
