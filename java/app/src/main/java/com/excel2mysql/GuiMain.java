@@ -743,7 +743,7 @@ public final class GuiMain {
 
     /**
      * 三个日志框的最小高度：不给最小高度，分栏按比例一缩，默认窗口里实测只剩两行
-     * （截图复核抓到的）。这一条断"至少装得下 4 行日志那一档字号（14pt）的字"。
+     * （截图复核抓到的）。这一条断"至少装得下 4 行日志那一档字号（10pt）的字"。
      */
     private static void log_pane_height(MainFrame frame, List<String> problems) {
         com.excel2mysql.gui.LogPanel[] panes = {
@@ -1282,7 +1282,7 @@ public final class GuiMain {
             problems.add("三页的提示条说的话不一样，用户会以为连的不是同一个库");
         }
         frame.setSelectedDatabase("testdb");
-        if (!frame.excelHintText().contains("当前目标库：testdb（127.0.0.1:3306）")
+        if (!frame.excelHintText().contains("目标库：testdb —— ")
                 || !frame.excelHintText().contains("Excel 数据将导入到这个库")
                 || !frame.excelHintIsOk()) {
             problems.add("选定库之后 Excel 页提示条不对：" + frame.excelHintText());
@@ -1295,13 +1295,48 @@ public final class GuiMain {
                 || !frame.runDbHintText().contains("testdb") || !frame.runDbHintIsOk()) {
             problems.add("SQL 执行器页的当前库条不对：" + frame.runDbHintText());
         }
+        // 页内那条不再重复 host:port；主机端口与用户名收进状态栏的悬停提示
+        if (frame.excelHintText().contains("127.0.0.1")
+                || !"● 目标库 testdb".equals(frame.connStateText())
+                || !frame.connTip().contains("127.0.0.1:3306")
+                || !frame.connTip().contains("root")) {
+            problems.add("状态栏没把 host:port 收住：" + frame.connStateText()
+                    + " / " + frame.connTip());
+        }
+        // 选定库之后连接表单自动收起：跑业务时不必一直看着五行环境信息（用户口径）
+        if (frame.isConnExpanded() || !frame.connEditVisible()) {
+            problems.add("选定库之后连接表单没自动收起，环境信息仍常驻首屏");
+        }
+        frame.setConnExpanded(true);
+        if (!frame.isConnExpanded() || frame.connEditVisible()) {
+            problems.add("点「修改连接」没能展开表单，或那颗按钮没让位给「收起」");
+        }
+        frame.setConnExpanded(false);
+        if (frame.isConnExpanded() || !frame.connEditVisible()) {
+            problems.add("点「收起」没能收回一条状态栏");
+        }
+        // 「重新填库列表」不等于「选定目标库」：Swing 里 addItem 会把第一项选上，
+        // 一加载就收起等于把用户下一步要用的那颗下拉藏起来
+        frame.setConnExpanded(true);
+        frame.reloadDatabases(java.util.Arrays.asList("alpha", "beta"));
+        if (!frame.isConnExpanded()) {
+            problems.add("只是重新填了一遍库列表就把连接区收起了");
+        }
+        frame.setSelectedDatabase("beta");
+        if (frame.isConnExpanded()) {
+            problems.add("在目标库里选了一个还没自动收起");
+        }
+        frame.setSelectedDatabase("testdb");
         frame.hostField().setText("10.0.0.9");
-        if (!frame.excelHintText().contains("10.0.0.9:3306")
-                || !frame.runDbHintText().contains("10.0.0.9:3306")) {
-            problems.add("改了主机但提示条还是旧地址：" + frame.excelHintText());
+        if (!frame.connTip().contains("10.0.0.9:3306")) {
+            problems.add("改了主机但状态栏提示还是旧地址：" + frame.connTip());
+        }
+        if (frame.excelHintText().contains("10.0.0.9")) {
+            problems.add("页内那条又把 host:port 拼回来了：" + frame.excelHintText());
         }
         frame.hostField().setText("127.0.0.1");
         // 提示条要能真的按住拖选再复制（Python 那边是开了 TextSelectableByMouse 的 QLabel）
+        dragSelectable(frame.connState(), "连接状态栏", problems);
         dragSelectable(frame.excelHint(), "Excel 页提示条", problems);
         dragSelectable(frame.sqlPage().hintField(), "SQL 页提示条", problems);
         dragSelectable(frame.runDbHint(), "SQL 执行器页提示条", problems);
@@ -1610,24 +1645,24 @@ public final class GuiMain {
     }
 
     /**
-     * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：12 号被现场判过太小，
-     * 用户 2026-10-23 定的口径是"内容比日志大一档"，日志钉 14、表格钉 18。
+     * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：9 号被判过小、14 号只露三行，
+     * 现定 10；表格保持"比日志大一档"定 11，与 Excel 数据网格同级。
      * 第三页的编辑区与结果区不在这档（那是给人读语句的主区域，仍 16），
      * 由 sql_run_tab 里那组断言管。
-     * "14 / 18" 是 Python 侧的 pt，Swing 里必须折成 DPI 对应的物理像素（144dpi → 21 / 27px）。
+     * "10 / 11" 是 Python 侧的 pt，Swing 里必须折成 DPI 对应的物理像素（144dpi → 20 / 22px）。
      */
     private static void checkLogFonts(MainFrame frame, List<String> problems) {
         com.excel2mysql.gui.LogPanel[] logs = {
                 frame.logPanel(), frame.sqlPage().logPanel()};
         String[] names = {"主页日志", "SQL 脚本页日志"};
-        int wantLog = wantFontPx(14);
+        int wantLog = wantFontPx(10);
         for (int i = 0; i < logs.length; i++) {
             java.awt.Font f = logs[i].getFont();
             if (f == null || !"Monospaced".equals(f.getFamily())) {
                 problems.add(names[i] + "不是等宽字体：" + (f == null ? "无字体" : f.getFamily()));
             }
             if (f == null || f.getSize() != wantLog) {
-                problems.add(names[i] + "字号不是 14pt 折算的 " + wantLog + "px："
+                problems.add(names[i] + "字号不是 10pt 折算的 " + wantLog + "px："
                         + (f == null ? "无字体" : f.getSize()));
             }
         }
@@ -1641,18 +1676,18 @@ public final class GuiMain {
                         + f.getSize());
             }
         }
-        // 用户口径（2026-10-23）：内容比日志大一档。表格 18、日志 14，
+        // 用户口径（2026-10-23）：内容比日志大一档。表格 11、日志 10，
         // 期望值写死成这两个契约数字，不拿常量当期望值。
         // 顺带盯行高跟着字号走——行高写死的话放大字号会把字裁掉一半
         java.awt.Font tf = frame.fileTable().getFont();
         java.awt.Font hf = frame.fileTable().getTableHeader().getFont();
-        int wantTable = wantFontPx(18);
+        int wantTable = wantFontPx(11);
         if (tf.getSize() <= wantLog || hf.getSize() <= wantLog) {
             problems.add("表格内容/表头字号没有比日志大一档：内容 " + tf.getSize()
                     + "、表头 " + hf.getSize() + "，日志 " + wantLog + "px");
         }
         if (tf.getSize() != wantTable || hf.getSize() != wantTable) {
-            problems.add("表格字号不是 18pt 折算的 " + wantTable + "px：内容 "
+            problems.add("表格字号不是 11pt 折算的 " + wantTable + "px：内容 "
                     + tf.getSize() + "、表头 " + hf.getSize());
         }
         if (frame.fileTable().getRowHeight() <= tf.getSize()) {
@@ -2767,7 +2802,7 @@ public final class GuiMain {
                     "预览 DDL", "开始导入", "移除选中文件", "保存修改后ddl脚本",
                     "执行修改后ddl脚本到当前库", "连接并加载库",
                     "生成标准excel文件", "生成简易excel文件", "示例 (?)",
-                    "清空编辑区", "清空结果区"};
+                    "清空编辑区", "清空结果区", "修改连接", "收起"};
             for (String n : named) {
                 if (!onUi.contains(n)) {
                     problems.add("说明里点名的按钮界面上不存在：" + n);
@@ -4097,6 +4132,7 @@ public final class GuiMain {
                             + ra.width + "x" + ra.height);
                 }
             }
+            
             int pa = a.getDone();
             int pb = b.getDone();
             long p0 = System.currentTimeMillis();

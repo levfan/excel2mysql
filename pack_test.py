@@ -675,10 +675,11 @@ check("F4b 目标库提示条：SQL 执行器页说的是编辑区那一段",
       "编辑区里的 SQL 将执行到这个库" in w.lbl_run_db.text()
       and "testdb" in w.lbl_run_db.text(), w.lbl_run_db.text())
 w.ed_port.setValue(3307)
-check("F5 改端口后提示条实时联动", "3307" in w.lbl_imp_db.text(), w.lbl_imp_db.text())
-check("F5b 改端口时三页一起联动（同一个 head 不是各页各拼一份）",
-      "3307" in w.lbl_sql_db.text() and "3307" in w.lbl_run_db.text(),
-      (w.lbl_sql_db.text(), w.lbl_run_db.text()))
+check("F5 改端口后状态栏的悬停提示实时联动（host:port 收在这条里）",
+      "3307" in w.lbl_conn_state.toolTip(), w.lbl_conn_state.toolTip())
+check("F5b 页内三条指向不再重复 host:port（只说这一页要写到哪个库）",
+      "3307" not in w.lbl_imp_db.text() and "127.0.0.1" not in w.lbl_imp_db.text()
+      and "3307" not in w.lbl_run_db.text(), (w.lbl_imp_db.text(), w.lbl_run_db.text()))
 w.cb_db.setCurrentIndex(-1)
 check("F6 未选库时提示条回落为告警态", w.lbl_imp_db.text().startswith("⚠"))
 check("F6b 未选库提示在三页上完全一致",
@@ -693,6 +694,43 @@ check("F6e 三条提示条同色：绿在选定态、红在告警态",
       and "#c62828" in w.lbl_sql_db.styleSheet()
       and "#c62828" in w.lbl_run_db.styleSheet(),
       (w.lbl_imp_db.styleSheet(), w.lbl_run_db.styleSheet()))
+
+# 连接区折叠：跑业务时只留一条"当前是哪个库"，要改连接再展开（用户口径）
+_wc = app_main.MainWindow()
+_wc.resize(1100, 780)
+_wc.show()
+_app.processEvents()
+check("F6f 启动时连接表单是展开的（那时还没有目标库，正是要填的时候）",
+      _wc.conn_form.isVisible() and not _wc.btn_conn_edit.isVisible(),
+      (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible()))
+_wc.cb_db.addItem("testdb", "testdb")      # 走真信号：选定库应当自动收起
+_app.processEvents()
+check("F6g 选定目标库后自动收起，状态栏只报库名",
+      not _wc.conn_form.isVisible() and _wc.btn_conn_edit.isVisible()
+      and _wc.lbl_conn_state.text() == "● 目标库 testdb",
+      (_wc.conn_form.isVisible(), _wc.lbl_conn_state.text()))
+check("F6h 收起后 host:port 与用户名退到悬停提示里，信息没丢",
+      "127.0.0.1" in _wc.lbl_conn_state.toolTip()
+      and "3306" in _wc.lbl_conn_state.toolTip() and "root" in _wc.lbl_conn_state.toolTip(),
+      _wc.lbl_conn_state.toolTip())
+_wc.btn_conn_edit.click()
+_app.processEvents()
+check("F6i 点「修改连接」重新展开填表，那颗按钮自己让位给「收起」",
+      _wc.conn_form.isVisible() and not _wc.btn_conn_edit.isVisible()
+      and _wc.btn_conn_collapse.isVisible(),
+      (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible(),
+       _wc.btn_conn_collapse.isVisible()))
+_wc.btn_conn_collapse.click()
+_app.processEvents()
+check("F6j 点「收起」回到一条状态栏",
+      not _wc.conn_form.isVisible() and _wc.btn_conn_edit.isVisible(),
+      (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible()))
+check("F6k 收起的只是表单本体，页签与表格不受牵连",
+      _wc.file_table.isVisible() and _wc.main_tabs.isVisible(),
+      (_wc.file_table.isVisible(), _wc.main_tabs.isVisible()))
+_wc.close()
+_wc.deleteLater()
+_app.processEvents()
 src = main_source()
 if src is not None:
     check("F6d main.py 里不存在指向页签的连接指引", "「Excel 导入」页" not in src)
@@ -1349,23 +1387,29 @@ check("H17b 拖拽区文案写明三种格式且带点击提示（运行时取 Q
       drop.label.text().replace("\n", " / "))
 check("H18 IMPORT_EXTS 覆盖三种扩展名",
       app_main.IMPORT_EXTS == (".xlsx", ".xls", ".zip"), app_main.IMPORT_EXTS)
-check("H18b 首屏日志 14 号等宽字体（默认 9 号字现场看不清；表格那一档比它大）",
+check("H18b 首屏日志 10 号等宽字体（9 号现场判过小、14 号只露三行；表格那一档比它大）",
       w3.log.font().family() == "Consolas"
-      and w3.log.font().pointSize() == app_main.LOG_FONT_SIZE == 14,
+      and w3.log.font().pointSize() == app_main.LOG_FONT_SIZE == 10,
       (w3.log.font().family(), w3.log.font().pointSize()))
 check("H18c SQL 脚本页日志与首屏同一档字号",
       w3.sql_log.font().family() == w3.log.font().family()
       and w3.sql_log.font().pointSize() == w3.log.font().pointSize(),
       (w3.sql_log.font().family(), w3.sql_log.font().pointSize()))
-check("H18d 表格内容与表头的字号严格大于日志（用户口径：内容比日志大一档）",
+check("H18d 表格内容与表头同为 11 号且严格大于日志（用户口径：内容比日志大一档）",
       w3.file_table.font().pointSize() > w3.log.font().pointSize()
       and w3.file_table.horizontalHeader().font().pointSize()
-      > w3.log.font().pointSize()
+      == w3.file_table.font().pointSize()
       and w3.sql_table.font().pointSize() > w3.log.font().pointSize()
-      and w3.file_table.font().pointSize() == app_main.TABLE_FONT_SIZE == 18,
+      and w3.file_table.font().pointSize() == app_main.TABLE_FONT_SIZE == 11,
       (w3.file_table.font().pointSize(),
        w3.file_table.horizontalHeader().font().pointSize(),
        w3.sql_table.font().pointSize(), w3.log.font().pointSize()))
+_h18_row = w3.file_table.verticalHeader().defaultSectionSize()
+_h18_line = w3.file_table.fontMetrics().height()
+check("H18e 表格行高按字高加留白算出来，不是写死的 30px",
+      _h18_line + 4 <= _h18_row <= _h18_line + 8
+      and w3.sql_table.verticalHeader().defaultSectionSize() == _h18_row,
+      (_h18_row, _h18_line, w3.sql_table.verticalHeader().defaultSectionSize()))
 
 section("I .xls 老格式支持（xlrd）")
 
@@ -2759,7 +2803,7 @@ from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "开始导入", "移除选中文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
-           "示例 (?)", "清空编辑区", "清空结果区"]
+           "示例 (?)", "清空编辑区", "清空结果区", "修改连接", "收起"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
 _absent = [t for t in _labels if t not in _btns]
 check("P15 说明里点名的按钮在界面上确实存在", not _absent, _absent)
@@ -2889,9 +2933,15 @@ check("Q1 「连接并加载库」成功后下拉框填充并可用",
       qw.cb_db.isEnabled() and _dbs == ["alpha", "beta"], _dbs)
 check("Q2 加载结果写进日志", "[已加载] 可用数据库" in qw.log.toPlainText(),
       qw.log.toPlainText().splitlines()[-1:])
-check("Q3 选定库后提示条从告警态转为正常态",
-      "当前目标库" in qw.lbl_imp_db.text() and "⚠" not in qw.lbl_imp_db.text(),
-      qw.lbl_imp_db.text())
+check("Q3 加载完库提示条从告警态转为正常态，但连接区先不收起（下一步就是在这下拉里挑库）",
+      "目标库：alpha ——" in qw.lbl_imp_db.text() and "⚠" not in qw.lbl_imp_db.text()
+      # 这一组的窗口没 show 过，isVisible() 恒为假：只问"是不是被显式收起来了"
+      and not qw.conn_form.isHidden() and qw.btn_conn_edit.isHidden(),
+      (qw.lbl_imp_db.text(), qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden()))
+qw.cb_db.setCurrentText("beta")
+check("Q3b 真在目标库里选了一个才自动收起",
+      qw.conn_form.isHidden() and not qw.btn_conn_edit.isHidden(),
+      (qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden()))
 qw.cb_db.setCurrentText("alpha")
 check("Q4 导入取的就是下拉选中的那个库",
       qw._conn_cfg()["database"] == "alpha", qw._conn_cfg()["database"])
@@ -4496,24 +4546,27 @@ if not getattr(sys, "frozen", False):
     sys.modules.pop("build_stamp", None)
 _i = _ai.build_info()
 
-check("T1 版本号是 X.Y.Z 语义化格式，且只有一个来源",
-      _re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+", APP_VERSION) is not None, APP_VERSION)
+check("T1 版本号是 X.Y.Z 语义化格式（可带 -alpha.N/-beta.N/-rc.N 阶段后缀），且只有一个来源",
+      _re.fullmatch(r"[0-9]+[.][0-9]+[.][0-9]+"
+                    r"(-(?:alpha|beta|rc)[.][0-9]+)?", APP_VERSION) is not None, APP_VERSION)
 check("T2 appinfo 报的版本与 version.py 一致", _ai.build_info()["version"] == APP_VERSION)
 
 # 版本号除了 version.py，还写死在三个 pom、构建脚本里的 jar 名、随包说明那句命令里。
 # 改版本漏一处就会出现"关于框 1.0.3、jar 还叫 1.0.2"这种交付事故，所以逐处核回来。
+# 每处都按整段取（含阶段后缀）：只截到 X.Y.Z 的话，"1.1.0-rc.1 vs 1.1.0"会判成一致。
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _VERSION_SITES = [
-    ("java/pom.xml", r"<app\.version>\s*([0-9][.\d]*)\s*</app\.version>"),
-    ("java/pom.xml", r"<project[\s\S]{0,400}?<version>\s*([0-9][.\d]*)\s*</version>"),
-    ("java/app/pom.xml", r"<parent>[\s\S]{0,200}?<version>\s*([0-9][.\d]*)\s*</version>"),
-    ("java/verify/pom.xml", r"<parent>[\s\S]{0,200}?<version>\s*([0-9][.\d]*)\s*</version>"),
-    ("java/构建验证.bat", r"excel2mysql-([0-9][.\d]*)\.jar"),
-    ("help_doc.py", r"excel2mysql-([0-9][.\d]*)\.jar"),
-    ("java/assets/conn.ini", r"excel2mysql-([0-9][.\d]*)\.jar"),
-    ("README.md", r"当前版本 v([0-9][.\d]*)"),
-    ("README.md", r"excel2mysql-java-([0-9][.\d]*)-win64"),
-    ("README.md", r"excel2mysql-([0-9][.\d]*)\.jar"),
+    ("java/pom.xml", r"<app\.version>\s*([0-9][0-9A-Za-z.\-]*)\s*</app\.version>"),
+    ("java/pom.xml", r"<project[\s\S]{0,400}?<version>\s*([0-9][0-9A-Za-z.\-]*)\s*</version>"),
+    ("java/app/pom.xml", r"<parent>[\s\S]{0,200}?<version>\s*([0-9][0-9A-Za-z.\-]*)\s*</version>"),
+    ("java/verify/pom.xml", r"<parent>[\s\S]{0,200}?<version>\s*([0-9][0-9A-Za-z.\-]*)\s*</version>"),
+    ("java/构建验证.bat", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
+    ("help_doc.py", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
+    ("java/assets/conn.ini", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
+    ("README.md", r"当前版本 v([0-9][0-9A-Za-z.\-]*)"),
+    ("README.md", r"excel2mysql-cli ([0-9][0-9A-Za-z.\-]*)"),
+    ("README.md", r"excel2mysql-java-([0-9][0-9A-Za-z.\-]*)-win64"),
+    ("README.md", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
 ]
 _drift = []
 _missing_site = []

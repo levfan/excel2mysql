@@ -119,6 +119,10 @@ public final class GuiDump {
                         frame.fileTable().getFont().getSize())));
                 put("font.log.pt", String.valueOf(UiScale.fontPxToPt(
                         frame.logPanel().getFont().getSize())));
+                // 连接区：跑业务时收起成一条状态栏，只报当前是哪个库（用户口径）
+                put("conn.state", frame.connStateText());
+                put("conn.expanded", frame.isConnExpanded() ? "展开" : "收起");
+                put("conn.edit", frame.connEditVisible() ? "显示" : "隐藏");
                 put("hint.excel", frame.excelHintText());
                 put("hint.sql", frame.sqlPage().hintText());
                 put("drop.hint", frame.dropArea().hintText());

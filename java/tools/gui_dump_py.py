@@ -338,6 +338,10 @@ def main():
     # 字号也是界面事实：比的是设计稿那一档（pt），不是各台机器上的物理像素
     put("font.table.pt", str(win.file_table.font().pointSize()))
     put("font.log.pt", str(win.log.font().pointSize()))
+    # 连接区：跑业务时收起成一条状态栏，只报当前是哪个库（用户口径）
+    put("conn.state", win.lbl_conn_state.text())
+    put("conn.expanded", "展开" if win.conn_form.isVisible() else "收起")
+    put("conn.edit", "显示" if win.btn_conn_edit.isVisible() else "隐藏")
     put("hint.excel", win.lbl_imp_db.text())
     put("hint.sql", win.lbl_sql_db.text())
     put("drop.hint", win.drop.label.text())
