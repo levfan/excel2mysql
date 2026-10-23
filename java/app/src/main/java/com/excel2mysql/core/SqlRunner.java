@@ -22,6 +22,7 @@ import java.util.List;
 public final class SqlRunner {
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
+    private static final Charset GBK = Charset.forName("GBK");
 
     public static final class FileResult {
         public String file;
@@ -51,20 +52,33 @@ public final class SqlRunner {
     }
 
     /**
-     * 读脚本原文。编码按 UTF-8（含 BOM）严格解码 → GBK 回退：
+     * 读脚本原文。编码按 UTF-8（含 BOM）严格解码 → GBK 严格解码 → UTF-8 替换坏字节：
      * 原正文里的 U+FFFD 是合法 Unicode 字符，不能拿"出现了替换字符"当成不是 UTF-8；
-     * 只有 UTF-8 字节序列本身非法，才轮到 GBK。GBK 解任何字节序列都不抛异常，
-     * 因此只在 UTF-8 严格解码失败时使用。
+     * 只有 UTF-8 字节序列本身非法，才轮到 GBK。数据库 dump 里夹着原样导出的二进制值时
+     * 两种严格解码都会失败，这时只能按 UTF-8 替换坏字节——整份按 GBK 重解会把正文里
+     * 本来正确的 UTF-8 中文全部变成「瀵嗛挜」，与 Python 线 read_sql_text 同一口径。
      */
     public static String readScript(File file) throws IOException {
         byte[] raw = Files.readAllBytes(file.toPath());
-        CharsetDecoder decoder = UTF8.newDecoder()
+        String utf8 = decodeStrict(raw, UTF8);
+        if (utf8 != null) {
+            return stripBom(utf8);
+        }
+        String gbk = decodeStrict(raw, GBK);
+        if (gbk != null) {
+            return stripBom(gbk);
+        }
+        return stripBom(new String(raw, UTF8));
+    }
+
+    private static String decodeStrict(byte[] raw, Charset charset) {
+        CharsetDecoder decoder = charset.newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT);
         try {
-            return stripBom(decoder.decode(ByteBuffer.wrap(raw)).toString());
-        } catch (CharacterCodingException notUtf8) {
-            return stripBom(new String(raw, Charset.forName("GBK")));
+            return decoder.decode(ByteBuffer.wrap(raw)).toString();
+        } catch (CharacterCodingException bad) {
+            return null;
         }
     }
 
