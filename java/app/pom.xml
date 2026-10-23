@@ -8,7 +8,7 @@
   <parent>
     <groupId>com.excel2mysql</groupId>
     <artifactId>excel2mysql-java</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.3</version>
   </parent>
 
   <artifactId>excel2mysql-app</artifactId>

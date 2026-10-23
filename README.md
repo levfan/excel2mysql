@@ -1,6 +1,11 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v1.0.2** —— 版本号的唯一来源是 `version.py` 里的 `APP_VERSION`，改版本只改那一行（README、窗口标题、程序内《关于》都从它取）。
+**当前版本 v1.0.3** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+`--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
+（根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
+`java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
+以及本 README 顶部与几处路径示例。漏一处就是"关于框 1.0.3、jar 还叫 1.0.2"这种交付事故，
+所以用例里有一条 `T15` 逐处把这些字符串与 `APP_VERSION` 核一遍（改版本前先跑它，改完再跑一次）。
 运行环境要求见下方「运行环境要求」一节：图形版要 **64 位 Windows 10 1809+ / Windows 11**；
 必须在 Windows 7 上干活，用同一份 `core/` 的**命令行版**（见「Windows 7 命令行版」一节）。
 
@@ -274,7 +279,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.0.2` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.0.3` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -368,9 +373,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-1.0.2-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-1.0.2-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-1.0.2-win64\excel2mysql-1.0.2.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-1.0.3-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-1.0.3-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-1.0.3-win64\excel2mysql-1.0.3.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
