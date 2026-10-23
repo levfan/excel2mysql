@@ -1822,14 +1822,14 @@ class MainWindow(QWidget):
 
         # 第二页只保留大小写开关：默认不勾选。勾选后表名清单、元数据弹窗和生成件都按大写显示，
         # 但脚本正文仍保持原样，避免用户只是想看一份大写清单却把源文件改掉。
-        # 移除按钮排在同一排的最左：表格下面第一排（前缀行的下一行）的最左那颗，
-        # 与「Excel 导入」那页「清空待上传文件」的相对位置一致。
+        # 清空按钮排在同一排的最左：表格下面第一排（前缀行的下一行）的最左那颗，
+        # 与「Excel 导入」那页「清空待上传文件」同一位置同一语义：整份清出清单，不是只删选中行。
         # 不塞进保存/执行那一排——那排的最小宽度已经贴着窗口宽度，再加一颗就顶出屏幕
         # （U7 那条"整窗落在可用区内"实测被顶到 848 > 可用 800）。
         name_row = QHBoxLayout()
-        self.btn_sql_remove = QPushButton("移除选中文件")
-        self.btn_sql_remove.clicked.connect(self.on_sql_remove_selected)
-        name_row.addWidget(self.btn_sql_remove)
+        self.btn_sql_clear = QPushButton("清空待上传文件")
+        self.btn_sql_clear.clicked.connect(self.on_sql_clear_files)
+        name_row.addWidget(self.btn_sql_clear)
         self.chk_sql_upper = QCheckBox("表名与字段名转大写")
         self.chk_sql_upper.setToolTip(
             "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部大写\n"
@@ -2128,18 +2128,16 @@ class MainWindow(QWidget):
         popup_box(self, "添加结果", "\n".join(lines),
                   "warning" if res["failed"] else "information")
 
-    def on_sql_remove_selected(self):
-        rows = sorted({i.row() for i in self.sql_table.selectedIndexes()}, reverse=True)
-        paths = set()
-        for r in rows:
-            it = self.sql_table.item(r, 1)
-            if it:
-                paths.add(it.data(Qt.UserRole))
-        if not paths:
-            return
-        self.sql_files = [s for s in self.sql_files if s["path"] not in paths]
+    def on_sql_clear_files(self):
+        """与第一页「清空待上传文件」同一语义：整份清出清单，磁盘上的脚本不动。"""
+        n = len(self.sql_files)
+        self.sql_files = []
         self._refresh_sql_table()
-        append_log(self.sql_log, f"[移除] {len(paths)} 个脚本文件")
+        self._sync_gen_buttons()
+        if n:
+            append_log(self.sql_log, f"[清空] 已清空 {n} 个脚本文件")
+        else:
+            append_log(self.sql_log, "[清空] 清单里没有脚本文件，无需清空")
 
     def _warn(self, text):
         """拦下一次点击：日志与弹窗双写同一句话。

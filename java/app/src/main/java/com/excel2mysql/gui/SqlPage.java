@@ -296,12 +296,9 @@ public final class SqlPage extends JPanel {
         // 添加文件这一路与第一页统一：拖进来或点这块区域选文件，不再单独放一颗按钮
         sqlDrop = new DropArea(paths -> dropFiles(paths), () -> chooseFiles(),
                 DropArea.SQL_HINT, "点击选择 SQL 脚本；也可以直接拖到这里");
-        JButton remove = new JButton("移除选中文件");
-        remove.addActionListener(e -> {
-            if (removeSelected() == 0) {
-                log("没选中文件，未移除任何脚本");
-            }
-        });
+        // 与「Excel 导入」那页「清空待上传文件」同一位置同一语义：整份清出清单，不是只删选中行
+        JButton clearSql = new JButton("清空待上传文件");
+        clearSql.addActionListener(e -> clearAllFiles());
         prefixField = new HintTextField(18, PREFIX_HINT);
         JButton apply = new JButton("批量应用前缀");
         apply.setToolTipText("只改「当前表名」列的显示（双击看的元数据表名同步），脚本正文不动；"
@@ -374,11 +371,11 @@ public final class SqlPage extends JPanel {
         actRow.add(runBtns, BorderLayout.WEST);
         actRow.add(clearLog, BorderLayout.EAST);
 
-        // 移除按钮排在表格下方第一排（前缀行的下一行）的最左，
-        // 与「Excel 导入」那页「清空待上传文件」的相对位置一致
+        // 清空按钮排在表格下方第一排（前缀行的下一行）的最左，
+        // 与「Excel 导入」那页「清空待上传文件」同一位置同一语义
         JPanel nameRow = flow();
         rowName = nameRow;
-        nameRow.add(remove);
+        nameRow.add(clearSql);
         nameRow.add(upperBox);
 
         JPanel actions = new JPanel(new BorderLayout());
@@ -906,28 +903,18 @@ public final class SqlPage extends JPanel {
         host.inform2("添加结果", body.toString());
     }
 
-    /** 选中行可能同属一个文件的多个表名，按文件去重后整文件移除。 */
-    public int removeSelected() {
-        Set<String> drop = new LinkedHashSet<String>();
-        for (int row : table.getSelectedRows()) {
-            if (row >= 0 && row < rowPath.size()) {
-                drop.add(rowPath.get(row));
-            }
-        }
-        if (drop.isEmpty()) {
+    /** 与第一页「清空待上传文件」同语义：整份清出清单，磁盘不动；返回清掉的个数。 */
+    public int clearAllFiles() {
+        int n = entries.size();
+        if (n == 0) {
+            log("[清空] 清单里没有脚本文件，无需清空");
             return 0;
         }
-        List<Entry> keep = new ArrayList<Entry>();
-        for (Entry e : entries) {
-            if (!drop.contains(e.path)) {
-                keep.add(e);
-            }
-        }
         entries.clear();
-        entries.addAll(keep);
         refreshTable();
-        log("[移除] " + drop.size() + " 个脚本文件");
-        return drop.size();
+        applyGenEnabled();
+        log("[清空] 已清空 " + n + " 个脚本文件");
+        return n;
     }
 
     /** 两颗前缀按钮的共同前置检查：没有可处理的表就返回一句说明，让按钮走 warn 弹窗。 */
@@ -1436,6 +1423,10 @@ public final class SqlPage extends JPanel {
     public void setGenBusy(boolean busy) {
         genBusy = busy;
         applyGenEnabled();
+    }
+
+    public boolean genButtonsEnabled() {
+        return genStd.isEnabled();
     }
 
     private String displayName(String actual) {
