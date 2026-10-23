@@ -23,13 +23,14 @@ import java.util.List;
  * 结构弹窗：一张表一个标签页，改字段名/注释/类型/主键。
  * 对应 Python 侧 main.py:1619-1693 的 StructureDialog（同样是全表标签页，不是单表）。
  *
- * 第 4 列"最大字节长度"只显示不可回写——它是推断的中间量，改了不会改类型，
+ * 第 4 列"表内数据最大字节长度"只显示不可回写——它是推断的中间量，改了不会改类型，
  * 只会让"改完看起来对、实际按新类型建表"这种错觉发生（Python 侧同样不回写）。
+ * 列名写明"表内数据"：这一列是数据实测值，不是右边「类型」列的声明容量。
  */
 public final class StructureDialog extends JDialog {
 
     private static final String[] COLUMNS = {"主键", "字段名(拼音/首字母)", "字段注释(中文表头)",
-            "类型", "最大字节长度"};
+            "类型", "表内数据最大字节长度"};
     private static final String TIP =
             "勾选一列或多列作为主键（多列即组合主键，主键约束至多一个）；"
             + "主键需全列非空且组合唯一，全部不勾选则不设主键";
@@ -53,7 +54,7 @@ public final class StructureDialog extends JDialog {
 
                 @Override
                 public boolean isCellEditable(int row, int col) {
-                    // 五列都可编辑，和 Python 侧一致；第 4 列"最大字节长度"改了也不回写，
+                    // 五列都可编辑，和 Python 侧一致；第 4 列"表内数据最大字节长度"改了也不回写，
                     // 但禁掉编辑会让人以为它是锁死的关键信息
                     return true;
                 }
@@ -106,7 +107,11 @@ public final class StructureDialog extends JDialog {
             // Swing 没有"按内容自适应"这一档，用固定窄列 + 后续列均分来贴
             table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
             table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(46));
-            table.getColumnModel().getColumn(4).setPreferredWidth(UiScale.px(96));
+            // 末列表头有 10 个汉字，写死 96px 会被截断；按表头实际字宽量出来
+            java.awt.FontMetrics headerMetrics = table.getTableHeader()
+                    .getFontMetrics(table.getTableHeader().getFont());
+            table.getColumnModel().getColumn(4).setPreferredWidth(
+                    headerMetrics.stringWidth(COLUMNS[4]) + UiScale.px(20));
             JScrollPane scroll = new JScrollPane(table);
             ed.scroll = scroll;
             scroll.setPreferredSize(new Dimension(UiScale.px(900), UiScale.px(420)));

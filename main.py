@@ -3048,8 +3048,10 @@ class StructureDialog(QDialog):
         for t in tables:
             tw = QTableWidget(len(t["columns"]), 5)
             style_table_font(tw)
+            # 第 4 列是这一列数据在表内的实测最大字节数，不是类型声明的容量；
+            # 挨着「类型」放时只写"最大字节长度"会被读成 VARCHAR(n) 那一档
             tw.setHorizontalHeaderLabels(
-                ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "类型", "最大字节长度"])
+                ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "类型", "表内数据最大字节长度"])
             for i, c in enumerate(t["columns"]):
                 cb = QCheckBox()
                 cb.setChecked(bool(c.get("primary_key")))
@@ -3061,6 +3063,8 @@ class StructureDialog(QDialog):
             tw.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
             tw.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
             tw.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            # 末列按内容宽度走：表头 10 个字，默认 100px 会把它截成省略号
+            tw.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
             # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方
             self.tabs.addTab(tw, t["table_name"])
             self.editors.append((t, tw))
