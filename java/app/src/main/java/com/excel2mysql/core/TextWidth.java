@@ -8,8 +8,9 @@ package com.excel2mysql.core;
  * 同一个宽度，否则同一个查询在两条线上排出不同的表。区间与那边逐条对齐，
  * 由金标准差分（SqlDiffer 的 table-render 分支）钉住。
  *
- * 弹窗折行用的是 {@link com.excel2mysql.gui.PopupText} 里那套，
- * 那边只要求两边对同一句折出同一个串，不参与跨语言金标准，所以没并到一起。
+ * 进度框那条折行用的是 {@link com.excel2mysql.gui.PopupText} 里那套（显式区间表 +
+ * 写死的列预算），它只服务一个尺寸固定的小框，不参与跨语言金标准，所以没并到一起。
+ * 结果弹窗已经不再自己折行：正文原样显示，折点由控件按内容区右边界算。
  */
 public final class TextWidth {
 
