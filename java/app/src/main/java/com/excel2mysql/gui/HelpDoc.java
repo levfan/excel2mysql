@@ -90,7 +90,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.2.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.3.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -727,7 +727,7 @@ public final class HelpDoc {
                     "一边变宽另一边就变窄；两边都不允许拖到 0 宽。上面那行提示和「示例 (?)」「执行」是固定件，不参与挤压；两颗<b>清空</b>分别在左右两栏的头一行，各管自己那一边</li>" + NL +
                     "<li>三个页签的日志框都带<b>最小高度</b>（按日志那一档字号算四行）：把分隔条拖到极限，" + NL +
                     "日志也不会被压成一两行——只剩两行的日志框等于没有，往上滚就看不到上一条。" + NL +
-                    "默认比例已经把日志段给到不小于拖拽区那一段</li>" + NL +
+                    "默认比例把最大的那一段给表格、日志次之（表格是主工作面），窗口放大时多出来的高度也是表格拿大头</li>" + NL +
                     "<li>三个页签的高度分配都<b>不写入配置</b>，重开程序回到初始比例</li>" + NL +
                     "<li>待导入文件表的<b>列宽可自由拖动</b>，最后一列自动填满剩余空间</li>" + NL +
                     "<li><b>连接信息平时收起成一条</b>：上方只留「● 目标库 xxx」，主机 / 端口 / 用户名" + NL +

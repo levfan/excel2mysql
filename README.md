@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v1.1.2** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v1.1.3** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -282,7 +282,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.1.2` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.1.3` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -376,9 +376,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-1.1.2-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-1.1.2-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-1.1.2-win64\excel2mysql-1.1.2.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-1.1.3-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-1.1.3-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-1.1.3-win64\excel2mysql-1.1.3.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -970,8 +970,10 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
 写同一个像素数会变成"两边都满足同一个数、实际看到的行数不一样"。
 下限也不能给多——主窗口自身最小高就有 717px，按 8 行给会顶到 847px，
 1024x768 的现场机与"整窗落在屏幕可用区内"那条断言都撑不住。
-默认比例同时把日志段从 290 提到 330（拖拽区 130→110、表格 250→200），
-让日志在默认窗口里不小于拖拽区那一段。
+两个三段分栏页的默认比例都是 110 : 360 : 200（拖拽区 : 表格 : 日志）：表格是主工作面，
+拿最大的那一段。旧默认（Excel 110 : 200 : 330、SQL 110 : 230 : 330）下默认窗口里
+文件表视口实测只剩 37px，不到两行；现在表格约八行、日志约十一行，仍远高于四行下限。
+窗口再放大时多出来的高度按 3 : 2 分给表格与日志。
 
 每条记录写成 `[时:分:秒] 符号 [级别] 正文`，四档级别与命令行版同一套标签，图形界面只是多了钟点：
 
@@ -1095,7 +1097,7 @@ Swing 侧是 `LogPanel.render()` 按级别加 `StyleConstants`），复制日志
 - 提示条、`开始导入`/`停止`/`生成标准excel文件`/`生成简易excel文件` 动作条、进度条是固定件，**不在分隔条内**，不参与挤压
 - 因此动作条与进度条现在位于窗口**底部**（原先夹在文件表和日志之间）
 - 「清除日志」按钮跟着日志面板一起缩放，始终可见
-- 初始比例约 1 : 2 : 3
+- 初始约 110 : 360 : 200：表格段最高，日志段次之
 
 ### 「SQL 脚本改名入库」页：待处理文件表格 ↔ 日志
 
@@ -1105,7 +1107,7 @@ Swing 侧是 `LogPanel.render()` 按级别加 `StyleConstants`），复制日志
 - 「表名前缀」行、`移除选中文件` 与大写开关所在的行，以及 `保存修改后ddl脚本`/`执行修改后ddl脚本到当前库`/`清除日志`
   操作条**跟着表格一起缩放**（同属中间那一段），不会被分隔条单独挤掉
 - 只有最上面的提示条是固定件；拖拽区本身是三段中的第一段，会跟着一起被拉高拉矮
-- 三段都不允许拖到 0 高；初始约 110 : 230 : 330（与「Excel 导入」那页同一形状）
+- 三段都不允许拖到 0 高；初始约 110 : 360 : 200（与「Excel 导入」那页同一形状）
 
 ### 「SQL 执行器」页：SQL 文本 ↔ 执行结果（左右分栏）
 
