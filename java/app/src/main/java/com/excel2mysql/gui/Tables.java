@@ -8,20 +8,19 @@ import javax.swing.BorderFactory;
 /**
  * 表格字体与行高：内容与表头同一档，且必须比日志大一档。
  *
- * 日志区按现场反馈从系统默认的 9pt 放大过，而当时表格还吃着 9pt，
- * 一眼看上去就是"日志比内容还大"；用户 2026-10-23 又把关系定成反向——
- * 内容 18、日志 14。行高按字体量出来，不写死像素——
- * 写死的数在 144dpi 上会把字裁掉一半。
+ * 表格取数据网格的常规档（11pt，与 Excel 同级），比日志大一档；
+ * 18pt 是上一轮"内容要比日志大"的过头做法，一屏装不下几行。
+ * 行高按字体量出来，不写死像素——写死的数在 144dpi 上会把字裁掉一半。
  * Python 侧同一口径在 main.py 的 style_table_font / TABLE_FONT_SIZE。
  */
 public final class Tables {
 
     /**
-     * 设计稿字号（pt）。2026-10-23 用户的口径是"内容比日志大一档"：
-     * 表格 18、日志 14（见 LogPanel.DEFAULT_FONT_SIZE），两边同一组数，
+     * 设计稿字号（pt）。2026-10-23 定的口径是"内容比日志大一档"：
+     * 表格 11、日志 10（见 LogPanel.DEFAULT_FONT_SIZE），两边同一组数，
      * 由对撞键 font.table.pt / font.log.pt 核同值，自检另断"表格 &gt; 日志"。
      */
-    public static final int POINT_SIZE = 18;
+    public static final int POINT_SIZE = 11;
 
     /**
      * 每张表格左上角那一句标识（标题边框）。用户口径：每个表格都要有标识，
