@@ -94,7 +94,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.6.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-1.1.7.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -532,9 +532,9 @@ public final class HelpDoc {
                     "虚线框既可以拖文件进来，也可以点一下打开选择器，没有单独的「添加 SQL 文件」按钮。" + NL +
                     "拖进来的东西里混着不是 <code>.sql</code> 的，日志逐个点名跳过；" + NL +
                     "整批都不是 <code>.sql</code> 时明说一句已忽略，不会清单不动又没话</td></tr>" + NL +
-                    "<tr><td>移除选中文件</td><td>排在表格下面那一排的最左（与「Excel 导入」那页" + NL +
-                    "「清空待上传文件」同一位置），只把选中的脚本从清单里去掉，磁盘上的脚本不动；" + NL +
-                    "没选中任何东西时说清\"没选中文件，未移除任何脚本\"</td></tr>" + NL +
+                    "<tr><td>清空待上传文件</td><td>排在表格下面那一排的最左，与「Excel 导入」那页同名按钮" + NL +
+                    "同一位置同一语义：把清单里的脚本整份清掉，磁盘上的脚本不动；清单本来就是空的时" + NL +
+                    "也会写一句\"清单里没有脚本文件，无需清空\"，不会点了没反应</td></tr>" + NL +
                     "<tr><td>批量应用前缀</td><td><b>只改页面显示</b>：给「当前表名」列加一段显示前缀，" + NL +
                     "双击看的元数据标题同步变，脚本正文不动；已带该前缀的自动跳过，重复应用不会叠加；" + NL +
                     "前缀留空再点一次，显示恢复为脚本原名。真正写进脚本要等四个动作按钮</td></tr>" + NL +
