@@ -518,8 +518,13 @@ public final class GuiMain {
             problems.add("结构弹窗表头被简写了：" + dlg.columnHeader(0, 1) + " / "
                     + dlg.columnHeader(0, 2));
         }
+        // 末列写的是数据实测值，不是「类型」的声明容量；列名少了"表内数据"就会被读成后者
+        if (!"表内数据最大字节长度".equals(dlg.columnHeader(0, 4))) {
+            problems.add("结构弹窗第 4 列表头不是「表内数据最大字节长度」："
+                    + dlg.columnHeader(0, 4));
+        }
         if (!dlg.cellEditable(0, 0, 4)) {
-            problems.add("「最大字节长度」列被禁了编辑，Python 那边只是不回写");
+            problems.add("「表内数据最大字节长度」列被禁了编辑，Python 那边只是不回写");
         }
         if (!dlg.cellEditable(0, 0, 1)) {
             problems.add("字段名列不可编辑，弹窗就白摆");
