@@ -1,7 +1,7 @@
 """一键打包脚本：改完代码后跑它，产出可分发的 exe 并完成全部验收。
 
 用法：
-    双击 一键打包.bat          （推荐）
+    双击 一键打包-图形版.bat          （推荐）
     python build_exe.py        （命令行）
     python build_exe.py --fast       只打产品包，跳过冻结态用例集与启动验收（图快时用）
     python build_exe.py --app-only   只打产品包，但保留开发态用例集检查

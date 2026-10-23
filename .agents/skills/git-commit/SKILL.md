@@ -24,7 +24,7 @@ whenToUse: 完成任意一处改动需要提交代码；用户说"提交""推一
 | --- | --- | --- |
 | 任何代码改动（`main.py` / `core/*.py` / `ui_help.py` / `help_doc.py`） | `.venv/Scripts/python.exe pack_test.py` | **退出码 0** 且汇总 `失败 0` |
 | 只改测试用例 `pack_test.py` | 同上（用例自己就是被测对象） | 退出码 0 |
-| 打包口径（`*.spec` / `_pack_common.py` / `build_exe.py` / `一键打包.bat`） | 先 `pack_test.py`，再 `build_exe.py` 全闸门 | 闸门 7 步全过、产物能起窗 |
+| 打包口径（`*.spec` / `_pack_common.py` / `build_exe.py` / `一键打包-图形版.bat`） | 先 `pack_test.py`，再 `build_exe.py` 全闸门 | 闸门 7 步全过、产物能起窗 |
 | 纯文档（`README.md` / `help_doc.py` 文案 / `.agents/**`） | 自检即可：frontmatter 合法、路径存在、无待办占位；`help_doc.py` 改动要能 `import` 且 `pack_test.py` 的 P 组不红 | 上述检查通过 |
 
 - **"全绿"必须拿退出码**：`echo $?` 为 0 才算过，不能靠肉眼看输出里有没有 FAIL
@@ -161,7 +161,7 @@ test(naming): 覆盖首段切分、撞名去重与 SQL 引用同步改写
   既不提交也不删除，等用户决定
 - `.gitignore` 里 `!excel2mysql.spec` / `!packtest.spec` 两条否定**不能删**：
   GitHub 的 Python 模板含 `*.spec`，删掉会让打包配置静默漏出仓库，别人 clone 后构建不了
-- `*.bat` 必须保持 CRLF（`.gitattributes` 已固定），改 `一键打包.bat` 后不要顺手转成 LF
+- `*.bat` 必须保持 CRLF（`.gitattributes` 已固定），改任何 `.bat`（三端打包入口、构建验证、对撞）后不要顺手转成 LF
 - 公开仓库：文档与注释里不出现内部数据包代号、内网地址、他人姓名等
 
 ## 与其他规则冲突时

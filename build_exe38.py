@@ -1,11 +1,11 @@
 """Win7 线一键打包闸门：用 .venv38（Python 3.8.10 + PyInstaller 5.x）打命令行 exe。
 
-与 GUI 那套（一键打包.bat → build_exe.py）完全独立：两台环境、两种产物、互不影响。
+与 GUI 那套（一键打包-图形版.bat → build_exe.py）完全独立：两台环境、两种产物、互不影响。
 分两条线是因为 PyInstaller 6.x / Qt 6 / numpy 2.x 都不再支持 Windows 7，
 只能把命令行版单独钉在 3.8 这一套上；core/ 两边共用。
 
 用法：
-    双击 一键打包38.bat              （推荐）
+    双击 一键打包-命令行版.bat              （推荐）
     .venv38\\Scripts\\python build_exe38.py
     .venv38\\Scripts\\python build_exe38.py --fast          只打产品包，跳过冻结态用例与冒烟验收
     .venv38\\Scripts\\python build_exe38.py --no-parity     跳过 3.12 那一轮跨栈比对

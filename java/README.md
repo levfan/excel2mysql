@@ -101,7 +101,7 @@ JDK 8u202 的核心二进制实测零 `api-ms-win-crt-*` 导入，它依赖的 `
   第 2 行子合并、2x2 块与其余合并区照旧拒绝。金标准夹具
   `两行合并表头（ods_t_merged_header）.xlsx` 带「原始表」与「结构化参考」两页，
   表名/字段名与类型推断两步差分、Swing 自检都覆盖。
-- P3 CLI 与交付包：绿。`一键打包.bat` 先跑十步闸门再组装，产物
+- P3 CLI 与交付包：绿。`一键打包-Java版.bat` 先跑十步闸门再组装，产物
   `dist/excel2mysql-java-<版本>-win64/` 含 `启动.bat`、程序 jar、随包 `conn.ini`、
   `jre\`、`README.txt`；出包时断言剔桩为零、class 主版本 ≤ 52，
   并用**包内那个 java.exe** 跑界面自检与"在别的工作目录里自动读到产物同级 conn.ini"。

@@ -25,7 +25,7 @@ GUI 版（main.py）要求 Windows 10 1809+，两者共用推断/建表/导入�
     5  有 SQL 脚本执行失败（该文件事务已回滚，其余文件继续处理）
     130 用户按 Ctrl+C 中止
 
-开发态：python cli.py ...      打包：双击 一键打包38.bat
+开发态：python cli.py ...      打包：双击 一键打包-命令行版.bat
 """
 import argparse
 import os

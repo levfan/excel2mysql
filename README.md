@@ -39,7 +39,7 @@ Python 侧同源靠同一个 `core/` 包，Java 侧是把 `core/` 重写一遍�
 | 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` | `java/` → `启动.bat`（界面）／`jre\bin\java.exe -jar`（命令行） |
 | 能跑的系统 | **64 位 Windows 10 1809+ / Windows 11** | **Windows 7 SP1 及以上**，且系统 UCRT 补丁与系统文件完整 | **64 位 Windows 7 及以上**；包内自带 Java 8 运行时，目标机器不用装任何东西 |
 | 语言与依赖 | Python 3.10+（本机 `.venv` 用 3.12.8）+ PySide6 | Python 3.8.10（本机 `.venv38`），不含任何 Qt | Java 8（本机 `jdk1.8.0_202`），依赖见 `java/pom.xml` |
-| 打包闸门 | `一键打包.bat` → `build_exe.py` | `一键打包38.bat` → `build_exe38.py` | `java/一键打包.bat` → `tools/build_java_dist.py` |
+| 打包闸门 | `一键打包-图形版.bat` → `build_exe.py` | `一键打包-命令行版.bat` → `build_exe38.py` | `java/一键打包-Java版.bat` → `tools/build_java_dist.py` |
 | 用例与守卫 | `pack_test.py`（518 项，含 GUI 各组；没设数据库凭据时 512 通过 / 6 跳过） | `pack_test38.py`（257 项，含真库读写与 `.sql` 执行；同一份在旧栈与新栈各跑一遍，旧栈 243 通过 / 14 跳过） | `java/构建验证.bat` 十步闸门 + `java/界面双端对撞.bat` + `--gui --selftest` |
 | 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 | 两种都有：同一个 jar，`--gui` 起界面，不给 `--gui` 就是命令行 |
 
@@ -53,9 +53,9 @@ Java 包 232 MB，绝大部分是随包的运行时。
 
 | 运行形态 | 怎么起 | 属于哪个产物 | 构建脚本 |
 | --- | --- | --- | --- |
-| Python 3.12 图形界面 | 双击 `excel2mysql.exe` | `dist\excel2mysql\` | `一键打包.bat` |
-| Python 3.8 命令行 | `excel2mysql-cli.exe <路径>` | `dist\excel2mysql-cli\` | `一键打包38.bat` |
-| Java 图形界面 | 双击 `启动.bat`（内部就是 `--gui`） | `java\dist\excel2mysql-java-<版本>-win64\` | `java\一键打包.bat` |
+| Python 3.12 图形界面 | 双击 `excel2mysql.exe` | `dist\excel2mysql\` | `一键打包-图形版.bat` |
+| Python 3.8 命令行 | `excel2mysql-cli.exe <路径>` | `dist\excel2mysql-cli\` | `一键打包-命令行版.bat` |
+| Java 图形界面 | 双击 `启动.bat`（内部就是 `--gui`） | `java\dist\excel2mysql-java-<版本>-win64\` | `java\一键打包-Java版.bat` |
 | Java 命令行 | `jre\bin\java.exe -jar excel2mysql-<版本>.jar <路径>` | **同一个包**，不给 `--gui` 就是命令行 | 同上（不单独出第二个包） |
 
 两个事实要说清：Java 的界面与命令行**是同一个 jar 的两种模式**（`Main-Class` 是
@@ -304,7 +304,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 .venv38\Scripts\python -m pip install -r requirements38.txt
 
 :: 打包 + 全部验收
-一键打包38.bat
+一键打包-命令行版.bat
 ```
 
 闸门顺序与 GUI 那条一样是"任一步失败就非 0 退出"：
@@ -362,7 +362,7 @@ pip install -r requirements.txt
 # 即 PySide6 pymysql pandas openpyxl xlrd pypinyin pyinstaller
 # 前五个是运行期依赖，最后那个 pyinstaller 是打包闸门要用的构建工具——
 # 有意一起列在这份清单里：重建 .venv 时一条命令就能得到"能跑也能打包"的环境，
-# 不会装完还得到闸门第 1 步才发现缺 PyInstaller（真踩过：.venv 重建后一键打包.bat 就起不来）
+# 不会装完还得到闸门第 1 步才发现缺 PyInstaller（真踩过：.venv 重建后一键打包-图形版.bat 就起不来）
 # 只想要更小体积可把 PySide6 换成 PySide6-Essentials：代码只用到 QtCore/QtGui/QtWidgets，
 # 装成完整 PySide6 也不会被打进产物（打包时 WebEngine/Pdf 等已显式排除）
 
@@ -389,16 +389,21 @@ java\dist\excel2mysql-java-2.0.0-win64\jre\bin\java.exe -jar ^
 
 | 产物 | 双击入口 | 实际执行 | 用什么环境 |
 | --- | --- | --- | --- |
-| 图形版 `dist\excel2mysql\`（162 MB，带 `_internal`） | `一键打包.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
-| 命令行版 `dist\excel2mysql-cli\`（131 MB，平铺无 `_internal`；内含 `win7_sp1_patch\`） | `一键打包38.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
-| Java 版 `java\dist\excel2mysql-java-<版本>-win64\`（约 232 MB，含随包 JRE） | `java\一键打包.bat` | `java/tools/build_java_dist.py`（剔桩 + 逐 jar class 版本 + 冒烟 + README/启动.bat 内容校验） | 本机 `jdk1.8.0_202` + Maven |
+| 图形版 `dist\excel2mysql\`（162 MB，带 `_internal`） | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
+| 命令行版 `dist\excel2mysql-cli\`（131 MB，平铺无 `_internal`；内含 `win7_sp1_patch\`） | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
+| Java 版 `java\dist\excel2mysql-java-<版本>-win64\`（约 232 MB，含随包 JRE） | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py`（剔桩 + 逐 jar class 版本 + 冒烟 + README/启动.bat 内容校验） | 本机 `jdk1.8.0_202` + Maven |
+
+三端一起打就双击项目根目录的 **`一键打包-三端.bat`**：它按 图形版 → 命令行版 → Java 版 的顺序
+调用上面三个闸门，逐步打印 `[1/3]`…`[3/3]`；任何一步非 0 退出就停住、不再往下出包
+（三份产物都来自同一份源码，源码没过闸门时打出来的也是坏包）。它不接受参数，
+单端自己的选项（例如 `--fast`）仍直接调对应的那个 bat。
 
 下面「一键打包」到「已知限制」讲的是**图形版**那条闸门；
 命令行版的完整步骤、产物体检项与分发说明在本文件前面的「Windows 7 命令行版」一节。
 
 ### 一键打包（推荐，改完代码就用它）
 
-**双击项目根目录的 `一键打包.bat`** 即可。它按顺序做完并逐项汇报：
+**双击项目根目录的 `一键打包-图形版.bat`** 即可。它按顺序做完并逐项汇报：
 
 | 步骤 | 做什么 | 失败会怎样 |
 | --- | --- | --- |
@@ -426,7 +431,7 @@ python build_exe.py --keep-cache # 保留 build/ 中间缓存，加速下一次�
 
 ```bat
 set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& set PT_DB=测试库
-一键打包.bat
+一键打包-图形版.bat
 ```
 
 未设凭据时 G 组打印 `SKIP`，并在结尾的汇总里显式记为"未覆盖"，不会被算成通过。

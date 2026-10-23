@@ -18,7 +18,7 @@ Excel -> MySQL 批量导入工具（PySide6 GUI）
   - 导入成功的文件自动移出待导入列表，失败文件保留可重试
 
 依赖：pip install -r requirements.txt   （PySide6 pymysql pandas openpyxl xlrd pypinyin）
-运行：python main.py            打包：双击 一键打包.bat
+运行：python main.py            打包：双击 一键打包-图形版.bat
 """
 import os
 import shutil
