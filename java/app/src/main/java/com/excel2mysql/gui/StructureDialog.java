@@ -196,7 +196,7 @@ public final class StructureDialog extends JDialog {
             return;
         }
         String text = String.join("\n", problems) + "\n\n请调整主键勾选或字段类型后重试。";
-        MessageDialog.show(this, "主键设置无效", PopupText.wrapAll(text), text,
+        MessageDialog.show(this, "主键设置无效", text, null,
                 javax.swing.JOptionPane.WARNING_MESSAGE);
     }
 

@@ -2355,11 +2355,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     private void dialog(String title, String text, int icon) {
-        // 记录用折行并截断的那份：Python 侧弹窗走的同一道折行，对撞比的就是它；
-        // 显示用不截断的全量折行，超出的行靠滚动条看，不再换成「见日志」那句
-        String record = PopupText.wrap(text);
+        // 记录与显示都是同一份原文：横向折行交给正文控件按内容区右边界做，
+        // 纵向靠滚动条看全，谁都不再按写死的列数改写这句话
         lastDialogTitle = title;
-        lastDialogText = record;
+        lastDialogText = text;
         lastDialogIsError = icon == javax.swing.JOptionPane.ERROR_MESSAGE;
         lastDialogIcon = icon == javax.swing.JOptionPane.ERROR_MESSAGE ? "critical"
                 : icon == javax.swing.JOptionPane.WARNING_MESSAGE ? "warning" : "information";
@@ -2367,12 +2366,22 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 自检站在事件分发线程上，模态框会把它自己卡死；原地模式下只留痕不弹窗
             return;
         }
-        MessageDialog.show(this, title, PopupText.wrapAll(text), text, icon);
+        MessageDialog.show(this, title, popupBodyText(text), null, icon);
+    }
+
+    /**
+     * 弹窗将要显示的那一份正文：与 {@link #dialog} 同一个出口，自检量的就是它。
+     *
+     * <p>恒等返回不是多余的一层——它把"显示的就是原文"变成一处可断言的事实：
+     * 谁再往这里加折行，自检立刻红，而不只是改了一个没人走的调用点。
+     */
+    public String popupBodyText(String text) {
+        return text;
     }
 
     /** 结果弹窗正文用可选中的文本区；自检验的是真实弹窗里的同一个组件。 */
     public javax.swing.JComponent popupMessageComponent(String text) {
-        return MessageDialog.createArea(PopupText.wrapAll(text));
+        return MessageDialog.createArea(text);
     }
 
     /** 最后一次弹窗的标题与正文：两条路都写满，自检读这一份，模态那条才真弹。 */

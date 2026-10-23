@@ -25,7 +25,6 @@ import shutil
 import sys
 import tempfile
 import time
-import unicodedata
 import warnings
 
 # 与 cli.py 同一条口径：openpyxl 读"没有命名样式"的 Excel（真实数据包里全是这种）会给每张表
@@ -44,7 +43,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QSpinBox, QPushButton, QComboBox, QFileDialog, QTableWidget,
     QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QGroupBox,
-    QMessageBox, QHeaderView, QCheckBox, QAbstractItemView,
+    QMessageBox, QHeaderView, QCheckBox, QAbstractItemView, QScrollArea, QStyle,
     QDialog, QDialogButtonBox, QTabWidget, QSplitter, QListWidget,
 )
 
@@ -162,74 +161,103 @@ def style_table_font(view):
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
 
-# 弹窗正文的折行预算，两个数都按最小的目标机 1024x768 算：
-# 72 显示列（汉字/全角算 2 列）约等于 36 个汉字的宽度，长路径也能一行放下大半；
-# 24 行连标题栏和按钮仍在可用高度里。再长就不往弹窗里硬塞了——放不下的部分
-# 会把开头几行顶出屏幕，那才是真的看不见；完整内容本来就写在底部日志里。
-POPUP_WRAP_COLS = 72
-POPUP_MAX_LINES = 24
-POPUP_OVERFLOW_NOTE = "……（其余 %d 行放不下，完整内容见底部日志）"
+# 结果弹窗的尺寸：与 Java 侧 MessageDialog 同一组数（设计像素）。
+# 正文不再预折行，所以高度只按"原文有几行"给一个区间，装不下的部分出滚动条。
+POPUP_WANT_WIDTH = 880
+POPUP_MIN_WIDTH = 820
+POPUP_MIN_HEIGHT = 420
+POPUP_MAX_HEIGHT = 640
 
 
-def _display_cols(ch: str) -> int:
-    """一个字符占几个显示列：全角与宽字符算 2，其余算 1。"""
-    return 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+class PopupMessageBox(QDialog):
+    """结果/告警弹窗：正文原样显示，横向折行交给控件按内容区右边界做，纵向出滚动条。
 
-
-def wrap_popup_text(text: str) -> str:
-    """把弹窗正文按显示列宽折行，并给放不下的行留一句去日志里看的提示。
-
-    两边的控件库默认排版不一样：Swing 的消息框完全折不了一行（一条长路径能把它
-    撑到 1286 像素宽），Qt 会折但会把 30 行正文撑到比屏幕还高。所以折行自己算，
-    算完两边拿到的是同一个字符串，界面上才谈得上等价。
+    以前是 QMessageBox + 自己按 72 显示列预折行。那条列预算跟弹窗的实际像素宽
+    没有任何约束关系——同一句话在 Java 那颗弹窗里只排到半幅宽（实测 691/1250），
+    而且换行点写死在文本里，窗口拉大也不会重排。更要紧的是：为了把高度摁住，
+    两边都得按"折出来的行"截断，于是截断位置也跟着各栈的字体走，
+    一句"其余 N 行见日志"把两栈显示的正文改成了不同的话。
+    改成"显示原文 + 控件折行 + 滚动条"之后，两栈显示的确实是同一份原文。
     """
-    lines = []
-    for seg in text.split("\n"):
-        buf = ""
-        wide = 0
-        for ch in seg:
-            w = _display_cols(ch)
-            if buf and wide + w > POPUP_WRAP_COLS:
-                lines.append(buf)
-                buf = ""
-                wide = 0
-            buf += ch
-            wide += w
-        lines.append(buf)
-    if len(lines) <= POPUP_MAX_LINES:
-        return "\n".join(lines)
-    kept = lines[:POPUP_MAX_LINES - 1]
-    kept.append(POPUP_OVERFLOW_NOTE % (len(lines) - len(kept)))
-    return "\n".join(kept)
 
+    _STD_ICONS = {QMessageBox.Information: QStyle.SP_MessageBoxInformation,
+                  QMessageBox.Warning: QStyle.SP_MessageBoxWarning,
+                  QMessageBox.Critical: QStyle.SP_MessageBoxCritical}
 
-class PopupMessageBox(QMessageBox):
-    def showEvent(self, event):
-        super().showEvent(event)
-        # QMessageBox 显示时会按正文重算尺寸，把外部设的最小值一并丢掉
-        self.setMinimumSize(820, 420)
-        self.resize(max(self.width(), 820), max(self.height(), 420))
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        head = QHBoxLayout()
+        self.icon_label = QLabel()
+        self.title_label = QLabel()
+        bold = self.title_label.font()
+        bold.setBold(True)
+        self.title_label.setFont(bold)
+        head.addWidget(self.icon_label)
+        head.addWidget(self.title_label, 1)
+        head.addStretch(1)
+        lay.addLayout(head)
+
+        self.body = QLabel()
+        self.body.setWordWrap(True)
+        self.body.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.body.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.body.setMargin(8)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.body)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lay.addWidget(scroll, 1)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        self.buttons.accepted.connect(self.accept)
+        lay.addWidget(self.buttons)
+        self.setMinimumSize(POPUP_MIN_WIDTH, POPUP_MIN_HEIGHT)
+
+    # build_popup_box 与用例桩之间就靠这几个装配方法对话，两边实现同一套
+    def setWindowTitle(self, title):
+        super().setWindowTitle(title)
+        self.title_label.setText(title)
+
+    def setText(self, text):
+        self.body.setText(text)
+        # 高度按"原文几行"给一个区间（与 Java 侧同一个算法），放不下就靠滚动条看
+        lines = text.count("\n") + 1
+        want_h = min(POPUP_MAX_HEIGHT,
+                     max(POPUP_MIN_HEIGHT, lines * self.body.fontMetrics().height() + 120))
+        fit_client(self, POPUP_WANT_WIDTH, want_h)
+
+    def setIcon(self, icon):
+        std = self._STD_ICONS.get(icon)
+        if std is not None:
+            self.icon_label.setPixmap(self.style().standardIcon(std).pixmap(32, 32))
+
+    def setStandardButtons(self, buttons):
+        self.buttons.setStandardButtons(buttons)
+
+    def text(self):
+        return self.body.text()
+
+    def body_label(self):
+        """正文那一个标签：用例与取证要量的是它的宽度与折完的高度，不是标题。"""
+        return self.body
 
 
 _POPUP_MESSAGE_BOX = PopupMessageBox
 _POPUP_ICONS = {"information": QMessageBox.Information,
                 "warning": QMessageBox.Warning,
                 "critical": QMessageBox.Critical}
-_POPUP_OK = QMessageBox.Ok
+_POPUP_OK = QDialogButtonBox.Ok
 
 
 def build_popup_box(parent, title: str, text: str, kind: str = "information",
                     box_class=None):
-    """构造结果弹窗：折行只写一遍，正文允许鼠标选中后用 Ctrl+C 复制。"""
+    """构造结果弹窗：正文一律原样交给弹窗自己排，复制与显示的是同一份文字。"""
     box = (box_class or _POPUP_MESSAGE_BOX)(parent)
     box.setWindowTitle(title)
-    box.setText(wrap_popup_text(text))
+    box.setText(text)
     box.setIcon(_POPUP_ICONS[kind])
     box.setStandardButtons(_POPUP_OK)
-    # 结果里常带产物目录与脚本完整路径；按正文折行只有 400 多像素宽，长路径看着像被截掉。
-    # 这里给一个与 72 显示列相称的下限，小屏（1024）仍放得下。
-    box.setMinimumWidth(820)
-    box.setMinimumHeight(420)
     return box
 
 
