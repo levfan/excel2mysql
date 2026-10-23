@@ -490,6 +490,11 @@ public final class SqlPage extends JPanel {
         }
     }
 
+    /** 未选库时收起这条重复告警：唯一的提示留在主窗口顶部状态栏。 */
+    public void clearHint() {
+        hint.clearHint();
+    }
+
     public String hintText() {
         return hint.hintText();
     }

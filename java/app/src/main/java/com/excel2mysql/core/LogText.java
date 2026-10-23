@@ -22,9 +22,9 @@ public final class LogText {
     /** Java 源里的换行转义容易被工具链吃掉，统一走这个常量。 */
     public static final String NL = String.valueOf((char) 10);
 
-    /** 连接区在两个页签上方常驻，指引说"上方"而不是某个页签。 */
+    /** 未选库只在顶部状态栏说一次；这句是不点名状态的完整解释，给悬停提示与拦下弹窗共用。 */
     public static final String NO_DB_HINT =
-            "未选择目标数据库：请先在上方填写连接信息并点「连接并加载库」，再选择目标库";
+            "未选择目标库：请先在上方连接区填好连接信息，加载出库列表后选中要写入的库";
     public static final String NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。";
     public static final String NO_SQL_HINT = "请先添加 SQL 脚本文件。";
 

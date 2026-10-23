@@ -109,8 +109,8 @@ LOG_LEVEL_COLORS = {"ok": LOG_OK_COLOR, "info": None, "warn": LOG_WARN_COLOR,
                     "error": LOG_ERROR_COLOR}
 MAX_LOG_STATEMENT = 2000   # 出错语句全文最长展示，超出截断，避免超大 INSERT 刷爆日志
 
-# 连接区在三个页签上方常驻，不属于任何一页，指引必须指向"上方"而不是某个页签
-NO_DB_HINT = "未选择目标数据库：请先在上方填写连接信息并点「连接并加载库」，再选择目标库"
+# 未选库只在顶部状态栏说一次；这句是不点名状态的完整解释，给悬停提示与拦下弹窗共用
+NO_DB_HINT = "未选择目标库：请先在上方连接区填好连接信息，加载出库列表后选中要写入的库"
 NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
 
 # 「SQL 执行器」编辑区的开场文本：既是"连不连得上库"的一键自检语句，
@@ -1573,12 +1573,19 @@ class MainWindow(QWidget):
                 self.lbl_conn_state.setText("⚠ 未选择目标库——点右侧「设置数据源信息」展开后填写")
             self.lbl_conn_state.setToolTip(NO_DB_HINT)
             state_style = "color: #c62828; font-weight: bold;"
-            head = "⚠ "
-            tails = [NO_DB_HINT, NO_DB_HINT, NO_DB_HINT]
+            head = None
+            tails = [None, None, None]
         self.lbl_conn_state.setStyleSheet(state_style)
         for lbl, tail in zip((self.lbl_imp_db, self.lbl_sql_db, self.lbl_run_db), tails):
+            if tail is None:
+                # 用户口径：未选库的提示只留顶部状态栏一处，页内三条不再重复告警
+                lbl.setText("")
+                lbl.setStyleSheet("")
+                lbl.setVisible(False)
+                continue
             lbl.setText(head + tail)
             lbl.setStyleSheet(state_style)
+            lbl.setVisible(True)
 
     # -------------------- 使用说明 / 关于 --------------------
     def on_help(self):

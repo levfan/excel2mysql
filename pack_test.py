@@ -681,19 +681,27 @@ check("F5b 页内三条指向不再重复 host:port（只说这一页要写到�
       "3307" not in w.lbl_imp_db.text() and "127.0.0.1" not in w.lbl_imp_db.text()
       and "3307" not in w.lbl_run_db.text(), (w.lbl_imp_db.text(), w.lbl_run_db.text()))
 w.cb_db.setCurrentIndex(-1)
-check("F6 未选库时提示条回落为告警态", w.lbl_imp_db.text().startswith("⚠"))
-check("F6b 未选库提示在三页上完全一致",
-      w.lbl_imp_db.text() == w.lbl_sql_db.text() == w.lbl_run_db.text(),
-      (w.lbl_imp_db.text(), w.lbl_sql_db.text(), w.lbl_run_db.text()))
+check("F6 未选库时三页提示条清空并隐藏，不再重复顶部状态栏那条告警",
+      w.lbl_imp_db.text() == w.lbl_sql_db.text() == w.lbl_run_db.text() == ""
+      and w.lbl_imp_db.isHidden() and w.lbl_sql_db.isHidden() and w.lbl_run_db.isHidden(),
+      (w.lbl_imp_db.text(), w.lbl_sql_db.text(), w.lbl_run_db.text(),
+       w.lbl_imp_db.isHidden(), w.lbl_sql_db.isHidden(), w.lbl_run_db.isHidden()))
+check("F6b 唯一的告警在顶部状态栏，指向此刻真能点到的按钮，话术只有一套",
+      w.lbl_conn_state.text().startswith("⚠ 未选择目标库")
+      and "设置数据源信息" in w.lbl_conn_state.text()
+      and app_main.NO_DB_HINT in w.lbl_conn_state.toolTip()
+      and app_main.NO_DB_HINT.startswith("未选择目标库"),
+      (w.lbl_conn_state.text(), w.lbl_conn_state.toolTip()))
 check("F6c 提示不再把公共连接区说成某个页签",
-      "Excel 导入」页" not in w.lbl_imp_db.text() and "SQL 脚本」页" not in w.lbl_imp_db.text()
-      and "上方" in w.lbl_imp_db.text() and "上方" in w.lbl_run_db.text(),
-      (w.lbl_imp_db.text(), w.lbl_run_db.text()))
-check("F6e 三条提示条同色：绿在选定态、红在告警态",
-      "#c62828" in w.lbl_imp_db.styleSheet()
-      and "#c62828" in w.lbl_sql_db.styleSheet()
-      and "#c62828" in w.lbl_run_db.styleSheet(),
-      (w.lbl_imp_db.styleSheet(), w.lbl_run_db.styleSheet()))
+      "上方连接区" in w.lbl_conn_state.toolTip()
+      and "Excel 导入」页" not in w.lbl_conn_state.toolTip()
+      and "SQL 脚本」页" not in w.lbl_conn_state.toolTip(),
+      w.lbl_conn_state.toolTip())
+check("F6e 告警只染顶部状态栏，页内三条不残留红色样式",
+      "#c62828" in w.lbl_conn_state.styleSheet()
+      and all("#c62828" not in lbl.styleSheet()
+              for lbl in (w.lbl_imp_db, w.lbl_sql_db, w.lbl_run_db)),
+      (w.lbl_conn_state.styleSheet(), w.lbl_imp_db.styleSheet()))
 
 # 连接区折叠：跑业务时只留一条"当前是哪个库"，要改连接再展开（用户口径）
 _wc = app_main.MainWindow()
@@ -714,10 +722,12 @@ check("F6f2 点「设置数据源信息」展开五行表单，那颗按钮让�
        _wc.btn_conn_collapse.isVisible()))
 _wc.cb_db.addItem("testdb", "testdb")      # 走真信号：选定库应当自动收起
 _app.processEvents()
-check("F6g 选定目标库后自动收起，状态栏只报库名",
+check("F6g 选定目标库后自动收起，状态栏只报库名，三页提示条恢复显示",
       not _wc.conn_form.isVisible() and _wc.btn_conn_edit.isVisible()
-      and _wc.lbl_conn_state.text() == "● 目标库 testdb",
-      (_wc.conn_form.isVisible(), _wc.lbl_conn_state.text()))
+      and _wc.lbl_conn_state.text() == "● 目标库 testdb"
+      and not _wc.lbl_imp_db.isHidden() and "testdb" in _wc.lbl_imp_db.text(),
+      (_wc.conn_form.isVisible(), _wc.lbl_conn_state.text(),
+       _wc.lbl_imp_db.isHidden(), _wc.lbl_imp_db.text()))
 check("F6h 收起后 host:port 与用户名退到悬停提示里，信息没丢",
       "127.0.0.1" in _wc.lbl_conn_state.toolTip()
       and "3306" in _wc.lbl_conn_state.toolTip() and "root" in _wc.lbl_conn_state.toolTip(),
@@ -2937,9 +2947,12 @@ app_main.connect = _fake_connect
 # ---- 连接并加载库：成功路径 ----
 qw = app_main.MainWindow()
 # 启动默认收起；先点开，才能验证"重新填列表不算选定、不该收起"
-check("Q0 未做任何操作时连接区是收起的",
-      qw.conn_form.isHidden() and not qw.btn_conn_edit.isHidden(),
-      (qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden()))
+check("Q0 未做任何操作时连接区是收起的，三页提示条也不出现",
+      qw.conn_form.isHidden() and not qw.btn_conn_edit.isHidden()
+      and qw.lbl_imp_db.isHidden() and qw.lbl_sql_db.isHidden()
+      and qw.lbl_run_db.isHidden(),
+      (qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden(),
+       qw.lbl_imp_db.isHidden(), qw.lbl_sql_db.isHidden(), qw.lbl_run_db.isHidden()))
 qw.btn_conn_edit.click()
 qw.on_load_databases()
 _dbs = [qw.cb_db.itemText(i) for i in range(qw.cb_db.count())]
@@ -2947,11 +2960,13 @@ check("Q1 「连接并加载库」成功后下拉框填充并可用",
       qw.cb_db.isEnabled() and _dbs == ["alpha", "beta"], _dbs)
 check("Q2 加载结果写进日志", "[已加载] 可用数据库" in qw.log.toPlainText(),
       qw.log.toPlainText().splitlines()[-1:])
-check("Q3 加载完库提示条从告警态转为正常态，但连接区先不收起（下一步就是在这下拉里挑库）",
+check("Q3 加载完库提示条从隐藏恢复为正常态，但连接区先不收起（下一步就是在这下拉里挑库）",
       "目标库：alpha ——" in qw.lbl_imp_db.text() and "⚠" not in qw.lbl_imp_db.text()
+      and not qw.lbl_imp_db.isHidden()
       # 这一组的窗口没 show 过，isVisible() 恒为假：只问"是不是被显式收起来了"
       and not qw.conn_form.isHidden() and qw.btn_conn_edit.isHidden(),
-      (qw.lbl_imp_db.text(), qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden()))
+      (qw.lbl_imp_db.text(), qw.lbl_imp_db.isHidden(),
+       qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden()))
 qw.cb_db.setCurrentText("beta")
 check("Q3b 真在目标库里选了一个才自动收起",
       qw.conn_form.isHidden() and not qw.btn_conn_edit.isHidden(),

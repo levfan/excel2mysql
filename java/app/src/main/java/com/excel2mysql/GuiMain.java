@@ -1278,18 +1278,27 @@ public final class GuiMain {
         if (!frame.isConnExpanded() || frame.connEditVisible()) {
             problems.add("点「设置数据源信息」没能展开连接表单");
         }
-        if (!frame.excelHintText().contains("未选择目标数据库") || frame.excelHintIsOk()) {
-            problems.add("未选库时 Excel 页提示条没按红级说明：" + frame.excelHintText());
+        // 用户口径：未选库的告警只留顶部状态栏一处，三页里不再重复
+        if (!frame.excelHintText().isEmpty() || frame.excelHint().isVisible()
+                || !frame.sqlPage().hintText().isEmpty()
+                || frame.sqlPage().hintField().isVisible()
+                || !frame.runDbHintText().isEmpty() || frame.runDbHint().isVisible()) {
+            problems.add("未选库时三页仍重复了告警（应当只在顶部状态栏说一次）："
+                    + frame.excelHintText() + " / " + frame.sqlPage().hintText()
+                    + " / " + frame.runDbHintText());
+        }
+        // 此刻连接表单是展开的（上面刚点开过），告警要指向这颗真在界面上的按钮
+        if (!frame.connStateText().startsWith("⚠ 未选择目标库")
+                || !frame.connStateText().contains("连接并加载库")
+                || !com.excel2mysql.core.LogText.NO_DB_HINT.startsWith("未选择目标库")) {
+            problems.add("未选库时顶部状态栏没承担唯一告警，或话术还是两套："
+                    + frame.connStateText());
         }
         // ⚠ 在 Microsoft YaHei 下没有字形，直接画就是豆腐块；显示文字里不许留它，
         // 但 hintText 要保留原文给双端对撞。图标由 HintLabel 自绘。
-        String badShown = frame.excelHint().getText();
-        if (badShown.contains("⚠") || !badShown.contains("未选择目标数据库")) {
+        String badShown = frame.connState().getText();
+        if (badShown.contains("⚠") || !frame.connStateText().contains("未选择目标库")) {
             problems.add("告警条显示文字仍是 ⚠ 原文或丢了正文：" + badShown);
-        }
-        if (!frame.sqlPage().hintText().equals(frame.excelHintText())
-                || !frame.runDbHintText().equals(frame.excelHintText())) {
-            problems.add("三页的提示条说的话不一样，用户会以为连的不是同一个库");
         }
         frame.setSelectedDatabase("testdb");
         if (!frame.excelHintText().contains("目标库：testdb —— ")
@@ -1451,11 +1460,11 @@ public final class GuiMain {
         frame.addFiles(files);
         frame.startImport();
         if (!"提示".equals(frame.lastDialogTitle())
-                || !frame.lastDialogText().contains("未选择目标数据库")) {
+                || !frame.lastDialogText().contains("未选择目标库")) {
             problems.add("没选库点导入要弹 NO_DB_HINT，实际标题=" + frame.lastDialogTitle()
                     + " 正文=" + frame.lastDialogText().replace((char) 10, ' '));
         }
-        if (!frame.logPanel().contains("已拦下：未选择目标数据库")) {
+        if (!frame.logPanel().contains("已拦下：未选择目标库")) {
             problems.add("拦下导入只弹窗没写日志，回头查不到");
         }
         if (frame.taskBusy()) {
@@ -2695,7 +2704,7 @@ public final class GuiMain {
         }
 
         String hint = page.execute();
-        if (hint == null || !hint.contains("未选择目标数据库")) {
+        if (hint == null || !hint.contains("未选择目标库")) {
             problems.add("没选库时执行应当拦下并说明：" + hint);
         }
         List<com.excel2mysql.gui.SqlPage.RunFile> runFiles =

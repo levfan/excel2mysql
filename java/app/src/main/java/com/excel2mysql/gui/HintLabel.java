@@ -43,6 +43,7 @@ public final class HintLabel extends JTextField {
         setBorder(null);
         setMargin(new Insets(PAD, PAD, PAD, PAD));
         setForeground(OK_COLOR);
+        setVisible(true);
     }
 
     /**
@@ -62,6 +63,20 @@ public final class HintLabel extends JTextField {
                 0, PAD + ICON_ROOM, 0, 0));
         setMargin(new Insets(PAD, PAD, PAD, PAD));
         setForeground(BAD_COLOR);
+        setVisible(true);
+    }
+
+    /**
+     * 收起这条提示：清空正文并隐藏。
+     *
+     * <p>用户口径：未选库的告警只在顶部状态栏留一处，三页里不再重复；
+     * 正文也要一起清掉，否则 hintText() 还能读出一句界面上已经看不见的话。
+     */
+    public void clearHint() {
+        warning = false;
+        badText = "";
+        setText("");
+        setVisible(false);
     }
 
     @Override

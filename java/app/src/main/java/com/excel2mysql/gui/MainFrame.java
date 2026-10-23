@@ -735,13 +735,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     ? "⚠ 未选择目标库——填好下面连接信息后点「连接并加载库」"
                     : "⚠ 未选择目标库——点右侧「设置数据源信息」展开后填写");
             connState.setToolTipText(LogText.NO_DB_HINT);
-            String text = "⚠ " + LogText.NO_DB_HINT;
-            impHint.setBad(text);
+            // 用户口径：未选库只留顶部状态栏这一处，三页里不再重复同一条告警
+            impHint.clearHint();
             if (sqlPage != null) {
-                sqlPage.setHint(false, text);
+                sqlPage.clearHint();
             }
             if (sqlRunDbHint != null) {
-                sqlRunDbHint.setBad(text);
+                sqlRunDbHint.clearHint();
             }
             return;
         }
