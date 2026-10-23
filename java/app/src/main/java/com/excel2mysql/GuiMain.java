@@ -3849,6 +3849,9 @@ public final class GuiMain {
                 + "password = pw-file\ndatabase = alpha\n");
         java.io.File bad = new java.io.File(dir, "bad.ini");
         writeText(bad.getPath(), "host = 1.2.3.4\n");      // 没有小节名，读不了
+        java.io.File blank = new java.io.File(dir, "blank.ini");
+        writeText(blank.getPath(), "[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
+                + "password = pw-file\ndatabase =\n");     // 读得到，但没点名目标库
         List<String> keep = MainFrame.connCandidates;
         try {
             MainFrame.connCandidates = java.util.Collections.singletonList(good.getPath());
@@ -3868,6 +3871,26 @@ public final class GuiMain {
             if (log1.contains("pw-file")) {
                 problems.add("口令被写进日志正文了：日志里不许出现配置文件里的密码");
             }
+            // 启动自动连接：配置里写了库，窗口出来后应自己连上并选中它。
+            // 自检不显示窗口，直接调 windowOpened 会调的那支，走的仍是生产代码。
+            if (!f1.isAutoConnectEligible()) {
+                problems.add("conn.ini 读到了却没被记为「用户明确配过」，启动不会自动连接");
+            }
+            MainFrame.fetchOverride = () -> Arrays.asList("alpha", "beta");
+            f1.autoConnect();
+            String autoLog = f1.logPanel().text();
+            if (!"alpha".equals(f1.selectedDatabase())
+                    || !autoLog.contains("[连接中] 启动自动连接 10.0.0.8:3307（用户 ops）")
+                    || !autoLog.contains("[已加载] 目标库按 conn.ini 选中：alpha")) {
+                problems.add("有 conn.ini 时启动自动连接没连上/没选中目标库："
+                        + tail(autoLog));
+            }
+            // 配置的库不在服务器上：要解释，不能让人以为配置没生效
+            f1.applyDatabases(f1.currentConfig(), Arrays.asList("beta", "gamma"));
+            if (!f1.logPanel().text().contains("[跳过] conn.ini 指定的目标库 alpha 不在服务器上")) {
+                problems.add("目标库不在服务器上时没有解释，用户会回头去改配置文件："
+                        + tail(f1.logPanel().text()));
+            }
             f1.dispose();
 
             MainFrame.connCandidates = java.util.Collections.singletonList(bad.getPath());
@@ -3880,7 +3903,60 @@ public final class GuiMain {
             if (!"127.0.0.1".equals(f2.currentConfig().host)) {
                 problems.add("读不了的文件没退回内置默认值：" + f2.currentConfig().host);
             }
+
+            // 没配过就不连：换成一个会计数的取数函数，确认一次都没被调用
+            final int[] autoCalls = {0};
+            MainFrame.fetchOverride = () -> {
+                autoCalls[0]++;
+                return Arrays.asList("alpha");
+            };
+            String before = f2.logPanel().text();
+            f2.autoConnect();
+            if (autoCalls[0] != 0 || f2.logPanel().text().contains("[连接中] 启动自动连接")
+                    || !f2.logPanel().text().equals(before)) {
+                problems.add("没有明确配置（文件读不了）时仍然去连了库："
+                        + tail(f2.logPanel().text()));
+            }
             f2.dispose();
+
+            // 读得到但 database 留空（随包空模板就是这个形状）：不许自动连，
+            // 否则新装用户一开界面就看到一条连本机 3306 的失败日志
+            MainFrame.connCandidates = java.util.Collections.singletonList(blank.getPath());
+            MainFrame f2b = new MainFrame();
+            final int[] blankCalls = {0};
+            MainFrame.fetchOverride = () -> {
+                blankCalls[0]++;
+                return Arrays.asList("alpha");
+            };
+            String blankBefore = f2b.logPanel().text();
+            if (f2b.isAutoConnectEligible()) {
+                problems.add("conn.ini 没点目标库也算「明确配置」，会去连本机默认库");
+            }
+            f2b.autoConnect();
+            if (blankCalls[0] != 0 || !f2b.logPanel().text().equals(blankBefore)
+                    || f2b.logPanel().text().contains("[连接中] 启动自动连接")) {
+                problems.add("空模板 conn.ini 仍然触发了自动连接："
+                        + tail(f2b.logPanel().text()));
+            }
+            f2b.dispose();
+
+            // 自动连接失败只写日志、不弹模态框：弹出会让人以为软件打不开。
+            // 这里若真弹了框，自检会挂死（与本文件其它弹窗路径同一判据）。
+            MainFrame.connCandidates = java.util.Collections.singletonList(good.getPath());
+            MainFrame.fetchOverride = () -> {
+                throw new java.sql.SQLException("(2003) 模拟连不上");
+            };
+            MainFrame f3 = new MainFrame();
+            f3.autoConnect();
+            String failLog = f3.logPanel().text();
+            if (!failLog.contains("[连接失败] 启动自动连接失败")
+                    || !failLog.contains("库列表未加载")
+                    || !failLog.contains("设置数据源信息")
+                    || f3.databaseChooserEnabled()) {
+                problems.add("自动连接失败没有写清原因/重试入口，或把下拉框留成了可用："
+                        + tail(failLog));
+            }
+            f3.dispose();
 
             // 没有配置文件那一条看主窗口的启动句：它就是在没有 conn.ini 的目录下建起来的
             String log0 = frame.logPanel().text();
@@ -3890,6 +3966,7 @@ public final class GuiMain {
             }
         } finally {
             MainFrame.connCandidates = keep;
+            MainFrame.fetchOverride = null;
         }
     }
 

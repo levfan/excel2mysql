@@ -311,9 +311,18 @@ def names(win):
 
 
 def main():
+    # 对撞口径固定在"没有 conn.ini"：否则程序同级那份配置会触发启动自动连接，
+    # 探针结果随运行目录、环境变量变（Java 侧 GuiDump 同样钉住）
+    no_cfg = os.path.join(tempfile.gettempdir(), "e2m-gui-dump-python-noconf")
+    os.makedirs(no_cfg, exist_ok=True)
+    for k in [k for k in os.environ if k.startswith("E2M_")]:
+        del os.environ[k]
+    keep_pdir = m.program_dir
+    m.program_dir = lambda: no_cfg
     win = m.MainWindow()
     win.show()
     app.processEvents()
+    m.program_dir = keep_pdir
 
     put("tabs", "|".join(win.main_tabs.tabText(i)
                         for i in range(win.main_tabs.count())))

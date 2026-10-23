@@ -53,6 +53,10 @@ public final class GuiDump {
             System.exit(2);
         }
         MainFrame.modalProgress = false;
+        // 对撞口径固定在"没有 conn.ini"：包内冒烟时 jar 同级带着随包 conn.ini，
+        // 不钉住的话这里会真的去连库，探针结果随运行目录变
+        MainFrame.connCandidates = java.util.Collections.singletonList(
+                new File(tmp, "no-such-conn.ini").getPath());
         ui(UiScale::apply);
         ui(new Runnable() {
             @Override

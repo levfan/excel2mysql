@@ -234,6 +234,10 @@ check("A7 图标资源能被 Qt 解码且非空", not icon.isNull() and bool(ico
       f"sizes={sorted(str(s) for s in icon.availableSizes())[:4]}")
 
 _tmpdir = tempfile.mkdtemp(prefix="packtest_")
+# 用例不依赖本机环境里有没有 E2M_*：这些变量会让图形版一开窗就自动连真库，
+# 把"没配就不连"的断言变成随机结果。Q53c 与 G10 自己设、自己删。
+for _ek in [k for k in os.environ if k.startswith("E2M_")]:
+    del os.environ[_ek]
 
 
 def make_xlsx(name, sheets):
@@ -2950,7 +2954,7 @@ class _QConn:
 _CONNS = []
 
 
-def _fake_connect(cfg):
+def _fake_connect(cfg, **_kw):
     c = _QConn(cfg)
     _CONNS.append(c)
     return c
@@ -2962,6 +2966,16 @@ def _wait_worker(win, limit=250):
         _app.processEvents()
         if win.worker is not None and not win.worker.isRunning():
             _app.processEvents()
+            return True
+        _time.sleep(0.02)
+    return False
+
+
+def _wait_auto(win, limit=300):
+    """等启动自动连接收尾：showEvent 里的 QTimer 先跑起来，线程退出后信号回主线程。"""
+    for _ in range(limit):
+        _app.processEvents()
+        if win._auto_conn_started and win._auto_conn_worker is None:
             return True
         _time.sleep(0.02)
     return False
@@ -3065,8 +3079,110 @@ check("Q53e 没有 conn.ini 时照旧用内置默认值起界面，并说一句�
       cw4.ed_host.text() == "127.0.0.1" and cw4.ed_user.text() == "root"
       and "没找到 conn.ini" in cw4.log.toPlainText(),
       [l for l in cw4.log.toPlainText().splitlines() if "conn.ini" in l][:1])
+# ---- 启动自动连接：配了连接信息就不再点「连接并加载库」 ----
+app_main.program_dir = lambda: _cdir
+_CONNS.clear()
+aw = app_main.MainWindow()
+check("Q53h 建窗本身不发连接请求（连接发生在窗口显示之后）",
+      not _CONNS and aw._auto_conn_worker is None, len(_CONNS))
+aw.show()
+_ok_auto = _wait_auto(aw)
+_al = aw.log.toPlainText()
+check("Q53i 有 conn.ini 时窗口一显示就自动连接，并选中配置里的目标库",
+      _ok_auto and aw.cb_db.count() == 2 and aw.cb_db.currentText() == "alpha"
+      and "[连接中] 启动自动连接 10.0.0.8:3307（用户 ops）" in _al
+      and "[已加载] 目标库按 conn.ini 选中：alpha" in _al
+      and bool(_CONNS) and _CONNS[-1].closed,
+      (_ok_auto, aw.cb_db.currentText(), _CONNS[-1].closed if _CONNS else None,
+       [l for l in _al.splitlines() if "自动连接" in l][:1]))
+aw.close()
+
+
+def _auto_fail_connect(cfg, **_kw):
+    raise RuntimeError("(2003, \"Can't connect to MySQL server on '10.0.0.8'\")")
+
+
+app_main.connect = _auto_fail_connect
+POPUPS.clear()
+af = app_main.MainWindow()
+af.show()
+_ok_fail = _wait_auto(af)
+_afl = af.log.toPlainText()
+check("Q53j 自动连接失败只写日志不弹窗，红色状态栏留着可手动重试",
+      _ok_fail and not POPUPS
+      and "[连接失败] 启动自动连接失败" in _afl and "库列表未加载" in _afl
+      and "设置数据源信息" in _afl
+      and "⚠" in af.lbl_conn_state.text()
+      and af.cb_db.isEnabled() is False,
+      (POPUPS, [l for l in _afl.splitlines() if "连接失败" in l][:1]))
+af.close()
+app_main.connect = _fake_connect
+
+app_main.program_dir = lambda: _edir
+nc = app_main.MainWindow()
+nc.show()
+_wait_auto(nc)
+check("Q53k 没配连接信息就不去连（不制造一条本机 3306 的假告警）",
+      "[连接中] 启动自动连接" not in nc.log.toPlainText()
+      and nc._auto_conn_worker is None,
+      [l for l in nc.log.toPlainText().splitlines() if "连接" in l][:2])
+nc.close()
+
+# 随包 conn.ini 是空模板（database 留空）：读得到，但没点名目标库就不该去连
+_tdir = os.path.join(_tmpdir, "conn没点库")
+os.makedirs(_tdir, exist_ok=True)
+with io.open(os.path.join(_tdir, "conn.ini"), "w", encoding="utf-8") as _tf:
+    _tf.write("[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
+              "password = pw-file\ndatabase =\n")
+app_main.program_dir = lambda: _tdir
+tw = app_main.MainWindow()
+tw.show()
+_wait_auto(tw)
+check("Q53n 配置里没点名目标库就不自动连（随包空模板不该让新装用户一开界面就见失败）",
+      not tw._conn_auto and tw._auto_conn_worker is None
+      and "[连接中] 启动自动连接" not in tw.log.toPlainText()
+      and tw.ed_host.text() == "10.0.0.8",
+      (tw._conn_auto, [l for l in tw.log.toPlainText().splitlines() if "连接" in l][:2]))
+tw.close()
+
+# 自动连接还在路上时用户自己点了「连接并加载库」：迟到的自动结果不许覆盖手动结果
+app_main.program_dir = lambda: _cdir
+lw = app_main.MainWindow()
+lw._db_load_seq += 1                  # 模拟 _auto_connect 已发车
+lw._auto_conn_seq = lw._db_load_seq
+lw.on_load_databases()                # 手动接手，序号再 +1
+_lw_before = [lw.cb_db.itemText(i) for i in range(lw.cb_db.count())]
+_lw_log0 = lw.log.toPlainText()
+lw._auto_connect_done(["beta", "gamma"])   # 迟到的自动结果
+_lw_after = [lw.cb_db.itemText(i) for i in range(lw.cb_db.count())]
+check("Q53l 手动加载之后，迟到的自动连接结果作废（不覆盖用户刚选的库）",
+      _lw_before == ["alpha", "beta"] and _lw_after == _lw_before
+      and lw.cb_db.currentText() == "alpha"
+      and "gamma" not in lw.log.toPlainText()[len(_lw_log0):],
+      (_lw_before, _lw_after, lw.cb_db.currentText()))
+lw._auto_connect_failed("(2003, \"late\")")
+check("Q53l2 迟到的自动失败也作废，不在用户已连上的窗口里留红字",
+      "[连接失败] 启动自动连接失败" not in lw.log.toPlainText())
+lw.close()
+
+_mdir = os.path.join(_tmpdir, "conn库里没有")
+os.makedirs(_mdir, exist_ok=True)
+with io.open(os.path.join(_mdir, "conn.ini"), "w", encoding="utf-8") as _mf:
+    _mf.write("[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
+              "password = pw-file\ndatabase = omega\n")
+app_main.program_dir = lambda: _mdir
+mw = app_main.MainWindow()
+mw.on_load_databases()
+check("Q53m 配置里的目标库不在服务器上时说清楚并让人手选，不静默落到第一个库",
+      "[跳过] conn.ini 指定的目标库 omega 不在服务器上" in mw.log.toPlainText()
+      and mw.cb_db.count() == 2 and mw.cb_db.currentText() != "omega"
+      and mw.cb_db.isEnabled(),
+      (mw.cb_db.currentText(),
+       [l for l in mw.log.toPlainText().splitlines() if "跳过" in l][:1]))
+mw.close()
+
 app_main.program_dir = _pdir0
-for _w in (cw, cw2, cw3, cw4):
+for _w in (cw, cw2, cw3, cw4, aw, af, nc, tw, lw, mw):
     _w.close()
 
 # ---- 开始导入：成功路径 ----
@@ -4856,7 +4972,7 @@ _cfg = {"host": os.environ.get("PT_HOST", "127.0.0.1"),
         "password": os.environ.get("PT_PASS", ""),
         "database": os.environ.get("PT_DB", "")}
 if not _cfg["user"] or not _cfg["database"]:
-    skip("G1-G9 全部 MySQL 真实读写用例",
+    skip("G1-G10 全部 MySQL 真实读写用例",
          "未提供凭据（设 PT_USER / PT_PASS / PT_DB 环境变量后重跑本用例集）")
 else:
     try:
@@ -4926,6 +5042,35 @@ else:
         create_table(conn, f"DROP TABLE IF EXISTS `{tname}_bad`")
         conn.close()
         check("G9 探针表已清理", True)
+
+        # G10 真库启动自动连接：E2M_* 是"用户配过"的口径（口令不落任何文件），
+        # 断言窗口显示后自己连上、下拉里真有这个库、并且按配置选中的就是它
+        _gdir = os.path.join(_tmpdir, "G10无配置")
+        os.makedirs(_gdir, exist_ok=True)
+        _gpdir = app_main.program_dir
+        _genv = {"E2M_HOST": _cfg["host"], "E2M_PORT": str(_cfg["port"]),
+                 "E2M_USER": _cfg["user"], "E2M_PASS": _cfg["password"],
+                 "E2M_DB": _cfg["database"]}
+        try:
+            app_main.program_dir = lambda: _gdir
+            os.environ.update(_genv)
+            gw = app_main.MainWindow()
+            gw.show()
+            _gok = _wait_auto(gw)
+            _glog = gw.log.toPlainText()
+            check("G10 真库启动自动连接：窗口出来后自己连上并按配置选中目标库",
+                  _gok and gw.cb_db.isEnabled()
+                  and gw.cb_db.findText(_cfg["database"]) >= 0
+                  and gw.cb_db.currentText() == _cfg["database"]
+                  and ("启动自动连接 %s:%s" % (_cfg["host"], _cfg["port"])) in _glog
+                  and ("[已加载] 目标库按 conn.ini 选中：%s" % _cfg["database"]) in _glog,
+                  (_gok, gw.cb_db.currentText(), gw.cb_db.count(),
+                   [l for l in _glog.splitlines() if "自动连接" in l][:1]))
+            gw.close()
+        finally:
+            for _k in _genv:
+                os.environ.pop(_k, None)
+            app_main.program_dir = _gpdir
     except Exception as e:
         check("G0 连接 MySQL 失败", False, f"{type(e).__name__}: {e}")
         traceback.print_exc()
