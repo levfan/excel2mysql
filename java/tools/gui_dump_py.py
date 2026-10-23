@@ -198,7 +198,7 @@ def title_of_table(table):
 def dump_sql_rows(win):
     """第二页每一行从左到右是哪几颗按钮——位置也是界面事实，与 Java 侧同判据。
 
-    按钮文案早就在逐颗比，但"移除选中文件排在开关那一行、还是排在保存/执行那一行"
+    按钮文案早就在逐颗比，但"清空待上传文件排在开关那一行、还是排在保存/执行那一行"
     只有看真正的行结构才比得出来。按像素量不行：这一页在没被切到前面时子控件还没排过版，
     量出来全是 0，所以直接读布局——表格区那层布局里的每一条 QHBoxLayout 就是一行。
     """
@@ -710,28 +710,21 @@ def main():
     win.on_sql_apply_prefix()
     put("guard.sql.empty_prefix", popup_text())
 
-    # ---- SQL 页：移除选中、保存副本、没选库就执行 ----
+    # ---- SQL 页：保存副本、没选库就执行、整份清空 ----
+    # 「清空待上传文件」放在保存/执行之后取证，否则后两步没有脚本可处理，
+    # 比的就是空清单守卫而不是保存与执行
     POPUPS.clear()
-    mark = win.sql_log.toPlainText()
-    win.sql_table.selectRow(0)
-    win.on_sql_remove_selected()
-    put("sql.remove.log", win.sql_log.toPlainText()[len(mark):].strip())
-    mark = win.sql_log.toPlainText()
+    smark = win.sql_log.toPlainText()
     win.on_sql_save_modified()
     app.processEvents()
-    put("sql.save.log", win.sql_log.toPlainText()[len(mark):].strip())
+    put("sql.save.log", win.sql_log.toPlainText()[len(smark):].strip())
     put("sql.save.popup", popup_text().replace(sql_dir, u"根目录"))
     POPUPS.clear()
     win.on_sql_execute()
     put("sql.execute.nodb", popup_text())
-
-    # ---- SQL 页：两颗生成按钮（脚本正文 -> 标准/简易件） ----
-    # 先把上面那两份脚本从页面清干净，生成只喂 probe.sql，
-    # 否则产物清单里混着 t_order/dim_x，两边比的就是"清场是否一致"而不是解析
-    while win.sql_files:
-        win.sql_table.selectRow(0)
-        win.on_sql_remove_selected()
-        app.processEvents()
+    cmark = win.sql_log.toPlainText()
+    win.on_sql_clear_files()
+    put("sql.remove.log", win.sql_log.toPlainText()[len(cmark):].strip())
     gdir = os.path.join(TMP, "sqlgen")
     os.makedirs(gdir)
     probe = os.path.join(gdir, "probe.sql")

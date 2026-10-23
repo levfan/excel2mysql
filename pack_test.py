@@ -1721,8 +1721,9 @@ check("K14 前缀行、大写开关与整排动作条跟着表格区一起缩放
       and sp2.widget(1).isAncestorOf(w.chk_sql_upper)
       and sp2.widget(1).isAncestorOf(w.btn_sql_run)
       and sp2.widget(1).isAncestorOf(w.btn_sql_clear_log))
-check("K15 移除按钮排在表格区动作条最左（与第一页那颗同位置），拖拽区在分隔条里",
-      sp2.widget(1).isAncestorOf(w.btn_sql_remove)
+check("K15 清空按钮排在表格区动作条最左（与第一页那颗同位置同文案），拖拽区在分隔条里",
+      sp2.widget(1).isAncestorOf(w.btn_sql_clear)
+      and w.btn_sql_clear.text() == "清空待上传文件"
       and w.lbl_sql_db.parent() is not sp2 and sp2.isAncestorOf(w.sql_drop))
 check("K16 表格由分隔条控制高度后仍拿得到视口",
       w.sql_table.viewport().height() > 0, w.sql_table.viewport().height())
@@ -2867,7 +2868,7 @@ app_main.HelpDialog = _real_help
 # 文档漂移守卫：说明里写到的按钮名必须是界面上真实存在的文案
 from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
-           "开始导入", "移除选中文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
+           "开始导入", "清空待上传文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
            "示例 (?)", "清空编辑区", "清空结果区", "设置数据源信息", "收起"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
@@ -3428,11 +3429,17 @@ check("Q27c 手动把显示名改回脚本里的原名 = 只撤掉这一行的�
       and "显示前缀已移除，脚本未改写" in sw2.sql_log.toPlainText()
       and "t_one" not in sw2.sql_files[0].get("display_map", {}), 
       sw2.sql_files[0].get("display_map"))
-sw2.sql_table.selectRow(0)
-sw2.on_sql_remove_selected()
-check("Q28 「移除选中文件」按选中行删除并留痕",
-      sw2.sql_files == [] and "[移除] 1 个脚本文件" in sw2.sql_log.toPlainText(),
-      sw2.sql_files)
+_n_before = len(sw2.sql_files)
+sw2.on_sql_clear_files()
+check("Q28 「清空待上传文件」整份清出清单并留痕，生成按钮跟着熄灭",
+      _n_before == 1 and sw2.sql_files == [] and sw2.sql_table.rowCount() == 0
+      and not sw2.btn_sql_gen_std.isEnabled() and not sw2.btn_sql_gen_simple.isEnabled()
+      and "[清空] 已清空 1 个脚本文件" in sw2.sql_log.toPlainText(),
+      (_n_before, sw2.sql_files))
+sw2.on_sql_clear_files()
+check("Q28a 空清单再点清空也留一句话，不静默不动",
+      "清单里没有脚本文件" in sw2.sql_log.toPlainText(),
+      sw2.sql_log.toPlainText()[-120:])
 POPUPS.clear()
 sw2._finish_sql_execute({
     "conn_failed": False, "ok": 1, "fail": 1, "skipped": 1, "cancelled": False,

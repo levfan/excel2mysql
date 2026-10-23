@@ -262,7 +262,7 @@ public final class GuiMain {
                 import_guard(frame, files, problems);
                 // 首屏分栏：表格是主工作面，表格段要比日志段高
                 split_defaults(frame, problems);
-                // SQL 页签：读盘、改表名、落盘副本、移除选中，全离线可验
+                // SQL 页签：读盘、改表名、落盘副本、整份清空，全离线可验
                 sql_page(frame, problems);
                 // 第三个页签「SQL 执行器」：编辑区、示例清单与空输入那道闸
                 sql_run_tab(frame, problems);
@@ -2776,15 +2776,22 @@ public final class GuiMain {
             problems.add("有失败时执行收尾行没标成错误级");
         }
 
-        page.selectRow(0);
-        if (page.removeSelected() != 1) {
-            problems.add("选中一行应移除它所属的整个文件");
+        int cleared = page.clearAllFiles();
+        if (cleared != 2) {
+            problems.add("「清空待上传文件」应整份清出清单，实际清掉 " + cleared + " 个");
         }
-        if (page.entryCount() != 1 || page.rowCount() != 1) {
-            problems.add("移除后文件与行数都不对：" + page.entryCount() + "/" + page.rowCount());
+        if (page.entryCount() != 0 || page.rowCount() != 0) {
+            problems.add("清空后文件与行数都不对：" + page.entryCount() + "/" + page.rowCount());
         }
-        if (!page.logPanel().contains("[移除] 1 个脚本文件")) {
-            problems.add("移除文件没有留痕");
+        if (page.genButtonsEnabled()) {
+            problems.add("清空待上传文件后生成按钮还亮着");
+        }
+        if (!page.logPanel().contains("[清空] 已清空 2 个脚本文件")) {
+            problems.add("清空待上传文件没有留痕");
+        }
+        page.clearAllFiles();
+        if (!page.logPanel().contains("[清空] 清单里没有脚本文件，无需清空")) {
+            problems.add("空清单再点清空也要说一句，不能静默不动");
         }
         deleteTree(dir);
     }
@@ -2891,7 +2898,7 @@ public final class GuiMain {
                 onUi.add(b.getText());
             }
             String[] named = {"批量应用前缀", "替换首个前缀", "生成表结构预览",
-                    "预览 DDL", "开始导入", "移除选中文件", "保存修改后ddl脚本",
+                    "预览 DDL", "开始导入", "清空待上传文件", "保存修改后ddl脚本",
                     "执行修改后ddl脚本到当前库", "连接并加载库",
                     "生成标准excel文件", "生成简易excel文件", "示例 (?)",
                     "清空编辑区", "清空结果区", "设置数据源信息", "收起"};

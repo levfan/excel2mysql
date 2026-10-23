@@ -737,10 +737,6 @@ public final class GuiDump {
                         beforeDialog.equals(afterDialog) ? "" : popup());
 
                 String smark = frame.sqlPage().logPanel().text();
-                frame.sqlPage().selectRow(0);
-                frame.sqlPage().removeSelected();
-                put("sql.remove.log", tail(smark, frame.sqlPage().logPanel().text()));
-                smark = frame.sqlPage().logPanel().text();
                 frame.sqlPage().saveModified();
                 put("sql.save.log", tail(smark, frame.sqlPage().logPanel().text()));
                 put("sql.save.popup", popup().replace(dir.getPath(), "根目录"));
@@ -749,14 +745,11 @@ public final class GuiDump {
                     frame.warn(ehint);
                 }
                 put("sql.execute.nodb", popup());
-                // 先把上面那两份脚本从页面清干净，生成交付件只喂 probe.sql，
-                // 否则产物清单里混着 t_order/dim_x，两边比的就是"清场是否一致"而不是解析
-                while (frame.sqlPage().rowCount() > 0) {
-                    frame.sqlPage().selectRow(0);
-                    if (frame.sqlPage().removeSelected() == 0) {
-                        break;
-                    }
-                }
+                // 「清空待上传文件」与第一页同语义：整份清出清单；放在保存/执行之后取证，
+                // 否则后面这两步没有脚本可处理，比的就是空清单守卫而不是保存与执行
+                String cmark = frame.sqlPage().logPanel().text();
+                frame.sqlPage().clearAllFiles();
+                put("sql.remove.log", tail(cmark, frame.sqlPage().logPanel().text()));
                 final List<String> gp = new ArrayList<String>();
                 gp.add(probe);
                 String gmark = frame.sqlPage().logPanel().text();
@@ -995,7 +988,7 @@ public final class GuiDump {
     /**
      * 第二页每一行从左到右是哪几颗按钮——位置也是界面事实，与 Python 侧 dump_sql_rows 同判据。
      *
-     * 按钮文案早就在逐颗比，但"移除选中文件排在开关那一行、还是排在保存/执行那一行"
+     * 按钮文案早就在逐颗比，但"清空待上传文件排在开关那一行、还是排在保存/执行那一行"
      * 只有看真正的行结构才比得出来。按像素量不行：这一页没被切到前面时子控件还没排过版，
      * 量出来全是 0（Python 侧第一版就是这么全落在第 0 带），所以直接读三行的容器。
      */
