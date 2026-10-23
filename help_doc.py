@@ -77,7 +77,7 @@ Excel 页说"数据将导入到这个库"，「SQL 脚本改名入库」页说"�
 <code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。
 想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>
 <li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-2.0.2.jar --check</code>。</li>
+<code>jre\\bin\\java.exe -jar excel2mysql-2.0.3.jar --check</code>。</li>
 <li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。
 双击 jar 文件本身不会有任何反应。</li>
 </ul>
