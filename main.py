@@ -873,6 +873,19 @@ def sql_save_task(items, sink):
     return {"saved": saved, "failed": failed, "cancelled": sink.cancelled}
 
 
+def fetch_databases(cfg, _sink=None):
+    """连库取库列表；启动自动连接与手动「连接并加载库」共用这一条路。
+
+    纯工作函数（_sink 只为满足 ProgressWorker 的最后一个入参约定），不碰控件。
+    5 秒连接超时：自动连接在后台跑，但关闭窗口时也不能被一个不在线的地址拖住。
+    """
+    conn = connect(cfg, connect_timeout=5)
+    try:
+        return list_databases(conn)
+    finally:
+        conn.close()
+
+
 def sql_execute_task(items, cfg, sink):
     """逐个脚本执行到目标库，每个文件一个事务。
 
@@ -1276,6 +1289,15 @@ class MainWindow(QWidget):
         self._tasks = []
         self._import_task = None   # 导入这条长任务单独留一份引用，收尾收它自己的框
         self._cfg_db = ""          # conn.ini 里写的目标库，库列表加载出来后按它预选
+        # 启动自动连接：只有真的读到 conn.ini 或 E2M_* 才算"用户配过"。
+        # 什么都没配时不去连——否则每台机器一开窗都先对本机 3306 撞一次，日志里多一条红
+        self._conn_auto = False
+        self._auto_conn_started = False
+        self._auto_conn_worker = None
+        # 手动加载一次就 +1：自动连接的结果回来晚了（用户已经自己点过按钮）就作废，
+        # 不能让一份过期结果盖掉用户刚选的库
+        self._db_load_seq = 0
+        self._auto_conn_seq = 0
         # 连接表单的展开态自己记，不拿 conn_form.isVisible() 反查：
         # 窗口还没 show 过的时候 Qt 的 isVisible() 一律给 false，
         # 首屏那句话就会让人去点一颗此刻恰好藏着的「设置数据源信息」
@@ -2484,6 +2506,11 @@ class MainWindow(QWidget):
         """
         cfg, src, path, err = conn_config.discover(program_dir())
         cfg, from_env = conn_config.apply_env(cfg)
+        # 只有配置点名了目标库才自动连：随包 conn.ini 是空模板（database 留空），
+        # 照着它去连本机 3306 只会让新装用户一开界面就看到一条失败；没点库时
+        # 即便连上也得让人手选，省不下那一步。
+        self._conn_auto = (bool(from_env) or (path is not None and err is None)) \
+            and bool(cfg.get("database"))
         if from_env:
             src += "、环境变量 " + "/".join(from_env)
         port = cfg["port"]
@@ -2516,28 +2543,82 @@ class MainWindow(QWidget):
                        "[已加载] 连接信息预填 %s | 来源：%s | 密码%s"
                        % (shown, src, "已读入（不回显）" if cfg["password"] else "未配置"))
 
+    def showEvent(self, e):
+        """首屏画完再自动连接：连接慢（对端不在线要等到超时）也不能卡住开窗。"""
+        super().showEvent(e)
+        if self._auto_conn_started:
+            return
+        self._auto_conn_started = True
+        if self._conn_auto:
+            QTimer.singleShot(0, self._auto_connect)
+
+    def _auto_connect(self):
+        """启动自动连接：conn.ini / E2M_* 给了明确配置时，窗口出来后自己连一次。
+
+        失败只写日志、不弹模态框——启动就弹"连接失败"会让人以为软件打不开；
+        顶部状态栏本来就会保持红色的"未选择目标库"，点「设置数据源信息」可重试。
+        """
+        if not self._conn_auto:
+            return
+        cfg = self._conn_cfg()
+        self._db_load_seq += 1
+        self._auto_conn_seq = self._db_load_seq
+        append_log(self.log, "[连接中] 启动自动连接 %s:%s（用户 %s）…"
+                   % (cfg["host"], cfg["port"], cfg["user"]))
+        self._auto_conn_worker = ProgressWorker(fetch_databases, (cfg,))
+        # 信号一律接主窗口的绑定方法：lambda 没有 QObject 接收者，会在工作线程里跑并碰控件
+        self._auto_conn_worker.completed.connect(self._auto_connect_done)
+        self._auto_conn_worker.failed.connect(self._auto_connect_failed)
+        self._auto_conn_worker.finished.connect(self._auto_connect_finished)
+        self._auto_conn_worker.start()
+
+    def _auto_connect_done(self, dbs):
+        if self._auto_conn_seq != self._db_load_seq:
+            return                   # 手动加载已经接手，这份迟到的结果作废
+        self._apply_databases(dbs)
+
+    def _auto_connect_failed(self, detail):
+        if self._auto_conn_seq != self._db_load_seq:
+            return
+        cfg = self._conn_cfg()
+        append_log(self.log,
+                   "[连接失败] 启动自动连接失败：无法连接到 %s:%s（用户 %s），"
+                   "库列表未加载；可点「设置数据源信息」重试\n%s"
+                   % (cfg["host"], cfg["port"], cfg["user"], indent_detail(detail)),
+                   error=True)
+
+    def _auto_connect_finished(self):
+        worker, self._auto_conn_worker = self._auto_conn_worker, None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _apply_databases(self, dbs):
+        """把库列表灌进下拉框并选中配置里的目标库；手动加载与自动连接共用。"""
+        self.cb_db.blockSignals(True)
+        self.cb_db.clear()
+        for d in dbs:
+            self.cb_db.addItem(d, d)
+        self.cb_db.blockSignals(False)
+        self.cb_db.setEnabled(True)
+        if self._cfg_db and self.cb_db.findText(self._cfg_db) >= 0:
+            # 配置里写了目标库就别让人再选一遍；库里没有这个名字就照旧让人手选
+            self.cb_db.setCurrentText(self._cfg_db)
+            append_log(self.log, "[已加载] 目标库按 conn.ini 选中：%s" % self._cfg_db)
+        elif self._cfg_db:
+            # 说了要选却没选上，必须解释：否则用户以为配置没生效，回头改配置文件
+            append_log(self.log,
+                       "[跳过] conn.ini 指定的目标库 %s 不在服务器上，请手动选择" % self._cfg_db)
+        self._refresh_db_labels()
+        append_log(self.log, f"[已加载] 可用数据库：{', '.join(dbs)}")
+
     def on_load_databases(self):
+        cfg = self._conn_cfg()
+        self._db_load_seq += 1       # 还在路上的自动连接结果就此过期
         try:
-            cfg = self._conn_cfg()
-            conn = connect(cfg)
-            dbs = list_databases(conn)
-            conn.close()
-            self.cb_db.blockSignals(True)
-            self.cb_db.clear()
-            for d in dbs:
-                self.cb_db.addItem(d, d)
-            self.cb_db.blockSignals(False)
-            self.cb_db.setEnabled(True)
-            if self._cfg_db and self.cb_db.findText(self._cfg_db) >= 0:
-                # 配置里写了目标库就别让人再选一遍；库里没有这个名字就照旧让人手选
-                self.cb_db.setCurrentText(self._cfg_db)
-                append_log(self.log, "[已加载] 目标库按 conn.ini 选中：%s" % self._cfg_db)
-            self._refresh_db_labels()
-            append_log(self.log, f"[已加载] 可用数据库：{', '.join(dbs)}")
+            self._apply_databases(fetch_databases(cfg))
         except Exception as e:
             # 弹窗与日志用同一套展开格式，否则弹窗里是 (2003, '...') 这种元组原文
             popup_box(self, "连接失败", describe_db_error(e), "critical")
-            cfg = self._conn_cfg()
             append_log(self.log,
                        f"[连接失败] 无法连接到 "
                        f"{cfg['host']}:{cfg['port']}（用户 {cfg['user']}），库列表未加载\n"
@@ -2684,6 +2765,10 @@ class MainWindow(QWidget):
 
     def closeEvent(self, e):
         """退出时清掉 ZIP 展开出来的临时文件。"""
+        worker = self._auto_conn_worker
+        if worker is not None and worker.isRunning():
+            # 不先等它收尾就析构 QThread，进程会在原生层直接 abort（关窗闪退）
+            worker.wait(6000)
         if self._zip_tmp:
             shutil.rmtree(self._zip_tmp, ignore_errors=True)
         super().closeEvent(e)

@@ -27,8 +27,14 @@ public final class DbClient implements AutoCloseable {
     private final Connection conn;
 
     public DbClient(Config cfg) throws SQLException {
+        this(cfg, 0);
+    }
+
+    /** connectTimeoutMs &gt; 0 时限定握手超时：图形界面启动自动连接不能无限等。 */
+    public DbClient(Config cfg, int connectTimeoutMs) throws SQLException {
         // 没选库时也允许连过去列库，所以 database 可为空
-        this.conn = DriverManager.getConnection(cfg.jdbcUrl(), cfg.user, cfg.password);
+        this.conn = DriverManager.getConnection(
+                cfg.jdbcUrl(connectTimeoutMs), cfg.user, cfg.password);
         this.conn.setAutoCommit(false);
     }
 

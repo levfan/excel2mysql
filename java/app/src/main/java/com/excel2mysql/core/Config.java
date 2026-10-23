@@ -27,6 +27,14 @@ public final class Config {
     public String source = "内置默认值";
 
     /**
+     * 这份配置是不是"用户明确配过"：读到了 conn.ini，或有任何 E2M_* 环境变量。
+     *
+     * 图形界面据此决定启动时要不要自动连接——什么都没配却去连本机 3306，
+     * 只会在日志区留一条红色告警，让人以为软件坏了。
+     */
+    public boolean explicit;
+
+    /**
      * 自动发现的那份文件读不了时的路径与原因，没这回事时两个都是 null。
      *
      * 命令行自己会打一行告警；图形界面看不见标准输出，得靠这两个字段把话写进日志区，
@@ -83,6 +91,7 @@ public final class Config {
     public static Config fromFile(String path) throws IOException {
         Config c = new Config();
         c.source = path;
+        c.explicit = true;
         BufferedReader r = new BufferedReader(new InputStreamReader(
                 new java.io.FileInputStream(path), Charset.forName("UTF-8")));
         String section = "";
@@ -142,18 +151,24 @@ public final class Config {
     }
 
     private void applyEnv() {
-        assignFromEnv("host", ENV_KEYS.get("host"));
-        assignFromEnv("port", ENV_KEYS.get("port"));
-        assignFromEnv("user", ENV_KEYS.get("user"));
-        assignFromEnv("password", ENV_KEYS.get("password"));
-        assignFromEnv("database", ENV_KEYS.get("database"));
+        boolean any = false;
+        any |= assignFromEnv("host", ENV_KEYS.get("host"));
+        any |= assignFromEnv("port", ENV_KEYS.get("port"));
+        any |= assignFromEnv("user", ENV_KEYS.get("user"));
+        any |= assignFromEnv("password", ENV_KEYS.get("password"));
+        any |= assignFromEnv("database", ENV_KEYS.get("database"));
+        if (any) {
+            explicit = true;
+        }
     }
 
-    private void assignFromEnv(String key, String env) {
+    private boolean assignFromEnv(String key, String env) {
         String v = System.getenv(env);
         if (v != null && !v.isEmpty()) {
             assign(key, v);
+            return true;
         }
+        return false;
     }
 
     /**
@@ -188,6 +203,16 @@ public final class Config {
     }
 
     public String jdbcUrl() {
+        return jdbcUrl(0);
+    }
+
+    /**
+     * connectTimeoutMs &gt; 0 时给驱动加连接超时；0 保持默认。
+     *
+     * 只加 connectTimeout（握手阶段），不加 socketTimeout——后者会掐断长导入。
+     * 图形界面启动时自动连接用它，服务端不在线要能在几秒内失败，不能挂住后台线程。
+     */
+    public String jdbcUrl(int connectTimeoutMs) {
         StringBuilder sb = new StringBuilder("jdbc:mysql://").append(host).append(':')
                 .append(port).append('/');
         // 没选库时连过去只为列库；选了库就带上库名
@@ -198,6 +223,9 @@ public final class Config {
         sb.append("&serverTimezone=Asia/Shanghai");
         // 不开这个开关，addBatch() 会被拆成一条一条发，批量导入的吞吐差一个量级
         sb.append("&rewriteBatchedStatements=true");
+        if (connectTimeoutMs > 0) {
+            sb.append("&connectTimeout=").append(connectTimeoutMs);
+        }
         return sb.toString();
     }
 

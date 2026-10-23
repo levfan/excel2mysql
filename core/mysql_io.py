@@ -112,13 +112,17 @@ def _convert_rows(rows, coltypes, warn=None, row_offset=0):
     return out
 
 
-def connect(cfg: dict):
+def connect(cfg: dict, connect_timeout=None):
     """根据连接配置建立 pymysql 连接。cfg 含 host/port/user/password/database。"""
+    extra = {}
+    if connect_timeout is not None:
+        # 图形界面启动时自动连接不能无限等：服务端不在线时用户还得能正常关窗口
+        extra["connect_timeout"] = connect_timeout
     return pymysql.connect(
         host=cfg["host"], port=int(cfg.get("port", 3306)),
         user=cfg["user"], password=cfg.get("password", ""),
         database=cfg.get("database") or None,
-        charset="utf8mb4", autocommit=False,
+        charset="utf8mb4", autocommit=False, **extra,
     )
 
 

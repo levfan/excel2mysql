@@ -161,6 +161,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private boolean connected;
     /** conn.ini 里写的目标库：库列表加载出来之后按它预选。 */
     private String cfgDb = "";
+    /** 有没有一份明确的连接配置（读到 conn.ini 或 E2M_*）；没有就不自动连。 */
+    private boolean autoConnectEligible;
+    private boolean autoConnectStarted;
+    /** 手动加载一次 +1：自动连接的结果回来晚了就作废，不能盖掉用户刚选的库。 */
+    private int dbLoadSeq;
     private String zipSessionDir;
     private int zipDestSeq;
     private final Names names = new Names(PinyinLoader.get());
@@ -192,6 +197,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         bindHelpKey();
         refreshDbLabels();
         loadDefaultConn();
+        // 窗口真显示出来之后再自动连：构造期间连库（对端不在线要等到超时）会让首屏迟迟不出来
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowOpened(java.awt.event.WindowEvent e) {
+                autoConnect();
+            }
+        });
         // Qt 的 resize(1100,780) 说的是客户区，Swing 的 setSize 说的是整个外框：
         // 照抄数字会让这边的内容区比 Python 小掉一条标题栏加边框，
         // 表格与日志就那么被挤矮了。客户区尺寸、屏幕夹取与居中统一走 Windows.clientSize。
@@ -685,29 +697,108 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
+     * 自检用：替换"连库取列表"这一步，闸门里不用真连一台不存在的服务器。留 null 就是真连。
+     * 与 connCandidates 同一类测试缝——只换掉外部依赖，界面与日志仍走生产那段代码。
+     */
+    public static java.util.concurrent.Callable<List<String>> fetchOverride;
+
+    private static List<String> fetchDatabases(Config cfg) throws Exception {
+        if (fetchOverride != null) {
+            return fetchOverride.call();
+        }
+        // 5 秒握手超时：自动连接在后台跑，关闭窗口时也不能被一个不在线的地址拖住
+        DbClient client = new DbClient(cfg, 5000);
+        try {
+            return client.listDatabases();
+        } finally {
+            client.close();
+        }
+    }
+
+    /**
+     * 把库列表灌进下拉框并选中配置里的目标库；手动加载与启动自动连接共用。
+     * 与 Python 的 _apply_databases 同语义，含"配置的库不在服务器上"那句解释。
+     */
+    public void applyDatabases(Config cfg, List<String> dbs) {
+        String previous = selectedDatabase();
+        reloadDatabases(dbs);
+        if (!previous.isEmpty() && dbs.contains(previous)) {
+            dbCombo.setSelectedItem(previous);
+        } else if (!cfgDb.isEmpty() && dbs.contains(cfgDb)) {
+            // 连接信息是 conn.ini 预填的，库列表出来就顺手选上，别再让人点一遍
+            dbCombo.setSelectedItem(cfgDb);
+            log("[已加载] 目标库按 conn.ini 选中：" + cfgDb);
+        } else if (!cfgDb.isEmpty()) {
+            // 说了要选却没选上，必须解释：否则用户以为配置没生效，回头改配置文件
+            log("[跳过] conn.ini 指定的目标库 " + cfgDb + " 不在服务器上，请手动选择");
+        }
+        config = cfg;
+        connected = true;
+        importBtn.setEnabled(!tables.isEmpty());
+        log("[已加载] 可用数据库：" + String.join(", ", dbs));
+        refreshDbLabels();
+    }
+
+    /**
+     * 启动自动连接：读到 conn.ini 或 E2M_* 时，窗口出来后自己连一次并选库。
+     *
+     * 失败只写日志、不弹模态框——启动就弹"连接失败"会让人以为软件打不开；
+     * 顶部状态栏本来就保持红色"未选择目标库"，点「设置数据源信息」可重试。
+     * 自检（modalProgress=false）里与其它任务一样原地跑完，不起线程。
+     */
+    public void autoConnect() {
+        if (autoConnectStarted || !autoConnectEligible) {
+            return;
+        }
+        autoConnectStarted = true;
+        final Config cfg = currentConfig();
+        final int seq = ++dbLoadSeq;
+        log("[连接中] 启动自动连接 " + cfg.host + ":" + cfg.port + "（用户 " + cfg.user + "）…");
+        if (!modalProgress) {
+            try {
+                applyDatabases(cfg, fetchDatabases(cfg));
+            } catch (Exception e) {
+                autoConnectFailed(cfg, e);
+            }
+            return;
+        }
+        new javax.swing.SwingWorker<List<String>, Void>() {
+            @Override
+            protected List<String> doInBackground() throws Exception {
+                return fetchDatabases(cfg);
+            }
+
+            @Override
+            protected void done() {
+                if (seq != dbLoadSeq) {
+                    return;         // 手动加载已经接手，这份迟到的结果作废
+                }
+                try {
+                    applyDatabases(cfg, get());
+                } catch (Exception e) {
+                    autoConnectFailed(cfg, e);
+                }
+            }
+        }.execute();
+    }
+
+    private void autoConnectFailed(Config cfg, Exception e) {
+        String detail = LogText.describe(e);
+        logError("[连接失败] 启动自动连接失败：无法连接到 " + cfg.host + ":" + cfg.port
+                + "（用户 " + cfg.user + "），库列表未加载；可点「设置数据源信息」重试"
+                + LogText.NL + LogText.indentDetail(detail));
+        refreshDbLabels();
+    }
+
+    /**
      * 连接服务器并列出库。返回 null 表示成功；非 null 是弹窗正文，
-     * 与日志用的是同一份展开文案（对应 main.py:1334-1355）。
+     * 与日志用的是同一份展开文案（对应 main.py 的 on_load_databases）。
      */
     public String loadDatabases() {
         Config cfg = currentConfig();
+        dbLoadSeq++;                     // 还在路上的自动连接结果就此过期
         try {
-            DbClient client = new DbClient(cfg);
-            List<String> dbs = client.listDatabases();
-            client.close();
-            String previous = selectedDatabase();
-            reloadDatabases(dbs);
-            if (!previous.isEmpty() && dbs.contains(previous)) {
-                dbCombo.setSelectedItem(previous);
-            } else if (!cfgDb.isEmpty() && dbs.contains(cfgDb)) {
-                // 连接信息是 conn.ini 预填的，库列表出来就顺手选上，别再让人点一遍
-                dbCombo.setSelectedItem(cfgDb);
-                log("[已加载] 目标库按 conn.ini 选中：" + cfgDb);
-            }
-            config = cfg;
-            connected = true;
-            importBtn.setEnabled(!tables.isEmpty());
-            log("[已加载] 可用数据库：" + String.join(", ", dbs));
-            refreshDbLabels();
+            applyDatabases(cfg, fetchDatabases(cfg));
             return null;
         } catch (Exception e) {
             connected = false;
@@ -1008,6 +1099,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private void loadDefaultConn() {
         Config c = Config.discover(connCandidates == null
                 ? Config.defaultConfigPaths() : connCandidates);
+        // 只有"用户明确配过、且点名了目标库"才自动连：随包 conn.ini 是空模板
+        // （database 留空），照它连本机 3306 只会让新装用户一开界面就看到一条失败；
+        // 没点库时即便连上也得让人手选，省不下那一步。
+        autoConnectEligible = c.explicit
+                && c.database != null && !c.database.trim().isEmpty();
         hostField.setText(c.host);
         portField.setValue(c.port);
         userField.setText(c.user);
@@ -1025,6 +1121,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         } else {
             log("[已加载] 连接信息预填 " + shown + " | 来源：" + c.source + " | 密码" + pwd);
         }
+    }
+
+    /** 自检读这条：有没有一份明确的连接配置（决定窗口显示后要不要自动连）。 */
+    public boolean isAutoConnectEligible() {
+        return autoConnectEligible;
     }
 
     /** 界面点出来的入口：输出根目录就是可执行程序同级。 */
