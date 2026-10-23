@@ -53,8 +53,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             "把表名第一个下划线之前的部分换成上面填的内容："
             + "ods_t_order → change_t_order、adb_table2 → change_table2；"
             + "表名里没有下划线的（如 users）不动，日志会列出。末尾下划线不用写";
-    /** SQL 执行器左右两栏与示例全文的字号：16pt，按屏幕 DPI 折算（144dpi → 32px）。 */
-    private static final int SQL_RUN_FONT_SIZE = 16;
+    /** SQL 执行器左右两栏的字号：与第一页日志同档（LogPanel.DEFAULT_FONT_SIZE），
+     *  用户口径是"两页正文一样大"；按屏幕 DPI 折算成物理像素。 */
+    private static final int SQL_RUN_FONT_SIZE = LogPanel.DEFAULT_FONT_SIZE;
 
     private final FileRowModel fileModel = new FileRowModel();
     private final javax.swing.JTable table = new javax.swing.JTable(fileModel) {
