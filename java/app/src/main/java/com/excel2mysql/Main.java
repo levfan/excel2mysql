@@ -1,5 +1,6 @@
 package com.excel2mysql;
 
+import com.excel2mysql.core.AppInfo;
 import com.excel2mysql.core.Config;
 import com.excel2mysql.core.Ddl;
 import com.excel2mysql.core.DbClient;
@@ -34,7 +35,12 @@ public final class Main {
     static final int EXIT_IMPORT = 4;
     static final int EXIT_SCRIPT = 5;
 
-    private static final String VERSION = "1.0.2";
+    // 版本只有随包 appinfo.properties 一个来源（Maven 由 pom 的 app.version 过滤出来），
+    // 这里再写一份常量，升版本时必然漏掉一处：1.1.0 到 1.1.2 的 jar 里 --version
+    // 一直报 1.0.2，界面却是新版本号。
+    private static String versionText() {
+        return AppInfo.load().versionText();
+    }
 
     public static void main(String[] argv) {
         // 图形界面不能走 System.exit：窗口刚立起来就被退出码 0 关掉
@@ -62,7 +68,7 @@ public final class Main {
         for (int i = 0; i < argv.length; i++) {
             String a = argv[i];
             if ("--version".equals(a) || "-V".equals(a)) {
-                System.out.println("excel2mysql " + VERSION + " (Java 1.8 线)");
+                System.out.println("excel2mysql " + versionText() + " (Java 1.8 线)");
                 return EXIT_OK;
             } else if ("--help".equals(a) || "-h".equals(a)) {
                 usage();
@@ -131,7 +137,7 @@ public final class Main {
             naming = " | 命名 " + (initials ? "取拼音首字母" : "全拼")
                     + (upper ? "，表名与字段名转大写" : "");
         }
-        System.out.println("- [INFO] 启动 | 版本 " + VERSION + " | 动作 " + actions[0]
+        System.out.println("- [INFO] 启动 | 版本 " + versionText() + " | 动作 " + actions[0]
                 + " | 配置来源 " + cfg.source + naming);
         System.out.println("- [INFO] 目标 | " + cfg);
 
