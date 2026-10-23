@@ -10,6 +10,10 @@ Excel → MySQL 批量导入工具（Java 线）v{version}
     想一次带上文件，把 .xlsx/.xls/.zip 拖到 启动.bat 的图标上。
     不想用脚本也行，手敲等价命令：
       jre\bin\java.exe -Dfile.encoding=UTF-8 -jar {jar} --gui
+    同级的 conn.ini（或环境变量 E2M_*）给了连接信息、并写了 database 时，
+    窗口显示出来后会在后台自动连接，服务器上有这个库就直接选中，不用先点「连接并加载库」。
+    没写 database（随包模板就是这样）只预填表单、不自动连；自动连接失败只写日志、
+    不弹窗，可展开连接区手动重试。
 
   要用命令行：在 cmd（或 PowerShell）里敲
       jre\bin\java.exe -Dfile.encoding=UTF-8 -jar {jar} <路径> [选项]
@@ -53,6 +57,7 @@ Excel → MySQL 批量导入工具（Java 线）v{version}
   启动.bat            界面入口：双击就开图形界面（内部就是 -jar … --gui）
   {jar}   程序本体（所有依赖已打成一个 jar；界面与命令行是这同一个 jar，靠 --gui 分）
   conn.ini            默认连接配置模板；库名留空是有意为之，没指定目标库会直接报用法错误
+                      （图形版读它时不会自动连接，只把连接信息预填进表单）
   jre\               随包的 Java 8 运行时，命令行里那个 java.exe 就在 jre\bin\ 下
   README.txt          本文件（快速上手与命令行）
   使用说明.txt        完整操作手册，15 章；与界面里按 F1 打开的是同一份内容

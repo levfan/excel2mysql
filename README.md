@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v1.1.4** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v1.1.5** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -90,7 +90,7 @@ Python 3.8 那条**只有命令行**（`.venv38` 里没装 PySide6，实测确�
 | 生成标准 / 简易 Excel 交付件 | 有（Excel 导入页 + SQL 脚本改名入库页） | 无 | **只有界面有**（同样两页各两颗） |
 | 执行 `.sql` 脚本 | 有（SQL 脚本改名入库页） | 默认只登记，加 `--run-sql` 才执行 | **动作由路径类型决定**：给 `.sql` 就执行，`--no-sql` / `--no-excel` 各自排除；没有 `--run-sql` |
 | 直接敲一段 SQL 执行（建库、建表、查元数据、治理体检） | 有（SQL 执行器页，带 100 条示例） | 没有界面，只能给 `.sql` 文件（`--run-sql`） | 有（SQL 执行器页，同一份示例） |
-| 连接信息怎么给 | 界面上填 | `--host/--port/--user/--password/-d` 或 `E2M_*` 或配置文件 | 同级 `conn.ini` 或 `E2M_*`（命令行只认 `-c` 指定配置文件） |
+| 连接信息怎么给 | 界面上填，或同级 `conn.ini` / `E2M_*`（启动后在后台自动连接并选库） | `--host/--port/--user/--password/-d` 或 `E2M_*` 或配置文件 | 同级 `conn.ini` 或 `E2M_*`（启动自动连接；命令行只认 `-c` 指定配置文件） |
 | 口令里能有中文吗 | **不能**（pymysql 按 latin-1 编码口令） | **不能**（同一个驱动） | 能（JDBC 支持 Unicode 口令） |
 | 随包使用说明 | 内置《使用说明》（右上角「?」/ F1） | 包内 `README.txt` | 界面内置同一份《使用说明》 + 包内 `README.txt` |
 | 其余命令行开关 | — | `--initials` `--upper` `--drop-if-exists` `--batch` `--no-recursive` `--keep-temp` `--log` `--quiet` `--check` `--dry-run` | `--initials` `--upper` `--check` `--dry-run` `--prefix` `-c/--conn` `--debug` `--version` `--gui` |
@@ -282,7 +282,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.1.4` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 1.1.5` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -376,9 +376,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-1.1.4-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-1.1.4-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-1.1.4-win64\excel2mysql-1.1.4.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-1.1.5-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-1.1.5-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-1.1.5-win64\excel2mysql-1.1.5.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -604,12 +604,19 @@ qtvirtualkeyboardplugin`。后两个是插件文件本身——它们依赖的 D
 
 ## 使用流程
 
-1. 填 MySQL 连接信息 → 点「连接并加载库」→ 下拉选择目标库；
-   这一块默认收起成一条状态栏（只报"现在是哪个库"），点右侧「设置数据源信息」才展开五行表单，
+1. 打开软件：两个图形界面启动时会先找**程序同级的 `conn.ini`**（Java 交付包已带一份，
+   图形版可从 `assets/conn.ini` 复制一份改），或读 **`E2M_*` 环境变量**；
+   只要其中一份配置存在**且写了 `database`**，**窗口显示出来后就在后台自动连接**，
+   服务器上有这个库就直接选中它（日志 `[连接中] 启动自动连接 …` →
+   `[已加载] 目标库按 conn.ini 选中：…`）；没写 `database` 时只预填表单、不自动连
+   （随包空模板属于这种，新装机器上不会平白多一条失败日志），
+   两份都没有时同样不连，照常起界面、只提示一句怎么预填。
+   自动连接**不挡界面**，失败**只写日志、不弹窗**，顶部状态栏保持红色告警，
+   点「设置数据源信息」展开表单可手动重试。
+   要换库、或没有配置时，仍按原路走：点「设置数据源信息」展开五行表单、填好后点
+   「连接并加载库」、在下拉里选库；这一块默认收起成一条状态栏（只报"现在是哪个库"），
    选定库之后自动收起（详见下方「连接区」）；
-   两个图形界面启动时会先找**程序同级的 `conn.ini`**（Java 交付包已带一份，
-   图形版可从 `assets/conn.ini` 复制一份改）：有这份文件就按它预填主机、端口、用户名、密码，
-   写了 `database` 的话库列表出来后自动选中那个库；优先级是
+   优先级是
    **环境变量 `E2M_HOST/E2M_PORT/E2M_USER/E2M_PASS/E2M_DB` > `conn.ini` > 内置默认值**，
    界面上手填的最即时。启动日志写明这次用的是哪来的配置——读到了报路径，
    文件写坏了报"找到了但读不了"并退回默认值，没有这个文件也照常起界面、只提示一句。
@@ -659,10 +666,15 @@ qtvirtualkeyboardplugin`。后两个是插件文件本身——它们依赖的 D
 - **展开态**：点「设置数据源信息」把五行表单摊开，改完点**「连接并加载库」**测连接并列出库，
   行尾那颗**「收起」**随时能手动收回去；「设置数据源信息」和「收起」不会同时出现
 - **什么时候自动展开 / 收起**：程序启动就是收起的，首屏只留一条状态栏；
+  配了 `conn.ini` 或 `E2M_*` **且写了 `database`** 时，窗口显示后会在后台自动连接一次（不挡界面），
+  连上就按配置里的 `database` 选中目标库，状态栏由红转绿——等于替用户点了「连接并加载库」并选好库；
+  没写 `database` 只预填表单、不自动连（空模板不制造失败日志）；
+  自动连接失败只写日志、不弹窗，状态栏保持红色，展开后手动点一次即可重试；
   还没有目标库时那条是红色告警，直接指向「设置数据源信息」那颗按钮；
   点「连接并加载库」把列表拉出来那一下**不收起**——用户下一步就是在那个下拉里挑库，
   这时候收起等于把要用的东西藏起来；真正**选定一个库之后才自动收起**。
   `conn.ini` 里预填了 `database` 的话，加载完就等于已选定，随即收起
+  （配置里的库名服务器上没有时会留一行 `[跳过]`，让人手选，不静默落到第一个库）
 - **没选库时说什么**：**只有状态栏这一条红色告警**，页内三条指向不重复同一句话（未选库时整条隐藏）；
   告警文案跟着当前状态换说法，展开时是"填好下面连接信息后点「连接并加载库」"，
   收起时才说"点右侧「设置数据源信息」展开后填写"，指的那颗按钮一定真的在界面上
