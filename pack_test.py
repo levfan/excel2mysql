@@ -816,16 +816,16 @@ check("F12 普通日志不残留红色",
       and line_color(v, 3) != app_main.LOG_ERROR_COLOR,
       f"{line_color(v,0)} / {line_color(v,3)}")
 
-# ---- 日志一行的形状：钟点 + 符号 + 大写分级标签（三个页签的日志框共用这一套） ----
+# ---- 日志一行的形状：年-月-日 时:分:秒 + 符号 + 大写分级标签（三个页签的日志框共用这一套） ----
 import re as _re_log
-LOG_HEAD_RE = _re_log.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\] ([+\-!x]) \[(OK|INFO|WARN|ERROR)\] ")
+LOG_HEAD_RE = _re_log.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ([+\-!x]) \[(OK|INFO|WARN|ERROR)\] ")
 
 
 def log_body(view_or_text):
-    """把日志里的行还原成正文：抹掉行首的钟点+分级前缀，再退掉续行补上的 4 格缩进。
+    """把日志里的行还原成正文：抹掉行首的时间戳+分级前缀，再退掉续行补上的 4 格缩进。
 
     断言"日志与弹窗是同一句话"要用这一份——带前缀的那一行比的是排版不是文案，
-    而排版（几点几分）本来就不可能和弹窗一致。
+    而排版（年月日时分秒）本来就不可能和弹窗一致。
     """
     text = (view_or_text.toPlainText()
             if hasattr(view_or_text, "toPlainText") else view_or_text)
@@ -837,7 +837,7 @@ def log_body(view_or_text):
 
 
 def log_lines(view_or_text, prefix):
-    """按正文开头挑日志行。行首多了 [时:分:秒] 与分级标签，直接 startswith 会全挑空。"""
+    """按正文开头挑日志行。行首多了 [年-月-日 时:分:秒] 与分级标签，直接 startswith 会全挑空。"""
     return [ln for ln in log_body(view_or_text).splitlines() if ln.startswith(prefix)]
 
 
@@ -858,11 +858,11 @@ app_main.append_log(v2, "      | 1 | 2 |")
 def log_head(line):
     """取一行的 (符号, 级别)；没带前缀就返回哨兵值，别让守卫自己抛异常把整轮打断。"""
     m = LOG_HEAD_RE.match(line)
-    return (m.group(4), m.group(5)) if m else ("<无前缀>", "<无前缀>")
+    return (m.group(1), m.group(2)) if m else ("<无前缀>", "<无前缀>")
 
 
 _lines = v2.toPlainText().splitlines()
-check("F12b 每条记录首行带 [时:分:秒] 与符号+大写分级标签",
+check("F12b 每条记录首行带 [年-月-日 时:分:秒] 与符号+大写分级标签",
       all(LOG_HEAD_RE.match(l) for l in _lines[:3]),
       _lines[:3])
 check("F12c 级别由标签定：跳过是警告、已解析是成功",
@@ -1042,7 +1042,7 @@ check("F25 落到库上的语句序列与提交次序正确",
 check("F26 逐条进度与汇总都写进结果区",
       "第 1/2 条" in _run_log and "第 2/2 条" in _run_log
       and "全部完成 | 2 条语句已提交" in _run_log, _run_log)
-check("F26b 结果区每条记录首行带钟点（缩进的表格行归上一条，不另打时间戳）",
+check("F26b 结果区每条记录首行带年月日+钟点（缩进的表格行归上一条，不另打时间戳）",
       all(LOG_HEAD_RE.match(l) for l in _run_log.splitlines()
           if l.strip() and not l.startswith("      ")),
       [l for l in _run_log.splitlines()
@@ -1580,7 +1580,7 @@ first_log_line = (log_text.split("[添加结果] ", 1)[1].splitlines()[0]
                   if "[添加结果] " in log_text else None)
 check("J13d 日志与弹窗文本逐字一致（只差 [添加结果] 前缀）",
       first_log_line == text.splitlines()[0], f"{first_log_line!r} vs {text.splitlines()[0]!r}")
-check("J13e 日志里每条记录的首行都带钟点（缩进的明细行除外）",
+check("J13e 日志里每条记录的首行都带年月日+钟点（缩进的明细行除外）",
       all(LOG_HEAD_RE.match(l) for l in log_text.splitlines()
           if l.strip() and not l.startswith("    ")),
       [l for l in log_text.splitlines()
@@ -3209,7 +3209,7 @@ check("Q25b 添加结束在日志里留一行汇总",
       ("===== 添加完成：1 个脚本，0 个读取失败，0 个重复 =====" in sw2.sql_log.toPlainText()
        and "===== 添加完成：0 个脚本，0 个读取失败，1 个重复 =====" in sw2.sql_log.toPlainText()),
       log_lines(sw2.sql_log.toPlainText(), "====="))
-check("Q25c2 第二页的日志框也每条带钟点、按级别打标",
+check("Q25c2 第二页的日志框也每条带年月日+钟点、按级别打标",
       all(LOG_HEAD_RE.match(l) for l in sw2.sql_log.toPlainText().splitlines()
           if l.strip() and not l.startswith("    "))
       and any("] ! [WARN] [跳过]" in l for l in sw2.sql_log.toPlainText().splitlines()),

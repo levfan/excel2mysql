@@ -12,9 +12,9 @@ import java.util.Deque;
 import java.util.List;
 
 /**
- * 带颜色的日志面板：每条记录首行带 [时:分:秒] 与分级标签，按级别上色，行数封顶不无限涨。
+ * 带颜色的日志面板：每条记录首行带 [年-月-日 时:分:秒] 与分级标签，按级别上色，行数封顶不无限涨。
  * 形状与定级都由 core/LogText.format 那一处决定（与 Python 侧 core/log_text.py 同一张表），
- * 面板只管渲染——三个页签的日志框都走这里，不会出现"这一页有钟点、那一页没有"。
+ * 面板只管渲染——三个页签的日志框都走这里，不会出现"这一页有时间戳、那一页没有"。
  */
 public final class LogPanel extends javax.swing.JTextPane {
 

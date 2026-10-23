@@ -690,14 +690,14 @@ public final class GuiMain {
      * Python 侧对应 M21/M22 与 B22：名字规则写在开关上，不在代码里各写一份。
      */
     /**
-     * 日志一行的形状：[时:分:秒] + 符号 + 大写分级标签，级别由中文标签定，续行不另打时间戳。
+     * 日志一行的形状：[年-月-日 时:分:秒] + 符号 + 大写分级标签，级别由中文标签定，续行不另打时间戳。
      *
-     * 这一道必须咬住：三条线同一套标签（cli.py / core.log_text / 这里），图形界面只是多了钟点。
-     * 时间戳丢了、级别定错了、命令行搬来的那句叠出两个标签，都会在这里变红。
+     * 这一道必须咬住：三条线同一套标签（cli.py / core.log_text / 这里），时间戳也同一形状。
+     * 时间戳丢了或只剩钟点、级别定错了、命令行搬来的那句叠出两个标签，都会在这里变红。
      */
     private static void log_line_shape(MainFrame frame, List<String> problems) {
         java.util.regex.Pattern head = java.util.regex.Pattern.compile(
-                "^\\[(\\d{2}:\\d{2}:\\d{2})\\] ([+\\-!x]) \\[(OK|INFO|WARN|ERROR)\\] (.*)$");
+                "^\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\\] ([+\\-!x]) \\[(OK|INFO|WARN|ERROR)\\] (.*)$");
         frame.log("[跳过] 形状A");
         frame.log("[已解析] 形状B");
         frame.logError("[建表失败] 形状C");
@@ -729,7 +729,7 @@ public final class GuiMain {
             }
             java.util.regex.Matcher m = head.matcher(ln);
             if (!m.matches()) {
-                problems.add("日志行首不是「[时:分:秒] 符号 [级别] 」：" + ln);
+                problems.add("日志行首不是「[年-月-日 时:分:秒] 符号 [级别] 」：" + ln);
                 continue;
             }
             if (!wantLevel[i].equals(m.group(3)) || !wantMark[i].equals(m.group(2))) {
@@ -739,7 +739,7 @@ public final class GuiMain {
         if (seen.get("形状D") != null && countOf(seen.get("形状D"), "[WARN]") != 1) {
             problems.add("本来就带大写标签的那句被叠了两个标签：" + seen.get("形状D"));
         }
-        // 整页日志都要合这规矩（缩进行与空行除外）：漏一处就有一页的日志没有钟点
+        // 整页日志都要合这规矩（缩进行与空行除外）：漏一处就有一页的日志没有时间戳
         for (String ln : frame.logPanel().text().split("\n")) {
             if (ln.trim().isEmpty() || Character.isWhitespace(ln.charAt(0))) {
                 continue;

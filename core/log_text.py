@@ -39,11 +39,13 @@ def describe_db_error(e):
 
 # ---------------------------------------------------------------------------
 # 日志一行的形状：时间戳 + 符号 + 大写分级标签，正文里的分段用 |
-# 与命令行 cli.py 的 Log 同一套标签（OK/INFO/WARN/ERROR），图形界面只是多了钟点。
+# 与命令行 cli.py 的 Log 同一套标签（OK/INFO/WARN/ERROR），时间戳也同一形状
+# （[年-月-日 时:分:秒]）：日志常被整段复制去跟现场、跟命令行日志文件对时刻，
+# 只留钟点的话跨天就对不上。
 # 分级不是装饰：三个页签的日志一屏几百行，靠颜色与标签才能一眼挑出"这条要看"，
 # 复制出去之后也还能按 [WARN] / [ERROR] 单独筛。
 # ---------------------------------------------------------------------------
-LOG_TIME_FORMAT = "%H:%M:%S"
+LOG_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 LOG_LEVELS = ("ok", "info", "warn", "error")
 LOG_LEVEL_MARK = {"ok": "+", "info": "-", "warn": "!", "error": "x"}
 
@@ -63,13 +65,13 @@ LOG_TAG_LEVEL = {
 }
 
 # 命令行那套前缀（"+ [OK] "/"! [WARN] "...）会原样出现在被搬进图形界面的文案里，
-# 先剥掉再按本行的级别重新拼，避免出现 "09:12:03 + [OK] + [OK] ..." 这种重复标签
+# 先剥掉再按本行的级别重新拼，避免出现 "[时间戳] + [OK] + [OK] ..." 这种重复标签
 _LOG_HEAD_RE = re.compile(r"^(?:[+\-!x]\s*)?\[(OK|INFO|WARN|ERROR)\]\s+", re.IGNORECASE)
 _TAG_RE = re.compile(r"^\[([^\]\n]{1,16})\]")
 
 
 def log_time(now=None):
-    """一条日志的钟点。整场会话都在同一个窗口里，日期不进每一行。"""
+    """一条日志的时间戳（年月日到秒，与命令行写进日志文件的形状一致）。"""
     return time.strftime(LOG_TIME_FORMAT, time.localtime(now) if now else time.localtime())
 
 

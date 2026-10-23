@@ -101,13 +101,14 @@ public final class LogText {
     }
 
     // ---------------------------------------------------------------------
-    // 日志一行的形状：[时:分:秒] + 符号 + 大写分级标签，正文分段用 |
-    // 与 Python 侧 core/log_text.py 同一套标签与同一张定级表：同一条日志在两条
-    // 线上必须是同一个颜色同一个级别，对撞器比的是含标签的整行，写歪就当场不等。
+    // 日志一行的形状：[年-月-日 时:分:秒] + 符号 + 大写分级标签，正文分段用 |
+    // 与 Python 侧 core/log_text.py 同一套标签、同一张定级表、同一形状的时间戳：
+    // 同一条日志在两条线上必须是同一个颜色同一个级别，对撞器比的是含标签的整行，
+    // 写歪就当场不等。
     // ---------------------------------------------------------------------
 
-    /** 只到秒：整场会话都在同一个窗口里，日期不进每一行。 */
-    public static final String TIME_FORMAT = "HH:mm:ss";
+    /** 年月日到秒：与命令行日志文件同形，跨天复制出去对时刻时不会只剩钟点。 */
+    public static final String TIME_FORMAT = "yyyy-MM-dd HH:mm:ss";
 
     private static final Map<String, String> MARK = new LinkedHashMap<String, String>();
     private static final Map<String, String> TAG_LEVEL = new LinkedHashMap<String, String>();
