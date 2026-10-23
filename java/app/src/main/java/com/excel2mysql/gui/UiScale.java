@@ -49,6 +49,11 @@ public final class UiScale {
         return (int) Math.round(pt * DPI / 72.0);
     }
 
+    /** 反算回点值：对撞键要比的是设计稿那一档（pt），不是各台机器上的物理像素。 */
+    public static int fontPxToPt(int px) {
+        return (int) Math.round(px * 72.0 / DPI);
+    }
+
     /** 当前实际选用的界面字族；没有雅黑时退回 Segoe UI / 对话框字体。 */
     public static String fontFamily() {
         return FAMILY;

@@ -23,12 +23,13 @@ public final class LogPanel extends javax.swing.JTextPane {
     private static final Color OK_COLOR = new Color(0x1a, 0x7f, 0x37);
     private static final int MAX_LINES = 2000;
     private static final int TRIM_TO = 1500;
-    /** 12 与 14 在 1080p 上都偏小，现场两次反馈看不清；所有日志统一 16pt（同 Python）。
-     *  表格那一档（gui/Tables）引用同一个数，两处不许各写一份 16。 */
-    static final int DEFAULT_FONT_SIZE = 16;
+    /** 12 与 14 在 1080p 上都偏小，现场两次反馈看不清；日志这一档定在 14pt（同 Python）。
+     *  2026-10-23 用户又点名"表格内容要更大、日志可以小一点"，所以这里不再是最高档：
+     *  表格那一档见 gui/Tables.POINT_SIZE（18pt），两处各自写死、由对撞键核同值。 */
+    static final int DEFAULT_FONT_SIZE = 14;
     /**
      * 日志框至少看得见 4 行它自己的字。按"行数"而不是像素约定：
-     * 两栈的 16pt 行高不同（Qt 实测 24px、Swing 实测 28.7px），写同一个像素数
+     * 同一档字号在 Qt 与 Swing 里量出来的行高本就不同，写同一个像素数
      * 会变成"两边都满足同一个数、实际看到的行数不一样"。跨线比的是这个 4。
      * 行数不能给多：主窗口自身最小高就有 717px，按 8 行给会顶到 847px，
      * 1024x768 的现场机与"整窗落在可用区内"那条断言都撑不住。
