@@ -335,6 +335,9 @@ def main():
     # 每张主表格左上角那句标识（读真控件上的组框标题，不是各抄一份常量）
     put("table.file.title", title_of_table(win.file_table))
     put("table.sql.title", title_of_table(win.sql_table))
+    # 字号也是界面事实：比的是设计稿那一档（pt），不是各台机器上的物理像素
+    put("font.table.pt", str(win.file_table.font().pointSize()))
+    put("font.log.pt", str(win.log.font().pointSize()))
     put("hint.excel", win.lbl_imp_db.text())
     put("hint.sql", win.lbl_sql_db.text())
     put("drop.hint", win.drop.label.text())

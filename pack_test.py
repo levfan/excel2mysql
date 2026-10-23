@@ -1349,19 +1349,20 @@ check("H17b 拖拽区文案写明三种格式且带点击提示（运行时取 Q
       drop.label.text().replace("\n", " / "))
 check("H18 IMPORT_EXTS 覆盖三种扩展名",
       app_main.IMPORT_EXTS == (".xlsx", ".xls", ".zip"), app_main.IMPORT_EXTS)
-check("H18b 首屏日志 16 号等宽字体（默认 9 号字现场看不清）",
+check("H18b 首屏日志 14 号等宽字体（默认 9 号字现场看不清；表格那一档比它大）",
       w3.log.font().family() == "Consolas"
-      and w3.log.font().pointSize() == app_main.LOG_FONT_SIZE == 16,
+      and w3.log.font().pointSize() == app_main.LOG_FONT_SIZE == 14,
       (w3.log.font().family(), w3.log.font().pointSize()))
 check("H18c SQL 脚本页日志与首屏同一档字号",
       w3.sql_log.font().family() == w3.log.font().family()
       and w3.sql_log.font().pointSize() == w3.log.font().pointSize(),
       (w3.sql_log.font().family(), w3.sql_log.font().pointSize()))
-check("H18d 表格内容与表头的字号不小于日志（日志比内容大是用户点名的毛病）",
-      w3.file_table.font().pointSize() >= w3.log.font().pointSize()
+check("H18d 表格内容与表头的字号严格大于日志（用户口径：内容比日志大一档）",
+      w3.file_table.font().pointSize() > w3.log.font().pointSize()
       and w3.file_table.horizontalHeader().font().pointSize()
-      >= w3.log.font().pointSize()
-      and w3.sql_table.font().pointSize() >= w3.log.font().pointSize(),
+      > w3.log.font().pointSize()
+      and w3.sql_table.font().pointSize() > w3.log.font().pointSize()
+      and w3.file_table.font().pointSize() == app_main.TABLE_FONT_SIZE == 18,
       (w3.file_table.font().pointSize(),
        w3.file_table.horizontalHeader().font().pointSize(),
        w3.sql_table.font().pointSize(), w3.log.font().pointSize()))

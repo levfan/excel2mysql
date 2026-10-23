@@ -743,7 +743,7 @@ public final class GuiMain {
 
     /**
      * 三个日志框的最小高度：不给最小高度，分栏按比例一缩，默认窗口里实测只剩两行
-     * （截图复核抓到的）。这一条断"至少装得下 4 行 16 号字"。
+     * （截图复核抓到的）。这一条断"至少装得下 4 行日志那一档字号（14pt）的字"。
      */
     private static void log_pane_height(MainFrame frame, List<String> problems) {
         com.excel2mysql.gui.LogPanel[] panes = {
@@ -1610,22 +1610,24 @@ public final class GuiMain {
     }
 
     /**
-     * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：12 号、14 号都被现场判过太小，钉 16。
-     * 第三页的编辑区与结果区也在这档，由 sql_run_tab 里那组断言管。
-     * "16" 是 Python 侧的 pt，Swing 里必须折成 DPI 对应的物理像素（144dpi → 32px）。
+     * 主页与 SQL 脚本页两处日志区共用 LogPanel 默认档：12 号被现场判过太小，
+     * 用户 2026-10-23 定的口径是"内容比日志大一档"，日志钉 14、表格钉 18。
+     * 第三页的编辑区与结果区不在这档（那是给人读语句的主区域，仍 16），
+     * 由 sql_run_tab 里那组断言管。
+     * "14 / 18" 是 Python 侧的 pt，Swing 里必须折成 DPI 对应的物理像素（144dpi → 21 / 27px）。
      */
     private static void checkLogFonts(MainFrame frame, List<String> problems) {
         com.excel2mysql.gui.LogPanel[] logs = {
                 frame.logPanel(), frame.sqlPage().logPanel()};
         String[] names = {"主页日志", "SQL 脚本页日志"};
-        int want16 = wantFontPx(16);
+        int wantLog = wantFontPx(14);
         for (int i = 0; i < logs.length; i++) {
             java.awt.Font f = logs[i].getFont();
             if (f == null || !"Monospaced".equals(f.getFamily())) {
                 problems.add(names[i] + "不是等宽字体：" + (f == null ? "无字体" : f.getFamily()));
             }
-            if (f == null || f.getSize() != want16) {
-                problems.add(names[i] + "字号不是 16pt 折算的 " + want16 + "px："
+            if (f == null || f.getSize() != wantLog) {
+                problems.add(names[i] + "字号不是 14pt 折算的 " + wantLog + "px："
                         + (f == null ? "无字体" : f.getSize()));
             }
         }
@@ -1639,13 +1641,19 @@ public final class GuiMain {
                         + f.getSize());
             }
         }
-        // 日志不许比表格内容大：表格与日志同一档（gui/Tables），这里断"表格 ≥ 日志"，
+        // 用户口径（2026-10-23）：内容比日志大一档。表格 18、日志 14，
+        // 期望值写死成这两个契约数字，不拿常量当期望值。
         // 顺带盯行高跟着字号走——行高写死的话放大字号会把字裁掉一半
         java.awt.Font tf = frame.fileTable().getFont();
         java.awt.Font hf = frame.fileTable().getTableHeader().getFont();
-        if (tf.getSize() < want16 || hf.getSize() < want16) {
-            problems.add("表格内容/表头字号比日志还小：内容 " + tf.getSize()
-                    + "、表头 " + hf.getSize() + "，日志 " + want16 + "px");
+        int wantTable = wantFontPx(18);
+        if (tf.getSize() <= wantLog || hf.getSize() <= wantLog) {
+            problems.add("表格内容/表头字号没有比日志大一档：内容 " + tf.getSize()
+                    + "、表头 " + hf.getSize() + "，日志 " + wantLog + "px");
+        }
+        if (tf.getSize() != wantTable || hf.getSize() != wantTable) {
+            problems.add("表格字号不是 18pt 折算的 " + wantTable + "px：内容 "
+                    + tf.getSize() + "、表头 " + hf.getSize());
         }
         if (frame.fileTable().getRowHeight() <= tf.getSize()) {
             problems.add("表格行高没跟着字号走：行高 " + frame.fileTable().getRowHeight()

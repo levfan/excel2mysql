@@ -114,6 +114,11 @@ public final class GuiDump {
                 // 每张主表格左上角那句标识（读真控件的标题边框，与 Python 侧同判据）
                 put("table.file.title", Tables.titledAncestor(frame.fileTable()));
                 put("table.sql.title", frame.sqlPage().tableTitle());
+                // 字号也是界面事实：两栈各写一份常量，以前只能靠人记着同步
+                put("font.table.pt", String.valueOf(UiScale.fontPxToPt(
+                        frame.fileTable().getFont().getSize())));
+                put("font.log.pt", String.valueOf(UiScale.fontPxToPt(
+                        frame.logPanel().getFont().getSize())));
                 put("hint.excel", frame.excelHintText());
                 put("hint.sql", frame.sqlPage().hintText());
                 put("drop.hint", frame.dropArea().hintText());
