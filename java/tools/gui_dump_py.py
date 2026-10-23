@@ -27,7 +27,7 @@ sys.path.insert(0, REPO)
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QGroupBox,  # noqa: E402
                                QLabel, QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
-                               QPushButton, QSpinBox, QTableWidget)
+                               QPushButton, QScrollArea, QSpinBox, QTableWidget)
 import main as m  # noqa: E402
 
 app = QApplication(sys.argv)
@@ -205,7 +205,8 @@ def dump_sql_rows(win):
     upper = None
     for i in range(win.sql_split.count()):
         w = win.sql_split.widget(i)
-        if w is not win.sql_drop and w is not win.sql_log:
+        # 日志段现在套了一层面板（清除日志在框上方），按里面那个文本框认
+        if w is not win.sql_drop and w.findChild(QPlainTextEdit) is not win.sql_log:
             upper = w
     if upper is None or upper.layout() is None:
         return
@@ -224,6 +225,17 @@ def dump_sql_rows(win):
         if names:
             out.append("%d:%s" % (band, ",".join(names)))
             band += 1
+    # 底部动作条（保存/执行/生成）与覆盖开关已挪到分隔条外，和第一页同一形状；
+    # 它不是表格区里的一行，但“哪几颗按钮在同一排”仍是界面事实，按下一带接着比
+    bar = find_layout(win.main_tabs.widget(1), win.btn_sql_save)
+    if bar is not None:
+        names = []
+        for k in range(bar.count()):
+            wd = bar.itemAt(k).widget()
+            if isinstance(wd, QPushButton) and norm(wd.text()):
+                names.append(norm(wd.text()))
+        if names:
+            out.append("%d:%s" % (band, ",".join(names)))
     put("bar.sql.rows", "|".join(out))
 
 
@@ -261,8 +273,14 @@ def find_layout(root, target):
                 return lay
             if item.layout() is not None:
                 stack.append(item.layout())
-            if item.widget() is not None and item.widget().layout() is not None:
-                stack.append(item.widget().layout())
+            w = item.widget()
+            if w is not None and w.layout() is not None:
+                stack.append(w.layout())
+            # 横向滚动区里的内容挂在自己的滚动视口里，不是它的直接 layout；
+            # 底部动作条就套了这一层，不穿过去会读成"这排按钮不存在"
+            if isinstance(w, QScrollArea) and w.widget() is not None \
+                    and w.widget().layout() is not None:
+                stack.append(w.widget().layout())
     return None
 
 
@@ -334,6 +352,7 @@ def main():
     dump_widget("prefix", win.ed_prefix)
     dump_widget("sql_prefix", win.ed_sql_prefix)
     dump_widget("drop_existing", win.chk_drop)
+    dump_widget("sql_drop_existing", win.chk_sql_drop)
     dump_widget("initials", win.chk_initials)
     dump_widget("upper", win.chk_upper)
     dump_widget("sql_upper", win.chk_sql_upper)
@@ -362,12 +381,26 @@ def main():
             return u"拖拽区"
         if w.findChild(QTableWidget) is win.sql_table:
             return u"表格区"
-        if w is win.sql_log:
+        # 日志段现在套了一层面板（清除日志在框上方），按里面那个文本框认
+        if w.findChild(QPlainTextEdit) is win.sql_log:
             return u"日志区"
         return type(w).__name__
 
     put("split.sql.order", "|".join(_sql_segment(win.sql_split.widget(i))
                                     for i in range(win.sql_split.count())))
+
+    # 日志默认高度 = 它自己的最小高度（用户口径：默认压到最低，仍可拖）。
+    # 量的是日志「段」（含上方清除日志那排），与用例/自检同一口径；不是里面那个文本框。
+    def _log_at_min(panel):
+        minimum = max(panel.minimumHeight(), panel.minimumSizeHint().height())
+        return "1" if 0 <= panel.height() - minimum <= 4 else "0"
+
+    put("split.excel.logmin", _log_at_min(win.excel_split.widget(2)))
+    win.main_tabs.setCurrentIndex(1)
+    app.processEvents()
+    put("split.sql.logmin", _log_at_min(win.sql_split.widget(2)))
+    win.main_tabs.setCurrentIndex(0)
+    app.processEvents()
 
     # ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
     put("hint.sqlrun", norm(win.sql_run_hint.text()))

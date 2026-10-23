@@ -24,6 +24,59 @@ public final class SqlScript {
           + "(?<![\\w$`])%s(?![\\w$`])",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
 
+    /** 执行前要删的那张表：schema 限定名整段留下（db.tbl 就该删 db.tbl）。 */
+    private static final Pattern CREATE_TARGET = Pattern.compile(
+            "CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?"
+          + "((?:`?[\\w$]+`?\\s*\\.\\s*)?`?[A-Za-z0-9_$]+`?)",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+
+    /** 覆盖执行准备：执行副本 + 这份脚本要建的表名（按出现顺序去重）。 */
+    public static final class DropPrep {
+        public final String text;
+        public final List<String> tables = new ArrayList<String>();
+
+        DropPrep(String text) {
+            this.text = text;
+        }
+    }
+
+    /**
+     * 给执行副本开头的每个建表目标补一句 DROP TABLE IF EXISTS。
+     *
+     * 只在「覆盖已存在表」勾选后由执行动作调用，不写回脚本正文。
+     * 只认整句以 CREATE TABLE 开头的语句：注释里的建表、字符串里的建表都不该被删，
+     * 这是删除动作，判据必须比"清单里显示哪些表"更严。
+     * 顺序按出现顺序倒过来，近似"先删子表再删父表"。与 core/sql_script.py 同语义。
+     */
+    public static DropPrep prependDropTables(String text) {
+        Map<String, Boolean> seen = new LinkedHashMap<String, Boolean>();
+        for (String stmt : splitStatements(text)) {
+            String masked = maskComments(stmt).trim();
+            if (!Pattern.compile("^CREATE\\s+TABLE\\b", Pattern.CASE_INSENSITIVE)
+                    .matcher(masked).find()) {
+                continue;
+            }
+            Matcher m = CREATE_TARGET.matcher(masked);
+            if (!m.find()) {
+                continue;
+            }
+            String target = m.group(1).replaceAll("\\s+", "");
+            seen.put(target, Boolean.TRUE);
+        }
+        if (seen.isEmpty()) {
+            return new DropPrep(text);
+        }
+        List<String> names = new ArrayList<String>(seen.keySet());
+        StringBuilder block = new StringBuilder();
+        for (int i = names.size() - 1; i >= 0; i--) {
+            block.append("DROP TABLE IF EXISTS ").append(names.get(i)).append(";\n");
+        }
+        block.append('\n').append(text);
+        DropPrep out = new DropPrep(block.toString());
+        out.tables.addAll(names);
+        return out;
+    }
+
     private SqlScript() {
     }
 

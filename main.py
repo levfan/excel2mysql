@@ -37,7 +37,7 @@ warnings.filterwarnings("ignore", message=".*no longer supported by the Python c
 import functools
 import re
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QGroupBox,
     QMessageBox, QHeaderView, QCheckBox, QAbstractItemView, QScrollArea, QStyle,
     QDialog, QDialogButtonBox, QTabWidget, QSplitter, QListWidget,
+    QFrame, QSizePolicy,
 )
 
 from core import conn_config
@@ -60,7 +61,7 @@ from core.sql_execute import run as run_sql_statements
 from core.sql_script import (
     extract_create_tables, split_sql_statements,
     parse_create_tables, rename_table_sql, apply_display_renames,
-    set_table_comment,
+    set_table_comment, prepend_drop_tables,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES
@@ -149,6 +150,54 @@ LOG_MIN_LINES = 4
 def log_min_height(view) -> int:
     """这个日志控件的最小高度：够放下 LOG_MIN_LINES 行它自己的字。"""
     return LOG_MIN_LINES * view.fontMetrics().height()
+
+
+class LogMinPlacer(QObject):
+    """默认把日志段压在自己的最小高度，直到用户亲手拖过把手。
+
+    QSplitter 在尺寸总和不等于可用高度时会按 stretch 因子再分一次，
+    构造时直接 setSizes([..., log_min]) 仍会多给日志一截；而窗口从构造到
+    首次显示会经历好几次 Resize，只在第一次摆会留下最后一轮拉伸分给日志的
+    那几十像素。所以在用户拖把手之前，每次 Resize 都按绝对高度重摆一次；
+    一旦 splitterMoved 出现，日志高度就归用户，程序不再抢。
+    """
+
+    def __init__(self, splitter, log_panel):
+        super().__init__(splitter)
+        self.splitter = splitter
+        self.log_panel = log_panel
+        self.user_moved = False
+        self.adjusting = False
+        splitter.splitterMoved.connect(self._mark_user_moved)
+        splitter.installEventFilter(self)
+
+    def _mark_user_moved(self, pos, index):
+        self.user_moved = True
+
+    @staticmethod
+    def _min_size(w):
+        # QSplitter 不许折叠时，段的最小高度取 minimumHeight 与 minimumSizeHint 的较大者
+        return max(w.minimumHeight(), w.minimumSizeHint().height())
+
+    def eventFilter(self, obj, event):
+        if self.user_moved or self.adjusting or event.type() != QEvent.Resize:
+            return False
+        height = self.splitter.height()
+        log_min = self._min_size(self.log_panel)
+        # 隐藏页签还没排过版时高度与最小尺寸都不可信，等下一次 Resize
+        if log_min <= 0 or height < log_min + 200:
+            return False
+        handles = self.splitter.handleWidth() * (self.splitter.count() - 1)
+        first = max(round(height * 110.0 / 670.0),
+                    self._min_size(self.splitter.widget(0)))
+        rest = height - first - handles
+        table_min = self._min_size(self.splitter.widget(1))
+        self.adjusting = True
+        try:
+            self.splitter.setSizes([first, max(rest - log_min, table_min), log_min])
+        finally:
+            self.adjusting = False
+        return False
 
 def style_table_font(view):
     """表格内容与表头一起设成同一档字号：只设单元格不设表头，表头会小一圈。
@@ -1504,9 +1553,11 @@ class MainWindow(QWidget):
         self.excel_split.setStretchFactor(1, 3)
         self.excel_split.setStretchFactor(2, 2)
         # 表格是主工作面：文件表那段还要装组框标题与两排操作按钮，110:200:330 时
-        # 默认窗口里表格视口实测只剩 37px（不到两行）。110:360:200 把表格抬到约八行、
-        # 日志留约十一行；窗口再放大时多出来的高度由表格拿大头
+        # 默认窗口里表格视口实测只剩 37px（不到两行）。日志默认只占它自己的最小
+        # 高度（4 行），其余都给表格；真布局出来一次后按绝对高度摆（见 LogMinPlacer），
+        # 之后仍可自由拖动分隔条
         self.excel_split.setSizes([110, 360, 200])
+        self.excel_log_placer = LogMinPlacer(self.excel_split, log_panel)
         excel_lay.addWidget(self.excel_split, 1)
 
         # 6. 操作（贴在窗口底部的动作条）
@@ -1839,7 +1890,6 @@ class MainWindow(QWidget):
         name_row.addWidget(self.chk_sql_upper)
         name_row.addStretch(1)
 
-        act_row = QHBoxLayout()
         self.btn_sql_save = QPushButton("保存修改后ddl脚本")
         self.btn_sql_save.clicked.connect(self.on_sql_save_modified)
         self.btn_sql_run = QPushButton("执行修改后ddl脚本到当前库")
@@ -1861,22 +1911,26 @@ class MainWindow(QWidget):
             "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖")
         self.btn_sql_gen_simple.setEnabled(False)
         self.btn_sql_gen_simple.clicked.connect(lambda: self.on_sql_gen_excel("简易", False))
-        act_row.addWidget(self.btn_sql_save)
-        act_row.addWidget(self.btn_sql_run)
-        act_row.addWidget(self.btn_sql_gen_std)
-        act_row.addWidget(self.btn_sql_gen_simple)
-        act_row.addStretch(1)
+
+        # 日志：清除按钮在日志框上方、贴右，与第一页同一排布
         self.btn_sql_clear_log = QPushButton("清除日志")
         self.btn_sql_clear_log.clicked.connect(self.on_sql_clear_log)
-        act_row.addWidget(self.btn_sql_clear_log)
+        log_row = QHBoxLayout()
+        log_row.addStretch(1)
+        log_row.addWidget(self.btn_sql_clear_log)
 
         self.sql_log = QPlainTextEdit()
         self.sql_log.setReadOnly(True)
         self.sql_log.setMaximumBlockCount(2000)
         self.sql_log.setFont(QFont("Consolas", LOG_FONT_SIZE))
         self.sql_log.setMinimumHeight(log_min_height(self.sql_log))
+        log_panel = QWidget()
+        lp = QVBoxLayout(log_panel)
+        lp.setContentsMargins(0, 0, 0, 0)
+        lp.addLayout(log_row)
+        lp.addWidget(self.sql_log, 1)
 
-        # 三段可上下拖拽，与「Excel 导入」那页同一形状：拖拽区 / 表格与它的三行操作条 / 日志。
+        # 三段可上下拖拽，与「Excel 导入」那页同一形状：拖拽区 / 表格与它的两行操作条 / 日志。
         # 把手 6px、任何一段都不许拖到 0 高；表格段给到最大，理由与第一页那条一样。
         # 表格区套一层组框，标题就是这张表的标识——与第一页「待导入文件」同一做法
         sql_upper = QGroupBox(SQL_TABLE_TITLE)
@@ -1885,20 +1939,51 @@ class MainWindow(QWidget):
         up_lay.addWidget(self.sql_table, 1)
         up_lay.addLayout(prefix_row)
         up_lay.addLayout(name_row)
-        up_lay.addLayout(act_row)
 
         self.sql_split = QSplitter(Qt.Vertical)
         self.sql_split.setChildrenCollapsible(False)     # 不允许把任一边拖到 0 高
         self.sql_split.setHandleWidth(6)
         self.sql_split.addWidget(self.sql_drop)
         self.sql_split.addWidget(sql_upper)
-        self.sql_split.addWidget(self.sql_log)
+        self.sql_split.addWidget(log_panel)
         self.sql_split.setStretchFactor(0, 0)
         self.sql_split.setStretchFactor(1, 3)
         self.sql_split.setStretchFactor(2, 2)
-        # 110 是拖拽区的四行字，360 给表格加它自己那几行操作条，日志留 200（同第一页）
+        # 日志默认只占它自己的最小高度（4 行），其余都给表格；真布局出来一次后
+        # 按绝对高度摆（见 LogMinPlacer），之后仍可自由拖动分隔条
         self.sql_split.setSizes([110, 360, 200])
+        self.sql_log_placer = LogMinPlacer(self.sql_split, log_panel)
         lay.addWidget(self.sql_split, 1)
+
+        # 底部动作条：与第一页同一形状——覆盖开关在左，动作按钮在右（在分隔条之外，不随表格被挤）
+        op = QHBoxLayout()
+        self.chk_sql_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
+        self.chk_sql_drop.setToolTip(
+            "勾选后，执行前先对脚本里每条 CREATE TABLE 的建表目标补一句\n"
+            "DROP TABLE IF EXISTS；只认整句以 CREATE TABLE 开头的语句，\n"
+            "注释或字符串里出现的建表不会触发删除。只影响执行，不改脚本正文，\n"
+            "也不影响保存与生成两条出口；默认不勾选。")
+        op.addWidget(self.chk_sql_drop)
+        # 四颗按钮的总宽比第一页多两颗，直接摊在一行会把主窗口的最小宽度顶到屏幕外：
+        # 套一层横向滚动区，正常宽度下照样贴右排开，窄屏才出滚动条，窗口仍能缩回屏幕内
+        run_box = QWidget()
+        run_row = QHBoxLayout(run_box)
+        run_row.setContentsMargins(0, 0, 0, 0)
+        run_row.setSpacing(6)
+        run_row.addStretch(1)
+        run_row.addWidget(self.btn_sql_save)
+        run_row.addWidget(self.btn_sql_run)
+        run_row.addWidget(self.btn_sql_gen_std)
+        run_row.addWidget(self.btn_sql_gen_simple)
+        run_scroll = QScrollArea()
+        run_scroll.setFrameShape(QFrame.NoFrame)
+        run_scroll.setWidgetResizable(True)
+        run_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        run_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        run_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        run_scroll.setWidget(run_box)
+        op.addWidget(run_scroll, 1)
+        lay.addLayout(op)
         return page
 
     def _sql_display_name(self, actual):
@@ -2324,9 +2409,26 @@ class MainWindow(QWidget):
             self._warn("请先添加 SQL 脚本文件。")
             return
         self._materialize_sql_display()
-        append_log(self.sql_log, 
-            f"===== 开始执行脚本（目标库 {db}，每个文件一个事务）=====")
-        items = [(s["path"], s["text"]) for s in self.sql_files]
+        overwrite = self.chk_sql_drop.isChecked()
+        note = "；已勾选「覆盖已存在表」，执行副本先 DROP 脚本要建的表" if overwrite else ""
+        append_log(self.sql_log,
+            f"===== 开始执行脚本（目标库 {db}，每个文件一个事务{note}）=====")
+        items, dropped = [], []
+        for s in self.sql_files:
+            text = s["text"]
+            if overwrite:
+                text, tables = prepend_drop_tables(text)
+                if tables:
+                    dropped.append((os.path.basename(s["path"]), tables))
+            items.append((s["path"], text))
+        if overwrite:
+            if dropped:
+                for fname, tables in dropped:
+                    append_log(self.sql_log,
+                        f"[覆盖] {fname}：执行前先 DROP " + "、".join(tables))
+            else:
+                append_log(self.sql_log,
+                    "[覆盖] 脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除")
         self._run_modal("正在执行脚本到目标库…", sql_execute_task, (items, cfg),
                         on_done=self._finish_sql_execute, log_view=self.sql_log)
 

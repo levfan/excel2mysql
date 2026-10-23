@@ -579,14 +579,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         excelLower = lower;
         excelDrop = drop;
         excelFileBox = fileBox;
+        excelLogBox = logBox;
         // Qt 的 setSizes([110,360,200]) 会按可用高度等比缩放，JSplitPane 只认绝对值：
-        // 窗口比 670 矮时日志段会被挤成一行，所以真拿到尺寸后按同一比例重摆一次
-        stacked.addComponentListener(new java.awt.event.ComponentAdapter() {
-            @Override
-            public void componentResized(java.awt.event.ComponentEvent e) {
-                applySplitProportions();
-            }
-        });
+        // 真拿到尺寸后按 110:670 摆拖拽区，剩下的高度里日志只留它自己的最小高度。
+        // 两条分隔条都要监听 Resize：内层高度变了，日志段也要重新落回最小高度。
+        java.awt.event.ComponentAdapter placer =
+                new java.awt.event.ComponentAdapter() {
+                    @Override
+                    public void componentResized(java.awt.event.ComponentEvent e) {
+                        applySplitProportions();
+                    }
+                };
+        stacked.addComponentListener(placer);
+        lower.addComponentListener(placer);
+        watchDivider(stacked);
+        watchDivider(lower);
 
         // 底部动作条：勾选框在左，停止与开始导入在右，再下面才是页内进度条（main.py:976-994）
         dropExisting = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
@@ -2020,24 +2027,79 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JSplitPane excelLower;
     private java.awt.Component excelDrop;
     private java.awt.Component excelFileBox;
-    private boolean splitPlaced;
+    private java.awt.Component excelLogBox;
+    /** 用户亲手拖过任一条分隔条后，默认摆放就交还给用户。 */
+    private boolean splitUserMoved;
+    /** 程序自己摆分隔条期间不把随之而来的 Resize 当成用户动作。 */
+    private boolean splitAdjusting;
 
     /**
-     * 把三段分栏按 Python 的 110:360:200 等比摆一次。
-     * 只在真拿到足够高度时做，且做一次就够——用户之后自己拖把手，不该被程序改回去。
+     * 把三段分栏按 Python 的 110:670 摆一次，日志段只留它自己的最小高度。
+     *
+     * 窗口从构造到首次显示会经历多次 Resize：只在第一次摆会留下后一轮拉伸分给日志的
+     * 高度（Python 侧 LogMinPlacer 同样每次 Resize 重摆）。所以用户拖过把手之前，
+     * 每次 Resize 都按绝对高度重摆；一旦拖动过，日志高度就归用户，程序不再抢。
      */
     public void applySplitProportions() {
-        if (splitPlaced || excelSplit == null
-                || excelSplit.getHeight() < UiScale.px(200)) {
+        if (splitUserMoved || splitAdjusting || excelSplit == null
+                || excelLower == null || excelLogBox == null) {
             return;
         }
-        splitPlaced = true;
-        int first = (int) Math.round(excelSplit.getHeight() * 110.0 / 670.0);
-        excelSplit.setDividerLocation(Math.max(first, excelDrop.getMinimumSize().height));
-        int rest = excelSplit.getHeight() - excelSplit.getDividerLocation()
-                - excelSplit.getDividerSize();
-        int second = (int) Math.round(rest * 360.0 / 560.0);
-        excelLower.setDividerLocation(Math.max(second, excelFileBox.getMinimumSize().height));
+        if (excelSplit.getHeight() < UiScale.px(200)
+                || excelLogBox.getMinimumSize().height <= 0) {
+            return;
+        }
+        splitAdjusting = true;
+        try {
+            int first = (int) Math.round(excelSplit.getHeight() * 110.0 / 670.0);
+            excelSplit.setDividerLocation(Math.max(first, excelDrop.getMinimumSize().height));
+            int rest = excelSplit.getHeight() - excelSplit.getDividerLocation()
+                    - excelSplit.getDividerSize();
+            // 下段高度 = rest - 分隔位置 - 内层把手；日志段要正好落到它自己的最小高度
+            int second = Math.max(excelFileBox.getMinimumSize().height,
+                    rest - excelLower.getDividerSize() - excelLogBox.getMinimumSize().height);
+            excelLower.setDividerLocation(second);
+        } finally {
+            splitAdjusting = false;
+        }
+    }
+
+    /** 用户按下分隔条把手就停止自动摆放；键盘拖动同样算用户动作。 */
+    private void watchDivider(JSplitPane pane) {
+        javax.swing.plaf.SplitPaneUI ui = pane.getUI();
+        if (!(ui instanceof javax.swing.plaf.basic.BasicSplitPaneUI)) {
+            return;
+        }
+        java.awt.Component divider =
+                ((javax.swing.plaf.basic.BasicSplitPaneUI) ui).getDivider();
+        if (divider == null) {
+            return;
+        }
+        divider.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                splitUserMoved = true;
+            }
+        });
+    }
+
+    /** 第一页日志段是否还压在自己的最小高度上（对撞与自检都量真控件）。 */
+    public String logAtMin() {
+        if (excelLogBox == null) {
+            return "0";
+        }
+        // JSplitPane 的边框会让实际高度比最小高度少 1~2px，留同样宽的容差
+        int diff = excelLogBox.getHeight() - excelLogBox.getMinimumSize().height;
+        return diff >= -4 && diff <= 4 ? "1" : "0";
+    }
+
+    /** 自检诊断用：日志段的实际高度与最小高度。 */
+    public int logBoxHeight() {
+        return excelLogBox == null ? -1 : excelLogBox.getHeight();
+    }
+
+    public int logBoxMinHeight() {
+        return excelLogBox == null ? -1 : excelLogBox.getMinimumSize().height;
     }
 
     /** 自检用：第一页表格段与日志段的拉伸权重（配置值，离屏环境量不准实际高度）。 */

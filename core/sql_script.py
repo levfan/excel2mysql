@@ -26,6 +26,43 @@ def extract_create_tables(text: str) -> list:
     return [{"name": n, "count": counts[n]} for n in order]
 
 
+# 执行前要删的那张表：与 extract_create_tables 同一段 CREATE 头，但把 schema 限定名
+# 整段留下（db.tbl 就该删 db.tbl，不能删成当前库里的同名表）
+_CREATE_TARGET_RE = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"((?:`?[\w$]+`?\s*\.\s*)?`?[A-Za-z0-9_$]+`?)",
+    re.IGNORECASE,
+)
+
+
+def prepend_drop_tables(text: str) -> tuple:
+    """给执行副本开头的每个建表目标补一句 DROP TABLE IF EXISTS。
+
+    只在「覆盖已存在表」勾选后由执行动作调用，不写回脚本正文。
+    返回 (新文本, 表名列表)；没有 CREATE TABLE 时原样返回。
+    只认整句以 CREATE TABLE 开头的语句：注释里的建表、字符串里的建表都不该被删，
+    这是删除动作，判据必须比"清单里显示哪些表"更严。
+    顺序按出现顺序倒过来，近似"先删子表再删父表"。
+    """
+    seen, names = set(), []
+    for stmt in split_sql_statements(text):
+        masked = _mask_comments(stmt).strip()
+        m = re.match(r"(?is)^CREATE\s+TABLE\b", masked)
+        if not m:
+            continue
+        m2 = _CREATE_TARGET_RE.search(masked)
+        if not m2:
+            continue
+        target = re.sub(r"\s+", "", m2.group(1))
+        if target not in seen:
+            seen.add(target)
+            names.append(target)
+    if not names:
+        return text, []
+    block = "".join("DROP TABLE IF EXISTS %s;\n" % n for n in reversed(names))
+    return block + "\n" + text, names
+
+
 def _rewrite_names(text: str, plan: dict) -> tuple:
     """按 {旧表名: 新表名} 改写脚本中的表名引用。
 

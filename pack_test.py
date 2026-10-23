@@ -211,7 +211,7 @@ from core.infer import (
 )
 from core.sql_script import (
     extract_create_tables, apply_table_prefix_sql, split_sql_statements,
-    has_executable_content as has_exec,
+    has_executable_content as has_exec, prepend_drop_tables,
 )
 from core.sql_execute import executable_statements
 from core.mysql_io import (
@@ -571,6 +571,25 @@ check("E10 整句只剩注释的片段判为无可执行内容（字符串里的
 check("E11 执行器把纯注释整批剔掉：一句都不执行，也不报「已提交 1 条」",
       executable_statements("-- a\n; /* b */ ; SELECT 1;") == ["SELECT 1"],
       executable_statements("-- a\n; /* b */ ; SELECT 1;"))
+
+# 覆盖执行：只认整句 CREATE TABLE，注释/字符串里的建表不触发删除；
+# schema 限定名整段保留，同名去重，DROP 按出现顺序倒序排在执行副本最前
+_drop_src = ("-- CREATE TABLE ghost (id INT);\n"
+             "CREATE TABLE `db`.`t1` (id INT);\n"
+             "create table if not exists t2 (id INT);\n"
+             "CREATE TABLE t1 (id INT);\n"
+             "INSERT INTO t1 VALUES ('CREATE TABLE nope (id INT);');\n")
+_drop_text, _drop_names = prepend_drop_tables(_drop_src)
+check("E12 覆盖执行只给整句 CREATE TABLE 的建表目标补 DROP",
+      _drop_names == ["`db`.`t1`", "t2", "t1"]
+      and _drop_text == ("DROP TABLE IF EXISTS t1;\n"
+                         "DROP TABLE IF EXISTS t2;\n"
+                         "DROP TABLE IF EXISTS `db`.`t1`;\n\n") + _drop_src,
+      (_drop_names, _drop_text.splitlines()[:4]))
+check("E13 没有建表语句时执行副本原样返回（不凭空多出 DROP）",
+      prepend_drop_tables("-- only comment\nSELECT 1;\n") == ("-- only comment\nSELECT 1;\n", []))
+check("E14 注释里的建表不会被当成删除目标",
+      prepend_drop_tables("/* CREATE TABLE ghost (id INT); */ SELECT 1;")[1] == [])
 
 gbk = os.path.join(_tmpdir, "gbk.sql")
 open(gbk, "wb").write("CREATE TABLE `t` (`id` INT); -- 中文注释".encode("gbk"))
@@ -1666,6 +1685,13 @@ check("K0 首屏默认：表格段高于日志段，表格视口至少露 5 行�
       >= 5 * w.file_table.verticalHeader().defaultSectionSize(),
       (sp.sizes(), w.file_table.viewport().height(),
        w.file_table.verticalHeader().defaultSectionSize()))
+# 量的是日志「段」（含上方清除日志那排），不是里面那个文本框：默认高度口径是
+# 用户看到的那一段，面板高度还包含按钮行，只量文本框会被按钮行差出十几像素
+_log_panel1 = sp.widget(2)
+_log_min1 = max(_log_panel1.minimumHeight(), _log_panel1.minimumSizeHint().height())
+check("K0b 首屏日志默认压在自己的最小高度（4 行），不是 200px",
+      abs(_log_panel1.height() - _log_min1) <= 4,
+      (_log_panel1.height(), _log_min1, sp.sizes()))
 
 sp.setSizes([100, 600, 100])
 _app.processEvents()
@@ -1700,7 +1726,7 @@ check("K10 SQL 页用垂直分隔条承载「拖拽区 / 文件表格区 / 日�
 check("K11 三段正是拖拽区、待处理文件表与 SQL 日志（顺序与第一页一致）",
       sp2.widget(0) is w.sql_drop
       and sp2.widget(1).findChild(QTableWidget) is w.sql_table
-      and sp2.widget(2) is w.sql_log,
+      and sp2.widget(2).findChild(app_main.QPlainTextEdit) is w.sql_log,
       [type(sp2.widget(i)).__name__ for i in range(3)])
 check("K11b SQL 页首屏默认：表格段高于日志段，表格视口至少露 5 行",
       sp2.sizes()[1] > sp2.sizes()[2]
@@ -1708,6 +1734,12 @@ check("K11b SQL 页首屏默认：表格段高于日志段，表格视口至少�
       >= 5 * w.sql_table.verticalHeader().defaultSectionSize(),
       (sp2.sizes(), w.sql_table.viewport().height(),
        w.sql_table.verticalHeader().defaultSectionSize()))
+# 与 K0b 同一口径：量日志段（含上方清除日志那排），不是里面那个文本框
+_log_panel2 = sp2.widget(2)
+_log_min2 = max(_log_panel2.minimumHeight(), _log_panel2.minimumSizeHint().height())
+check("K11c SQL 页日志默认也压在自己的最小高度（4 行），与第一页同一口径",
+      abs(_log_panel2.height() - _log_min2) <= 4,
+      (_log_panel2.height(), _log_min2, sp2.sizes()))
 sp2.setSizes([100, 600, 100])
 _app.processEvents()
 u = [sp2.widget(i).height() for i in range(3)]
@@ -1717,14 +1749,16 @@ d = [sp2.widget(i).height() for i in range(3)]
 check("K12 往上拖：日志最高、表格区确实被压缩；反向拖：表格区高于日志",
       d[2] > d[1] and d[1] < u[1] and u[1] > u[2], f"{u} -> {d}")
 check("K13 三段此消彼长，总和守恒", abs(sum(u) - sum(d)) <= 2, f"{sum(u)} vs {sum(d)}")
-check("K14 前缀行、大写开关与整排动作条跟着表格区一起缩放，不会被分隔条单独挤掉",
+check("K14 前缀行与大写开关留在表格区；保存/执行/生成与覆盖开关已挪到分隔条外的底部动作条",
       sp2.widget(1).isAncestorOf(w.ed_sql_prefix)
       and sp2.widget(1).isAncestorOf(w.chk_sql_upper)
-      and sp2.widget(1).isAncestorOf(w.btn_sql_run)
-      and sp2.widget(1).isAncestorOf(w.btn_sql_clear_log))
-check("K15 清空按钮排在表格区动作条最左（与第一页那颗同位置同文案），拖拽区在分隔条里",
+      and not sp2.widget(1).isAncestorOf(w.btn_sql_run)
+      and not sp2.isAncestorOf(w.btn_sql_run)
+      and not sp2.isAncestorOf(w.chk_sql_drop))
+check("K15 清空按钮排在表格区动作条最左（与第一页那颗同位置同文案），清除日志随日志段，拖拽区在分隔条里",
       sp2.widget(1).isAncestorOf(w.btn_sql_clear)
       and w.btn_sql_clear.text() == "清空待上传文件"
+      and sp2.widget(2).findChild(app_main.QPushButton) is w.btn_sql_clear_log
       and w.lbl_sql_db.parent() is not sp2 and sp2.isAncestorOf(w.sql_drop))
 check("K16 表格由分隔条控制高度后仍拿得到视口",
       w.sql_table.viewport().height() > 0, w.sql_table.viewport().height())
@@ -1747,9 +1781,94 @@ check("K20 表格区那层组框不影响三段分栏：中间那一段仍是装
       isinstance(sp2.widget(1), app_main.QGroupBox)
       and sp2.widget(1).findChild(app_main.QTableWidget) is w.sql_table,
       type(sp2.widget(1)).__name__)
+# 底部动作条与第一页同一形状：覆盖开关在左，四颗动作按钮在右；只重排，没有新增按钮。
+# 四颗按钮包在横向滚动区里（窄屏才出滚动条），所以要先穿过那一层再读按钮顺序
+_sql_page = w.main_tabs.widget(1)
+_op = _sql_page.layout().itemAt(_sql_page.layout().count() - 1).layout()
+_op_items = [_op.itemAt(i).widget() for i in range(_op.count())]
+_run_box = _op_items[-1]
+_run_row = _run_box.widget().layout()
+_run_items = [_run_row.itemAt(i).widget() for i in range(_run_row.count())]
+check("K21 底部动作条：覆盖开关在最左，保存/执行/生成四颗在最右（与第一页同一形状）",
+      _op_items[0] is w.chk_sql_drop
+      and all(x is None for x in _op_items[1:-1])
+      and all(x is None for x in _run_items[:-4])
+      and _run_items[-4:] == [w.btn_sql_save, w.btn_sql_run,
+                              w.btn_sql_gen_std, w.btn_sql_gen_simple],
+      [type(x).__name__ if x is not None else "弹簧" for x in _op_items]
+      + ["|"] + [b.text() if hasattr(b, "text") else "弹簧"
+                 for b in _run_items])
+check("K22 覆盖开关默认不勾选，提示写清只影响执行、不改脚本正文",
+      w.chk_sql_drop.isChecked() is False
+      and "只影响执行" in w.chk_sql_drop.toolTip()
+      and "CREATE TABLE" in w.chk_sql_drop.toolTip())
+_sql_btns = sorted(b.text() for b in _sql_page.findChildren(app_main.QPushButton) if b.text())
+check("K23 第二页按钮集合与改动前完全一致（只重排布局，没有新增按钮）",
+      _sql_btns == sorted([
+          "批量应用前缀", "替换首个前缀", "清空待上传文件", "清除日志",
+          "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
+          "生成标准excel文件", "生成简易excel文件"]), _sql_btns)
 w.main_tabs.setCurrentIndex(0)
 _app.processEvents()
 w.close()
+
+# ---------------------------------------------------------------------------
+section("V 覆盖已存在表（执行副本先 DROP，不改脚本正文）")
+
+_vdir = tempfile.mkdtemp(prefix="pt_drop_")
+_vsql = os.path.join(_vdir, "v.sql")
+_vsrc = ("-- CREATE TABLE ghost (id INT);\n"
+         "/* CREATE TABLE ghost2 (id INT); */\n"
+         "CREATE TABLE `db`.`t_v1` (id INT);\n"
+         "CREATE TABLE t_v2 (id INT);\n"
+         "CREATE TABLE t_v1 (id INT);\n")
+# newline="" 钉住字节形状：Windows 文本模式会把 \n 写成 \r\n，
+# 而断言比的是脚本原文；不钉住的话，读回来带 CRLF 会被误判成"执行副本改了正文"
+open(_vsql, "w", encoding="utf-8", newline="").write(_vsrc)
+vw = app_main.MainWindow()
+vw.on_sql_files_dropped([_vsql])
+vw.cb_db.addItem("fakedb", "fakedb")
+vw.cb_db.setCurrentIndex(vw.cb_db.count() - 1)
+_cap = {}
+_orig_run_modal = vw._run_modal
+
+
+def _cap_modal(title, work, args=(), on_done=None, log_view=None):
+    _cap["items"] = args[0]
+
+
+vw._run_modal = _cap_modal
+vw.chk_sql_drop.setChecked(True)
+vw.on_sql_execute()
+_vitem = _cap.get("items") or []
+_vtext = _vitem[0][1] if _vitem else ""
+check("V1 勾选后执行副本按出现顺序倒序补 DROP，schema 限定名整段保留",
+      _vtext.startswith("DROP TABLE IF EXISTS t_v1;\n"
+                        "DROP TABLE IF EXISTS t_v2;\n"
+                        "DROP TABLE IF EXISTS `db`.`t_v1`;\n\n"
+                        + _vsrc),
+      _vtext.splitlines()[:4])
+check("V2 注释里的建表不触发删除；日志点名要删的表与原脚本仍原样",
+      "DROP TABLE IF EXISTS ghost" not in _vtext
+      and vw.sql_files[0]["text"] == _vsrc
+      and "[覆盖] v.sql：执行前先 DROP `db`.`t_v1`、t_v2、t_v1"
+      in vw.sql_log.toPlainText(),
+      log_lines(vw.sql_log.toPlainText(), "[覆盖]"))
+check("V3 勾选后的开始执行那一行写明覆盖口径",
+      "已勾选「覆盖已存在表」，执行副本先 DROP 脚本要建的表"
+      in vw.sql_log.toPlainText())
+_cap.clear()
+vw.chk_sql_drop.setChecked(False)
+vw.on_sql_execute()
+_vitem2 = _cap.get("items") or []
+_last_header = [l for l in vw.sql_log.toPlainText().splitlines()
+                if "开始执行脚本" in l][-1]
+check("V4 不勾选时执行副本与脚本正文完全一致，开始执行那一行不写覆盖口径",
+      _vitem2 and _vitem2[0][1] == _vsrc
+      and "覆盖已存在表" not in _last_header,
+      (_vitem2[0][1][:20] if _vitem2 else None, _last_header))
+vw._run_modal = _orig_run_modal
+vw.close()
 
 # ---------------------------------------------------------------------------
 section("L 字段类型映射（金额语义 + 精度按数据校核）")

@@ -401,7 +401,10 @@ check("V15 撞名自动加 _2",
       [x["table_name"] for x in tables] == ["tong_ming_biao", "tong_ming_biao_2"],
       [x["table_name"] for x in tables])
 
-from core.sql_script import apply_table_prefix_sql, extract_create_tables, split_sql_statements
+from core.sql_script import (
+    apply_table_prefix_sql, extract_create_tables, split_sql_statements,
+    prepend_drop_tables,
+)
 
 _script = ("CREATE TABLE `ods_t_order` (`id` INT) COMMENT='订单';\n"
            "INSERT INTO `ods_t_order` VALUES (1);\n"
@@ -421,6 +424,18 @@ check("V17c 重复应用不叠加前缀",
       apply_table_prefix_sql(_new, "ads_")[2])
 check("V18 字符串与注释里的分号不当成语句边界",
       len(split_sql_statements(_script)) == 3, split_sql_statements(_script))
+_drop_text, _drop_tabs = prepend_drop_tables(
+    "-- CREATE TABLE ghost (id INT);\n"
+    "CREATE TABLE `db`.`t1` (id INT);\nCREATE TABLE t2 (id INT);\n"
+    "CREATE TABLE t1 (id INT);\n")
+check("V18b 覆盖执行只在整句 CREATE TABLE 前补 DROP，倒序去重且保留 schema 限定名",
+      _drop_tabs == ["`db`.`t1`", "t2", "t1"]
+      and _drop_text.startswith("DROP TABLE IF EXISTS t1;\n"
+                                "DROP TABLE IF EXISTS t2;\n"
+                                "DROP TABLE IF EXISTS `db`.`t1`;\n\n"),
+      (_drop_tabs, _drop_text.splitlines()[:3]))
+check("V18c 没有建表语句时不补 DROP",
+      prepend_drop_tables("SELECT 1;") == ("SELECT 1;", []))
 
 from core.merge_check import MergedCellsError, ensure_no_merged_cells
 

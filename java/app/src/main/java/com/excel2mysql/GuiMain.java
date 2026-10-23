@@ -2482,14 +2482,20 @@ public final class GuiMain {
     }
 
     /**
-     * 首屏分栏：日志区要给主表格让位（用户口径"日志区低一些、主表格高一些"）。
-     * 离屏环境量不准实际高度，这里断配置值——表格 360 : 日志 200、余量 3:2。
+     * 首屏分栏：日志区默认压到它自己的最小高度，余量按 3:2 给表格（用户口径"日志低、表格高"）。
+     * 离屏构造时窗口还没真布局，先按生产窗口尺寸排一次，再量日志段是不是落在最小高度。
      */
     private static void split_defaults(MainFrame frame, List<String> problems) {
-        if (Math.abs(frame.excelLowerResizeWeight() - 0.6) > 0.001
-                || frame.excelLowerDividerLocation() != wantPx(360)) {
-            problems.add("第一页分栏默认没有让表格高于日志（360:200）："
-                    + frame.excelLowerResizeWeight() + " / " + frame.excelLowerDividerLocation());
+        if (Math.abs(frame.excelLowerResizeWeight() - 0.6) > 0.001) {
+            problems.add("第一页分栏拉伸比例不对，应为 3:2：" + frame.excelLowerResizeWeight());
+        }
+        frame.setSize(wantPx(1100), wantPx(780));
+        frame.validate();
+        frame.applySplitProportions();
+        frame.validate();
+        if (!"1".equals(frame.logAtMin())) {
+            problems.add("第一页日志默认没有压到最小高度：高 "
+                    + frame.logBoxHeight() + " / 最小 " + frame.logBoxMinHeight());
         }
     }
 
@@ -2511,9 +2517,22 @@ public final class GuiMain {
             problems.add("SQL 页分栏拉伸比例不对，应为 3:2（表格多于日志）："
                     + page.splitResizeWeight());
         }
-        if (page.splitDividerLocation() != wantPx(360)) {
-            problems.add("SQL 页分栏初始位置不是 " + wantPx(360) + "："
-                    + page.splitDividerLocation());
+        // 日志段默认压到最小高度；切到这一页排一次版再量（隐藏页签的子控件还没量过）
+        frame.selectTab(1);
+        frame.validate();
+        page.applySplitProportions();
+        frame.validate();
+        if (!"1".equals(page.logAtMin())) {
+            problems.add("SQL 页日志默认没有压到最小高度：高 "
+                    + page.logBoxHeight() + " / 最小 " + page.logBoxMinHeight());
+        }
+        frame.selectTab(0);
+        frame.validate();
+        if (!page.dropExistingBox().getText().equals("覆盖已存在表（先 DROP 再建）")
+                || page.dropExistingBox().isSelected()) {
+            problems.add("SQL 页覆盖开关的文案或默认状态不对："
+                    + page.dropExistingBox().getText() + " / "
+                    + page.dropExistingBox().isSelected());
         }
         // 三段结构与「Excel 导入」那页一致：拖拽区在最上、表格区在中、日志在下
         if (!"拖拽区|表格区|日志区".equals(page.segmentOrder())) {
@@ -2607,6 +2626,40 @@ public final class GuiMain {
         }
         if (!page.logPanel().contains("[已加载] a.sql：2 个表")) {
             problems.add("加载日志没报每个文件的表数");
+        }
+        // 覆盖执行：执行副本补 DROP、正文不动；只认整句 CREATE TABLE，注释里的建表不删
+        String originalA = page.textOf(a);
+        List<String[]> dropNames = new ArrayList<String[]>();
+        List<com.excel2mysql.gui.SqlPage.Src> runItems = page.prepareRunItems(true, dropNames);
+        String expectedA = "DROP TABLE IF EXISTS plain;" + nl
+                + "DROP TABLE IF EXISTS t_order;" + nl + nl + originalA;
+        if (runItems.size() != 2 || !expectedA.equals(runItems.get(0).text)
+                || !runItems.get(1).text.startsWith("DROP TABLE IF EXISTS dim_x;" + nl)) {
+            problems.add("勾选覆盖后执行副本没有先 DROP 脚本要建的表："
+                    + (runItems.isEmpty() ? "空" : runItems.get(0).text.split(nl)[0]));
+        }
+        if (dropNames.size() != 2 || !"t_order、plain".equals(dropNames.get(0)[1])
+                || !"dim_x".equals(dropNames.get(1)[1])) {
+            problems.add("覆盖执行报出的表名清单不对：" + dropNames.size());
+        }
+        if (!originalA.equals(page.textOf(a))) {
+            problems.add("覆盖执行改到了脚本正文");
+        }
+        List<String[]> noneDropped = new ArrayList<String[]>();
+        if (!originalA.equals(page.prepareRunItems(false, noneDropped).get(0).text)
+                || !noneDropped.isEmpty()) {
+            problems.add("不勾选覆盖时执行副本不该带 DROP");
+        }
+        String commented = "-- CREATE TABLE ghost (id INT);" + nl
+                + "/* CREATE TABLE ghost2 (id INT); */" + nl
+                + "CREATE TABLE `db`.`t9` (id INT);" + nl
+                + "CREATE TABLE t9 (id INT);" + nl;
+        com.excel2mysql.core.SqlScript.DropPrep dropEdge =
+                com.excel2mysql.core.SqlScript.prependDropTables(commented);
+        if (!dropEdge.tables.equals(java.util.Arrays.asList("`db`.`t9`", "t9"))
+                || !dropEdge.text.startsWith("DROP TABLE IF EXISTS t9;" + nl
+                        + "DROP TABLE IF EXISTS `db`.`t9`;" + nl + nl)) {
+            problems.add("覆盖执行的判据不对（注释/重名/schema 限定）：" + dropEdge.tables);
         }
         // 任务日志按页分家：SQL 页读盘的那几行不该串到 Excel 页面板去
         if (frame.logPanel().contains("[已加载] a.sql")) {

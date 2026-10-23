@@ -215,6 +215,8 @@ public final class SqlPage extends JPanel {
     private boolean genBusy;
     /** 大小写开关：清单、元数据弹窗和生成件同步按大写显示；脚本正文不回写。 */
     private final JCheckBox upperBox = new JCheckBox("表名与字段名转大写");
+    /** 覆盖开关：勾选后执行副本先 DROP 脚本要建的表；只影响执行，不改正文。 */
+    private final JCheckBox dropExisting = new JCheckBox("覆盖已存在表（先 DROP 再建）");
     private final List<String> rowPath = new ArrayList<String>();
     private final List<String> rowOrigin = new ArrayList<String>();
     private final List<String> rowActual = new ArrayList<String>();
@@ -224,13 +226,14 @@ public final class SqlPage extends JPanel {
     private final LogPanel logPanel = new LogPanel();
     private final HintTextField prefixField;
     private final JButton runButton;
-    /** 三段分栏：拖拽区 / 表格与它的三行操作条 / 日志。内层是 split，外层是 outerSplit。 */
+    /** 三段分栏：拖拽区 / 表格与它的两行操作条 / 日志。内层是 split，外层是 outerSplit。 */
     private JSplitPane split;
     private JSplitPane outerSplit;
     private DropArea sqlDrop;
-    /** 表格区那三行的真实容器（对撞器要读"哪颗按钮在哪一行"，不看像素）。 */
+    /** 表格区那两行的真实容器（对撞器要读"哪颗按钮在哪一行"，不看像素）。 */
     private java.awt.Container rowPrefix;
     private java.awt.Container rowName;
+    /** 底部动作条（覆盖开关 + 保存/执行/生成四颗），在分隔条之外。 */
     private java.awt.Container rowAct;
     private final HintLabel hint = new HintLabel();
 
@@ -358,18 +361,22 @@ public final class SqlPage extends JPanel {
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixBtns, BorderLayout.EAST);
 
-        // 保存/执行在左、清除日志在右（与 Python 侧同一排布）。移除按钮不排这一排：
-        // 这一排的最小宽度已经贴着窗口宽度，再加一颗就顶出屏幕
-        //（Python 侧 U7「整窗落在可用区内」实测被顶到 848 > 可用 800），两条线同一做法
+        // 保存/执行/生成四颗动作按钮与覆盖开关挪到底部动作条（与第一页同一形状）：
+        // 开关在左、按钮在右，且都在分隔条之外，不跟着表格段被挤压
         JPanel runBtns = flow();
         runBtns.add(save);
         runBtns.add(runButton);
         runBtns.add(genStd);
         runBtns.add(genSimple);
-        JPanel actRow = new JPanel(new BorderLayout());
-        rowAct = actRow;
-        actRow.add(runBtns, BorderLayout.WEST);
-        actRow.add(clearLog, BorderLayout.EAST);
+        JPanel op = new JPanel(new BorderLayout());
+        rowAct = op;
+        // 默认不勾选：勾选后执行副本先 DROP 脚本要建的表；只影响执行，不改脚本正文
+        dropExisting.setToolTipText("<html>勾选后，执行前先对脚本里每条 CREATE TABLE 的建表目标"
+                + "补一句<br>DROP TABLE IF EXISTS；只认整句以 CREATE TABLE 开头的语句，<br>"
+                + "注释或字符串里出现的建表不会触发删除。只影响执行，不改脚本正文，<br>"
+                + "也不影响保存与生成两条出口；默认不勾选。</html>");
+        op.add(dropExisting, BorderLayout.WEST);
+        op.add(runBtns, BorderLayout.EAST);
 
         // 清空按钮排在表格下方第一排（前缀行的下一行）的最左，
         // 与「Excel 导入」那页「清空待上传文件」同一位置同一语义
@@ -381,7 +388,6 @@ public final class SqlPage extends JPanel {
         JPanel actions = new JPanel(new BorderLayout());
         actions.add(prefixRow, BorderLayout.NORTH);
         actions.add(nameRow, BorderLayout.CENTER);
-        actions.add(actRow, BorderLayout.SOUTH);
 
         JPanel upper = new JPanel(new BorderLayout(UiScale.px(4), UiScale.px(4)));
         // 表格区套一层标题边框，标题就是这张表的标识——与第一页「待导入文件」同一做法
@@ -389,17 +395,26 @@ public final class SqlPage extends JPanel {
         upper.add(scroll, BorderLayout.CENTER);
         upper.add(actions, BorderLayout.SOUTH);
 
+        // 日志：清除按钮在日志框上方、贴右，与第一页同一排布
+        JPanel logHead = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), UiScale.px(2)));
+        logHead.add(clearLog);
         JScrollPane logScroll = new JScrollPane(logPanel);
-        // Python 的 SQL 日志区同样没有组框标题，只有上面那排按钮；
-        // 下限取日志面板自己量出来的行数高度（这一段里没有标题行，不用再加）
+        // 下限取日志面板自己量出来的行数高度（这一页的标题行在表格区，日志段只有按钮行）
         logScroll.setMinimumSize(new Dimension(UiScale.px(300),
                 logPanel.getMinimumSize().height));
+        JPanel logBox = new JPanel(new BorderLayout());
+        logBox.add(logHead, BorderLayout.NORTH);
+        logBox.add(logScroll, BorderLayout.CENTER);
+        // 日志段的最小高度 = 日志框 4 行 + 上面那排「清除日志」，默认就压在这一档
+        logBox.setMinimumSize(new Dimension(UiScale.px(300),
+                logPanel.getMinimumSize().height + UiScale.px(34)));
 
-        // 三段纵向分栏，段数与比例照 main.py 的 setSizes([110, 360, 200])：
-        // 拖拽区不参与拉伸，多出来的高度由表格拿大头（与第一页同一套做法）
+        // 三段纵向分栏，段数与比例照 main.py：拖拽区不参与拉伸，多出来的高度由表格拿大头；
+        // 日志默认只占它自己的最小高度（真布局出来一次后由 applySplitProportions 按绝对高度摆）
         sqlDrop.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(60)));
         upper.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(80)));
-        split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logScroll);
+        split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, logBox);
         split.setDividerSize(UiScale.px(6));
         // Qt 的 setStretchFactor(3, 2) 换到 Swing 就是"上段拿 3/(3+2) 的余量"
         split.setResizeWeight(0.6);
@@ -410,21 +425,29 @@ public final class SqlPage extends JPanel {
         outerSplit.setResizeWeight(0.0);
         outerSplit.setDividerLocation(UiScale.px(110));
         outerSplit.setContinuousLayout(true);
-        // 与 Excel 页同一件事：Qt 的 setSizes 会等比缩放，JSplitPane 只认绝对值
-        splitPlaced = false;
+        // 与 Excel 页同一件事：Qt 的 setSizes 会等比缩放，JSplitPane 只认绝对值。
+        // 用户拖过把手之前每次 Resize 都重摆（窗口从构造到显示会经历多次 Resize），
+        // 拖过之后高度就归用户。
         sqlUpper = upper;
         sqlLog = logScroll;
-        outerSplit.addComponentListener(new java.awt.event.ComponentAdapter() {
-            @Override
-            public void componentResized(java.awt.event.ComponentEvent e) {
-                applySplitProportions();
-            }
-        });
+        sqlLogBox = logBox;
+        java.awt.event.ComponentAdapter placer =
+                new java.awt.event.ComponentAdapter() {
+                    @Override
+                    public void componentResized(java.awt.event.ComponentEvent e) {
+                        applySplitProportions();
+                    }
+                };
+        outerSplit.addComponentListener(placer);
+        split.addComponentListener(placer);
+        watchDivider(outerSplit);
+        watchDivider(split);
 
         JPanel north = new JPanel(new BorderLayout());
         north.add(hint, BorderLayout.NORTH);
         add(north, BorderLayout.NORTH);
         add(outerSplit, BorderLayout.CENTER);
+        add(op, BorderLayout.SOUTH);
     }
 
     private static JPanel flow() {
@@ -516,23 +539,57 @@ public final class SqlPage extends JPanel {
 
     private java.awt.Component sqlUpper;
     private java.awt.Component sqlLog;
-    private boolean splitPlaced;
+    private java.awt.Component sqlLogBox;
+    /** 用户亲手拖过任一条分隔条后，默认摆放就交还给用户。 */
+    private boolean splitUserMoved;
+    /** 程序自己摆分隔条期间不把随之而来的 Resize 当成用户动作。 */
+    private boolean splitAdjusting;
 
-    /** 表格与日志按 360:200 等比摆一次；用户之后自己拖的把手不该被程序改回去。 */
+    /**
+     * 表格与日志按默认摆放：日志段只留最小高度；用户拖过把手之后不再抢。
+     * 与 Excel 页同一口径——用户没拖之前每次 Resize 都重摆，窗口从构造到显示
+     * 会经历多次 Resize，只摆第一次会留下后一轮拉伸分给日志的那截高度。
+     */
     public void applySplitProportions() {
-        if (splitPlaced || outerSplit == null || split == null
+        if (splitUserMoved || splitAdjusting || outerSplit == null || split == null
                 || outerSplit.getHeight() < UiScale.px(200)
-                || sqlUpper == null || sqlLog == null) {
+                || sqlUpper == null || sqlLog == null || sqlLogBox == null
+                || sqlLogBox.getMinimumSize().height <= 0) {
             return;
         }
-        splitPlaced = true;
-        // 与第一页同一个算法：外层先按 110:670 给拖拽区，剩下的再按 360:200 分给表格与日志
-        int first = (int) Math.round(outerSplit.getHeight() * 110.0 / 670.0);
-        outerSplit.setDividerLocation(Math.max(first, sqlDrop.getMinimumSize().height));
-        int rest = outerSplit.getHeight() - outerSplit.getDividerLocation()
-                - outerSplit.getDividerSize();
-        int second = (int) Math.round(rest * 360.0 / 560.0);
-        split.setDividerLocation(Math.max(second, sqlUpper.getMinimumSize().height));
+        splitAdjusting = true;
+        try {
+            // 与第一页同一个算法：外层先按 110:670 给拖拽区，剩下的里日志只占最小高度
+            int first = (int) Math.round(outerSplit.getHeight() * 110.0 / 670.0);
+            outerSplit.setDividerLocation(Math.max(first, sqlDrop.getMinimumSize().height));
+            int rest = outerSplit.getHeight() - outerSplit.getDividerLocation()
+                    - outerSplit.getDividerSize();
+            // 下段高度 = rest - 分隔位置 - 内层把手；日志段要正好落到它自己的最小高度
+            int second = Math.max(sqlUpper.getMinimumSize().height,
+                    rest - split.getDividerSize() - sqlLogBox.getMinimumSize().height);
+            split.setDividerLocation(second);
+        } finally {
+            splitAdjusting = false;
+        }
+    }
+
+    /** 用户按下分隔条把手就停止自动摆放。 */
+    private void watchDivider(JSplitPane pane) {
+        javax.swing.plaf.SplitPaneUI ui = pane.getUI();
+        if (!(ui instanceof javax.swing.plaf.basic.BasicSplitPaneUI)) {
+            return;
+        }
+        java.awt.Component divider =
+                ((javax.swing.plaf.basic.BasicSplitPaneUI) ui).getDivider();
+        if (divider == null) {
+            return;
+        }
+        divider.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                splitUserMoved = true;
+            }
+        });
     }
 
     public double splitResizeWeight() {
@@ -541,6 +598,25 @@ public final class SqlPage extends JPanel {
 
     public int splitDividerLocation() {
         return split.getDividerLocation();
+    }
+
+    /** 本页日志段是否还压在自己的最小高度上（对撞与自检都量真控件）。 */
+    public String logAtMin() {
+        if (sqlLogBox == null) {
+            return "0";
+        }
+        // JSplitPane 的边框会让实际高度比最小高度少 1~2px，留同样宽的容差
+        int diff = sqlLogBox.getHeight() - sqlLogBox.getMinimumSize().height;
+        return diff >= -4 && diff <= 4 ? "1" : "0";
+    }
+
+    /** 自检诊断用：日志段的实际高度与最小高度。 */
+    public int logBoxHeight() {
+        return sqlLogBox == null ? -1 : sqlLogBox.getHeight();
+    }
+
+    public int logBoxMinHeight() {
+        return sqlLogBox == null ? -1 : sqlLogBox.getMinimumSize().height;
     }
 
     /** 外层那条（拖拽区与表格之间）的三个值，与第一页的 drop 段同一判据。 */
@@ -571,7 +647,7 @@ public final class SqlPage extends JPanel {
         return (outerSplit.getLeftComponent() == sqlDrop ? "拖拽区" : "?")
                 + "|" + (split.getTopComponent() == sqlUpper
                         && findTable((java.awt.Container) sqlUpper) == table ? "表格区" : "?")
-                + "|" + (split.getBottomComponent() == sqlLog ? "日志区" : "?");
+                + "|" + (split.getBottomComponent() == sqlLogBox ? "日志区" : "?");
     }
 
     /** 表格区从上到下的三行容器：前缀行 / 移除与开关行 / 保存执行生成行。 */
@@ -683,6 +759,11 @@ public final class SqlPage extends JPanel {
 
     public JCheckBox upperBox() {
         return upperBox;
+    }
+
+    /** 覆盖开关：默认不勾选；勾选后执行副本先 DROP 脚本要建的表。 */
+    public JCheckBox dropExistingBox() {
+        return dropExisting;
     }
 
     /** 自检入口：不靠模拟鼠标，直接核对行数据、单元格可编辑性与改名/元数据动作。 */
@@ -1193,10 +1274,19 @@ public final class SqlPage extends JPanel {
             return LogText.NO_SQL_HINT;
         }
         materializeDisplayNames();
-        log("===== 开始执行脚本（目标库 " + cfg.database + "，每个文件一个事务）=====");
-        List<Src> items = new ArrayList<Src>();
-        for (Entry e : entries) {
-            items.add(new Src(e.path, e.text));
+        boolean overwrite = dropExisting.isSelected();
+        String note = overwrite ? "；已勾选「覆盖已存在表」，执行副本先 DROP 脚本要建的表" : "";
+        log("===== 开始执行脚本（目标库 " + cfg.database + "，每个文件一个事务" + note + "）=====");
+        List<String[]> dropped = new ArrayList<String[]>();
+        List<Src> items = prepareRunItems(overwrite, dropped);
+        if (overwrite) {
+            if (dropped.isEmpty()) {
+                log("[覆盖] 脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除");
+            } else {
+                for (String[] one : dropped) {
+                    log("[覆盖] " + one[0] + "：执行前先 DROP " + one[1]);
+                }
+            }
         }
         final List<Src> todo = items;
         final Config conf = cfg;
@@ -1208,6 +1298,26 @@ public final class SqlPage extends JPanel {
             host.inform2("执行完成", finishRun(r));
         });
         return null;
+    }
+
+    /**
+     * 生成执行副本：勾选覆盖时每个副本先补 DROP，并往 dropped 里记「文件名 → 表名」。
+     * 脚本正文（entries 里的 text）不动；保存与生成两条出口也拿不到这份副本。
+     */
+    public List<Src> prepareRunItems(boolean overwrite, List<String[]> dropped) {
+        List<Src> items = new ArrayList<Src>();
+        for (Entry e : entries) {
+            String text = e.text;
+            if (overwrite) {
+                SqlScript.DropPrep prep = SqlScript.prependDropTables(text);
+                text = prep.text;
+                if (!prep.tables.isEmpty()) {
+                    dropped.add(new String[]{baseName(e.path), String.join("、", prep.tables)});
+                }
+            }
+            items.add(new Src(e.path, text));
+        }
+        return items;
     }
 
     /**

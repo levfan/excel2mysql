@@ -5,6 +5,7 @@ import com.excel2mysql.core.TableOps;
 import com.excel2mysql.gui.AboutDialog;
 import com.excel2mysql.gui.DDLDialog;
 import com.excel2mysql.gui.HelpDialog;
+import com.excel2mysql.gui.LogPanel;
 import com.excel2mysql.gui.MainFrame;
 import com.excel2mysql.gui.ProgressDialog;
 import com.excel2mysql.gui.SqlPage;
@@ -111,6 +112,7 @@ public final class GuiDump {
                 dumpWidget("initials", frame.initialsBox());
                 dumpWidget("upper", frame.upperBox());
                 dumpWidget("sql_upper", frame.sqlPage().upperBox());
+                dumpWidget("sql_drop_existing", frame.sqlPage().dropExistingBox());
                 dumpWidget("progress", frame.pageProgressBar());
                 dumpButtons();
                 dumpTable("file", frame.fileTable());
@@ -134,6 +136,19 @@ public final class GuiDump {
                 put("drop.sql.accepts",
                         frame.sqlPage().sqlDropArea().acceptsDrops() ? "true" : "false");
                 put("split.sql.order", frame.sqlPage().segmentOrder());
+                // 日志默认高度 = 它自己的最小高度（用户口径：默认压到最低，仍可拖）。
+                // 比的是真控件量出来的高度，不是各栈抄一份配置值。
+                frame.validate();
+                frame.applySplitProportions();
+                frame.validate();
+                put("split.excel.logmin", frame.logAtMin());
+                frame.selectTab(1);
+                frame.validate();
+                frame.sqlPage().applySplitProportions();
+                frame.validate();
+                put("split.sql.logmin", frame.sqlPage().logAtMin());
+                frame.selectTab(0);
+                frame.validate();
 
                 // ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
                 put("hint.sqlrun", norm(frame.sqlRunHintText()));
