@@ -406,10 +406,28 @@ def main():
     # ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
     put("hint.sqlrun", norm(win.sql_run_hint.text()))
     put("hint.sqlrun.db", win.lbl_run_db.text())
+    # 第三页的脚本队列：拖拽区、清单表、覆盖开关与底部那一排按钮
+    put("sqlrun.drop.hint", win.sql_run_drop.label.text())
+    put("sqlrun.drop.accepts", "true" if win.sql_run_drop.acceptDrops() else "false")
+    dump_widget("run_drop_existing", win.chk_run_drop)
+    dump_table("sqlrun", win.sql_run_table)
+    put("table.sqlrun.title", title_of_table(win.sql_run_table))
+    put("sqlrun.noedit", "1" if win.sql_run_table.editTriggers()
+        == m.QAbstractItemView.NoEditTriggers else "0")
+    _run_bar = find_layout(win.main_tabs.widget(2), win.btn_run_scripts)
+    _run_names = []
+    if _run_bar is not None:
+        for i in range(_run_bar.count()):
+            wd = _run_bar.itemAt(i).widget()
+            if isinstance(wd, QPushButton) and norm(wd.text()):
+                _run_names.append(norm(wd.text()))
+    put("bar.sqlrun.order", "|".join(_run_names))
     # 页面上的静态标签按字典序连起来比：两边的控件遍历顺序本来就不同（Qt 按创建序、
-    # Swing 按加进容器的序），排序后比的是"这一页上有哪几句话"。
+    # Swing 按加进容器的序），排序后比的是"这一页上有哪几句话"。拖拽区自己那句提示
+    # 是画出来的（Java 侧同样直接画在画布上），不算这一页的静态标签。
     put("sqlrun.labels", "|".join(sorted(
-        norm(l.text()) for l in win.main_tabs.widget(2).findChildren(QLabel) if norm(l.text()))))
+        norm(l.text()) for l in win.main_tabs.widget(2).findChildren(QLabel)
+        if norm(l.text()) and not win.sql_run_drop.isAncestorOf(l))))
     put("sqlrun.default", win.sql_run_input.toPlainText())
     put("sqlrun.wrap", "wrap" if win.sql_run_input.lineWrapMode()
         == QPlainTextEdit.WidgetWidth else "nowrap")

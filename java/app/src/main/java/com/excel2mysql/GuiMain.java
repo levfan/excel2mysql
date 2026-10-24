@@ -1349,7 +1349,7 @@ public final class GuiMain {
                 || !frame.sqlPage().hintIsOk()) {
             problems.add("SQL 页提示条没跟着联动：" + frame.sqlPage().hintText());
         }
-        if (!frame.runDbHintText().contains("编辑区里的 SQL 将执行到这个库")
+        if (!frame.runDbHintText().contains("编辑区 SQL 与脚本文件都执行到这个库")
                 || !frame.runDbHintText().contains("testdb") || !frame.runDbHintIsOk()) {
             problems.add("SQL 执行器页的当前库条不对：" + frame.runDbHintText());
         }
@@ -1544,7 +1544,7 @@ public final class GuiMain {
         if (titles.size() != 3 || !"SQL 执行器".equals(titles.get(2))) {
             problems.add("第三个页签不对：" + titles);
         }
-        if (!"直接输入 SQL 执行：建库、建表、改结构、查元数据都行；一次可以写多条，用分号分隔"
+        if (!"两种用法：把 .sql 脚本拖到下面清单里按顺序执行；或直接在编辑区写 SQL 临时执行（多条用分号分隔）"
                 .equals(frame.sqlRunHintText())) {
             problems.add("「SQL 执行器」的提示文案不对：" + frame.sqlRunHintText());
         }
@@ -1589,10 +1589,11 @@ public final class GuiMain {
                 clearLogBtn = frame.sqlRunClearLogButton(),
                 execBtn = frame.sqlRunButton(), helpBtn = frame.sqlRunHelpButton();
         if (clearInputBtn == null || clearLogBtn == null || execBtn == null || helpBtn == null
-                || !"示例 (?)".equals(helpBtn.getText()) || !"执行".equals(execBtn.getText())
+                || !"示例 (?)".equals(helpBtn.getText())
+                || !"执行编辑区 SQL".equals(execBtn.getText())
                 || !"清空编辑区".equals(clearInputBtn.getText())
                 || !"清空结果区".equals(clearLogBtn.getText())) {
-            problems.add("「SQL 执行器」的四颗按钮不齐（示例 (?) / 执行 / 清空编辑区 / 清空结果区）");
+            problems.add("「SQL 执行器」的编辑区那颗执行按钮或清空按钮文案不对");
         }
         if (execBtn != null && !execBtn.getToolTipText().contains("中途出错整批回滚")) {
             problems.add("「执行」按钮没把事务语义写在 tooltip 上：" + execBtn.getToolTipText());
@@ -1690,6 +1691,108 @@ public final class GuiMain {
         if (clearInputBtn != null && !clearInputBtn.getToolTipText().contains("右侧结果区不动")
                 || clearLogBtn != null && !clearLogBtn.getToolTipText().contains("左边编辑区不动")) {
             problems.add("两颗清空的 tooltip 没说清各自管哪一边");
+        }
+
+        // 脚本队列：清单表、覆盖开关与两颗按钮的初始态
+        javax.swing.JTable runTable = frame.sqlRunFilesTable();
+        if (runTable == null || runTable.getColumnCount() != 4
+                || !"序号".equals(runTable.getColumnName(0))
+                || !"文件".equals(runTable.getColumnName(1))
+                || !"大小".equals(runTable.getColumnName(2))
+                || !"状态".equals(runTable.getColumnName(3))) {
+            problems.add("脚本清单不是「序号/文件/大小/状态」四列");
+        }
+        if (runTable != null && (runTable.isCellEditable(0, 0)
+                || !com.excel2mysql.gui.Tables.isZebra(runTable))) {
+            problems.add("脚本清单应只读且带斑马纹");
+        }
+        if (runTable != null && !com.excel2mysql.gui.Tables.RUN_TABLE_TITLE.equals(
+                com.excel2mysql.gui.Tables.titledAncestor(runTable))) {
+            problems.add("脚本清单的组框标题不对："
+                    + com.excel2mysql.gui.Tables.titledAncestor(runTable));
+        }
+        javax.swing.JButton runBtn = frame.sqlRunScriptsButton();
+        if (runBtn == null || !"执行脚本文件".equals(runBtn.getText()) || runBtn.isEnabled()) {
+            problems.add("空清单时「执行脚本文件」应灰着："
+                    + (runBtn == null ? "缺" : String.valueOf(runBtn.isEnabled())));
+        }
+        javax.swing.JCheckBox runDrop = frame.sqlRunDropBox();
+        if (runDrop == null || runDrop.isSelected()
+                || !"覆盖已存在表（先 DROP 再建）".equals(runDrop.getText())
+                || !runDrop.getToolTipText().contains("不改磁盘上的脚本正文")) {
+            problems.add("第三页的覆盖开关初始态或文案不对");
+        }
+        if (frame.sqlRunDropArea() == null
+                || !com.excel2mysql.gui.DropArea.RUN_HINT.equals(
+                        frame.sqlRunDropArea().hintText())) {
+            problems.add("第三页的拖拽区文案不是脚本队列那句");
+        }
+        // 加入、去重、点名读不到的；清单、日志与按钮启用条件要一起跟上
+        java.io.File runDir;
+        try {
+            runDir = java.nio.file.Files.createTempDirectory("e2m-sqlrun").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建脚本队列的临时目录失败：" + e);
+            return;
+        }
+        String ra = new java.io.File(runDir, "a.sql").getPath();
+        String rb = new java.io.File(runDir, "b.sql").getPath();
+        writeText(ra, "CREATE TABLE t_a (id INT);" + String.valueOf((char) 10));
+        writeText(rb, "CREATE TABLE t_b (id INT);" + String.valueOf((char) 10));
+        String rtxt = new java.io.File(runDir, "说明.txt").getPath();
+        writeText(rtxt, "不是脚本");
+        frame.sqlRunDropArea().fireDrop(java.util.Arrays.asList(ra, rb, rtxt));
+        if (frame.sqlRunFileCount() != 2 || runTable == null || runTable.getRowCount() != 2
+                || !"1".equals(runTable.getValueAt(0, 0))
+                || !"a.sql".equals(runTable.getValueAt(0, 1))
+                || !"待执行".equals(runTable.getValueAt(0, 3))
+                || !frame.sqlRunLogPanel().contains("[跳过] 不是 SQL 脚本，未读入：说明.txt")) {
+            problems.add("拖入的脚本没按顺序进清单，或混着的别的文件没点名跳过："
+                    + frame.sqlRunFileCount() + " 个");
+        }
+        if (runBtn != null && !runBtn.isEnabled()) {
+            problems.add("清单里有脚本后「执行脚本文件」仍不可点");
+        }
+        frame.sqlRunDropArea().fireDrop(java.util.Collections.singletonList(ra));
+        if (frame.sqlRunFileCount() != 2
+                || !frame.lastDialogText().contains("已在列表")
+                || !"添加结果".equals(frame.lastDialogTitle())) {
+            problems.add("重复拖入没有去重或没有回执：数量=" + frame.sqlRunFileCount()
+                    + " 标题=" + frame.lastDialogTitle()
+                    + " 弹窗=" + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        frame.addRunScriptsFromUi(java.util.Collections.singletonList(
+                new java.io.File(runDir, "missing.sql").getPath()));
+        if (frame.sqlRunFileCount() != 2
+                || !frame.lastDialogText().contains("未加入")
+                || !"warning".equals(frame.lastDialogIcon())) {
+            problems.add("读不到的脚本没点名「未加入」，或弹窗没用警告级：图标="
+                    + frame.lastDialogIcon() + " 弹窗="
+                    + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        frame.clearRunScriptsFromUi();
+        if (frame.sqlRunFileCount() != 0 || runTable == null || runTable.getRowCount() != 0
+                || (runBtn != null && runBtn.isEnabled())
+                || !frame.sqlRunLogPanel().contains("[清空] 已清空 2 个待执行脚本")) {
+            problems.add("「清空待执行脚本」没清空清单或没同步灰掉执行按钮");
+        }
+        // 空清单执行必须当场拦下：先验没选库那句，再临时选个库验"请先添加"
+        frame.runScriptsFromUi();
+        if (!com.excel2mysql.core.LogText.NO_DB_HINT.equals(frame.lastDialogText())) {
+            problems.add("没选库时点「执行脚本文件」没弹 NO_DB_HINT："
+                    + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        String keepDb = frame.selectedDatabase();
+        frame.setSelectedDatabase("selftest_db");
+        frame.runScriptsFromUi();
+        if (!"请先添加 SQL 脚本文件。".equals(frame.lastDialogText())) {
+            problems.add("有库但清单空着时没拦下：" + frame.lastDialogText());
+        }
+        frame.dbCombo().removeAllItems();
+        if (!keepDb.isEmpty()) {
+            frame.setSelectedDatabase(keepDb);
+        } else {
+            frame.refreshDbLabels();
         }
         frame.showSqlSamples();
         frame.setSqlRunInputText("SELECT 1 AS 连通检查;");

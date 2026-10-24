@@ -153,6 +153,20 @@ public final class GuiDump {
                 // ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
                 put("hint.sqlrun", norm(frame.sqlRunHintText()));
                 put("hint.sqlrun.db", frame.runDbHintText());
+                // 第三页的脚本队列：拖拽区、清单表、覆盖开关与底部那一排按钮
+                put("sqlrun.drop.hint", frame.sqlRunDropArea().hintText());
+                put("sqlrun.drop.accepts",
+                        frame.sqlRunDropArea().acceptsDrops() ? "true" : "false");
+                dumpWidget("run_drop_existing", frame.sqlRunDropBox());
+                dumpTable("sqlrun", frame.sqlRunFilesTable());
+                put("table.sqlrun.title", Tables.titledAncestor(frame.sqlRunFilesTable()));
+                put("sqlrun.noedit",
+                        frame.sqlRunFilesTable().isCellEditable(0, 0) ? "0" : "1");
+                java.util.List<String> runBar = new ArrayList<String>();
+                if (frame.sqlRunActionRow() != null) {
+                    collectRowButtons(frame.sqlRunActionRow(), runBar);
+                }
+                put("bar.sqlrun.order", join(runBar, "|"));
                 // 页面上的静态标签按字典序连起来比：两边的控件遍历顺序本来就不同
                 // （Qt 按创建序、Swing 按加进容器的序），排序后比的是"这一页上有哪几句话"。
                 java.util.List<String> runLabels = new ArrayList<String>();

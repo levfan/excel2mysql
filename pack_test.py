@@ -721,8 +721,8 @@ check("F3 目标库提示条：Excel 页显示导入措辞",
       w.lbl_imp_db.text())
 check("F4 目标库提示条：SQL 页显示执行措辞",
       "SQL 脚本将执行到这个库" in w.lbl_sql_db.text(), w.lbl_sql_db.text())
-check("F4b 目标库提示条：SQL 执行器页说的是编辑区那一段",
-      "编辑区里的 SQL 将执行到这个库" in w.lbl_run_db.text()
+check("F4b 目标库提示条：SQL 执行器页说的是编辑区与脚本文件两段",
+      "编辑区 SQL 与脚本文件都执行到这个库" in w.lbl_run_db.text()
       and "testdb" in w.lbl_run_db.text(), w.lbl_run_db.text())
 w.ed_port.setValue(3307)
 check("F5 改端口后状态栏的悬停提示实时联动（host:port 收在这条里）",
@@ -983,7 +983,7 @@ check("F17 保存改名后的脚本落在源文件旁且不覆盖原文件",
 check("F18 保存后 modified 标记复位，重复保存不再产生新写入",
       w.sql_files[-1]["modified"] is False)
 
-# ---- 第三个页签「SQL 执行器」：编辑区、三颗按钮、示例对话框与执行语义 ----
+# ---- 第三个页签「SQL 执行器」：编辑区、脚本清单、示例对话框与执行语义 ----
 check("F19 页签顺序为 Excel 导入 / SQL 脚本改名入库 / SQL 执行器",
       [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())]
       == ["Excel 导入", "SQL 脚本改名入库", "SQL 执行器"],
@@ -992,10 +992,6 @@ check("F20 编辑区开场就是那句连通检查且不折行",
       w.sql_run_input.toPlainText() == app_main.SQL_RUN_DEFAULT
       and w.sql_run_input.lineWrapMode() == QPlainTextEdit.NoWrap,
       w.sql_run_input.toPlainText())
-_run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
-             w.btn_sql_run_exec.text(): w.btn_sql_run_exec,
-             w.btn_sql_run_clear_input.text(): w.btn_sql_run_clear_input,
-             w.btn_sql_run_clear_log.text(): w.btn_sql_run_clear_log}
 check("F20b 编辑区与结果区同一支等宽字体、字号与第一页日志同档",
       w.sql_run_log.font().family() == w.sql_run_input.font().family()
       and w.sql_run_log.font().pointSize() == w.sql_run_input.font().pointSize()
@@ -1013,13 +1009,41 @@ check("F20c 结果集排成等宽表格：列宽按显示宽度补齐、NULL 显
                  "+------+--------+"], _TABLE)
 check("F20d 零行的表格只有表头那一框，不重复画收口线",
       _rt(["a"], []) == ["+---+", "| a |", "+---+"], _rt(["a"], []))
-check("F21 四颗按钮齐备且可点（顶部两颗 + 两个 pane 各一颗清空）",
-      len(_run_btns) == 4 and set(_run_btns) == {u"示例 (?)", u"执行",
-                                                 u"清空编辑区", u"清空结果区"}
-      and all(b.isEnabled() for b in _run_btns.values()), sorted(_run_btns))
-check("F22 执行按钮的 tooltip 把事务语义写全",
-      "全部成功才提交，中途出错整批回滚" in w.btn_sql_run_exec.toolTip(),
-      w.btn_sql_run_exec.toolTip())
+_run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
+             w.btn_sql_run_exec.text(): w.btn_sql_run_exec,
+             w.btn_sql_run_clear_input.text(): w.btn_sql_run_clear_input,
+             w.btn_sql_run_clear_log.text(): w.btn_sql_run_clear_log,
+             w.btn_run_clear.text(): w.btn_run_clear,
+             w.btn_run_scripts.text(): w.btn_run_scripts}
+check("F21 六颗按钮齐备：示例、执行编辑区、两个清空、清单区的清空与执行",
+      len(_run_btns) == 6
+      and set(_run_btns) == {u"示例 (?)", u"执行编辑区 SQL", u"清空编辑区",
+                             u"清空结果区", u"清空待执行脚本", u"执行脚本文件"}
+      and all(b.isEnabled() for n, b in _run_btns.items() if n != u"执行脚本文件")
+      and not _run_btns[u"执行脚本文件"].isEnabled(), sorted(_run_btns))
+check("F22 两个执行按钮的 tooltip 各说清自己的事务语义与互斥",
+      "全部成功才提交，中途出错整批回滚" in w.btn_sql_run_exec.toolTip()
+      and "互不影响" in w.btn_sql_run_exec.toolTip()
+      and "每个文件一个事务" in w.btn_run_scripts.toolTip(),
+      (w.btn_sql_run_exec.toolTip(), w.btn_run_scripts.toolTip()))
+from PySide6.QtWidgets import QGroupBox
+_run_group = w.sql_run_table.parentWidget()
+while _run_group is not None and not isinstance(_run_group, QGroupBox):
+    _run_group = _run_group.parentWidget()
+check("F22b 脚本清单有自己的组框标题、四列、斑马纹与只读选择行",
+      _run_group is not None and _run_group.title() == app_main.RUN_TABLE_TITLE
+      and [w.sql_run_table.horizontalHeaderItem(i).text() for i in range(4)]
+      == ["序号", "文件", "大小", "状态"]
+      and w.sql_run_table.alternatingRowColors()
+      and w.sql_run_table.editTriggers() == app_main.QAbstractItemView.NoEditTriggers,
+      (_run_group.title() if _run_group else None,
+       [w.sql_run_table.horizontalHeaderItem(i).text() for i in range(4)],
+       w.sql_run_table.alternatingRowColors()))
+check("F22c 底部覆盖开关只作用于脚本文件，默认不勾选",
+      not w.chk_run_drop.isChecked()
+      and "执行脚本文件" in w.chk_run_drop.toolTip()
+      and "不改磁盘上的脚本正文" in w.chk_run_drop.toolTip(),
+      (w.chk_run_drop.isChecked(), w.chk_run_drop.toolTip()))
 
 
 class _RunCursor:
@@ -1175,6 +1199,234 @@ _pc3 = _PConn()
 _run_exec(_pc3, _THREE, lambda t: None)
 check("F29e 命令行那条线不传进度与取消，行为与改前一致",
       len(_pc3.executed) == 3 and _pc3.committed, _pc3.executed)
+
+
+class _FileSink:
+    """脚本文件队列的回报口：记日志、累计进度，可按进度触发取消。"""
+
+    def __init__(self, cancel_after=None):
+        self.done = 0
+        self.total = 0
+        self.logs = []
+        self.errors = []
+        self.cancelled = False
+        self.cancel_after = cancel_after
+
+    def set_total(self, total):
+        self.total = max(self.total, int(total))
+
+    def advance(self, n=1, label=""):
+        self.done += max(0, int(n))
+        if self.cancel_after is not None and self.done >= self.cancel_after:
+            self.cancelled = True
+
+    def note(self, label=""):
+        pass
+
+    def log(self, text):
+        self.logs.append(text)
+
+    def log_error(self, text):
+        self.errors.append(text)
+
+
+class _FCursor:
+    def __init__(self, owner):
+        self.owner = owner
+        self.description = None
+
+    def execute(self, sql):
+        self.owner.calls.append(sql)
+        if self.owner.fail_on and self.owner.fail_on in sql:
+            raise RuntimeError("(1064, 'boom')")
+        if sql.lstrip().upper().startswith("SELECT"):
+            self.description = [("x",)]
+
+    def fetchall(self):
+        return [(1,)]
+
+    def close(self):
+        self.owner.calls.append("cursor.close")
+
+
+class _FConn:
+    def __init__(self, fail_on=None):
+        self.calls = []
+        self.fail_on = fail_on
+
+    def begin(self):
+        self.calls.append("begin")
+
+    def cursor(self):
+        return _FCursor(self)
+
+    def commit(self):
+        self.calls.append("commit")
+
+    def rollback(self):
+        self.calls.append("rollback")
+
+    def close(self):
+        self.calls.append("close")
+
+
+_run_a = os.path.join(_tmpdir, "run_a.sql")
+_run_b = os.path.join(_tmpdir, "run_b.sql")
+_run_c = os.path.join(_tmpdir, "run_c.sql")
+open(_run_a, "w", encoding="utf-8").write(
+    "CREATE TABLE ra (id INT);\nINSERT INTO ra VALUES (1);")
+open(_run_b, "w", encoding="utf-8").write(
+    "CREATE TABLE rb (id INT);\nINSERT INTO rb VALUES (1);")
+open(_run_c, "w", encoding="utf-8").write("-- 只有注释\n")
+_CFG_D = {"host": "h", "port": 3306, "user": "u", "password": "", "database": "d"}
+
+w.sql_run_files = []
+w._refresh_run_table()
+w.on_run_scripts_dropped([_run_a, os.path.join(_tmpdir, "note.txt")])
+check("F32 拖入只收 .sql：清单记下路径与大小，非脚本点名跳过",
+      len(w.sql_run_files) == 1
+      and w.sql_run_files[0]["path"] == _run_a
+      and w.sql_run_files[0]["size"] == os.path.getsize(_run_a)
+      and w.sql_run_files[0]["status"] == "待执行"
+      and w.btn_run_scripts.isEnabled()
+      and "note.txt" in w.sql_run_log.toPlainText(),
+      (w.sql_run_files, w.btn_run_scripts.isEnabled(), w.sql_run_log.toPlainText()))
+check("F32b 清单表格显示序号/文件名/人读大小/状态，并挂完整路径提示",
+      w.sql_run_table.rowCount() == 1
+      and w.sql_run_table.item(0, 0).text() == "1"
+      and w.sql_run_table.item(0, 1).text() == "run_a.sql"
+      and w.sql_run_table.item(0, 1).toolTip() == _run_a
+      and w.sql_run_table.item(0, 2).text()
+      == app_main.format_file_size(os.path.getsize(_run_a))
+      and w.sql_run_table.item(0, 3).text() == "待执行",
+      [w.sql_run_table.item(0, i).text() for i in range(4)])
+POPUPS.clear()
+w.on_run_scripts_dropped([os.path.join(_tmpdir, "note.txt")])
+check("F32c 只拖非脚本：一条提示、不弹添加结果", not POPUPS
+      and "不是 SQL 脚本文件" in w.sql_run_log.toPlainText(), POPUPS)
+POPUPS.clear()
+w.add_run_script_paths([_run_a])
+check("F33 重复路径不再入清单，弹窗与表格都点名跳过",
+      len(w.sql_run_files) == 1 and any("已在列表" in t for _, t in POPUPS)
+      and w.sql_run_table.rowCount() == 1, POPUPS)
+POPUPS.clear()
+w.add_run_script_paths([os.path.join(_tmpdir, "missing.sql")])
+check("F34 访问不到的文件不入清单，添加结果按告警给出原因",
+      len(w.sql_run_files) == 1 and len(POPUPS) == 1
+      and any("未加入" in t for _, t in POPUPS), (w.sql_run_files, POPUPS))
+w.add_run_script_paths([_run_b, _run_c])
+check("F35 多个脚本按加入顺序排队",
+      [s["path"] for s in w.sql_run_files] == [_run_a, _run_b, _run_c]
+      and w.sql_run_table.rowCount() == 3,
+      [s["path"] for s in w.sql_run_files])
+w.on_run_scripts_clear()
+check("F36 清空清单整份清出、执行按钮回灰，并说清清了几个",
+      w.sql_run_files == [] and w.sql_run_table.rowCount() == 0
+      and not w.btn_run_scripts.isEnabled()
+      and "已清空 3 个待执行脚本" in w.sql_run_log.toPlainText())
+POPUPS.clear()
+_old_cfg = w._conn_cfg
+w._conn_cfg = lambda: dict(_CFG_D, database="")
+w.on_run_scripts_execute()
+check("F36b 未选目标库时拦下脚本执行（日志与弹窗同句）",
+      any("未选择目标库" in t for _, t in POPUPS)
+      and "已拦下：未选择目标库" in w.log.toPlainText(), POPUPS)
+w._conn_cfg = lambda: dict(_CFG_D)
+POPUPS.clear()
+w.on_run_scripts_execute()
+check("F36c 清单为空时拦下脚本执行",
+      any("请先添加 SQL 脚本文件" in t for _, t in POPUPS), POPUPS)
+w._conn_cfg = _old_cfg
+
+# 任务本体：逐文件读盘、逐文件事务；失败不挡后面的文件
+_sink = _FileSink()
+_conn_ok = _FConn()
+_conn_bad = _FConn(fail_on="INSERT INTO rb")
+_cons = [_conn_ok, _conn_bad]
+app_main.connect = lambda cfg: _cons.pop(0)
+_res = app_main.sql_run_files_task([_run_a, _run_b], False, _CFG_D, _sink)
+check("F37 每个文件一个事务：前一个提交、失败的那个回滚，错误不挡后续文件",
+      _cons == [] and "commit" in _conn_ok.calls
+      and "rollback" in _conn_bad.calls and "commit" not in _conn_bad.calls
+      and _res["ok"] == 1 and _res["fail"] == 1
+      and _res["files"][0]["status"] == "ok" and _res["files"][1]["status"] == "fail",
+      (_conn_ok.calls, _conn_bad.calls, _res))
+check("F37b 失败文件的日志点名第几条并带 DDL 隐式提交提醒",
+      any("run_b.sql 第 2/2 条语句报错" in t for t in _sink.errors)
+      and any("隐式提交" in t for t in _sink.errors), _sink.errors)
+_sink2 = _FileSink()
+_conn_drop = _FConn()
+app_main.connect = lambda cfg: _conn_drop
+_res2 = app_main.sql_run_files_task([_run_a], True, _CFG_D, _sink2)
+check("F38 勾选覆盖后先 DROP 再建，脚本正文本身不被改写",
+      _conn_drop.calls[:4] == ["begin", "DROP TABLE IF EXISTS ra",
+                               "CREATE TABLE ra (id INT)", "INSERT INTO ra VALUES (1)"]
+      and "commit" in _conn_drop.calls
+      and open(_run_a, encoding="utf-8").read().startswith("CREATE TABLE ra"),
+      _conn_drop.calls)
+_sink3 = _FileSink()
+_connect_calls = []
+app_main.connect = lambda cfg: _connect_calls.append(cfg) or _FConn()
+_res3 = app_main.sql_run_files_task([_run_c], False, _CFG_D, _sink3)
+check("F39 只有注释的脚本跳过，连库都不连",
+      _res3["skipped"] == 1 and _connect_calls == []
+      and _res3["files"][0]["status"] == "skip", (_res3, _connect_calls))
+_sink4 = _FileSink()
+_conn_read = _FConn()
+app_main.connect = lambda cfg: _conn_read
+_res4 = app_main.sql_run_files_task(
+    [os.path.join(_tmpdir, "missing.sql"), _run_a], False, _CFG_D, _sink4)
+check("F40 读不出来的文件只记失败，后面的脚本继续执行",
+      _res4["fail"] == 1 and _res4["ok"] == 1
+      and any("读取失败" in t for t in _sink4.errors), (_res4, _sink4.errors))
+_sink5 = _FileSink()
+
+
+def _bomb(cfg):
+    raise RuntimeError("(2003, \"Can't connect\")")
+
+
+app_main.connect = _bomb
+_res5 = app_main.sql_run_files_task([_run_a, _run_b], False, _CFG_D, _sink5)
+check("F41 连不上库时剩余脚本统一记未执行，不冒充成单个文件失败",
+      _res5["conn_failed"] and _res5["cancelled"]
+      and [f["status"] for f in _res5["files"]] == ["cancel", "cancel"]
+      and any("连接失败" in t for t in _sink5.errors), (_res5, _sink5.errors))
+_sink6 = _FileSink(cancel_after=1)
+_conn_cancel = _FConn()
+app_main.connect = lambda cfg: _conn_cancel
+_res6 = app_main.sql_run_files_task([_run_a], False, _CFG_D, _sink6)
+check("F42 中途取消：本文件不提交、回滚后记已取消",
+      _res6["files"][0]["status"] == "cancel"
+      and "rollback" in _conn_cancel.calls and "commit" not in _conn_cancel.calls,
+      (_res6, _conn_cancel.calls))
+app_main.connect = _real_connect
+
+# 界面这一路：任务跑完把逐文件结局写回清单状态并弹汇总
+w.sql_run_files = []
+w.add_run_script_paths([_run_a, _run_b])
+w._conn_cfg = lambda: dict(_CFG_D)
+w.chk_run_drop.setChecked(False)
+_ui_conns = [_FConn(), _FConn()]
+app_main.connect = lambda cfg: _ui_conns.pop(0)
+POPUPS.clear()
+w.sql_run_log.clear()
+w.on_run_scripts_execute()
+check("F43 界面执行脚本文件：按清单顺序跑完，表格状态写回成功",
+      [w.sql_run_files[i]["status"] for i in range(2)] == ["成功", "成功"]
+      and [w.sql_run_table.item(i, 3).text() for i in range(2)] == ["成功", "成功"]
+      and any(t == "执行完成" and "成功 2 个文件，失败 0 个文件" in x
+              for t, x in POPUPS),
+      ([s["status"] for s in w.sql_run_files], POPUPS))
+check("F43b 执行前先写一条带目标库与文件数的开工日志",
+      "开始执行脚本文件（目标库 d，2 个文件，每个文件一个事务）" in w.sql_run_log.toPlainText(),
+      w.sql_run_log.toPlainText()[:300])
+app_main.connect = _real_connect
+w._conn_cfg = _old_cfg
+w.sql_run_files = []
+w._refresh_run_table()
+w.chk_run_drop.setChecked(False)
+
 
 
 def _boom(cfg):
