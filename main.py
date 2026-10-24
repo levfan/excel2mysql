@@ -2144,6 +2144,11 @@ class MainWindow(QWidget):
         on = bool(self.tables) and not self.task_busy((self.RES_EXCEL,))
         self.btn_gen_std.setEnabled(on)
         self.btn_gen_simple.setEnabled(on)
+        # 保存/执行只看清单里有没有脚本：忙的时候点下去由任务位拦下并说清在等谁，
+        # 比跟着一起灰更好判读；清单空了则没有任何可写/可执行的对象，必须灰
+        has_sql = bool(self.sql_files)
+        self.btn_sql_save.setEnabled(has_sql)
+        self.btn_sql_run.setEnabled(has_sql)
         # 这一页的判据是"有没有脚本"，不是"有没有解析出表"：
         # 解析在点下去之后才做，解析不出东西时日志会给话，按钮不该一直灰着让人以为坏了
         sql_on = bool(self.sql_files) and not self.task_busy((self.RES_SQL,))
@@ -2242,9 +2247,11 @@ class MainWindow(QWidget):
         name_row.addStretch(1)
 
         self.btn_sql_save = QPushButton("保存修改后ddl脚本")
+        self.btn_sql_save.setEnabled(False)
         self.btn_sql_save.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.btn_sql_save.clicked.connect(self.on_sql_save_modified)
         self.btn_sql_run = QPushButton("执行修改后ddl脚本到当前库")
+        self.btn_sql_run.setEnabled(False)
         self.btn_sql_run.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.btn_sql_run.clicked.connect(self.on_sql_execute)
         # 两颗生成按钮排在「执行修改后ddl脚本到当前库」右侧：与 Excel 导入页那两颗同一排同一口径，

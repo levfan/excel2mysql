@@ -211,6 +211,8 @@ public final class SqlPage extends JPanel {
                     + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖";
     private JButton genStd;
     private JButton genSimple;
+    /** 保存/执行两颗动作按钮：清单空时置灰（与两颗生成按钮同一处判据）。 */
+    private JButton saveButton;
     /** 这一页有没有任务在跑：只用来管两颗生成按钮，由主窗口每次改动任务清单时回来说一句。 */
     private boolean genBusy;
     /** 大小写开关：清单、元数据弹窗和生成件同步按大写显示；脚本正文不回写。 */
@@ -324,10 +326,12 @@ public final class SqlPage extends JPanel {
                 host.warn(hint);
             }
         });
-        JButton save = new JButton("保存修改后ddl脚本");
-        Buttons.secondary(save);
-        save.addActionListener(e -> saveModified());
+        saveButton = new JButton("保存修改后ddl脚本");
+        saveButton.setEnabled(false);
+        Buttons.secondary(saveButton);
+        saveButton.addActionListener(e -> saveModified());
         runButton = new JButton("执行修改后ddl脚本到当前库");
+        runButton.setEnabled(false);
         Buttons.primary(runButton);
         runButton.addActionListener(e -> {
             String hint = execute();
@@ -371,7 +375,7 @@ public final class SqlPage extends JPanel {
         // 开关在左、按钮在右，且都在分隔条之外，不跟着表格段被挤压
         JPanel runBtns = flow();
         runBtns.setOpaque(false);
-        runBtns.add(save);
+        runBtns.add(saveButton);
         runBtns.add(runButton);
         runBtns.add(genStd);
         runBtns.add(genSimple);
@@ -1546,13 +1550,17 @@ public final class SqlPage extends JPanel {
     }
 
     /**
-     * 两颗生成按钮的可用性：有脚本、且这一页没有任务在跑（与 Excel 页同一口径）。
-     * 别的按钮不跟着灰——它们点下去会由任务位拦下并说清楚在等哪个任务，比闷着不响有用。
+     * 四颗动作按钮的可用性：清单里没有脚本时全部置灰。
+     * 保存/执行只看清单空不空——忙的时候点下去由任务位拦下并说清在等谁；
+     * 两颗生成按钮还多看一眼任务，免得两个任务共用同一份数据互相踩。
      */
     private void applyGenEnabled() {
         boolean on = !entries.isEmpty() && !genBusy;
         genStd.setEnabled(on);
         genSimple.setEnabled(on);
+        boolean hasScript = !entries.isEmpty();
+        saveButton.setEnabled(hasScript);
+        runButton.setEnabled(hasScript);
     }
 
     /** 主窗口每次改动任务清单时回来说一句这一页忙不忙。 */
@@ -1882,6 +1890,11 @@ public final class SqlPage extends JPanel {
     /** 自检读主按钮的强调标记用。 */
     public JButton runButton() {
         return runButton;
+    }
+
+    /** 自检读「保存修改后ddl脚本」的启用状态用。 */
+    public JButton saveButton() {
+        return saveButton;
     }
 
 }

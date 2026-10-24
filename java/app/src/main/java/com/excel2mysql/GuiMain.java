@@ -2230,6 +2230,10 @@ public final class GuiMain {
                 || !frame.lastDialogText().contains("请先添加 SQL 脚本文件。")) {
             problems.add("没有脚本时点生成按钮没拦下：标题=" + frame.lastDialogTitle());
         }
+        // 清单空时四颗动作按钮都要在既有样式上置灰：不灰的话点下去才被拦，用户先白点一次
+        if (empty.saveButton().isEnabled() || empty.runButton().isEnabled()) {
+            problems.add("清单空时「保存修改后ddl脚本」「执行修改后ddl脚本到当前库」没有置灰");
+        }
         // 前缀两颗按钮同样要有前置守卫：无文件时返回提示，由按钮接线走 host.warn
         empty.setPrefixText("dim_");
         if (!com.excel2mysql.core.LogText.NO_SQL_HINT.equals(empty.applyPrefix())) {
@@ -2846,6 +2850,9 @@ public final class GuiMain {
         writeText(notSql, "不是脚本");
         com.excel2mysql.gui.SqlPage dpage = new com.excel2mysql.gui.SqlPage(frame);
         int before = dpage.entryCount();
+        if (dpage.saveButton().isEnabled() || dpage.runButton().isEnabled()) {
+            problems.add("刚打开的 SQL 页清单为空，保存/执行按钮却没置灰");
+        }
         dpage.sqlDropArea().fireDrop(java.util.Arrays.asList(dropped, notSql));
         if (dpage.entryCount() != before + 1
                 || !dpage.logPanel().contains("[跳过] 不是 SQL 脚本，未读入：说明.txt")) {
@@ -2882,6 +2889,9 @@ public final class GuiMain {
         page.addFiles(paths);
         if (page.entryCount() != 2) {
             problems.add("两个脚本应全部加载成功，实际并入 " + page.entryCount() + " 个");
+        }
+        if (!page.saveButton().isEnabled() || !page.runButton().isEnabled()) {
+            problems.add("清单里已有脚本，保存/执行按钮却还是灰的");
         }
         if (!"添加结果".equals(frame.lastDialogTitle())
                 || !frame.lastDialogText().replace("\n", "").contains(a)
@@ -3124,6 +3134,9 @@ public final class GuiMain {
         }
         if (page.genButtonsEnabled()) {
             problems.add("清空待上传文件后生成按钮还亮着");
+        }
+        if (page.saveButton().isEnabled() || page.runButton().isEnabled()) {
+            problems.add("清空待上传文件后保存/执行按钮还亮着");
         }
         if (!page.logPanel().contains("[清空] 已清空 2 个脚本文件")) {
             problems.add("清空待上传文件没有留痕");
