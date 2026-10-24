@@ -199,10 +199,14 @@ class LogMinPlacer(QObject):
             self.adjusting = False
         return False
 
+ZEBRA_ALT_BG = "#f4f8fc"
+
+
 def style_table_font(view):
     """表格内容与表头一起设成同一档字号：只设单元格不设表头，表头会小一圈。
 
-    两栈同一口径（Java 侧 gui.Tables.style），字号关系由用例钉住：日志不许比表格大。
+    两栈同一口径（Java 侧 gui.Tables.style / Tables.zebra），字号关系由用例钉住：
+    日志不许比表格大；斑马纹的隔行底色也由两栈共用这一个色值。
     """
     font = QFont("", TABLE_FONT_SIZE)
     view.setFont(font)
@@ -212,7 +216,37 @@ def style_table_font(view):
     # 18 号字会顶满一行、11 号字又空出一截
     view.verticalHeader().setDefaultSectionSize(
         view.fontMetrics().height() + TABLE_ROW_PADDING)
+    view.setAlternatingRowColors(True)
+    view.setStyleSheet("QTableView { alternate-background-color: %s; }" % ZEBRA_ALT_BG)
     return view
+
+
+# 主按钮（执行/导入）的强调色，与 Java 侧 gui.Buttons.primary 同一组色值；
+# 次级强调（保存脚本）只描边不铺色，避免一屏出现两颗同等分量的主按钮。
+PRIMARY_BUTTON_QSS = (
+    "QPushButton { background-color: #2f6feb; color: #ffffff;"
+    " border: 1px solid #2459c9; border-radius: 4px;"
+    " padding: 3px 12px; font-weight: bold; }"
+    "QPushButton:hover { background-color: #3b7bf5; }"
+    "QPushButton:pressed { background-color: #2459c9; }"
+    "QPushButton:disabled { background-color: #aac4f0;"
+    " border-color: #aac4f0; color: #f5f8ff; }"
+)
+SECONDARY_BUTTON_QSS = (
+    "QPushButton { color: #1f5fd0; background: #f4f8ff;"
+    " border: 1px solid #8fb4ea; border-radius: 4px; padding: 3px 10px; }"
+    "QPushButton:hover { background: #e8f1ff; border-color: #2f6feb; }"
+    "QPushButton:disabled { color: #9aa7b8; background: #f7f9fc;"
+    " border-color: #c9d4e4; }"
+)
+
+
+def hline():
+    """动作区与上方内容之间的细分隔线（两栈同一处：Java 侧用 JSeparator）。"""
+    line = QFrame()
+    line.setFixedHeight(1)
+    line.setStyleSheet("background-color: #dbe3ee;")
+    return line
 
 
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
@@ -1444,6 +1478,34 @@ class MainWindow(QWidget):
         # 3. 文件列表
         file_box = QGroupBox(FILE_TABLE_TITLE)
         fl = QVBoxLayout(file_box)
+
+        # 命名规则工具条贴表格上沿：它管的是"表名/字段名怎么起"，与表格内容同组，
+        # 但不占下面前缀行——前缀行要留给前缀输入框与两颗按钮。
+        # 两颗都默认勾上：新加的文件直接按「首字母 + 大写」起名。
+        # 在连信号之前设好，免得启动时凭空打一行"切换"日志
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("命名规则："))
+        self.chk_initials = QCheckBox("表名与字段名取拼音首字母")
+        self.chk_initials.setChecked(True)
+        self.chk_initials.setToolTip(
+            "由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、\n"
+            "水库基础信息 → skjcxx）；默认已勾选，取消则用全拼（ding_dan_jin_e）。\n"
+            "文件名括号里显式写下的英文表名不受影响；对之后添加的文件生效。")
+        self.chk_initials.toggled.connect(self.on_initials_toggled)
+        self.chk_upper = QCheckBox("表名与字段名转大写")
+        self.chk_upper.setChecked(True)
+        self.chk_upper.setToolTip(
+            "由中文或文件名转写出来的表名与字段名全部大写\n"
+            "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；\n"
+            "默认已勾选，取消则用小写。文件名括号里写下的英文表名同样转大写；\n"
+            "结构定义 Sheet 里人工写的字段名与手动改过的表名前缀原样保留；\n"
+            "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
+        self.chk_upper.toggled.connect(self.on_upper_toggled)
+        name_row.addWidget(self.chk_initials)
+        name_row.addWidget(self.chk_upper)
+        name_row.addStretch(1)
+        fl.addLayout(name_row)
+
         self.file_table = QTableWidget(0, 7)
         style_table_font(self.file_table)
         self.file_table.setHorizontalHeaderLabels(
@@ -1452,7 +1514,7 @@ class MainWindow(QWidget):
         header = self.file_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.file_table.setColumnWidth(0, 54)
+        self.file_table.setColumnWidth(0, 44)
         self.file_table.setColumnWidth(1, 320)
         self.file_table.setColumnWidth(2, 200)
         self.file_table.setColumnWidth(3, 280)
@@ -1485,32 +1547,6 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.ed_prefix, 1)
         prefix_row.addWidget(self.btn_apply_prefix)
         prefix_row.addWidget(self.btn_replace_prefix)
-        # 命名开关放在表名治理行：它和前缀一样是"名字怎么起"的治理项。
-        # 不能进底部操作条——那条的最小宽度已经贴着 768，再塞一颗复选框
-        # 会被 U7 的"整窗落在可用区内"当场抓住（实测顶到 922）。
-        # 两颗复选框竖着摞，横向只占一颗的宽度，免得把这一行也顶宽
-        name_switches = QVBoxLayout()
-        # 两颗都默认勾上：新加的文件直接按「首字母 + 大写」起名。
-        # 在连信号之前设好，免得启动时凭空打一行"切换"日志
-        self.chk_initials = QCheckBox("表名与字段名取拼音首字母")
-        self.chk_initials.setChecked(True)
-        self.chk_initials.setToolTip(
-            "由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、\n"
-            "水库基础信息 → skjcxx）；默认已勾选，取消则用全拼（ding_dan_jin_e）。\n"
-            "文件名括号里显式写下的英文表名不受影响；对之后添加的文件生效。")
-        self.chk_initials.toggled.connect(self.on_initials_toggled)
-        name_switches.addWidget(self.chk_initials)
-        self.chk_upper = QCheckBox("表名与字段名转大写")
-        self.chk_upper.setChecked(True)
-        self.chk_upper.setToolTip(
-            "由中文或文件名转写出来的表名与字段名全部大写\n"
-            "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；\n"
-            "默认已勾选，取消则用小写。文件名括号里写下的英文表名同样转大写；\n"
-            "结构定义 Sheet 里人工写的字段名与手动改过的表名前缀原样保留；\n"
-            "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
-        self.chk_upper.toggled.connect(self.on_upper_toggled)
-        name_switches.addWidget(self.chk_upper)
-        prefix_row.addLayout(name_switches)
         fl.addLayout(prefix_row)
 
         btns = QHBoxLayout()
@@ -1520,9 +1556,10 @@ class MainWindow(QWidget):
         self.btn_preview.clicked.connect(self.on_preview_structure)
         self.btn_ddl = QPushButton("预览 DDL")
         self.btn_ddl.clicked.connect(self.on_preview_ddl)
-        btns.addWidget(self.btn_clear)
-        btns.addWidget(self.btn_preview)
-        btns.addWidget(self.btn_ddl)
+        # 三颗都是次级操作：等宽铺满整行，不跟底部的执行按钮抢注意力
+        btns.addWidget(self.btn_clear, 1)
+        btns.addWidget(self.btn_preview, 1)
+        btns.addWidget(self.btn_ddl, 1)
         fl.addLayout(btns)
 
         # 4. 日志
@@ -1560,17 +1597,28 @@ class MainWindow(QWidget):
         self.excel_log_placer = LogMinPlacer(self.excel_split, log_panel)
         excel_lay.addWidget(self.excel_split, 1)
 
-        # 6. 操作（贴在窗口底部的动作条）
+        # 6. 执行与输出（贴在窗口底部的动作条）
+        # 左列是执行选项与页内进度，右侧才是动作按钮：进度跟着执行走，放在同一层；
+        # 主按钮用强调色，停止与两颗生成按钮保持普通样式，一屏里只留一个视觉重点。
+        excel_lay.addWidget(hline())
         op = QHBoxLayout()
+        op_left = QVBoxLayout()
+        op_left.setSpacing(2)
         self.chk_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
+        op_left.addWidget(self.chk_drop)
+        self.progress = QProgressBar()
+        self.progress.setValue(0)
+        self.progress.setMinimumWidth(160)
+        op_left.addWidget(self.progress)
+        op.addLayout(op_left, 1)
+        op.addSpacing(12)
         self.btn_import = QPushButton("开始导入")
         self.btn_import.setEnabled(False)
+        self.btn_import.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.btn_import.clicked.connect(self.on_start_import)
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.on_stop)
-        op.addWidget(self.chk_drop)
-        op.addStretch(1)
         op.addWidget(self.btn_stop)
         op.addWidget(self.btn_import)
         # 两个生成按钮排在「开始导入」右侧：它们和导入用的是同一份已解析表定义，
@@ -1590,10 +1638,6 @@ class MainWindow(QWidget):
         op.addWidget(self.btn_gen_std)
         op.addWidget(self.btn_gen_simple)
         excel_lay.addLayout(op)
-
-        self.progress = QProgressBar()
-        self.progress.setValue(0)
-        excel_lay.addWidget(self.progress)
 
         self.main_tabs.addTab(excel_page, "Excel 导入")
         self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本改名入库")
@@ -1828,6 +1872,20 @@ class MainWindow(QWidget):
         self.sql_drop.files_dropped.connect(self.on_sql_files_dropped)
         self.sql_drop.clicked.connect(self.on_sql_add_files)
 
+        # 命名规则工具条贴表格上沿：与第一页同一位置；这一页只有大小写一颗。
+        # 默认不勾选。勾选后表名清单、元数据弹窗和生成件都按大写显示，
+        # 但脚本正文仍保持原样，避免用户只是想看一份大写清单却把源文件改掉。
+        name_bar = QHBoxLayout()
+        name_bar.addWidget(QLabel("命名规则："))
+        self.chk_sql_upper = QCheckBox("表名与字段名转大写")
+        self.chk_sql_upper.setToolTip(
+            "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部大写\n"
+            "（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；默认不勾选。\n"
+            "脚本正文不改，手动改过的新表名会保留其输入内容。")
+        self.chk_sql_upper.toggled.connect(self.on_sql_upper_toggled)
+        name_bar.addWidget(self.chk_sql_upper)
+        name_bar.addStretch(1)
+
         self.sql_table = QTableWidget(0, 5)
         style_table_font(self.sql_table)
         # 「CREATE 出现次数」这一列去掉：同一份脚本里一张表被写两遍，日志已经逐条点名，
@@ -1838,7 +1896,7 @@ class MainWindow(QWidget):
         header = self.sql_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.sql_table.setColumnWidth(0, 54)
+        self.sql_table.setColumnWidth(0, 44)
         self.sql_table.setColumnWidth(1, 300)
         self.sql_table.setColumnWidth(2, 260)
         self.sql_table.setColumnWidth(3, 200)
@@ -1871,9 +1929,7 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.btn_sql_prefix)
         prefix_row.addWidget(self.btn_sql_replace)
 
-        # 第二页只保留大小写开关：默认不勾选。勾选后表名清单、元数据弹窗和生成件都按大写显示，
-        # 但脚本正文仍保持原样，避免用户只是想看一份大写清单却把源文件改掉。
-        # 清空按钮排在同一排的最左：表格下面第一排（前缀行的下一行）的最左那颗，
+        # 清空按钮排在表格下面第一排的最左（前缀行的下一行），
         # 与「Excel 导入」那页「清空待上传文件」同一位置同一语义：整份清出清单，不是只删选中行。
         # 不塞进保存/执行那一排——那排的最小宽度已经贴着窗口宽度，再加一颗就顶出屏幕
         # （U7 那条"整窗落在可用区内"实测被顶到 848 > 可用 800）。
@@ -1881,18 +1937,13 @@ class MainWindow(QWidget):
         self.btn_sql_clear = QPushButton("清空待上传文件")
         self.btn_sql_clear.clicked.connect(self.on_sql_clear_files)
         name_row.addWidget(self.btn_sql_clear)
-        self.chk_sql_upper = QCheckBox("表名与字段名转大写")
-        self.chk_sql_upper.setToolTip(
-            "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部大写\n"
-            "（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；默认不勾选。\n"
-            "脚本正文不改，手动改过的新表名会保留其输入内容。")
-        self.chk_sql_upper.toggled.connect(self.on_sql_upper_toggled)
-        name_row.addWidget(self.chk_sql_upper)
         name_row.addStretch(1)
 
         self.btn_sql_save = QPushButton("保存修改后ddl脚本")
+        self.btn_sql_save.setStyleSheet(SECONDARY_BUTTON_QSS)
         self.btn_sql_save.clicked.connect(self.on_sql_save_modified)
         self.btn_sql_run = QPushButton("执行修改后ddl脚本到当前库")
+        self.btn_sql_run.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.btn_sql_run.clicked.connect(self.on_sql_execute)
         # 两颗生成按钮排在「执行修改后ddl脚本到当前库」右侧：与 Excel 导入页那两颗同一排同一口径，
         # 数据源换成了脚本里的 CREATE TABLE，产物形状不变
@@ -1936,6 +1987,7 @@ class MainWindow(QWidget):
         sql_upper = QGroupBox(SQL_TABLE_TITLE)
         up_lay = QVBoxLayout(sql_upper)
         up_lay.setContentsMargins(0, 0, 0, 0)
+        up_lay.addLayout(name_bar)
         up_lay.addWidget(self.sql_table, 1)
         up_lay.addLayout(prefix_row)
         up_lay.addLayout(name_row)
@@ -1981,8 +2033,13 @@ class MainWindow(QWidget):
         run_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         run_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         run_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # 视口默认铺一层窗口底色，在这条动作带上会显成一条灰带：只留按钮本身
+        run_scroll.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
         run_scroll.setWidget(run_box)
         op.addWidget(run_scroll, 1)
+        # 执行层与上方表格区之间的细分隔线：底部动作条不再和表格内容糊成一片
+        lay.addWidget(hline())
         lay.addLayout(op)
         return page
 
@@ -2505,6 +2562,7 @@ class MainWindow(QWidget):
         self.btn_sql_run_samples.setToolTip("打开示例清单：选中一条可复制到剪贴板或插到编辑区")
         self.btn_sql_run_samples.clicked.connect(self.on_sql_samples)
         self.btn_sql_run_exec = QPushButton("执行")
+        self.btn_sql_run_exec.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.btn_sql_run_exec.setToolTip("按分号切句逐条执行；全部成功才提交，中途出错整批回滚")
         self.btn_sql_run_exec.clicked.connect(self.on_sql_run)
         bar.addWidget(self.btn_sql_run_samples)

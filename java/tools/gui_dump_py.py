@@ -248,6 +248,7 @@ def dump_table(role, tw):
         cols.append(norm(it.text()) if it else "")
     put("table.%s.cols" % role, "|".join(cols))
     put("table.%s.width" % role, tw.columnCount())
+    put("table.%s.zebra" % role, int(bool(tw.alternatingRowColors())))
     rows = []
     for r in range(tw.rowCount()):
         cells = []

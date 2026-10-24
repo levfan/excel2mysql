@@ -1107,6 +1107,7 @@ public final class GuiDump {
         }
         put("table." + role + ".cols", join(cols, "|"));
         put("table." + role + ".width", String.valueOf(t.getColumnCount()));
+        put("table." + role + ".zebra", Tables.isZebra(t) ? "1" : "0");
         StringBuilder rows = new StringBuilder();
         for (int r = 0; r < t.getRowCount(); r++) {
             if (r > 0) {
@@ -1131,6 +1132,7 @@ public final class GuiDump {
         }
         put("table.sql.cols", join(cols, "|"));
         put("table.sql.width", String.valueOf(page.columnCount()));
+        put("table.sql.zebra", Tables.isZebra(page.tableWidget()) ? "1" : "0");
         StringBuilder rows = new StringBuilder();
         for (int r = 0; r < page.rowCount(); r++) {
             if (r > 0) {

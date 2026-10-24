@@ -265,7 +265,7 @@ public final class SqlPage extends JPanel {
         Tables.style(table);
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
-        table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(54));
+        table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(44));
         table.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(300));
         table.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(260));
         table.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(200));
@@ -292,6 +292,8 @@ public final class SqlPage extends JPanel {
                 }
             }
         });
+        // 斑马纹要挂在「文件」列渲染器之后：晚一步挂会把那一列的路径提示一起包进来
+        Tables.zebra(table);
 
         JScrollPane scroll = new JScrollPane(table);
         scroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(120)));
@@ -321,8 +323,10 @@ public final class SqlPage extends JPanel {
             }
         });
         JButton save = new JButton("保存修改后ddl脚本");
+        Buttons.secondary(save);
         save.addActionListener(e -> saveModified());
         runButton = new JButton("执行修改后ddl脚本到当前库");
+        Buttons.primary(runButton);
         runButton.addActionListener(e -> {
             String hint = execute();
             if (hint != null) {
@@ -378,12 +382,16 @@ public final class SqlPage extends JPanel {
         op.add(dropExisting, BorderLayout.WEST);
         op.add(runBtns, BorderLayout.EAST);
 
+        // 命名规则工具条贴表格上沿（与第一页同一位置）：管的是"表名/字段名怎么起"
+        JPanel nameBar = flow();
+        nameBar.add(new JLabel("命名规则："));
+        nameBar.add(upperBox);
+
         // 清空按钮排在表格下方第一排（前缀行的下一行）的最左，
         // 与「Excel 导入」那页「清空待上传文件」同一位置同一语义
         JPanel nameRow = flow();
         rowName = nameRow;
         nameRow.add(clearSql);
-        nameRow.add(upperBox);
 
         JPanel actions = new JPanel(new BorderLayout());
         actions.add(prefixRow, BorderLayout.NORTH);
@@ -392,6 +400,7 @@ public final class SqlPage extends JPanel {
         JPanel upper = new JPanel(new BorderLayout(UiScale.px(4), UiScale.px(4)));
         // 表格区套一层标题边框，标题就是这张表的标识——与第一页「待导入文件」同一做法
         Tables.titled(upper, Tables.SQL_TABLE_TITLE);
+        upper.add(nameBar, BorderLayout.NORTH);
         upper.add(scroll, BorderLayout.CENTER);
         upper.add(actions, BorderLayout.SOUTH);
 
@@ -447,7 +456,11 @@ public final class SqlPage extends JPanel {
         north.add(hint, BorderLayout.NORTH);
         add(north, BorderLayout.NORTH);
         add(outerSplit, BorderLayout.CENTER);
-        add(op, BorderLayout.SOUTH);
+        // 执行层与上方表格区之间的细分隔线（与第一页同一处）
+        JPanel bottom = new JPanel(new BorderLayout(0, UiScale.px(2)));
+        bottom.add(new javax.swing.JSeparator(), BorderLayout.NORTH);
+        bottom.add(op, BorderLayout.CENTER);
+        add(bottom, BorderLayout.SOUTH);
     }
 
     private static JPanel flow() {
@@ -727,6 +740,11 @@ public final class SqlPage extends JPanel {
 
     public String columnName(int col) {
         return String.valueOf(model.getColumnName(col));
+    }
+
+    /** 对撞器读斑马纹开关用（与第一页 fileTable() 同一用途）。 */
+    public javax.swing.JTable tableWidget() {
+        return table;
     }
 
     public int selectedRowCount() {
@@ -1851,6 +1869,11 @@ public final class SqlPage extends JPanel {
 
     public JButton genSimpleButton() {
         return genSimple;
+    }
+
+    /** 自检读主按钮的强调标记用。 */
+    public JButton runButton() {
+        return runButton;
     }
 
 }

@@ -106,4 +106,55 @@ public final class Tables {
         table.setRowHeight(fm.getHeight() + UiScale.px(6));
         return table;
     }
+
+    /** 隔行底色（与 main.py 的 ZEBRA_ALT_BG 同值），逐行扫读时不容易串行。 */
+    public static final java.awt.Color ZEBRA_ALT_BG = new java.awt.Color(0xf4, 0xf8, 0xfc);
+
+    private static final String ZEBRA_KEY = "excel2mysql.zebra";
+
+    /**
+     * 给表格加斑马纹。Swing 没有 Qt 的 setAlternatingRowColors，只能包一层渲染器；
+     * 已经按列挂过自定义渲染器的（SQL 页「文件」列的路径提示）也要一起包住，
+     * 否则那一列会自己铺白底，条纹断在中间。
+     */
+    public static void zebra(javax.swing.JTable table) {
+        if (Boolean.TRUE.equals(table.getClientProperty(ZEBRA_KEY))) {
+            return;
+        }
+        javax.swing.table.TableCellRenderer base = table.getDefaultRenderer(Object.class);
+        table.setDefaultRenderer(Object.class, new ZebraRenderer(base));
+        for (int i = 0; i < table.getColumnCount(); i++) {
+            javax.swing.table.TableColumn col = table.getColumnModel().getColumn(i);
+            javax.swing.table.TableCellRenderer own = col.getCellRenderer();
+            if (own != null && !(own instanceof ZebraRenderer)) {
+                col.setCellRenderer(new ZebraRenderer(own));
+            }
+        }
+        table.putClientProperty(ZEBRA_KEY, Boolean.TRUE);
+    }
+
+    /** 对撞器读的是真表格上的斑马纹开关，不是两边各抄一份常量。 */
+    public static boolean isZebra(javax.swing.JTable table) {
+        return Boolean.TRUE.equals(table.getClientProperty(ZEBRA_KEY));
+    }
+
+    private static final class ZebraRenderer implements javax.swing.table.TableCellRenderer {
+        private final javax.swing.table.TableCellRenderer delegate;
+
+        ZebraRenderer(javax.swing.table.TableCellRenderer delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public java.awt.Component getTableCellRendererComponent(
+                javax.swing.JTable table, Object value, boolean selected,
+                boolean focused, int row, int column) {
+            java.awt.Component c = delegate.getTableCellRendererComponent(
+                    table, value, selected, focused, row, column);
+            if (!selected) {
+                c.setBackground(row % 2 == 0 ? table.getBackground() : ZEBRA_ALT_BG);
+            }
+            return c;
+        }
+    }
 }

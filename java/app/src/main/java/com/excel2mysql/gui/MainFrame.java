@@ -168,7 +168,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 手动加载一次 +1：自动连接的结果回来晚了就作废，不能盖掉用户刚选的库。 */
     private int dbLoadSeq;
     private String zipSessionDir;
-    private int zipDestSeq;
     private final Names names = new Names(PinyinLoader.get());
     private final TableBuilder builder = new TableBuilder(new Infer(names), names);
 
@@ -472,10 +471,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 }
             }
         });
-        int[] widths = {54, 320, 200, 280, 80, 90, 160};
+        int[] widths = {44, 320, 200, 280, 80, 90, 160};
         for (int i = 0; i < widths.length && i < table.getColumnCount(); i++) {
             table.getColumnModel().getColumn(i).setPreferredWidth(UiScale.px(widths[i]));
         }
+        Tables.zebra(table);
         // 列宽可自由拖动，最后一列自动吃掉剩余空间（Qt 的 Interactive + stretchLastSection）
         table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN);
         JScrollPane tableScroll = new JScrollPane(table);
@@ -493,9 +493,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
         prefixBtns.add(applyPrefix);
         prefixBtns.add(replacePrefix);
-        // 命名开关（全拼/首字母、小写/大写）跟表名前缀同属"名字怎么起"的治理项。
-        // 竖着摞两颗，横向只占一颗的宽度，不会把前缀输入框挤没
-        // 两颗都默认勾上：新加的文件直接按「首字母 + 大写」起名。
+        // 命名规则工具条贴表格上沿（与 main.py 同一位置）：它管的是"表名/字段名怎么起"，
+        // 与表格内容同组，但不占下面前缀行——前缀行要留给输入框与两颗按钮。
         // setSelected 不触发 ActionListener，启动时不会凭空打一行"切换"日志
         initialsBox = new javax.swing.JCheckBox("表名与字段名取拼音首字母");
         initialsBox.setSelected(true);
@@ -515,14 +514,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："
                 + (upperBox.isSelected() ? "大写" : "小写")
                 + "（对之后添加的文件生效，结构定义 Sheet 里人工写的字段名不受影响）"));
-        JPanel nameSwitches = new JPanel();
-        nameSwitches.setLayout(new javax.swing.BoxLayout(nameSwitches, javax.swing.BoxLayout.Y_AXIS));
-        nameSwitches.add(initialsBox);
-        nameSwitches.add(upperBox);
+        JPanel nameBar = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
+        nameBar.add(new JLabel("命名规则："));
+        nameBar.add(initialsBox);
+        nameBar.add(upperBox);
         JPanel prefixEast = new JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
         prefixEast.add(prefixBtns);
-        prefixEast.add(nameSwitches);
         JPanel prefixRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
         prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
@@ -544,8 +543,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JPanel fileRows = new JPanel(new BorderLayout(0, UiScale.px(2)));
         fileRows.add(prefixRow, BorderLayout.NORTH);
         fileRows.add(btnRow, BorderLayout.SOUTH);
-        JPanel fileBox = new JPanel(new BorderLayout());
+        JPanel fileBox = new JPanel(new BorderLayout(0, UiScale.px(2)));
         Tables.titled(fileBox, Tables.FILE_TABLE_TITLE);
+        fileBox.add(nameBar, BorderLayout.NORTH);
         fileBox.add(tableScroll, BorderLayout.CENTER);
         fileBox.add(fileRows, BorderLayout.SOUTH);
 
@@ -595,11 +595,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         watchDivider(stacked);
         watchDivider(lower);
 
-        // 底部动作条：勾选框在左，停止与开始导入在右，再下面才是页内进度条（main.py:976-994）
+        // 底部动作条：左列是执行选项与页内进度，右侧才是动作按钮（main.py:976-994）。
+        // 主按钮用强调色，停止与两颗生成按钮保持普通样式，一屏里只留一个视觉重点
         dropExisting = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
         dropExisting.addActionListener(e -> refreshPreview());
         importBtn = new JButton("开始导入");
         importBtn.setEnabled(false);
+        Buttons.primary(importBtn);
         importBtn.addActionListener(e -> startImport());
         // 页面级「停止」：Python 的进度框根本没有 X，中止就靠这个按钮
         stopBtn = new JButton("停止");
@@ -624,18 +626,29 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         opRight.add(importBtn);
         opRight.add(genStd);
         opRight.add(genSimple);
-        JPanel op = new JPanel(new BorderLayout());
-        op.add(dropExisting, BorderLayout.WEST);
-        op.add(opRight, BorderLayout.EAST);
 
         pageProgress = new javax.swing.JProgressBar();
         // Qt 的 QProgressBar 默认就在条上印百分比，Swing 默认什么都不画：
         // 不开这个，页内进度条在两条线上看起来是两种东西
         pageProgress.setStringPainted(true);
         pageProgress.setPreferredSize(new Dimension(UiScale.px(200), UiScale.px(18)));
+        pageProgress.setMaximumSize(new Dimension(Integer.MAX_VALUE, UiScale.px(18)));
+        pageProgress.setAlignmentX(0f);
+        dropExisting.setAlignmentX(0f);
+        dropExisting.setMaximumSize(new Dimension(
+                Integer.MAX_VALUE, dropExisting.getPreferredSize().height));
+        JPanel opLeft = new JPanel();
+        opLeft.setLayout(new javax.swing.BoxLayout(opLeft, javax.swing.BoxLayout.Y_AXIS));
+        opLeft.add(dropExisting);
+        opLeft.add(javax.swing.Box.createVerticalStrut(UiScale.px(2)));
+        opLeft.add(pageProgress);
+        JPanel op = new JPanel(new BorderLayout());
+        op.add(opLeft, BorderLayout.CENTER);
+        op.add(opRight, BorderLayout.EAST);
         JPanel south = new JPanel(new BorderLayout(0, UiScale.px(2)));
-        south.add(op, BorderLayout.NORTH);
-        south.add(pageProgress, BorderLayout.SOUTH);
+        // 执行层与上方表格区之间的细分隔线：底部动作条不再和表格内容糊成一片
+        south.add(new javax.swing.JSeparator(), BorderLayout.NORTH);
+        south.add(op, BorderLayout.CENTER);
 
         JPanel page = new JPanel(new BorderLayout());
         page.add(impHint, BorderLayout.NORTH);
@@ -1536,6 +1549,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return stopBtn;
     }
 
+    /** 自检按用户的入口点这颗主按钮，不绕过界面直接调导入逻辑。 */
+    public javax.swing.JButton importButton() {
+        return importBtn;
+    }
+
     /** 自检与命令行入口按用户的方式点这两颗生成按钮，而不是绕过界面直接调 core。 */
     public javax.swing.JButton genStandardButton() {
         return genStd;
@@ -1633,6 +1651,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         final Task task = tasks.get(tasks.size() - 1);
         applyNamingSwitches();
+        // 解压子目录的编号起点 = 这一会话已经解出过多少个包内文件。
+        // 在 EDT 上取好再进解析线程：字段由主线程在 finishAdd 里改，
+        // 让子线程去读它就变成跨线程读，编号还可能被后一批的更新带跑。
+        final int destStart = zipOrigin.size();
         final ProgressDialog progress = new ProgressDialog(this, task.title);
         lastTask = progress;
         task.dialog = progress;
@@ -1640,7 +1662,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         Thread worker = new Thread(() -> {
             try {
             final ImportParse.Outcome outcome =
-                    ImportParse.parse(paths, currentPaths(), zipDirFor(paths), zipDestSeq,
+                    ImportParse.parse(paths, currentPaths(), zipDirFor(paths), destStart,
                             builder, sink);
             SwingUtilities.invokeLater(() -> finishTask(task, () -> {
                 progress.close();
@@ -1667,7 +1689,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     public String addFiles(List<String> paths) {
         applyNamingSwitches();
         ImportParse.Outcome outcome = ImportParse.parse(paths, currentPaths(),
-                zipDirFor(paths), zipDestSeq, builder, sinkForLogOnly());
+                zipDirFor(paths), zipOrigin.size(), builder, sinkForLogOnly());
         return finishAdd(outcome);
     }
 
@@ -1708,6 +1730,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 解析结果落到界面：子线程只算数据，列表、前缀、状态与弹窗都在这里改。 */
     public String finishAdd(ImportParse.Outcome outcome) {
         zipOrigin.putAll(outcome.zipOrigin);
+        // 编号起点直接从这张映射取（它就是"会话内已解出的包内文件数"），
+        // 不再自己按批次 +1：一批里解出 3 个文件时下一包的目录号会跳 3，
+        // 而批次计数只 +1，接着拖几批就会拐回已经用过的目录号上，
+        // 把前一批解出来的那份原地覆盖掉——列表里那张旧表的来源内容就此换人，
+        // 同名文件还会被当成"已在待导入列表"跳过，第二张包的表静默消失。
         for (TableBuilder.Result r : outcome.tables) {
             tables.add(r.table);
             byTable.put(r.table, r);
@@ -1723,7 +1750,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 TableOps.makeUniqueNames(tables);
             }
         }
-        zipDestSeq += 1;
         if (importBtn != null) {
             importBtn.setEnabled(!tables.isEmpty());
         }
@@ -2210,6 +2236,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunHelpBtn.addActionListener(e -> openSqlSamples());
         bar.add(sqlRunHelpBtn);
         sqlRunBtn = new javax.swing.JButton("执行");
+        Buttons.primary(sqlRunBtn);
         sqlRunBtn.setToolTipText("按分号切句逐条执行；全部成功才提交，中途出错整批回滚");
         sqlRunBtn.addActionListener(e -> runSqlStatements());
         bar.add(sqlRunBtn);
