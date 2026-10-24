@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v2.0.6** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v2.0.7** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -285,7 +285,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.0.6` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.0.7` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -379,9 +379,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-2.0.6-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-2.0.6-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-2.0.6-win64\excel2mysql-2.0.6.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-2.0.7-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-2.0.7-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-2.0.7-win64\excel2mysql-2.0.7.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -1240,6 +1240,17 @@ Swing 侧是 `LogPanel.render()` 按级别加 `StyleConstants`），复制日志
   会把整窗最小宽度顶到 830 以上，1024x768 的现场机放不下（用例 U7 抓的就是这个）
 
 三个页签的尺寸分配都**不写入配置**，重开程序回到初始比例。
+
+### 交互引导（三个页签一致）
+
+- 拖拽区常驻淡蓝底（`#eaf2fd`）与虚线描边；鼠标进入换成更深的 `#d8e8ff`、描边转强调蓝
+  `#2f6feb`，离开恢复。底色不等悬停，第一眼就看得出这块能放东西
+- 清单为空时，表格视口中央画「托盘 + 下箭头」图标与一句引导语：Excel 页
+  `请把 Excel 文件或 ZIP 压缩包拖到上方虚线区`，SQL 脚本页 `请把 SQL 脚本拖到上方虚线区`，
+  SQL 执行器页 `请把 SQL 文件拖到上方虚线区，按清单顺序执行`；加入第一行后自动消失。
+  提示画在视口上而不是叠一层控件，滚轮、右键与空表的原有行为不受影响
+- 三页底部的动作条包在同一块浅色圆角底板（底色 `#f4f7fc`、边框 `#dce5f2`）里，
+  「覆盖已存在表」与执行按钮同处一块，读作"执行前确认"的一组；主按钮的强调色不变
 
 ## 添加结果弹窗
 

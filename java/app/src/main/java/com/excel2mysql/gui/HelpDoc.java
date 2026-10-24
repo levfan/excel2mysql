@@ -94,7 +94,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.0.6.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.0.7.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -789,6 +789,12 @@ public final class HelpDoc {
                     "「保存修改后ddl脚本」用次级样式。" + NL +
                     "「清除日志」在日志框上方、贴右。日志段同样默认只占最小高度，拖过把手后才归用户。" + NL +
                     "表格同样带斑马纹，第一列「序号」只占 44px</li>" + NL +
+                    "<li><b>三页一致的视觉引导</b>：拖拽区常驻淡蓝底色（<code>#eaf2fd</code>）与虚线描边，" + NL +
+                    "鼠标移上去底色加深（<code>#d8e8ff</code>）、描边转为强调蓝，不必先碰运气才知道这里能放文件；" + NL +
+                    "清单还空着时，表格中央画一个「托盘 + 下箭头」图标和一句「请把 … 拖到上方虚线区」，" + NL +
+                    "形状与文案都指向正上方那块区域，加入第一行后自动消失；三页底部的动作条都包在同一块" + NL +
+                    "浅色圆角底板（<code>#f4f7fc</code>）里，「覆盖已存在表」与执行按钮同处一块，" + NL +
+                    "读起来是\"执行前确认\"的一组，而不是开关和按钮各站一边</li>" + NL +
                     "<li><b>「SQL 执行器」页左右分栏</b>：SQL 文本与执行结果之间一条 6px 竖向分隔条，" + NL +
                     "一边变宽另一边就变窄；两边都不允许拖到 0 宽。上面那行提示和「示例 (?)」「执行」是固定件，不参与挤压；" + NL +
                     "「执行」用强调色、「示例 (?)」保持普通样式；两颗<b>清空</b>分别在左右两栏的头一行，各管自己那一边</li>" + NL +
