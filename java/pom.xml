@@ -44,6 +44,38 @@
     <timestamp>${maven.build.timestamp}</timestamp>
   </properties>
 
+  <!--
+    依赖与插件的下载源只走国内阿里云镜像：现场机器与开发机都不访问国外仓库。
+    版本元数据查询同样以 https://maven.aliyun.com/repository/public/.../maven-metadata.xml 为准。
+    本机若已配 ~/.m2/settings.xml 的 <mirrorOf>*</mirrorOf>，这里不冲突（镜像优先）。
+  -->
+  <repositories>
+    <repository>
+      <id>aliyun-public</id>
+      <name>Aliyun Public</name>
+      <url>https://maven.aliyun.com/repository/public</url>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+    </repository>
+  </repositories>
+  <pluginRepositories>
+    <pluginRepository>
+      <id>aliyun-public</id>
+      <name>Aliyun Public</name>
+      <url>https://maven.aliyun.com/repository/public</url>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+    </pluginRepository>
+  </pluginRepositories>
+
   <dependencyManagement>
     <dependencies>
       <dependency>
