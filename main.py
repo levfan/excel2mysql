@@ -38,7 +38,10 @@ import functools
 import re
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat
+from PySide6.QtGui import (
+    QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat,
+    QPainter, QPen, QPainterPath,
+)
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QSpinBox, QPushButton, QComboBox, QFileDialog, QTableWidget,
@@ -220,6 +223,90 @@ def style_table_font(view):
     view.setAlternatingRowColors(True)
     view.setStyleSheet("QTableView { alternate-background-color: %s; }" % ZEBRA_ALT_BG)
     return view
+
+
+EMPTY_HINT_COLOR = "#8a97a8"
+EMPTY_ICON_COLOR = "#aebdd1"
+ACTION_BAR_BG = "#f4f7fc"
+ACTION_BAR_BORDER = "#dce5f2"
+
+
+class EmptyHintTable(QTableWidget):
+    """清单为空时在表格中央画一个"拖进来"的图标和一句引导语。
+
+    用户口径：空表格要看得懂下一步做什么，并且和上方虚线区说同一句话。
+    文字画在 viewport 上而不是塞一个覆盖控件：覆盖控件会吃掉滚轮与右键，
+    表格一空就只剩这层装饰可点，反而更迷惑。
+    """
+
+    def __init__(self, rows, cols, hint="", parent=None):
+        super().__init__(rows, cols, parent)
+        self.empty_hint = hint
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.rowCount() > 0 or not self.empty_hint:
+            return
+        vp = self.viewport()
+        painter = QPainter(vp)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            font = QFont("", 11)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            icon_h, gap = 44, 10
+            total = icon_h + gap + fm.height()
+            top = max(8, (vp.height() - total) // 2)
+            cx = vp.width() // 2
+            self._paint_empty_icon(painter, cx, top, icon_h)
+            painter.setPen(QColor(EMPTY_HINT_COLOR))
+            text_w = fm.horizontalAdvance(self.empty_hint)
+            painter.drawText((vp.width() - text_w) // 2,
+                             top + icon_h + gap + fm.ascent(), self.empty_hint)
+        finally:
+            painter.end()
+
+    @staticmethod
+    def _paint_empty_icon(painter, cx, top, size):
+        pen = QPen(QColor(EMPTY_ICON_COLOR))
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        half = size // 2
+        tray_top = top + int(size * 0.42)
+        tray_bottom = top + size
+        path = QPainterPath()
+        path.moveTo(cx - half, tray_top)
+        path.lineTo(cx - half, tray_bottom - 6)
+        path.quadTo(cx - half, tray_bottom, cx - half + 6, tray_bottom)
+        path.lineTo(cx + half - 6, tray_bottom)
+        path.quadTo(cx + half, tray_bottom, cx + half, tray_bottom - 6)
+        path.lineTo(cx + half, tray_top)
+        painter.drawPath(path)
+        arrow_tip = tray_top - 4
+        painter.drawLine(cx, top + 2, cx, arrow_tip)
+        painter.drawLine(cx - 7, arrow_tip - 7, cx, arrow_tip)
+        painter.drawLine(cx + 7, arrow_tip - 7, cx, arrow_tip)
+
+
+class ActionBar(QFrame):
+    """底部动作条的浅色底板：覆盖开关与执行按钮放进同一块底里。
+
+    用户口径：「覆盖已存在表」要像"执行前确认"的一部分，而不是和按钮各站一边。
+    底色只负责归组，不加边框阴影，免得和蓝色的主按钮抢注意力。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("actionBar")
+        self.fill_color = ACTION_BAR_BG
+        self.border_color = ACTION_BAR_BORDER
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "#actionBar { background: %s; border: 1px solid %s; border-radius: 6px; }"
+            % (ACTION_BAR_BG, ACTION_BAR_BORDER))
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
 
 # 主按钮（执行/导入）的强调色，与 Java 侧 gui.Buttons.primary 同一组色值；
@@ -1473,9 +1560,22 @@ class DropArea(QWidget):
     SQL_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）"
     RUN_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选；按列表顺序执行）"
 
+    # 淡蓝底 + 悬停加深：底色本身就要让人看出"这块是可以放东西的地方"，
+    # 不能等鼠标移上去才发现。色值与 Java 侧 DropArea 同一组，由对撞键核同值。
+    BG = "#eaf2fd"
+    BG_HOVER = "#d8e8ff"
+    LINE = "#a8bcd8"
+    LINE_HOVER = "#2f6feb"
+    TEXT = "#2c4a72"
+
     def __init__(self, parent=None, hint=None, tooltip=None):
         super().__init__(parent)
         self.hint_text = hint if hint is not None else self.EXCEL_HINT
+        self._hovered = False
+        self.fill_color = self.BG
+        self.hover_color = self.BG_HOVER
+        self.line_color = self.LINE
+        self.hover_line_color = self.LINE_HOVER
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(tooltip if tooltip is not None
@@ -1484,23 +1584,61 @@ class DropArea(QWidget):
         self.label = QLabel(self.hint_text)
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setFont(QFont("", 12))
+        self.label.setStyleSheet("QLabel { background: transparent; color: %s; }" % self.TEXT)
         lay.addWidget(self.label)
         self.setMinimumHeight(80)
-        self.setStyleSheet(
-            "DropArea { border: 2px dashed #888; border-radius: 8px; background: #f7f9fc; }"
-            "DropArea:hover { border-color: #2f6feb; background: #eef4ff; }"
-        )
+        self.setAttribute(Qt.WA_OpaquePaintEvent, False)
+
+    def paintEvent(self, event):
+        # 底色与虚线自己画，不用 QSS：自定义 QWidget 的样式表背景要等一次 polish，
+        # 鼠标快速掠过时会慢一帧才上色，看起来像"悬停没反应"
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            pen = QPen(QColor(self.hover_line_color if self._hovered else self.line_color))
+            pen.setWidth(2)
+            pen.setDashPattern([6, 4])
+            painter.setPen(pen)
+            painter.setBrush(QColor(self.hover_color if self._hovered else self.fill_color))
+            inset = 1
+            painter.drawRoundedRect(inset, inset, self.width() - 2 * inset - 1,
+                                    self.height() - 2 * inset - 1, 8, 8)
+        finally:
+            painter.end()
+
+    def _set_hover(self, on):
+        if self._hovered != on:
+            self._hovered = on
+            self.setProperty("hovered", on)
+            self.repaint()
+
+    @property
+    def hovered(self):
+        return self._hovered
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton:
             self.clicked.emit()
         super().mouseReleaseEvent(e)
 
+    def enterEvent(self, e):
+        self._set_hover(True)
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._set_hover(False)
+        super().leaveEvent(e)
+
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
+            self._set_hover(True)
+
+    def dragLeaveEvent(self, e):
+        self._set_hover(False)
 
     def dropEvent(self, e: QDropEvent):
+        self._set_hover(False)
         urls = [u.toLocalFile() for u in e.mimeData().urls()
                 if QFileInfo(u.toLocalFile()).isFile()]
         if urls:
@@ -1664,7 +1802,8 @@ class MainWindow(QWidget):
         name_row.addStretch(1)
         fl.addLayout(name_row)
 
-        self.file_table = QTableWidget(0, 7)
+        self.file_table = EmptyHintTable(
+            0, 7, "请把 Excel 文件或 ZIP 压缩包拖到上方虚线区")
         style_table_font(self.file_table)
         self.file_table.setHorizontalHeaderLabels(
             ["序号", "文件", "表名", "表注释", "字段数", "数据行数", "主键"])
@@ -1759,7 +1898,9 @@ class MainWindow(QWidget):
         # 左列是执行选项与页内进度，右侧才是动作按钮：进度跟着执行走，放在同一层；
         # 主按钮用强调色，停止与两颗生成按钮保持普通样式，一屏里只留一个视觉重点。
         excel_lay.addWidget(hline())
-        op = QHBoxLayout()
+        self.excel_action_bar = ActionBar()
+        op = QHBoxLayout(self.excel_action_bar)
+        op.setContentsMargins(10, 6, 10, 6)
         op_left = QVBoxLayout()
         op_left.setSpacing(2)
         self.chk_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
@@ -1795,7 +1936,7 @@ class MainWindow(QWidget):
         self.btn_gen_simple.clicked.connect(self.on_gen_simple)
         op.addWidget(self.btn_gen_std)
         op.addWidget(self.btn_gen_simple)
-        excel_lay.addLayout(op)
+        excel_lay.addWidget(self.excel_action_bar)
 
         self.main_tabs.addTab(excel_page, "Excel 导入")
         self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本改名入库")
@@ -2047,7 +2188,7 @@ class MainWindow(QWidget):
         name_bar.addWidget(self.chk_sql_upper)
         name_bar.addStretch(1)
 
-        self.sql_table = QTableWidget(0, 5)
+        self.sql_table = EmptyHintTable(0, 5, "请把 SQL 脚本拖到上方虚线区")
         style_table_font(self.sql_table)
         # 「CREATE 出现次数」这一列去掉：同一份脚本里一张表被写两遍，日志已经逐条点名，
         # 现场清单里那一列全是 1，占着宽度只让人以为坏了；表注释是"这张表是干什么的"，
@@ -2169,7 +2310,9 @@ class MainWindow(QWidget):
         lay.addWidget(self.sql_split, 1)
 
         # 底部动作条：与第一页同一形状——覆盖开关在左，动作按钮在右（在分隔条之外，不随表格被挤）
-        op = QHBoxLayout()
+        self.sql_action_bar = ActionBar()
+        op = QHBoxLayout(self.sql_action_bar)
+        op.setContentsMargins(10, 6, 10, 6)
         self.chk_sql_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
         self.chk_sql_drop.setToolTip(
             "勾选后，执行前先对脚本里每条 CREATE TABLE 的建表目标补一句\n"
@@ -2201,7 +2344,7 @@ class MainWindow(QWidget):
         op.addWidget(run_scroll, 1)
         # 执行层与上方表格区之间的细分隔线：底部动作条不再和表格内容糊成一片
         lay.addWidget(hline())
-        lay.addLayout(op)
+        lay.addWidget(self.sql_action_bar)
         return page
 
     def _sql_display_name(self, actual):
@@ -2727,7 +2870,8 @@ class MainWindow(QWidget):
         self.sql_run_drop.files_dropped.connect(self.on_run_scripts_dropped)
         self.sql_run_drop.clicked.connect(self.on_run_scripts_add)
 
-        self.sql_run_table = QTableWidget(0, 4)
+        self.sql_run_table = EmptyHintTable(
+            0, 4, "请把 SQL 文件拖到上方虚线区，按清单顺序执行")
         style_table_font(self.sql_run_table)
         self.sql_run_table.setHorizontalHeaderLabels(["序号", "文件", "大小", "状态"])
         header = self.sql_run_table.horizontalHeader()
@@ -2817,7 +2961,9 @@ class MainWindow(QWidget):
         lay.addWidget(self.sql_run_split_v, 1)
 
         # 底部动作条与第二页同一形状：覆盖开关在左、动作按钮在右，且在分隔条之外
-        op = QHBoxLayout()
+        self.run_action_bar = ActionBar()
+        op = QHBoxLayout(self.run_action_bar)
+        op.setContentsMargins(10, 6, 10, 6)
         self.chk_run_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
         self.chk_run_drop.setToolTip(
             "勾选后，执行脚本文件前先对脚本里每条 CREATE TABLE 的建表目标补一句\n"
@@ -2841,7 +2987,7 @@ class MainWindow(QWidget):
         op.addWidget(self.btn_sql_run_exec)
         op.addWidget(self.btn_run_scripts)
         lay.addWidget(hline())
-        lay.addLayout(op)
+        lay.addWidget(self.run_action_bar)
 
         self.sql_run_samples = None                          # 示例对话框只在打开时才有
         return page
