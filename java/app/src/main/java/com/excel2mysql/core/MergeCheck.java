@@ -192,7 +192,11 @@ public final class MergeCheck {
 
     private static Map<String, List<String>> scanXlsx(String path) throws Exception {
         Map<String, List<String>> out = new LinkedHashMap<String, List<String>>();
-        ZipFile z = new ZipFile(path);
+        // 与 ZipImport 同一口径：JDK 默认按 UTF-8 严格解条目名，遇到非 UTF-8 字节直接抛
+        // IllegalArgumentException: MALFORMED。.xlsx 内部部件名按规范是 ASCII，
+        // 但第三方工具产出的包里有非 ASCII 部件名时这一炸就让整张表解析失败，
+        // 按 GBK 打开对 ASCII 名字毫无影响，又能把那种包读下来。
+        ZipFile z = new ZipFile(path, java.nio.charset.Charset.forName("GBK"));
         try {
             Map<String, String> rels = new LinkedHashMap<String, String>();
             byte[] wb = read(z, "xl/workbook.xml");

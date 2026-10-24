@@ -68,11 +68,28 @@ public final class ZipImport {
         if ((flag & 0x800) != 0) {
             return name;
         }
+        // 折回 GBK 的前提是"这个名字本来就是 cp437 解出来的"。汉字不在 cp437 的取值范围里，
+        // getBytes(CP437) 会把每个编不进的字符写成 '?'，落点就成了 ????.xlsx——
+        // Windows 判它「文件名、目录名或卷标语法不正确」，整包一个都解不出来。
+        // 位标记读不到的时候（ZIP64 的条目数与目录偏移写在 64 位字段里，
+        // 只按 16 位 EOCD 取的扫描会整份失明）也必须原样留名，而不是毁掉它。
+        byte[] raw;
         try {
-            return new String(name.getBytes(CP437), GBK);
+            raw = name.getBytes(CP437);
         } catch (Exception e) {
             return name;
         }
+        if (!new String(raw, CP437).equals(name)) {
+            return name;              // 有字符编不进 cp437：这名字不是 cp437 解出来的，别折
+        }
+        String gbk;
+        try {
+            gbk = new String(raw, GBK);
+        } catch (Exception e) {
+            return name;
+        }
+        // 折出来带替换符说明这串字节本来就不是 GBK，硬用只会得到一个看不出原因的文件名
+        return gbk.indexOf('\uFFFD') >= 0 ? name : gbk;
     }
 
     /** 每次解压/预扫前先 load 一次。 */
@@ -85,9 +102,12 @@ public final class ZipImport {
      */
     static final class CentralDirectory {
         private final Map<String, Integer> byName = new LinkedHashMap<String, Integer>();
+        /** 第一个带 bit0（加密）的条目名；JDK 在打开阶段就整包拒绝，只能靠这里给出名字。 */
+        private String encryptedEntry;
 
         void load(String zipPath) throws IOException {
             byName.clear();
+            encryptedEntry = null;
             java.io.RandomAccessFile raf = new java.io.RandomAccessFile(zipPath, "r");
             try {
                 long len = raf.length();
@@ -111,14 +131,29 @@ public final class ZipImport {
                 // EOCD 里"条目数"是 16 位（偏移 8 与 10），只有目录大小与偏移才是 32 位。
                 // 读成 32 位会把"目录大小"的低两字节当成条目数，循环一路读出真实目录去，
                 // 最后撞在 EOCD 尾巴上抛 EOFException——整个压缩包会被判成"打不开"。
-                int total = readLe16(e, 10) & 0xFFFF;
+                long total = readLe16(e, 10) & 0xFFFFL;
                 long cdSize = readLe32(e, 12) & 0xFFFFFFFFL;
                 long cdOffset = readLe32(e, 16) & 0xFFFFFFFFL;
-                if (total <= 0 || cdOffset + cdSize > len) {
-                    return;                 // ZIP64 或结构异常：不去猜，交给上层按"没有位标志"处理
+                if (total == 0xFFFFL || cdSize == 0xFFFFFFFFL || cdOffset == 0xFFFFFFFFL) {
+                    // ZIP64：条目数、目录大小与目录偏移都改写在 64 位的 ZIP64 EOCD 里，
+                    // 16/32 位那三格填的是 0xFFFF / 0xFFFFFFFF 占位。只按旧字段取的话，
+                    // 整个映射建不起来，位标记全按"没标记 UTF-8"处理，
+                    // 中文条目名就会被折成一行问号（现场表现为拖包后报路径语法错误）。
+                    // 定位块紧贴 EOCD 前面，包有注释时还要再往前让开注释那段。
+                    long[] z64 = readZip64Eocd(raf,
+                            eocd - 20 - (readLe16(e, 20) & 0xFFFF));
+                    if (z64 == null) {
+                        return;
+                    }
+                    total = z64[0];
+                    cdSize = z64[1];
+                    cdOffset = z64[2];
+                }
+                if (total <= 0 || total > Integer.MAX_VALUE || cdOffset + cdSize > len) {
+                    return;                 // 结构异常：不去猜，交给上层按"没有位标志"处理
                 }
                 raf.seek(cdOffset);
-                for (int idx = 0; idx < total; idx++) {
+                for (int idx = 0; idx < (int) total; idx++) {
                     byte[] h = new byte[46];
                     raf.readFully(h);
                     if (readLe32(h, 0) != 0x02014b50L) {
@@ -133,8 +168,15 @@ public final class ZipImport {
                     raf.skipBytes(extraLen + commentLen);
                     String asUtf8 = new String(raw, Charset.forName("UTF-8"));
                     String asCp437 = new String(raw, CP437);
+                    // ZipFile 现在按 GBK 解无 UTF-8 标记的名字，所以第三种写法才是
+                    // entry.getName() 真正拿到的那串；少了它，加密条目那位 bit0 就查不到，
+                    // 「压缩包已加密」这句会变成一句静默的错解
                     put(asUtf8, flag);
                     put(asCp437, flag);
+                    put(new String(raw, GBK), flag);
+                    if (encryptedEntry == null && (flag & 0x1) != 0) {
+                        encryptedEntry = (flag & 0x800) != 0 ? asUtf8 : new String(raw, GBK);
+                    }
                 }
             } finally {
                 raf.close();
@@ -152,6 +194,10 @@ public final class ZipImport {
             Integer v = byName.get(name);
             return v == null ? 0 : v.intValue();
         }
+
+        String encryptedEntry() {
+            return encryptedEntry;
+        }
     }
 
     private static long readLe32(byte[] b, int at) {
@@ -161,6 +207,43 @@ public final class ZipImport {
 
     private static int readLe16(byte[] b, int at) {
         return (b[at] & 0xFF) | ((b[at + 1] & 0xFF) << 8);
+    }
+
+    private static long readLe64(byte[] b, int at) {
+        long v = 0;
+        for (int i = 7; i >= 0; i--) {
+            v = (v << 8) | (b[at + i] & 0xFFL);
+        }
+        return v;
+    }
+
+    /**
+     * 按 ZIP64 EOCD 定位块的偏移读那条 64 位记录。
+     * 返回 {条目数, 中央目录大小, 中央目录偏移}；定位块缺失、签名对不上或读不出去就回 null，
+     * 由调用方按"读不到位标志"处理——宁可名字原样留着，也不要猜一个偏移读进数据区。
+     */
+    private static long[] readZip64Eocd(java.io.RandomAccessFile raf, long locatorAt) {
+        if (locatorAt < 0) {
+            return null;
+        }
+        try {
+            byte[] loc = new byte[20];
+            raf.seek(locatorAt);
+            raf.readFully(loc);
+            if (readLe32(loc, 0) != 0x07064b50L) {
+                return null;
+            }
+            long at = readLe64(loc, 8);
+            byte[] r = new byte[56];
+            raf.seek(at);
+            raf.readFully(r);
+            if (readLe32(r, 0) != 0x06064b50L) {
+                return null;
+            }
+            return new long[]{readLe64(r, 32), readLe64(r, 40), readLe64(r, 48)};
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /** 把包内路径转成安全的相对路径，挡掉 ../ 与绝对路径的 zip slip。 */
@@ -214,12 +297,24 @@ public final class ZipImport {
         return "excel";
     }
 
+    /**
+     * 打开压缩包。字符集必须显式给 GBK：
+     * JDK 默认按 UTF-8 解条目名，而条目名里出现不合法的 UTF-8 字节时它不替换、
+     * 直接抛 IllegalArgumentException: MALFORMED（ZipCoder.toString）。
+     * Windows 自带「发送到压缩文件夹」写的正是 GBK 条目名，于是整包在枚举第一条
+     * 非 ASCII 名字时就炸掉——现场表现为「拖进去就报错」，而 Python 线读得下来。
+     * 给了 GBK 之后，带 UTF-8 标记（bit11）的条目仍按 UTF-8 解，两种包都对。
+     */
+    private static ZipFile open(File f) throws IOException {
+        return new ZipFile(f, GBK);
+    }
+
     /** 预扫包内 Excel 条目数；打不开或不存在的包返回 0，真正的错误留给解压时报。 */
     public static int countExcelEntries(String zipPath) {
         ZipFile z = null;
         try {
             flags.load(zipPath);
-            z = new ZipFile(new File(zipPath));
+            z = open(new File(zipPath));
             int n = 0;
             java.util.Enumeration<? extends ZipEntry> en = z.entries();
             while (en.hasMoreElements()) {
@@ -250,8 +345,16 @@ public final class ZipImport {
         ZipFile z;
         try {
             flags.load(zipPath);
-            z = new ZipFile(f);
+            z = open(f);
         } catch (IOException e) {
+            // JDK 8 在打开阶段就整包拒绝带 bit0 的压缩包，回的是英文那句
+            // 「invalid CEN header (encrypted entry)」——现场看不懂也做不了什么。
+            // 自己扫过中央目录就知道到底是哪一条被加密了，说人话并给出下一步。
+            String encrypted = flags.encryptedEntry();
+            if (encrypted != null) {
+                throw new ZipArchiveException("压缩包已加密（" + encrypted
+                        + "），请先解密后再导入");
+            }
             throw new ZipArchiveException("压缩包无法打开：" + LogText.describe(e));
         }
         try {
@@ -319,7 +422,9 @@ public final class ZipImport {
                         os.write(buf, 0, n);
                     }
                 } catch (IOException e) {
-                    throw new ZipArchiveException("写入 " + target + " 失败：" + e.getMessage());
+                    // 带上异常类型：现场那句「被占用」还是「路径语法不正确」，
+                    // 只有类型 + 系统原文能分清，光一句 message 抄不回原因
+                    throw new ZipArchiveException("写入 " + target + " 失败：" + LogText.describe(e));
                 } finally {
                     close(in);
                     close(os);
