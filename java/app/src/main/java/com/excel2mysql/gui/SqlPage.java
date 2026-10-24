@@ -262,6 +262,8 @@ public final class SqlPage extends JPanel {
             }
         };
         table = new EmptyHintTable(model, EmptyHintTable.SQL_HINT);
+        // 空态提示画在表格自身的中心：不铺满视口时表格只有表头高，提示会落在视口灰底上被切掉
+        table.setFillsViewportHeight(true);
         Tables.style(table);
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);

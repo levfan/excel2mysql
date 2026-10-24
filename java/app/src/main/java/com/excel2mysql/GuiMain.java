@@ -768,13 +768,23 @@ public final class GuiMain {
             problems.add(who + "没有空态提示语");
             return;
         }
-        table.setSize(560, 180);
-        table.doLayout();
-        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(560, 180,
+        // 提示画在表格自身的中心，只有表格铺满视口时才落在看得见的地方：
+        // 所以取证画面必须是真实的视口，不能自带尺寸单独画表格，否则漏掉"表格没铺满"这一类
+        javax.swing.JViewport vp = (javax.swing.JViewport)
+                SwingUtilities.getAncestorOfClass(javax.swing.JViewport.class, table);
+        if (vp == null) {
+            problems.add(who + "没有放在滚动视口里");
+            return;
+        }
+        int w = 560;
+        int h = 180;
+        vp.setSize(w, h);
+        vp.doLayout();
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h,
                 java.awt.image.BufferedImage.TYPE_INT_RGB);
         java.awt.Graphics2D g = img.createGraphics();
         try {
-            table.paint(g);
+            vp.paint(g);
         } finally {
             g.dispose();
         }
@@ -792,7 +802,7 @@ public final class GuiMain {
             }
         }
         if (ink < 100) {
-            problems.add(who + "的空态提示没画出来（非底色像素 " + ink + "）");
+            problems.add(who + "的空态提示在视口里没画出来（非底色像素 " + ink + "）");
         }
     }
 
