@@ -175,6 +175,20 @@ public final class GuiDump {
                 frame.sqlPage().applySplitProportions();
                 frame.validate();
                 put("split.sql.logmin", frame.sqlPage().logAtMin());
+                frame.selectTab(2);
+                frame.validate();
+                frame.applyRunSplitProportions();
+                frame.validate();
+                // 第三页默认把「编辑区与结果」压到最小，高度让给脚本清单：
+                // 量的是真控件（末段高度 vs 自己的最小高度），行数键跨栈同值。
+                put("split.sqlrun.tailmin", frame.sqlRunEditorAtMin());
+                put("split.sqlrun.order", frame.sqlRunSegmentOrder());
+                put("sqlrun.editor.minlines", frame.sqlRunInputMinLines());
+                int runNeed = UiScale.px(44) + UiScale.px(10)
+                        + frame.sqlRunFilesTable()
+                                .getFontMetrics(frame.sqlRunFilesTable().getFont()).getHeight();
+                put("sqlrun.table.fits",
+                        frame.sqlRunTableViewportHeight() >= runNeed ? "1" : "0");
                 frame.selectTab(0);
                 frame.validate();
 

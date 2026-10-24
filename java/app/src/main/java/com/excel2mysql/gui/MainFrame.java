@@ -602,8 +602,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 };
         stacked.addComponentListener(placer);
         lower.addComponentListener(placer);
-        watchDivider(stacked);
-        watchDivider(lower);
+        watchDivider(stacked, false);
+        watchDivider(lower, false);
 
         // 底部动作条：左列是执行选项与页内进度，右侧才是动作按钮（main.py:976-994）。
         // 主按钮用强调色，停止与两颗生成按钮保持普通样式，一屏里只留一个视觉重点
@@ -2079,6 +2079,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private boolean splitUserMoved;
     /** 程序自己摆分隔条期间不把随之而来的 Resize 当成用户动作。 */
     private boolean splitAdjusting;
+    /** 第三页（SQL 执行器）的三段：拖拽区 / 脚本清单 / 编辑区与结果。 */
+    private JSplitPane sqlRunSplitTop;
+    private JSplitPane sqlRunSplitLower;
+    private java.awt.Component sqlRunDropPane;
+    private java.awt.Component sqlRunQueuePane;
+    private java.awt.Component sqlRunEditorPane;
+    private boolean runSplitUserMoved;
+    private boolean runSplitAdjusting;
 
     /**
      * 把三段分栏按 Python 的 110:670 摆一次，日志段只留它自己的最小高度。
@@ -2112,8 +2120,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 用户按下分隔条把手就停止自动摆放；键盘拖动同样算用户动作。 */
-    private void watchDivider(JSplitPane pane) {
-        javax.swing.plaf.SplitPaneUI ui = pane.getUI();
+    private void watchDivider(JSplitPane pane, final boolean runPage) {        javax.swing.plaf.SplitPaneUI ui = pane.getUI();
         if (!(ui instanceof javax.swing.plaf.basic.BasicSplitPaneUI)) {
             return;
         }
@@ -2125,7 +2132,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         divider.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {
-                splitUserMoved = true;
+                if (runPage) {
+                    runSplitUserMoved = true;
+                } else {
+                    splitUserMoved = true;
+                }
             }
         });
     }
@@ -2157,6 +2168,93 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 自检用：第一页表格段与日志段的初始分隔位置（设计值，按 DPI 折算）。 */
     public int excelLowerDividerLocation() {
         return excelLower.getDividerLocation();
+    }
+
+    /**
+     * 第三页同样把末段（编辑区与结果）压到最小高度，余量留给上面的脚本清单。
+     *
+     * 空清单时那张表的图标与引导语要整块看得见；窗口每次 Resize 都按绝对高度重摆，
+     * 用户拖过任一条把手之后交还。份额照 Python 的 110:670 与「清单吃余量」口径。
+     */
+    public void applyRunSplitProportions() {
+        if (runSplitUserMoved || runSplitAdjusting || sqlRunSplitTop == null
+                || sqlRunSplitLower == null || sqlRunDropPane == null
+                || sqlRunQueuePane == null || sqlRunEditorPane == null) {
+            return;
+        }
+        if (sqlRunSplitTop.getHeight() < UiScale.px(200)
+                || sqlRunEditorPane.getMinimumSize().height <= 0) {
+            return;
+        }
+        runSplitAdjusting = true;
+        try {
+            int first = (int) Math.round(sqlRunSplitTop.getHeight() * 110.0 / 670.0);
+            sqlRunSplitTop.setDividerLocation(
+                    Math.max(first, sqlRunDropPane.getMinimumSize().height));
+            int rest = sqlRunSplitTop.getHeight() - sqlRunSplitTop.getDividerLocation()
+                    - sqlRunSplitTop.getDividerSize();
+            int second = Math.max(sqlRunQueuePane.getMinimumSize().height,
+                    rest - sqlRunSplitLower.getDividerSize()
+                            - sqlRunEditorPane.getMinimumSize().height);
+            sqlRunSplitLower.setDividerLocation(second);
+        } finally {
+            runSplitAdjusting = false;
+        }
+    }
+
+    /** 第三页编辑区与结果段是否还压在自己的最小高度上。 */
+    public String sqlRunEditorAtMin() {
+        if (sqlRunEditorPane == null) {
+            return "0";
+        }
+        int diff = sqlRunEditorPane.getHeight() - sqlRunEditorPane.getMinimumSize().height;
+        return diff >= -4 && diff <= 4 ? "1" : "0";
+    }
+
+    public int sqlRunEditorHeight() {
+        return sqlRunEditorPane == null ? -1 : sqlRunEditorPane.getHeight();
+    }
+
+    public int sqlRunEditorMinHeight() {
+        return sqlRunEditorPane == null ? -1 : sqlRunEditorPane.getMinimumSize().height;
+    }
+
+    /** 第三页「SQL 文本」编辑区的实际高度与最小高度（自检量它是不是 4 行）。 */
+    public int sqlRunInputHeight() {
+        return sqlRunInput == null ? -1 : sqlRunInput.getHeight();
+    }
+
+    public int sqlRunInputMinHeight() {
+        return sqlRunInput == null ? -1 : sqlRunInput.getMinimumSize().height;
+    }
+
+    /** 第三页编辑区最小高度合几行字：对撞器比的是这个行数，不是各栈的像素值。 */
+    public String sqlRunInputMinLines() {
+        if (sqlRunInput == null) {
+            return "0";
+        }
+        int line = sqlRunInput.getFontMetrics(sqlRunInput.getFont()).getHeight();
+        return line <= 0 ? "0"
+                : String.valueOf(Math.round(sqlRunInput.getMinimumSize().height / (float) line));
+    }
+
+    /** 第三页三段的自上而下语义名，与第二页 segmentOrder 同一种写法。 */
+    public String sqlRunSegmentOrder() {
+        if (sqlRunSplitTop == null || sqlRunSplitLower == null
+                || sqlRunDropPane == null || sqlRunQueuePane == null
+                || sqlRunEditorPane == null) {
+            return "";
+        }
+        return (sqlRunSplitTop.getLeftComponent() == sqlRunDropPane ? "拖拽区" : "?")
+                + "|" + (sqlRunSplitLower.getLeftComponent() == sqlRunQueuePane
+                        ? "脚本清单" : "?")
+                + "|" + (sqlRunSplitLower.getRightComponent() == sqlRunEditorPane
+                        ? "编辑区与结果" : "?");
+    }
+
+    /** 第三页脚本清单表的视口高度：空清单图标要整块露出来。 */
+    public int sqlRunTableViewportHeight() {
+        return sqlRunFilesTable == null ? -1 : sqlRunFilesTable.getVisibleRect().height;
     }
 
     /**
@@ -2331,6 +2429,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunInput = new javax.swing.JTextArea(8, 60);
         sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
                 UiScale.fontPt(SQL_RUN_FONT_SIZE)));
+        // 初始化时编辑区只占自己的 4 行：末段压到最小，空清单的图标与引导语才看得全
+        sqlRunInput.setMinimumSize(new Dimension(0, LogPanel.LOG_MIN_LINES
+                * sqlRunInput.getFontMetrics(sqlRunInput.getFont()).getHeight()));
         sqlRunInput.setLineWrap(false);
         sqlRunInput.setText("SELECT 1 AS 连通检查;");
         // 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
@@ -2351,6 +2452,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 0, UiScale.px(2)));
         left.add(leftHead, java.awt.BorderLayout.NORTH);
         left.add(new javax.swing.JScrollPane(sqlRunInput), java.awt.BorderLayout.CENTER);
+        left.setMinimumSize(new Dimension(0,
+                sqlRunInput.getMinimumSize().height + UiScale.px(34)));
 
         sqlRunLog = new LogPanel(SQL_RUN_FONT_SIZE);
         sqlRunClearLogBtn = new javax.swing.JButton("清空结果区");
@@ -2367,6 +2470,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JSplitPane split = new javax.swing.JSplitPane(
                 javax.swing.JSplitPane.HORIZONTAL_SPLIT, left, right);
         split.setResizeWeight(0.45D);
+        split.setMinimumSize(new Dimension(0,
+                sqlRunLog.getMinimumSize().height + UiScale.px(34)));
 
         // 三段落上下排：拖拽区 / 脚本清单 / 编辑区与结果。清单与编辑区同权，
         // 拖拽区按第一页的口径只占固定一份，不跟着窗口变高
@@ -2379,6 +2484,25 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         stacked.setResizeWeight(0.0D);
         stacked.setDividerLocation(UiScale.px(110));
         page.add(stacked, java.awt.BorderLayout.CENTER);
+
+        sqlRunSplitTop = stacked;
+        sqlRunSplitLower = lower;
+        sqlRunDropPane = sqlRunDrop;
+        sqlRunQueuePane = queueBox;
+        sqlRunEditorPane = split;
+        // 与第一页同一套：真拿到尺寸后按 110:670 摆拖拽区，清单吃余量、末段只留最小高度；
+        // 两条分隔条都听 Resize，切到这一页排过一次版才量得准
+        java.awt.event.ComponentAdapter runPlacer =
+                new java.awt.event.ComponentAdapter() {
+                    @Override
+                    public void componentResized(java.awt.event.ComponentEvent e) {
+                        applyRunSplitProportions();
+                    }
+                };
+        stacked.addComponentListener(runPlacer);
+        lower.addComponentListener(runPlacer);
+        watchDivider(stacked, true);
+        watchDivider(lower, true);
 
         // 底部动作条与第二页同一形状：覆盖开关在左、动作按钮在右，且在分隔条之外
         sqlRunDropBox = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
@@ -2394,8 +2518,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunScriptsBtn = new javax.swing.JButton("执行脚本文件");
         Buttons.primary(sqlRunScriptsBtn);
         sqlRunScriptsBtn.setEnabled(false);
-        sqlRunScriptsBtn.setToolTipText("按清单顺序逐个执行，每个文件一个事务；全部成功才提交，"
-                + "中途出错本文件回滚后继续下一个。执行前请先选好目标库。");
+        sqlRunScriptsBtn.setToolTipText("<html>按清单顺序逐个执行：手写脚本每个文件一个事务，全部成功才提交；<br>"
+                + "整库 dump 自动识别，改为不开事务、逐条提交、出错继续并汇总。<br>"
+                + "执行前请先选好目标库。</html>");
         sqlRunScriptsBtn.addActionListener(e -> executeRunScripts());
         javax.swing.JPanel opRight = new javax.swing.JPanel(
                 new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT,
@@ -2611,7 +2736,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
     }
 
-    /** 按清单顺序执行脚本文件；每个文件一个事务，日志与汇总都写这一页。 */
+    /** 按清单顺序执行脚本文件；手写脚本每个文件一个事务，整库 dump 逐条提交，日志与汇总都写这一页。 */
     private void executeRunScripts() {
         final Config cfg = currentConfig();
         if (cfg == null || !cfg.hasDatabase()) {
@@ -2625,7 +2750,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         final boolean overwrite = sqlRunDropBox.isSelected();
         String note = overwrite ? "；已勾选「覆盖已存在表」，每个脚本先 DROP 它要建的表" : "";
         sqlRunLog.log("===== 开始执行脚本文件（目标库 " + cfg.database + "，"
-                + sqlRunFiles.size() + " 个文件，每个文件一个事务" + note + "）=====");
+                + sqlRunFiles.size() + " 个文件；手写脚本每个文件一个事务，整库 dump 逐条提交"
+                + note + "）=====");
         final List<String> paths = new ArrayList<String>();
         for (RunScript s : sqlRunFiles) {
             paths.add(s.path);

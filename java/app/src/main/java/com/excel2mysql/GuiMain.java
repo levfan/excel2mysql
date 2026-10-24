@@ -321,6 +321,8 @@ public final class GuiMain {
                 checkSqlCliPrefix(problems);
                 // 「只写注释也不算」的判据表，与 Python 侧 pack_test 的 E10/E11 同一张
                 checkCommentOnly(problems);
+                // 整库 dump 的识别、切句（DELIMITER / 版本注释）与库级语句跳过
+                checkDumpScript(problems);
                 // 日志面板的线程安全：工作线程加行的同时有人在遍历，锁没加对就会炸 CME，
                 // 那个异常会把日志刷新整个带走——现场看到的就是"跑到一半日志不动了"
                 checkLogPanelThreadSafe(problems);
@@ -1637,6 +1639,32 @@ public final class GuiMain {
 
     /** 第三个页签「SQL 执行器」：常驻可见量、示例清单的一来一回与空输入那道闸。 */
     private static void sql_run_tab(MainFrame frame, List<String> problems) {
+        // 末段（SQL 文本 + 执行结果）初始化压到最小：空清单那张表的图标与引导语要整块露出来。
+        // 切到这一页排过一次版才量得准（隐藏页签的子控件还没量过）。
+        frame.selectTab(2);
+        frame.validate();
+        frame.applyRunSplitProportions();
+        frame.validate();
+        if (!"1".equals(frame.sqlRunEditorAtMin())) {
+            problems.add("第三页末段默认没有压到最小高度：高 "
+                    + frame.sqlRunEditorHeight() + " / 最小 " + frame.sqlRunEditorMinHeight());
+        }
+        if (frame.sqlRunInputMinHeight() != frame.sqlRunLogPanel().getMinimumSize().height
+                || frame.sqlRunInputMinHeight() <= 0) {
+            problems.add("第三页编辑区的最小高度不是日志同档的 4 行：编辑区 "
+                    + frame.sqlRunInputMinHeight() + " / 结果区 "
+                    + frame.sqlRunLogPanel().getMinimumSize().height);
+        }
+        int hintNeed = wantPx(44) + wantPx(10) + wantPx(8)
+                + frame.sqlRunFilesTable().getFontMetrics(
+                        frame.sqlRunFilesTable().getFont()).getHeight();
+        if (frame.sqlRunTableViewportHeight() < hintNeed) {
+            problems.add("第三页空清单的视口高 " + frame.sqlRunTableViewportHeight()
+                    + "，兜不住图标与引导语需要的 " + hintNeed
+                    + "（SQL 文本段没压到最小？）");
+        }
+        frame.selectTab(0);
+        frame.validate();
         List<String> titles = frame.tabTitles();
         if (titles.size() != 3 || !"SQL 执行器".equals(titles.get(2))) {
             problems.add("第三个页签不对：" + titles);
@@ -4082,8 +4110,80 @@ public final class GuiMain {
         }
     }
 
-    private static void checkSqlCliPrefix(java.util.List<String> problems) {
-        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
+    /** 整库 dump：识别看导出抬头/结尾，切句认 DELIMITER 与版本注释，库级导航语句只跳过不执行。 */
+    private static void checkDumpScript(List<String> problems) {
+        String nl = String.valueOf((char) 10);
+        String dump = "-- MySQL dump 10.13  Distrib 8.0.36, for Win64 (x86_64)" + nl
+                + "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;" + nl
+                + "/*M!999999\\- enable the sandbox mode */;" + nl
+                + "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `db1`;" + nl
+                + "USE `db1`;" + nl
+                + "DROP TABLE IF EXISTS `t1`;" + nl
+                + "CREATE TABLE `t1` (`id` int);" + nl
+                + "INSERT INTO `t1` VALUES (1);" + nl
+                + "DELIMITER ;;" + nl
+                + "CREATE TRIGGER `trg` BEFORE INSERT ON `t1` FOR EACH ROW" + nl
+                + "BEGIN" + nl
+                + "  SET @a = 1;" + nl
+                + "END;;" + nl
+                + "DELIMITER ;" + nl
+                + "-- Dump completed on 2026-10-25 10:00:00" + nl;
+        if (!com.excel2mysql.core.SqlScript.isDumpScript(dump)) {
+            problems.add("带 mysqldump 抬头的脚本没被识别成整库 dump");
+        }
+        if (com.excel2mysql.core.SqlScript.isDumpScript(
+                "CREATE TABLE t (id INT);" + nl + "INSERT INTO t VALUES (1);" + nl)) {
+            problems.add("手写建表脚本被误判成整库 dump");
+        }
+        if (!com.excel2mysql.core.SqlScript.isDumpScript(
+                "SELECT 1;" + nl + "-- Dump completed on 2026-10-25 10:00:00" + nl)) {
+            problems.add("只有结尾标记的 dump 没被识别出来");
+        }
+        List<String> stmts = com.excel2mysql.core.SqlScript.dumpStatements(dump);
+        if (stmts.size() != 7) {
+            problems.add("dump 切句条数不对（应 7，版本注释保留、沙箱标记与普通注释剔除）："
+                    + stmts.size() + " → " + stmts);
+        }
+        int trigger = 0;
+        for (String s : stmts) {
+            if (s.contains("CREATE TRIGGER")) {
+                trigger++;
+                if (!s.contains("END")) {
+                    problems.add("DELIMITER ;; 的触发器没切成完整一条：" + s);
+                }
+            }
+            if ("END".equals(s)) {
+                problems.add("DELIMITER 段被切断，END 成了一条独立语句");
+            }
+            if (s.startsWith("/*M!") || "-- 注释".equals(s)) {
+                problems.add("dump 切句里混进了不该执行的注释：" + s);
+            }
+        }
+        if (trigger != 1) {
+            problems.add("触发器应只有一条，实际 " + trigger);
+        }
+        if (!"CREATE DATABASE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
+                "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `db1`"))
+                || !"CREATE DATABASE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
+                        "--" + nl + "-- Current Database: `db1`" + nl + "--" + nl + nl
+                        + "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `db1`"))
+                || !"DROP DATABASE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
+                        "/*!40000 DROP DATABASE IF EXISTS `db1`*/"))
+                || !"USE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason("USE `db1`"))
+                || !"".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
+                        "INSERT INTO `t1` VALUES (1)"))) {
+            problems.add("dump 库级导航语句的识别不对（含开头注释块的 CREATE DATABASE）");
+        }
+        if (!com.excel2mysql.core.SqlScript.hasExecutableContentDump(
+                "/*!40101 SET NAMES utf8 */")
+                || com.excel2mysql.core.SqlScript.hasExecutableContentDump(
+                        "/*M!999999\\- enable the sandbox mode */")
+                || com.excel2mysql.core.SqlScript.hasExecutableContentDump("-- 注释")) {
+            problems.add("dump 模式的内容判据不对：版本注释要算，沙箱标记与行注释不算");
+        }
+    }
+
+    private static void checkSqlCliPrefix(java.util.List<String> problems) {        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
                 "e2m-sqlprefix-" + System.nanoTime());
         if (!dir.mkdirs()) {
             problems.add("建不出脚本前缀检查的临时目录：" + dir.getPath());

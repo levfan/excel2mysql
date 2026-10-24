@@ -3,6 +3,7 @@ package com.excel2mysql.core;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -306,14 +307,51 @@ public final class SqlScript {
 
     /**
      * 按分号切语句，正确跳过 '...' / "..." 字符串（支持反斜杠与双写引号转义）、
-     * `...` 反引号标识符、-- 与 # 行注释、块注释。不支持 DELIMITER 存储过程脚本。
+     * `...` 反引号标识符、-- 与 # 行注释、块注释。不支持 DELIMITER 存储过程脚本——
+     * 那是整库 dump 的写法，那条通道走 splitDumpStatements。
      */
     public static List<String> splitStatements(String text) {
+        return splitStatements(text, false);
+    }
+
+    /** 按整库 dump 的规则切句：在分号切分之上认 DELIMITER 指令（客户端指令不发给服务端）。 */
+    public static List<String> splitDumpStatements(String text) {
+        return splitStatements(text, true);
+    }
+
+    /** 行首的 DELIMITER 指令；只认整行（后面除空白外没有别的内容）。 */
+    private static final Pattern DELIMITER_DIRECTIVE = Pattern.compile(
+            "[ \\t]*DELIMITER[ \\t]+(\\S+)[ \\t]*(?:\\r?\\n|$)", Pattern.CASE_INSENSITIVE);
+
+    /** 这一行是不是 DELIMITER 指令：先做 9 个字符的比较，避免每行都拼一次缓冲。 */
+    private static boolean looksLikeDelimiter(String text, int at) {
+        int n = text.length();
+        int i = at;
+        while (i < n && (text.charAt(i) == ' ' || text.charAt(i) == '\t')) {
+            i++;
+        }
+        return text.regionMatches(true, i, "DELIMITER", 0, 9);
+    }
+
+    private static List<String> splitStatements(String text, boolean withDelimiter) {
         List<String> stmts = new ArrayList<String>();
         StringBuilder buf = new StringBuilder();
         int i = 0;
         int n = text.length();
+        String delim = ";";
         while (i < n) {
+            if (withDelimiter && (i == 0 || text.charAt(i - 1) == '\n')
+                    && looksLikeDelimiter(text, i)
+                    && !hasExecutableContent(buf.toString())) {
+                Matcher m = DELIMITER_DIRECTIVE.matcher(text);
+                m.region(i, n);
+                if (m.lookingAt()) {
+                    delim = m.group(1);
+                    buf.setLength(0);
+                    i = m.end();
+                    continue;
+                }
+            }
             char ch = text.charAt(i);
             char nxt = i + 1 < n ? text.charAt(i + 1) : 0;
             if (ch == '\'' || ch == '"' || ch == '`') {
@@ -357,13 +395,13 @@ public final class SqlScript {
                 i = j;
                 continue;
             }
-            if (ch == ';') {
+            if (text.startsWith(delim, i)) {
                 String s = Names.pyStrip(buf.toString());
                 if (!s.isEmpty()) {
                     stmts.add(s);
                 }
                 buf.setLength(0);
-                i++;
+                i += delim.length();
                 continue;
             }
             buf.append(ch);
@@ -440,6 +478,147 @@ public final class SqlScript {
             }
         }
         return out;
+    }
+
+    // ------------------------------------------------------------------
+    // 整库 dump：识别与按 dump 方式执行需要的分类（与 core/sql_script.py 同口径）
+    // ------------------------------------------------------------------
+
+    /** mysqldump / MariaDB dump / phpMyAdmin 导出都会带这几句里的一句。 */
+    private static final String[] DUMP_HEAD_MARKERS = {
+            "-- mysql dump", "-- mariadb dump", "-- mysql shell dump",
+            "-- phpmyadmin sql dump", "enable the sandbox mode",
+    };
+    private static final String DUMP_TAIL_MARKER = "-- dump completed";
+    private static final int DUMP_HEAD_CHARS = 8192;
+    private static final int DUMP_TAIL_CHARS = 4096;
+
+    private static final Pattern DUMP_NAV = Pattern.compile(
+            "(?is)^\\s*(CREATE\\s+DATABASE|DROP\\s+DATABASE|USE)\\b");
+
+    /** 这份脚本是不是整库 dump：看抬头 / 结尾那几句导出工具才会写的话。 */
+    public static boolean isDumpScript(String text) {
+        if (text == null) {
+            return false;
+        }
+        String head = text.substring(0, Math.min(text.length(), DUMP_HEAD_CHARS))
+                .toLowerCase(Locale.ROOT);
+        for (String marker : DUMP_HEAD_MARKERS) {
+            if (head.contains(marker)) {
+                return true;
+            }
+        }
+        String tail = text.substring(Math.max(0, text.length() - DUMP_TAIL_CHARS))
+                .toLowerCase(Locale.ROOT);
+        return tail.contains(DUMP_TAIL_MARKER);
+    }
+
+    /**
+     * dump 模式的内容判据：`/*!40101 SET ... *&#47;` 是服务端真会执行的语句。
+     *
+     * 普通块注释与 `/*M!...*&#47;`（MariaDB 客户端沙箱标记）仍不算；`/*!999999\- ...`
+     * 这种只在客户端生效、发给服务端会变成空查询的写法也按没有内容处理。
+     */
+    public static boolean hasExecutableContentDump(String stmt) {
+        int i = 0;
+        int n = stmt.length();
+        while (i < n) {
+            char ch = stmt.charAt(i);
+            char nxt = i + 1 < n ? stmt.charAt(i + 1) : 0;
+            if (Character.isWhitespace(ch)) {
+                i++;
+                continue;
+            }
+            if (ch == '\'' || ch == '"' || ch == '`') {
+                char quote = ch;
+                i++;
+                while (i < n) {
+                    char c = stmt.charAt(i);
+                    if (c == '\\' && quote != '`') {
+                        i += 2;
+                        continue;
+                    }
+                    if (c == quote) {
+                        if (i + 1 < n && stmt.charAt(i + 1) == quote) {
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+                return true;
+            }
+            if ((ch == '-' && nxt == '-') || ch == '#') {
+                int j = stmt.indexOf('\n', i);
+                i = j < 0 ? n : j;
+                continue;
+            }
+            if (ch == '/' && nxt == '*') {
+                int j = stmt.indexOf("*/", i + 2);
+                if (stmt.startsWith("/*!", i) && !stmt.startsWith("/*M!", i)) {
+                    String inner = stmt.substring(i + 3, j < 0 ? n : j)
+                            .replaceFirst("^\\d*", "").trim();
+                    if (!inner.isEmpty() && !inner.startsWith("\\")) {
+                        return true;
+                    }
+                }
+                i = j < 0 ? n : j + 2;
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** 整库 dump 的可执行语句：认 DELIMITER，并保留 `/*!...*&#47;` 版本注释语句。 */
+    public static List<String> dumpStatements(String text) {
+        List<String> out = new ArrayList<String>();
+        for (String s : splitDumpStatements(text)) {
+            if (hasExecutableContentDump(s)) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 这句是 dump 里的库级导航语句吗，返回关键字（空串表示不是）。
+     *
+     * 目标库由界面选择，dump 自带的 CREATE DATABASE / DROP DATABASE / USE
+     * 不该改写现场选好的库；其中 DROP DATABASE 更不能执行，否则会把目标库整个删掉。
+     * 语句开头常带着 `--` 注释块（真 dump 的 "Current Database" 那段就在 CREATE DATABASE 前面），
+     * 所以先把开头的空白与注释剥掉再认；`/*!40000 DROP DATABASE ... *&#47;` 这类版本注释里的正文也要认。
+     */
+    public static String dumpSkipReason(String stmt) {
+        String s = stmt == null ? "" : stmt.trim();
+        while (!s.isEmpty()) {
+            if (s.startsWith("--") || s.startsWith("#")) {
+                int j = s.indexOf('\n');
+                s = j < 0 ? "" : s.substring(j + 1).trim();
+                continue;
+            }
+            if (s.startsWith("/*")) {
+                int j = s.indexOf("*/", 2);
+                String inner = s.substring(2, j < 0 ? s.length() : j);
+                String rest = j < 0 ? "" : s.substring(j + 2).trim();
+                if (s.startsWith("/*!") && !s.startsWith("/*M!")) {
+                    String body = inner.substring(1).replaceFirst("^\\d*", "").trim();
+                    Matcher m = DUMP_NAV.matcher(body);
+                    return m.lookingAt()
+                            ? m.group(1).replaceAll("\\s+", " ").toUpperCase(Locale.ROOT) : "";
+                }
+                s = rest;
+                continue;
+            }
+            break;
+        }
+        Matcher m = DUMP_NAV.matcher(s);
+        if (!m.lookingAt()) {
+            return "";
+        }
+        return m.group(1).replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
     }
 
     // ------------------------------------------------------------------

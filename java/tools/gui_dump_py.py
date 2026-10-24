@@ -430,6 +430,29 @@ def main():
     win.main_tabs.setCurrentIndex(1)
     app.processEvents()
     put("split.sql.logmin", _log_at_min(win.sql_split.widget(2)))
+
+    # 第三页默认把「编辑区与结果」压到最小，高度让给脚本清单：量真控件，
+    # 行数键跨栈同值（两边的字体像素不同，比行数不比像素）
+    def _run_segment(w):
+        if w is win.sql_run_drop:
+            return u"拖拽区"
+        if w.findChild(QTableWidget) is win.sql_run_table:
+            return u"脚本清单"
+        if w is win.sql_run_split:
+            return u"编辑区与结果"
+        return type(w).__name__
+
+    win.main_tabs.setCurrentIndex(2)
+    app.processEvents()
+    put("split.sqlrun.order", "|".join(
+        _run_segment(win.sql_run_split_v.widget(i))
+        for i in range(win.sql_run_split_v.count())))
+    put("split.sqlrun.tailmin", _log_at_min(win.sql_run_split))
+    put("sqlrun.editor.minlines", str(int(round(
+        win.sql_run_input.minimumHeight()
+        / float(win.sql_run_input.fontMetrics().height())))))
+    put("sqlrun.table.fits", "1" if win.sql_run_table.viewport().height()
+        >= 44 + 10 + win.sql_run_table.fontMetrics().height() else "0")
     win.main_tabs.setCurrentIndex(0)
     app.processEvents()
 
