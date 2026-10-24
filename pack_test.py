@@ -4059,11 +4059,13 @@ check("Q27c 手动把显示名改回脚本里的原名 = 只撤掉这一行的�
       sw2.sql_files[0].get("display_map"))
 _n_before = len(sw2.sql_files)
 sw2.on_sql_clear_files()
-check("Q28 「清空待上传文件」整份清出清单并留痕，生成按钮跟着熄灭",
+check("Q28 「清空待上传文件」整份清出清单并留痕，四颗动作按钮跟着熄灭",
       _n_before == 1 and sw2.sql_files == [] and sw2.sql_table.rowCount() == 0
       and not sw2.btn_sql_gen_std.isEnabled() and not sw2.btn_sql_gen_simple.isEnabled()
+      and not sw2.btn_sql_save.isEnabled() and not sw2.btn_sql_run.isEnabled()
       and "[清空] 已清空 1 个脚本文件" in sw2.sql_log.toPlainText(),
-      (_n_before, sw2.sql_files))
+      (_n_before, sw2.sql_files,
+       [sw2.btn_sql_save.isEnabled(), sw2.btn_sql_run.isEnabled()]))
 sw2.on_sql_clear_files()
 check("Q28a 空清单再点清空也留一句话，不静默不动",
       "清单里没有脚本文件" in sw2.sql_log.toPlainText(),
@@ -4811,6 +4813,13 @@ with open(gsql, "w", encoding="utf-8") as _gfh:
 gw = app_main.MainWindow()
 check("R33 没加脚本时两颗生成按钮是灰的",
       not gw.btn_sql_gen_std.isEnabled() and not gw.btn_sql_gen_simple.isEnabled())
+# 四颗动作按钮同一口径：清单空时点下去没有对象，就在既有禁用样式上灰着，
+# 而不是等用户白点一次再弹"请先添加 SQL 脚本文件"
+check("R33b 没加脚本时保存/执行两颗动作按钮也在既有样式上置灰",
+      not gw.btn_sql_save.isEnabled() and not gw.btn_sql_run.isEnabled()
+      and "QPushButton:disabled" in gw.btn_sql_save.styleSheet()
+      and "QPushButton:disabled" in gw.btn_sql_run.styleSheet(),
+      (gw.btn_sql_save.isEnabled(), gw.btn_sql_run.isEnabled()))
 _orig_gofn4 = app_main.QFileDialog.getOpenFileNames
 app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([gsql], "SQL (*.sql)"))
 try:
@@ -4819,6 +4828,7 @@ finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn4)
 check("R34 有脚本后两颗按钮亮起，tooltip 说清数据 Sheet 只有表头",
       gw.btn_sql_gen_std.isEnabled() and gw.btn_sql_gen_simple.isEnabled()
+      and gw.btn_sql_save.isEnabled() and gw.btn_sql_run.isEnabled()
       and "只有表头" in gw.btn_sql_gen_std.toolTip()
       and "英文名表头" in gw.btn_sql_gen_simple.toolTip(), gw.btn_sql_gen_std.toolTip())
 gout = os.path.join(_tmpdir, "sqlgen_out")

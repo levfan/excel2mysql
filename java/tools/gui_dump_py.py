@@ -396,6 +396,12 @@ def main():
     put("action.sql.group", "%d|%d" % (
         int(win.sql_action_bar.isAncestorOf(win.chk_sql_drop)),
         int(win.sql_action_bar.isAncestorOf(win.btn_sql_run))))
+    # 清单空时两页的动作按钮都要在既有禁用样式上灰着：首屏对撞的就是这个状态
+    put("action.excel.enabled", "%d|%d" % (
+        int(win.btn_gen_std.isEnabled()), int(win.btn_gen_simple.isEnabled())))
+    put("action.sql.enabled", "%d|%d|%d|%d" % (
+        int(win.btn_sql_save.isEnabled()), int(win.btn_sql_run.isEnabled()),
+        int(win.btn_sql_gen_std.isEnabled()), int(win.btn_sql_gen_simple.isEnabled())))
     put("action.run.bg", win.run_action_bar.fill_color)
     put("action.run.group", "%d|%d" % (
         int(win.run_action_bar.isAncestorOf(win.chk_run_drop)),

@@ -153,6 +153,13 @@ public final class GuiDump {
                 put("action.sql.bg", hex(frame.sqlPage().actionBar().fillColor()));
                 put("action.sql.group", grouped(frame.sqlPage().actionBar(),
                         frame.sqlPage().dropExistingBox(), frame.sqlPage().runButton()));
+                put("action.excel.enabled",
+                        onOff(frame.genStandardButton()) + "|" + onOff(frame.genSimpleButton()));
+                put("action.sql.enabled",
+                        onOff(frame.sqlPage().saveButton()) + "|"
+                        + onOff(frame.sqlPage().runButton()) + "|"
+                        + onOff(frame.sqlPage().genStdButton()) + "|"
+                        + onOff(frame.sqlPage().genSimpleButton()));
                 put("action.run.bg", hex(frame.sqlRunActionBarWidget().fillColor()));
                 put("action.run.group", grouped(frame.sqlRunActionBarWidget(),
                         frame.sqlRunDropBox(), frame.sqlRunScriptsButton()));
@@ -979,6 +986,11 @@ public final class GuiDump {
                                   java.awt.Component b) {
         return (javax.swing.SwingUtilities.isDescendingFrom(a, bar) ? "1" : "0") + "|"
                 + (javax.swing.SwingUtilities.isDescendingFrom(b, bar) ? "1" : "0");
+    }
+
+    /** 按钮可点与否：从活控件读，不许在探针里写死期望值。 */
+    private static String onOff(javax.swing.JButton button) {
+        return button.isEnabled() ? "1" : "0";
     }
 
     private static final java.util.regex.Pattern PATH_RE =
