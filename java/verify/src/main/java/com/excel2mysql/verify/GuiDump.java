@@ -333,6 +333,27 @@ public final class GuiDump {
                                 javax.swing.JOptionPane.ERROR_MESSAGE);
                 put("popup.display.raw", worst.equals(wdlg.displayText()) ? "原文" : "被改写过");
                 wdlg.dispose();
+                // 弹窗按正文给尺寸：三把键钉住这条规则的两端（都落在夹取边界上，
+                // 不受两边字体度量差几个像素的影响），中间值由两边的用例各自量。
+                // 长句那一条只有宽度落在边界上，高度按折完的行数走，两边字体不同，只比宽度
+                StringBuilder tall = new StringBuilder();
+                for (int i = 1; i <= 40; i++) {
+                    tall.append("第 ").append(i).append(" 行报错正文。\n");
+                }
+                String[] popCase = {"清单里没有脚本文件，无需清空",
+                        tall.toString(), worst};
+                boolean[] popFull = {true, true, false};
+                String[] popName = {"short", "tall", "longwidth"};
+                for (int i = 0; i < popCase.length; i++) {
+                    com.excel2mysql.gui.MessageDialog pdb =
+                            com.excel2mysql.gui.MessageDialog.create(
+                                    frame, "提示", popCase[i], null,
+                                    javax.swing.JOptionPane.WARNING_MESSAGE);
+                    String w = want(pdb);
+                    put("popup.want." + popName[i],
+                            popFull[i] ? w : w.split("x")[0]);
+                    pdb.dispose();
+                }
                 frame.startImport();
                 put("guard.nodb.import", popup());
 

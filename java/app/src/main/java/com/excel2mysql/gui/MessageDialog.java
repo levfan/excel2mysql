@@ -34,18 +34,22 @@ import java.awt.event.KeyEvent;
  *
  * <p>正文就是调用方给的那份原文：横向由 {@link JTextArea} 自己的折行按内容区右边界
  * 断开（拉大窗口会重排），纵向靠滚动条，不截行。「复制全部」复制的也是同一份原文。
- * 窗口至少 820x420（Qt 逻辑像素，按屏幕 DPI 折算），按内容算高后夹进屏幕可用区。
+ * 窗口按正文要多大就给多大（宽 420~880、高 170~640 的设计像素，再夹进屏幕可用区）：
+ * 不再有一块"至少 820x420"的地板，一句话的提示也摊开半屏空白，
+ * 而且正文被那个地板顶得永远比视口高一点，滚动条下不去。
  */
 public final class MessageDialog extends JDialog {
 
     /** 正文与标题共用 Python 应用默认的 9pt，按 DPI 折成物理像素（144dpi → 18px）。 */
     public static final int FONT_SIZE = UiScale.fontPt(UiScale.UI_POINT_SIZE);
 
-    /** 以下四个是 Qt 逻辑像素的设计值，交给 Windows.clientSize 统一折算一次。 */
-    private static final int WANT_WIDTH = 880;
-    private static final int MIN_WIDTH = 820;
-    private static final int MIN_HEIGHT = 420;
-    private static final int MAX_HEIGHT = 640;
+    /** 以下都是 Qt 逻辑像素的设计值，交给 Windows.clientSize 统一折算一次。 */
+    private static final int WANT_WIDTH = 880;   // 长句仍然给到 880，折行点才贴得上右边界
+    private static final int MIN_WIDTH = 420;
+    private static final int MIN_HEIGHT = 170;
+    private static final int MAX_HEIGHT = 640;   // 超过这一档才真的出滚动条
+    private static final int SIDE_CHROME = 48;   // 滚动区边框 + 正文左右边距 + 布局外边距
+    private static final int TOP_CHROME = 120;   // 标题行 + 按钮行 + 上下留白
 
     private final JTextArea area;
     private final JScrollPane scroll;
@@ -80,7 +84,7 @@ public final class MessageDialog extends JDialog {
         buttons.add(close);
         content.add(buttons, BorderLayout.SOUTH);
 
-        content.setMinimumSize(new Dimension(UiScale.px(680), UiScale.px(320)));
+        content.setMinimumSize(new Dimension(UiScale.px(MIN_WIDTH), UiScale.px(MIN_HEIGHT)));
         setContentPane(content);
         getRootPane().setDefaultButton(close);
         getRootPane().registerKeyboardAction(e -> dispose(),
@@ -89,16 +93,34 @@ public final class MessageDialog extends JDialog {
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setResizable(true);
 
-        int lines = Math.max(1, body.split("\n", -1).length);
         FontMetrics fm = area.getFontMetrics(area.getFont());
-        // clientSize 会把设计值折成物理像素，所以行高先按同一因子折回设计像素，
-        // 不能把已经乘过 1.5 的高度再乘一次
-        int designLine = Math.max(1,
-                (int) Math.round(fm.getHeight() / UiScale.factor()));
-        int height = Math.max(MIN_HEIGHT,
-                Math.min(MAX_HEIGHT, lines * designLine + 120));
-        Windows.clientSize(content, this, WANT_WIDTH, height);
+        String[] lines = body.split("\n", -1);
+        // clientSize 会把设计值折成物理像素，所以量出来的物理宽度要先按同一因子折回设计像素，
+        // 不能拿乘过 1.5 的数当期望值
+        double factor = UiScale.factor();
+        int widest = 0;
+        for (String line : lines) {
+            widest = Math.max(widest, (int) Math.round(fm.stringWidth(line) / factor));
+        }
+        int width = Math.min(WANT_WIDTH, Math.max(MIN_WIDTH, widest + SIDE_CHROME));
+        // 先定宽，再问"按这个宽度折完有多高"：按原文行数估高的话，长句在窄处多折的那几行
+        // 会把内容顶出视口一点点，滚动条就从此常驻——现场那句"默认就有滚动条"是这么来的
+        int need = wrappedDesignHeight(area, width - SIDE_CHROME);
+        int height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, need + TOP_CHROME));
+        Windows.clientSize(content, this, width, height);
         setMinimumSize(new Dimension(UiScale.px(MIN_WIDTH), UiScale.px(MIN_HEIGHT)));
+    }
+
+    /**
+     * 按给定宽度折完之后的设计高度（只算正文，不含标题行与按钮行）。
+     * 折行文本区必须先给宽度再问首选高度，算出来的才是"按这个宽度折完有多高"；
+     * 直接把高度钉死的话，80 行报错也只报那一截，滚动区以为装得下，尾部就看不到了。
+     */
+    private static int wrappedDesignHeight(JTextArea area, int designWidth) {
+        area.setSize(UiScale.px(designWidth), Short.MAX_VALUE);
+        Dimension pref = area.getPreferredSize();
+        area.setPreferredSize(new Dimension(UiScale.px(designWidth), pref.height));
+        return (int) Math.round(pref.height / UiScale.factor());
     }
 
     private static JPanel buildHeader(String title, int iconType) {
@@ -134,15 +156,8 @@ public final class MessageDialog extends JDialog {
         area.setBorder(BorderFactory.createEmptyBorder(
                 UiScale.px(10), UiScale.px(12), UiScale.px(10), UiScale.px(12)));
         area.setCaretPosition(0);
-        // 与 Python 结果弹窗同一个下限：长路径与文件清单不至于被挤成一团
-        int minW = UiScale.px(MIN_WIDTH);
-        int minH = UiScale.px(MIN_HEIGHT);
-        area.setMinimumSize(new Dimension(minW, minH));
-        // 折行文本区必须先给宽度再问首选高度，算出来的才是「按这个宽度折完有多高」。
-        // 直接钉成 420 高的话，80 行报错也只报 420，滚动区以为装得下，尾部就看不到了
-        area.setSize(minW, Short.MAX_VALUE);
-        Dimension pref = area.getPreferredSize();
-        area.setPreferredSize(new Dimension(minW, Math.max(minH, pref.height)));
+        // 这里不给尺寸地板：窗的大小由构造器按"最长一段多宽、折完多高"现算。
+        // 早先钉死的 820x420 让正文永远比视口高一点点，一句话的提示也带着滚动条。
         return area;
     }
 

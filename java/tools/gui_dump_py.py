@@ -550,6 +550,18 @@ def main():
                                  box_class=m.PopupMessageBox)
     put("popup.display.raw", "原文" if _raw_box.text() == _worst else "被改写过")
     _raw_box.deleteLater()
+    # 弹窗按正文给尺寸：三把键钉住这条规则的两端（都落在夹取边界上，
+    # 不受两边字体度量差几个像素的影响），中间值由两边的用例各自量。
+    # 长句那一条只有宽度落在边界上，高度按折完的行数走，两边字体不同，只比宽度
+    for _case, _txt, _full in (("short", "清单里没有脚本文件，无需清空", True),
+                               ("tall", "\n".join("第 %d 行报错正文。" % i
+                                                  for i in range(1, 41)), True),
+                               ("longwidth", _worst, False)):
+        _sbox = m.build_popup_box(None, "提示", _txt, "warning",
+                                  box_class=m.PopupMessageBox)
+        _w = str(_sbox.property("e2mWant") or "")
+        put("popup.want." + _case, _w if _full else _w.split("x")[0])
+        _sbox.deleteLater()
     # 双击不是"接了信号"就算数，要真的建出那一张表的结构窗口。
     # 真窗口是模态的，离屏 exec() 会挂住进程，所以只把 exec 换成"记一笔、返回取消"，
     # 构造过程走真代码。

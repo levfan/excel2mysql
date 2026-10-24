@@ -253,11 +253,14 @@ ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交�
                  "回滚仅对其后的数据操作生效。")
 
 # 结果弹窗的尺寸：与 Java 侧 MessageDialog 同一组数（设计像素）。
-# 正文不再预折行，所以高度只按"原文有几行"给一个区间，装不下的部分出滚动条。
-POPUP_WANT_WIDTH = 880
-POPUP_MIN_WIDTH = 820
-POPUP_MIN_HEIGHT = 420
-POPUP_MAX_HEIGHT = 640
+# 框按正文要多大就给多大，只有下限与上限，不再有一个"至少 820x420"的死地板：
+# 一句话的提示也摊开这么大一块空白，用户第一反应是"这框是不是坏了"。
+POPUP_WANT_WIDTH = 880       # 长句仍然给到 880，折行点才贴得上右边界
+POPUP_MIN_WIDTH = 420
+POPUP_MIN_HEIGHT = 170
+POPUP_MAX_HEIGHT = 640       # 超过这一档才真的出滚动条
+POPUP_SIDE_CHROME = 48       # 滚动区边框 + 正文左右边距 + 布局外边距
+POPUP_TOP_CHROME = 120       # 标题行 + 按钮行 + 上下留白
 
 
 class PopupMessageBox(QDialog):
@@ -312,11 +315,16 @@ class PopupMessageBox(QDialog):
 
     def setText(self, text):
         self.body.setText(text)
-        # 高度按"原文几行"给一个区间（与 Java 侧同一个算法），放不下就靠滚动条看
-        lines = text.count("\n") + 1
-        want_h = min(POPUP_MAX_HEIGHT,
-                     max(POPUP_MIN_HEIGHT, lines * self.body.fontMetrics().height() + 120))
-        fit_client(self, POPUP_WANT_WIDTH, want_h)
+        fm = self.body.fontMetrics()
+        lines = text.split("\n")
+        widest = max([fm.horizontalAdvance(line) for line in lines] or [0])
+        width = min(POPUP_WANT_WIDTH, max(POPUP_MIN_WIDTH, widest + POPUP_SIDE_CHROME))
+        # 先定宽再问"折完有多高"：按原文行数估高，长句在窄处会多折几行，
+        # 差出来的那点高度刚好把滚动条顶出来——这就是"默认就有滚动条"的来路
+        need = self.body.heightForWidth(width - POPUP_SIDE_CHROME)
+        need = max(need, len(lines) * fm.height())
+        fit_client(self, width, min(POPUP_MAX_HEIGHT,
+                                    max(POPUP_MIN_HEIGHT, need + POPUP_TOP_CHROME)))
 
     def setIcon(self, icon):
         std = self._STD_ICONS.get(icon)
