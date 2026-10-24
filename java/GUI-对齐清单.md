@@ -3854,4 +3854,4 @@ dump 通道的执行语义：
   对撞报 `split.sqlrun.tailmin` Python=1 / Java=0。三处均按原样还原后全绿。
 - 对撞键 312 → 316：新增 `split.sqlrun.order` / `split.sqlrun.tailmin` /
   `sqlrun.editor.minlines` / `sqlrun.table.fits`，两边从活控件读布局与行数，逐键一致。
-- 3.8 线 261 / 0 / 1、3.12 线 252 / 0 / 4。版本按 minor 升到 2.0.10。
+- 3.8 线 261 / 0 / 1、3.12 线 252 / 0 / 4。版本按 minor 升到 2.1.0。
