@@ -95,11 +95,28 @@ public final class SqlRunner {
     }
 
     public static FileResult runText(DbClient db, String file, String text, StatementHook hook) {
+        return runStatements(db, file, SqlScript.splitStatements(text), hook, text);
+    }
+
+    /**
+     * 执行一份已经切好的语句：进度、取消与事务语义同上。
+     *
+     * 「SQL 执行器」页的脚本队列与 SQL 页共用这一步；那边切句时要剔掉只有注释的片段
+     * （{@link SqlScript#executableStatements}），不能在这里再切一遍把注释又带回来。
+     */
+    public static FileResult runStatements(DbClient db, String file, List<String> statements,
+                                           StatementHook hook) {
+        return runStatements(db, file, statements, hook, null);
+    }
+
+    private static FileResult runStatements(DbClient db, String file, List<String> statements,
+                                            StatementHook hook, String countText) {
         FileResult r = new FileResult();
         r.file = file;
-        List<String> statements = SqlScript.splitStatements(text);
         r.statements = statements;
-        r.creates = SqlScript.extractCreateTables(text).size();
+        if (countText != null) {
+            r.creates = SqlScript.extractCreateTables(countText).size();
+        }
         Statement st = null;
         try {
             st = db.connection().createStatement();

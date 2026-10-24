@@ -57,7 +57,7 @@ from core.infer import (
     replace_first_segment, sanitize_table_name, _col_to_field, dedup_field,
     table_name_problem,
 )
-from core.sql_execute import run as run_sql_statements
+from core.sql_execute import executable_statements, run as run_sql_statements
 from core.sql_script import (
     extract_create_tables, split_sql_statements,
     parse_create_tables, rename_table_sql, apply_display_renames,
@@ -137,6 +137,7 @@ TABLE_ROW_PADDING = 6
 # 两栈同一句、由对撞器逐条比（读的是真控件上的标题，不是这里抄一份）。
 FILE_TABLE_TITLE = "待导入文件（单击表名改名，双击其他列改字段）"
 SQL_TABLE_TITLE = "待处理的脚本表（双击表名或表注释编辑，双击其他列看元数据）"
+RUN_TABLE_TITLE = "待执行脚本（按清单顺序执行，每个文件一个事务）"
 COLUMN_TABLE_TITLE = "字段清单"
 
 # 日志框的最小高度按"看得见的行数"约定，不按像素：同一档字号在 Qt 与 Swing 里
@@ -412,6 +413,20 @@ def format_statement(st: str) -> str:
 def indent_detail(text: str, pad: str = "    ") -> str:
     """把多行详情统一缩进，避免与首行混在一起看不出层次。"""
     return "\n".join(pad + ln for ln in str(text).splitlines())
+
+
+def format_file_size(size) -> str:
+    """脚本文件大小按人看的一档显示；两栈同一套进位与一位小数。"""
+    if size is None:
+        return ""
+    size = float(size)
+    if size < 1024:
+        return "%d B" % int(size)
+    for unit in ("KB", "MB"):
+        size /= 1024.0
+        if size < 1024:
+            return "%.1f %s" % (size, unit)
+    return "%.1f GB" % (size / 1024.0)
 
 
 # ---------------------------------------------------------------------------
@@ -986,7 +1001,7 @@ def sql_execute_task(items, cfg, sink):
     sink.note(f"正在切分 {len(items)} 个脚本的语句…")
     plans = []
     for path, text in items:
-        stmts = split_sql_statements(text)
+        stmts = executable_statements(text)
         plans.append((path, stmts))
         if sink.cancelled:
             break
@@ -1083,14 +1098,146 @@ def sql_execute_task(items, cfg, sink):
                 pass
         sink.advance(len(stmts) - reported, f"{fname} 收尾")   # 把余数补齐，进度条落准
         files.append({"path": path, "status": outcome, "detail": detail})
-        if failed:
-            fail_files += 1
-        else:
+        # 取消的文件既不算成功也不算失败：汇总里的成功数不能把回滚掉的那份算进去
+        if outcome == "ok":
             ok_files += 1
+        elif outcome == "fail":
+            fail_files += 1
     done_paths = {f["path"] for f in files}
     for path, _ in plans:                            # 取消或连接中断后没轮到的脚本
         if path not in done_paths:
             files.append({"path": path, "status": "cancel", "detail": "未执行"})
+    return {"ok": ok_files, "fail": fail_files, "skipped": skipped,
+            "files": files, "target": target,
+            "cancelled": sink.cancelled, "conn_failed": False}
+
+
+def sql_run_files_task(paths, overwrite, cfg, sink):
+    """「SQL 执行器」页的脚本文件队列：按清单顺序逐个执行，每个文件一个事务。
+
+    与第二页 sql_execute_task 的事务语义、日志文案同一套；差别只在读盘时机——
+    轮到哪个文件才读哪个，导入一份大 dump 不必先把所有脚本正文都按在内存里。
+    进度按语句推进；读到新文件时总数随之增加（ProgressSink 的总数只增不减）。
+    """
+    target = f"{cfg['database']}@{cfg['host']}:{cfg['port']}"
+    ok_files = fail_files = skipped = 0
+    files = []                                      # 逐文件结局，收尾按路径写回清单状态
+    reported_total = 0
+    for index, path in enumerate(paths, 1):
+        fname = os.path.basename(path)
+        if sink.cancelled:
+            files.append({"path": path, "status": "cancel", "detail": "未执行"})
+            continue
+        sink.note(f"正在读取第 {index}/{len(paths)} 个脚本：{fname}")
+        try:
+            text = read_sql_text(path)
+        except Exception as e:
+            reason = describe_db_error(e)
+            fail_files += 1
+            files.append({"path": path, "status": "fail", "detail": "读取失败，未执行"})
+            sink.log_error(f"[读取失败] {fname} 未能读入，已跳过\n"
+                           + indent_detail(reason))
+            continue
+        if overwrite:
+            text, dropped = prepend_drop_tables(text)
+            sink.log(f"[覆盖] {fname}：" + (
+                "执行前先 DROP " + "、".join(dropped) if dropped
+                else "脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除"))
+        stmts = executable_statements(text)
+        if not stmts:
+            skipped += 1
+            files.append({"path": path, "status": "skip",
+                          "detail": "没有可执行的语句"})
+            sink.log(f"[跳过] {fname}：没有可执行的语句")
+            continue
+        try:
+            conn = connect(cfg)
+        except Exception as e:
+            sink.log_error(
+                f"[连接失败] 无法连接到 {target}（用户 {cfg['user']}），剩余脚本均未执行\n"
+                + indent_detail(describe_db_error(e)))
+            files.append({"path": path, "status": "cancel", "detail": "连接失败，未执行"})
+            for rest in paths[index:]:
+                files.append({"path": rest, "status": "cancel", "detail": "未执行"})
+            return {"ok": ok_files, "fail": fail_files, "skipped": skipped,
+                    "files": files, "target": target,
+                    "cancelled": True, "conn_failed": True}
+        reported_total += len(stmts)
+        sink.set_total(reported_total)
+        chunk = max(1, len(stmts) // 100)           # 每个文件最多约 100 次刷新
+        reported = 0
+        failed = False
+        executed = 0
+        outcome, detail = "ok", ""
+        try:
+            conn.begin()
+            cur = conn.cursor()
+            for pos, st in enumerate(stmts, 1):
+                if sink.cancelled:
+                    break
+                try:
+                    cur.execute(st)
+                    if cur.description is not None:
+                        cur.fetchall()
+                    executed += 1
+                except Exception as e:
+                    conn.rollback()
+                    failed = True
+                    outcome = "fail"
+                    detail = f"第 {pos}/{len(stmts)} 条语句报错，本文件事务已回滚"
+                    sink.log_error((
+                        f"[执行失败] {fname} 第 {pos}/{len(stmts)} 条语句报错，"
+                        f"目标库 {target}，本文件事务已回滚\n"
+                        + indent_detail(describe_db_error(e)) + "\n"
+                        + "    出错语句：\n" + format_statement(st) + "\n"
+                        + "    前面 " + str(executed) + " 条语句已随事务回滚。"
+                        + ROLLBACK_NOTE))
+                    break
+                if pos - reported >= chunk:
+                    reported = pos
+                    sink.advance(chunk, f"{fname} 第 {pos}/{len(stmts)} 条")
+            try:
+                cur.close()
+            except Exception:
+                pass
+            if failed:
+                pass
+            elif sink.cancelled and executed < len(stmts):
+                # 中途取消：本文件不提交，回滚后重跑才是干净的（DDL 隐式提交的部分除外）
+                conn.rollback()
+                outcome = "cancel"
+                detail = f"已执行 {executed}/{len(stmts)} 条，本文件事务已回滚"
+                sink.log(f"[已取消] {fname}：已执行 {executed}/{len(stmts)} 条，"
+                         f"本文件事务已回滚\n    " + ROLLBACK_NOTE)
+            else:
+                conn.commit()
+                detail = f"{executed} 条语句已提交"
+                sink.log(f"[提交] {fname}：{executed} 条语句已提交")
+        except Exception as e:
+            failed = True
+            outcome = "fail"
+            detail = f"执行异常（已提交 {executed} 条），本文件事务已回滚"
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            sink.log_error((
+                f"[执行失败] {fname} 执行异常（已提交 {executed} 条），目标库 {target}，"
+                f"本文件事务已回滚\n"
+                + indent_detail(describe_db_error(e)) + "\n"
+                + "    " + ROLLBACK_NOTE))
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        sink.advance(len(stmts) - reported, f"{fname} 收尾")   # 把余数补齐，进度落准
+        files.append({"path": path, "status": outcome, "detail": detail})
+        # 取消的文件既不算成功也不算失败：汇总里的成功数不能把回滚掉的那份算进去
+        if outcome == "ok":
+            ok_files += 1
+        elif outcome == "fail":
+            fail_files += 1
     return {"ok": ok_files, "fail": fail_files, "skipped": skipped,
             "files": files, "target": target,
             "cancelled": sink.cancelled, "conn_failed": False}
@@ -1324,6 +1471,7 @@ class DropArea(QWidget):
     EXCEL_HINT = "将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n" \
                  "（支持 .xlsx / .xls / .zip，可多选）"
     SQL_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）"
+    RUN_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选；按列表顺序执行）"
 
     def __init__(self, parent=None, hint=None, tooltip=None):
         super().__init__(parent)
@@ -1370,6 +1518,8 @@ class MainWindow(QWidget):
         self.tables = []            # 解析后的表定义列表
         self.worker = None
         self.sql_files = []         # SQL 脚本改名入库页：[{"path","text","modified","rename_map"}]
+        # SQL 执行器页的待执行脚本：只登记路径/大小/状态，正文等到执行时再读
+        self.sql_run_files = []
         self._sql_rows = []         # 表格每一行对应的实际表名，避免显示大小写与脚本内容混淆
         self._sql_display_names = []  # 上一轮刷新出来的显示值，用来识别"没编辑却提交同名"
         self._refreshing_sql_table = False
@@ -1690,7 +1840,7 @@ class MainWindow(QWidget):
             state_style = "color: #1a7f37; font-weight: bold;"
             head = "目标库：%s —— " % db
             tails = ["Excel 数据将导入到这个库", "SQL 脚本将执行到这个库",
-                     "编辑区里的 SQL 将执行到这个库"]
+                     "编辑区 SQL 与脚本文件都执行到这个库"]
         else:
             # 告警条的说法要看当前是展开还是收起：让人去点的那颗按钮必须真的在界面上
             if self._conn_expanded:
@@ -1733,7 +1883,7 @@ class MainWindow(QWidget):
     RES_LABEL = {
         "excel": "Excel 导入页的待导入列表",
         "sql": "SQL 脚本改名入库页的脚本列表",
-        "run": "SQL 执行器编辑区里那段文本",
+        "run": "SQL 执行器页的执行结果区（编辑区 SQL 与脚本清单共用）",
     }
 
     def _resources_for(self, log_view):
@@ -1858,6 +2008,9 @@ class MainWindow(QWidget):
         sql_on = bool(self.sql_files) and not self.task_busy((self.RES_SQL,))
         self.btn_sql_gen_std.setEnabled(sql_on)
         self.btn_sql_gen_simple.setEnabled(sql_on)
+        # 第三页的「执行脚本文件」判据与这里同一口径：有脚本、且这一页没任务在跑
+        run_on = bool(self.sql_run_files) and not self.task_busy((self.RES_RUN,))
+        self.btn_run_scripts.setEnabled(run_on)
 
     # -------------------- 槽函数 --------------------
     def on_clear_log(self):
@@ -2547,9 +2700,11 @@ class MainWindow(QWidget):
 
     # -------------------- SQL 执行器页 --------------------
     def _build_sql_run_page(self):
-        """第三个页签。与「SQL 脚本改名入库」页的分工：那一页管"手上有一批 .sql 文件要入库"
-        （挑文件、改表名、落盘副本），这一页管"临时问一句、顺手改点结构"，
-        所以它不挑文件也不落盘，只吃编辑区里那段文本。
+        """第三个页签：既能按清单执行 .sql 脚本文件，也能临时问一句 SQL。
+
+        文件这一路借用第一页的拖拽区与清单表、第二页的底部动作条：覆盖开关在左、
+        主按钮在右；编辑区这一路仍在下面。两路共用右侧结果区，所以同一页同时只跑
+        一个任务（见 _resources_for）。
         """
         page = QWidget()
         lay = QVBoxLayout(page)
@@ -2559,35 +2714,59 @@ class MainWindow(QWidget):
         self.lbl_run_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.lbl_run_db)
 
-        # 提示单独占一行，三颗按钮另起一行：QLabel 不折行，它的最小宽度就是整句的宽度，
-        # 和按钮排在同一行会把整个窗口的最小宽度顶到 830 以上——小屏（1024x768 的现场机、
-        # 还有 800 宽的离屏用例）上窗口放不下，U7 那条"客户区落在可用区内"就是抓这个的。
-        self.sql_run_hint = QLabel("直接输入 SQL 执行：建库、建表、改结构、查元数据都行；"
-                                   "一次可以写多条，用分号分隔")
+        # 提示单独占一行：QLabel 不折行，它的最小宽度就是整句的宽度，
+        # 和按钮排在同一行会把整个窗口的最小宽度顶出小屏
+        self.sql_run_hint = QLabel(
+            "两种用法：把 .sql 脚本拖到下面清单里按顺序执行；"
+            "或直接在编辑区写 SQL 临时执行（多条用分号分隔）")
         lay.addWidget(self.sql_run_hint)
-        bar = QHBoxLayout()
-        self.btn_sql_run_samples = QPushButton("示例 (?)")
-        self.btn_sql_run_samples.setToolTip("打开示例清单：选中一条可复制到剪贴板或插到编辑区")
-        self.btn_sql_run_samples.clicked.connect(self.on_sql_samples)
-        self.btn_sql_run_exec = QPushButton("执行")
-        self.btn_sql_run_exec.setStyleSheet(PRIMARY_BUTTON_QSS)
-        self.btn_sql_run_exec.setToolTip("按分号切句逐条执行；全部成功才提交，中途出错整批回滚")
-        self.btn_sql_run_exec.clicked.connect(self.on_sql_run)
-        bar.addWidget(self.btn_sql_run_samples)
-        bar.addWidget(self.btn_sql_run_exec)
-        lay.addLayout(bar)
+
+        # 文件这一路与第一页同一形状：拖拽区在上，清单表套在组框里
+        self.sql_run_drop = DropArea(hint=DropArea.RUN_HINT,
+                                     tooltip="点击选择 SQL 脚本；也可以直接拖到这里")
+        self.sql_run_drop.files_dropped.connect(self.on_run_scripts_dropped)
+        self.sql_run_drop.clicked.connect(self.on_run_scripts_add)
+
+        self.sql_run_table = QTableWidget(0, 4)
+        style_table_font(self.sql_run_table)
+        self.sql_run_table.setHorizontalHeaderLabels(["序号", "文件", "大小", "状态"])
+        header = self.sql_run_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        self.sql_run_table.setColumnWidth(0, 44)
+        self.sql_run_table.setColumnWidth(1, 300)
+        self.sql_run_table.setColumnWidth(2, 100)
+        self.sql_run_table.setColumnWidth(3, 140)
+        self.sql_run_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.sql_run_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        run_upper = QGroupBox(RUN_TABLE_TITLE)
+        ru = QVBoxLayout(run_upper)
+        ru.setContentsMargins(0, 0, 0, 0)
+        ru.addWidget(self.sql_run_table, 1)
+        # 与第一页「清空待上传文件」同一位置同一语义：整份清出清单，磁盘上的脚本不动
+        clear_row = QHBoxLayout()
+        self.btn_run_clear = QPushButton("清空待执行脚本")
+        self.btn_run_clear.clicked.connect(self.on_run_scripts_clear)
+        clear_row.addWidget(self.btn_run_clear)
+        clear_row.addStretch(1)
+        ru.addLayout(clear_row)
 
         self.sql_run_input = QPlainTextEdit(SQL_RUN_DEFAULT)
         self.sql_run_input.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
         # 不折行：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
         self.sql_run_input.setLineWrapMode(QPlainTextEdit.NoWrap)
-        # 两颗清空各归各的pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
+        # 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
         lh = QHBoxLayout()
         lh.addWidget(QLabel("SQL 文本"))
         lh.addStretch(1)
+        self.btn_sql_run_samples = QPushButton("示例 (?)")
+        self.btn_sql_run_samples.setToolTip("打开示例清单：选中一条可复制到剪贴板或插到编辑区")
+        self.btn_sql_run_samples.clicked.connect(self.on_sql_samples)
+        lh.addWidget(self.btn_sql_run_samples)
         self.btn_sql_run_clear_input = QPushButton("清空编辑区")
         self.btn_sql_run_clear_input.setToolTip("只清掉左边这段 SQL，右侧结果区不动")
         self.btn_sql_run_clear_input.clicked.connect(self.on_sql_run_clear_input)
@@ -2622,7 +2801,47 @@ class MainWindow(QWidget):
         self.sql_run_split.setStretchFactor(0, 45)
         self.sql_run_split.setStretchFactor(1, 55)
         self.sql_run_split.setSizes([450, 550])
-        lay.addWidget(self.sql_run_split, 1)
+
+        # 三段落上下排：拖拽区 / 脚本清单 / 编辑区与结果。清单与编辑区同权，
+        # 拖拽区按第一页的口径只占固定一份，不跟着窗口变高
+        self.sql_run_split_v = QSplitter(Qt.Vertical)
+        self.sql_run_split_v.setChildrenCollapsible(False)
+        self.sql_run_split_v.setHandleWidth(6)
+        self.sql_run_split_v.addWidget(self.sql_run_drop)
+        self.sql_run_split_v.addWidget(run_upper)
+        self.sql_run_split_v.addWidget(self.sql_run_split)
+        self.sql_run_split_v.setStretchFactor(0, 0)
+        self.sql_run_split_v.setStretchFactor(1, 1)
+        self.sql_run_split_v.setStretchFactor(2, 2)
+        self.sql_run_split_v.setSizes([110, 150, 320])
+        lay.addWidget(self.sql_run_split_v, 1)
+
+        # 底部动作条与第二页同一形状：覆盖开关在左、动作按钮在右，且在分隔条之外
+        op = QHBoxLayout()
+        self.chk_run_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
+        self.chk_run_drop.setToolTip(
+            "勾选后，执行脚本文件前先对脚本里每条 CREATE TABLE 的建表目标补一句\n"
+            "DROP TABLE IF EXISTS；只认整句以 CREATE TABLE 开头的语句，\n"
+            "注释或字符串里出现的建表不会触发删除。只影响「执行脚本文件」，\n"
+            "不改磁盘上的脚本正文；默认不勾选。")
+        op.addWidget(self.chk_run_drop)
+        op.addStretch(1)
+        self.btn_sql_run_exec = QPushButton("执行编辑区 SQL")
+        self.btn_sql_run_exec.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.btn_sql_run_exec.setToolTip("执行左侧编辑区里的 SQL：按分号切句逐条执行，"
+                                         "全部成功才提交，中途出错整批回滚；与脚本文件清单互不影响")
+        self.btn_sql_run_exec.clicked.connect(self.on_sql_run)
+        self.btn_run_scripts = QPushButton("执行脚本文件")
+        self.btn_run_scripts.setStyleSheet(PRIMARY_BUTTON_QSS)
+        self.btn_run_scripts.setToolTip(
+            "按清单顺序逐个执行，每个文件一个事务；全部成功才提交，\n"
+            "中途出错本文件回滚后继续下一个。执行前请先选好目标库。")
+        self.btn_run_scripts.setEnabled(False)
+        self.btn_run_scripts.clicked.connect(self.on_run_scripts_execute)
+        op.addWidget(self.btn_sql_run_exec)
+        op.addWidget(self.btn_run_scripts)
+        lay.addWidget(hline())
+        lay.addLayout(op)
 
         self.sql_run_samples = None                          # 示例对话框只在打开时才有
         return page
@@ -2645,6 +2864,128 @@ class MainWindow(QWidget):
         # 这一页是给人来回试语句的，每试一次弹一次模态框会点不完
         self._run_modal("正在执行 SQL…", sql_run_task, (text, cfg),
                         log_view=self.sql_run_log)
+
+    # -------------------- SQL 执行器页：脚本文件队列 --------------------
+    def on_run_scripts_add(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "选择 SQL 脚本", "", "SQL 脚本 (*.sql);;所有文件 (*)")
+        if files:
+            self.add_run_script_paths(files)
+
+    def on_run_scripts_dropped(self, paths):
+        """拖进来的路径只收 .sql，与第二页同一句口径；混着别的文件时点名哪些没进去。"""
+        keep = [p for p in paths if p.lower().endswith(".sql")]
+        wrong = [p for p in paths if not p.lower().endswith(".sql")]
+        if not keep:
+            append_log(self.sql_run_log, "[提示] 拖入的不是 SQL 脚本文件，已忽略。")
+            return
+        if wrong:
+            append_log(self.sql_run_log,
+                       "[跳过] 不是 SQL 脚本，未读入：%s"
+                       % "、".join(os.path.basename(p) for p in wrong))
+        self.add_run_script_paths(keep)
+
+    def add_run_script_paths(self, files):
+        """只登记路径与大小，正文等轮到它执行时再读：导入一份大 dump 不必先占满内存。"""
+        existing = {s["path"] for s in self.sql_run_files}
+        added, dups, failed = [], [], []
+        for f in files:
+            if f in existing:
+                dups.append(f)
+                continue
+            try:
+                size = os.path.getsize(f)
+            except OSError as e:
+                failed.append({"path": f, "reason": describe_db_error(e)})
+                continue
+            self.sql_run_files.append({"path": f, "size": size, "status": "待执行"})
+            existing.add(f)
+            added.append(f)
+        self._refresh_run_table()
+        lines = []
+        for p in added:
+            lines.append(f"[已加入] {p}")
+        for p in dups:
+            lines.append(f"[跳过] {p}：已在列表")
+        for f in failed:
+            lines.append(f"[未加入] {f['path']}：{' '.join(f['reason'].split())}")
+        append_log(self.sql_run_log,
+                   f"===== 添加完成：{len(added)} 个脚本，{len(failed)} 个无法访问，"
+                   f"{len(dups)} 个重复 =====", error=bool(failed))
+        popup_box(self, "添加结果", "\n".join(lines),
+                  "warning" if failed else "information")
+
+    def _refresh_run_table(self):
+        self.sql_run_table.setRowCount(len(self.sql_run_files))
+        for i, s in enumerate(self.sql_run_files):
+            items = [QTableWidgetItem(str(i + 1)),
+                     QTableWidgetItem(os.path.basename(s["path"])),
+                     QTableWidgetItem(format_file_size(s["size"])),
+                     QTableWidgetItem(s["status"])]
+            items[1].setToolTip(s["path"])
+            color = {"成功": LOG_OK_COLOR, "失败": LOG_ERROR_COLOR,
+                     "跳过": LOG_WARN_COLOR, "已取消": LOG_WARN_COLOR}.get(s["status"])
+            if color:
+                items[3].setForeground(QColor(color))
+            for j, it in enumerate(items):
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                self.sql_run_table.setItem(i, j, it)
+        self._sync_gen_buttons()
+
+    def on_run_scripts_clear(self):
+        """与第一页「清空待上传文件」同一语义：整份清出清单，磁盘上的脚本不动。"""
+        n = len(self.sql_run_files)
+        self.sql_run_files = []
+        self._refresh_run_table()
+        if n:
+            append_log(self.sql_run_log, f"[清空] 已清空 {n} 个待执行脚本")
+        else:
+            append_log(self.sql_run_log, "[清空] 清单里没有脚本文件，无需清空")
+
+    def on_run_scripts_execute(self):
+        cfg = self._conn_cfg()
+        db = cfg["database"]
+        if not db:
+            self._warn(NO_DB_HINT)
+            return
+        if not self.sql_run_files:
+            self._warn("请先添加 SQL 脚本文件。")
+            return
+        overwrite = self.chk_run_drop.isChecked()
+        note = "；已勾选「覆盖已存在表」，每个脚本先 DROP 它要建的表" if overwrite else ""
+        append_log(self.sql_run_log,
+                   f"===== 开始执行脚本文件（目标库 {db}，"
+                   f"{len(self.sql_run_files)} 个文件，每个文件一个事务{note}）=====")
+        paths = [s["path"] for s in self.sql_run_files]
+        for s in self.sql_run_files:
+            s["status"] = "待执行"
+        self._refresh_run_table()
+        self._run_modal("正在执行脚本文件到目标库…", sql_run_files_task,
+                        (paths, overwrite, cfg),
+                        on_done=self._finish_run_scripts, log_view=self.sql_run_log)
+
+    def _finish_run_scripts(self, res):
+        labels = {"ok": "成功", "fail": "失败", "skip": "跳过", "cancel": "已取消"}
+        by_path = {f["path"]: f for f in res["files"]}
+        for s in self.sql_run_files:
+            outcome = by_path.get(s["path"])
+            if outcome is not None:
+                s["status"] = labels.get(outcome["status"], outcome["status"])
+        self._refresh_run_table()
+        if res["conn_failed"]:
+            return                      # 连不上库时已经报过详细原因，不再重复汇总
+        note = "（已取消，剩余脚本未执行）" if res["cancelled"] else ""
+        append_log(self.sql_run_log,
+                   f"===== 执行完成：成功 {res['ok']} 个文件，失败 {res['fail']} 个文件"
+                   f"{note} =====", error=bool(res["fail"]))
+        lines = [f"成功 {res['ok']} 个文件，失败 {res['fail']} 个文件{note}。",
+                 f"目标库 {res['target']}"]
+        for f in res["files"]:
+            lines.append(f"[{labels.get(f['status'], f['status'])}] "
+                         f"{f['path']}：{f['detail']}")
+        lines.append("详见日志。")
+        popup_box(self, "执行完成", "\n".join(lines),
+                  "warning" if res["fail"] else "information")
 
     def on_sql_samples(self):
         if self.sql_run_samples is not None and self.sql_run_samples.isVisible():

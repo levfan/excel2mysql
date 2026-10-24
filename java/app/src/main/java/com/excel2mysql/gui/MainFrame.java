@@ -95,7 +95,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     static {
         RES_LABEL.put(RES_EXCEL, "Excel 导入页的待导入列表");
         RES_LABEL.put(RES_SQL, "SQL 脚本改名入库页的脚本列表");
-        RES_LABEL.put(RES_RUN, "SQL 执行器编辑区里那段文本");
+        RES_LABEL.put(RES_RUN, "SQL 执行器页的执行结果区（编辑区 SQL 与脚本清单共用）");
     }
 
     /**
@@ -143,6 +143,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JLabel sqlRunHint;
     /** 第三个页签顶部的当前目标库信息条：与前两页同一次刷新、同一个来源。 */
     private HintLabel sqlRunDbHint;
+    /** 第三页的脚本文件队列：拖拽区、清单表、覆盖开关与两颗清空/执行按钮。 */
+    private DropArea sqlRunDrop;
+    private javax.swing.JTable sqlRunFilesTable;
+    private javax.swing.table.DefaultTableModel sqlRunFilesModel;
+    private javax.swing.JButton sqlRunFilesClearBtn;
+    private javax.swing.JButton sqlRunScriptsBtn;
+    private javax.swing.JCheckBox sqlRunDropBox;
+    private javax.swing.JPanel sqlRunActionBar;
+    private final List<RunScript> sqlRunFiles = new ArrayList<RunScript>();
     private javax.swing.JDialog sqlRunSamples;
     private javax.swing.JList<String> sqlRunSamplesList;
     private javax.swing.JTextArea sqlRunPreview;
@@ -866,7 +875,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             sqlPage.setHint(true, head + "SQL 脚本将执行到这个库");
         }
         if (sqlRunDbHint != null) {
-            sqlRunDbHint.setOk(head + "编辑区里的 SQL 将执行到这个库");
+            sqlRunDbHint.setOk(head + "编辑区 SQL 与脚本文件都执行到这个库");
         }
     }
 
@@ -1066,6 +1075,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         syncGenButtons();
         if (sqlPage != null) {
             sqlPage.setGenBusy(taskBusy(RES_SQL));
+        }
+        // 脚本队列只要非空就能点：没选库时由 executeRunScripts 弹 NO_DB_HINT，
+        // 与「开始导入」同一口径；编辑区与脚本队列共用结果面板，跑着的时候两边都别动
+        if (sqlRunScriptsBtn != null) {
+            sqlRunScriptsBtn.setEnabled(!sqlRunFiles.isEmpty() && !taskBusy(RES_RUN));
         }
     }
 
@@ -1506,7 +1520,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return new ImportParse.Sink() {
             @Override
             public void setTotal(int total) {
-                task.setProgress(0, total, "");
+                // 脚本执行是一条一条读进来的，总量随时会长：这里再清零就把已经走完的进度抹掉了
+                task.setProgress(task.done, total, "");
             }
 
             @Override
@@ -2213,35 +2228,99 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 双端界面枚举对撞器要按页归属分按钮（两页有重名按钮）。 */
     /**
-     * 第三个页签「SQL 执行器」。与「SQL 脚本改名入库」页的分工要说清：那一页管"手上有一批 .sql
-     * 文件要入库"（挑文件、改表名、落盘副本），这一页管"临时问一句、顺手改点结构"，
-     * 所以它不挑文件也不落盘，只吃编辑区里那段文本。
+     * 第三个页签「SQL 执行器」：既能按清单执行 .sql 脚本文件，也能临时问一句 SQL。
+     *
+     * 文件这一路借用第一页的拖拽区与清单表、第二页的底部动作条：覆盖开关在左、
+     * 主按钮在右；编辑区这一路仍在下面。两路共用右侧结果区，所以同一页同时只跑
+     * 一个任务（见 resourcesFor）。
      */
     private javax.swing.JPanel buildSqlRunPage() {
         javax.swing.JPanel page = new javax.swing.JPanel(new java.awt.BorderLayout(
                 UiScale.px(8), UiScale.px(6)));
-        // 提示单独占一行，三颗按钮另起一行。合成一行时这一行的最小宽度是"整句提示 + 三颗按钮"，
-        // 会把整窗最小宽度顶到 830 以上，1024x768 的现场机和 800 宽的离屏用例都放不下。
+        // 提示单独占一行：与按钮同排会把整窗最小宽度顶到 830 以上，
+        // 1024x768 的现场机和 800 宽的离屏用例都放不下
         javax.swing.JPanel north = new javax.swing.JPanel(new java.awt.BorderLayout());
-        javax.swing.JPanel bar = new javax.swing.JPanel(
-                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT,
-                        UiScale.px(6), UiScale.px(2)));
         sqlRunDbHint = new HintLabel();
         north.add(sqlRunDbHint, java.awt.BorderLayout.NORTH);
         sqlRunHint = new javax.swing.JLabel(
-                "直接输入 SQL 执行：建库、建表、改结构、查元数据都行；一次可以写多条，用分号分隔");
+                "两种用法：把 .sql 脚本拖到下面清单里按顺序执行；"
+                + "或直接在编辑区写 SQL 临时执行（多条用分号分隔）");
         north.add(sqlRunHint, java.awt.BorderLayout.CENTER);
-        sqlRunHelpBtn = new javax.swing.JButton("示例 (?)");
-        sqlRunHelpBtn.setToolTipText("打开示例清单：选中一条可复制到剪贴板或插到编辑区");
-        sqlRunHelpBtn.addActionListener(e -> openSqlSamples());
-        bar.add(sqlRunHelpBtn);
-        sqlRunBtn = new javax.swing.JButton("执行");
-        Buttons.primary(sqlRunBtn);
-        sqlRunBtn.setToolTipText("按分号切句逐条执行；全部成功才提交，中途出错整批回滚");
-        sqlRunBtn.addActionListener(e -> runSqlStatements());
-        bar.add(sqlRunBtn);
-        north.add(bar, java.awt.BorderLayout.SOUTH);
         page.add(north, java.awt.BorderLayout.NORTH);
+
+        // 文件这一路与第一页同一形状：拖拽区在上，清单表套在组框里
+        sqlRunDrop = new DropArea(paths -> onRunScriptsDropped(paths),
+                this::chooseRunScripts, DropArea.RUN_HINT,
+                "点击选择 SQL 脚本；也可以直接拖到这里");
+        sqlRunDrop.setMinimumSize(new Dimension(UiScale.px(10), UiScale.px(60)));
+
+        sqlRunFilesModel = new javax.swing.table.DefaultTableModel(
+                new String[]{"序号", "文件", "大小", "状态"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int col) {
+                return false;
+            }
+        };
+        sqlRunFilesTable = new javax.swing.JTable(sqlRunFilesModel);
+        Tables.style(sqlRunFilesTable);
+        sqlRunFilesTable.setFillsViewportHeight(true);
+        sqlRunFilesTable.getTableHeader().setReorderingAllowed(false);
+        int[] widths = {44, 300, 100, 140};
+        for (int i = 0; i < widths.length; i++) {
+            sqlRunFilesTable.getColumnModel().getColumn(i)
+                    .setPreferredWidth(UiScale.px(widths[i]));
+        }
+        sqlRunFilesTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN);
+        // 「文件」列挂完整路径：脚本同名时只靠文件名分不出是哪个目录里的那份
+        sqlRunFilesTable.getColumnModel().getColumn(1).setCellRenderer(
+                new javax.swing.table.DefaultTableCellRenderer() {
+                    @Override
+                    public java.awt.Component getTableCellRendererComponent(
+                            javax.swing.JTable t, Object v, boolean selected,
+                            boolean focus, int row, int column) {
+                        super.getTableCellRendererComponent(t, v, selected, focus, row, column);
+                        setToolTipText(row < sqlRunFiles.size() ? sqlRunFiles.get(row).path : "");
+                        return this;
+                    }
+                });
+        // 状态列按结局上色：成功绿、失败红、跳过/取消黄褐，与日志分级同一套色
+        sqlRunFilesTable.getColumnModel().getColumn(3).setCellRenderer(
+                new javax.swing.table.DefaultTableCellRenderer() {
+                    @Override
+                    public java.awt.Component getTableCellRendererComponent(
+                            javax.swing.JTable t, Object v, boolean selected,
+                            boolean focus, int row, int column) {
+                        super.getTableCellRendererComponent(t, v, selected, focus, row, column);
+                        if (!selected) {
+                            String s = String.valueOf(v);
+                            if ("成功".equals(s)) {
+                                setForeground(new java.awt.Color(0x1a, 0x7f, 0x37));
+                            } else if ("失败".equals(s)) {
+                                setForeground(new java.awt.Color(0xc6, 0x28, 0x28));
+                            } else if ("跳过".equals(s) || "已取消".equals(s)) {
+                                setForeground(new java.awt.Color(0xb2, 0x6a, 0x00));
+                            } else {
+                                setForeground(t.getForeground());
+                            }
+                        }
+                        return this;
+                    }
+                });
+        Tables.zebra(sqlRunFilesTable);
+        JScrollPane runScroll = new JScrollPane(sqlRunFilesTable);
+        runScroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(120)));
+
+        sqlRunFilesClearBtn = new javax.swing.JButton("清空待执行脚本");
+        sqlRunFilesClearBtn.addActionListener(e -> clearRunScripts());
+        javax.swing.JPanel clearRow = new javax.swing.JPanel(
+                new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+        clearRow.add(sqlRunFilesClearBtn);
+        javax.swing.JPanel queueBox = new javax.swing.JPanel(new java.awt.BorderLayout(
+                0, UiScale.px(2)));
+        Tables.titled(queueBox, Tables.RUN_TABLE_TITLE);
+        queueBox.add(runScroll, java.awt.BorderLayout.CENTER);
+        queueBox.add(clearRow, java.awt.BorderLayout.SOUTH);
+        queueBox.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(150)));
 
         sqlRunInput = new javax.swing.JTextArea(8, 60);
         sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
@@ -2249,12 +2328,22 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunInput.setLineWrap(false);
         sqlRunInput.setText("SELECT 1 AS 连通检查;");
         // 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
+        sqlRunHelpBtn = new javax.swing.JButton("示例 (?)");
+        sqlRunHelpBtn.setToolTipText("打开示例清单：选中一条可复制到剪贴板或插到编辑区");
+        sqlRunHelpBtn.addActionListener(e -> openSqlSamples());
         sqlRunClearInputBtn = new javax.swing.JButton("清空编辑区");
         sqlRunClearInputBtn.setToolTipText("只清掉左边这段 SQL，右侧结果区不动");
         sqlRunClearInputBtn.addActionListener(e -> sqlRunInput.setText(""));
+        javax.swing.JPanel leftHead = new javax.swing.JPanel(new java.awt.BorderLayout());
+        leftHead.add(new javax.swing.JLabel("SQL 文本"), java.awt.BorderLayout.WEST);
+        javax.swing.JPanel leftEast = new javax.swing.JPanel(
+                new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
+        leftEast.add(sqlRunHelpBtn);
+        leftEast.add(sqlRunClearInputBtn);
+        leftHead.add(leftEast, java.awt.BorderLayout.EAST);
         javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(
                 0, UiScale.px(2)));
-        left.add(paneHeader("SQL 文本", sqlRunClearInputBtn), java.awt.BorderLayout.NORTH);
+        left.add(leftHead, java.awt.BorderLayout.NORTH);
         left.add(new javax.swing.JScrollPane(sqlRunInput), java.awt.BorderLayout.CENTER);
 
         sqlRunLog = new LogPanel(SQL_RUN_FONT_SIZE);
@@ -2263,7 +2352,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunClearLogBtn.addActionListener(e -> sqlRunLog.clearLog());
         javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(
                 0, UiScale.px(2)));
-        // 结果区也要顶得住：与 Excel 页同一句理由，缩成两行的结果区等于没有
+        // 结果区也要顶得住：缩成两行的结果区等于没有
         right.setMinimumSize(new java.awt.Dimension(UiScale.px(300),
                 sqlRunLog.getMinimumSize().height + UiScale.px(34)));
         right.add(paneHeader("执行结果", sqlRunClearLogBtn), java.awt.BorderLayout.NORTH);
@@ -2272,7 +2361,50 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JSplitPane split = new javax.swing.JSplitPane(
                 javax.swing.JSplitPane.HORIZONTAL_SPLIT, left, right);
         split.setResizeWeight(0.45D);
-        page.add(split, java.awt.BorderLayout.CENTER);
+
+        // 三段落上下排：拖拽区 / 脚本清单 / 编辑区与结果。清单与编辑区同权，
+        // 拖拽区按第一页的口径只占固定一份，不跟着窗口变高
+        JSplitPane lower = new JSplitPane(JSplitPane.VERTICAL_SPLIT, queueBox, split);
+        lower.setDividerSize(UiScale.px(6));
+        lower.setResizeWeight(1.0D / 3.0D);
+        lower.setDividerLocation(UiScale.px(150));
+        JSplitPane stacked = new JSplitPane(JSplitPane.VERTICAL_SPLIT, sqlRunDrop, lower);
+        stacked.setDividerSize(UiScale.px(6));
+        stacked.setResizeWeight(0.0D);
+        stacked.setDividerLocation(UiScale.px(110));
+        page.add(stacked, java.awt.BorderLayout.CENTER);
+
+        // 底部动作条与第二页同一形状：覆盖开关在左、动作按钮在右，且在分隔条之外
+        sqlRunDropBox = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
+        sqlRunDropBox.setToolTipText("<html>勾选后，执行脚本文件前先对脚本里每条 CREATE TABLE 的建表目标补一句<br>"
+                + "DROP TABLE IF EXISTS；只认整句以 CREATE TABLE 开头的语句，<br>"
+                + "注释或字符串里出现的建表不会触发删除。只影响「执行脚本文件」，<br>"
+                + "不改磁盘上的脚本正文；默认不勾选。</html>");
+        sqlRunBtn = new javax.swing.JButton("执行编辑区 SQL");
+        Buttons.secondary(sqlRunBtn);
+        sqlRunBtn.setToolTipText("执行左侧编辑区里的 SQL：按分号切句逐条执行，"
+                + "全部成功才提交，中途出错整批回滚；与脚本文件清单互不影响");
+        sqlRunBtn.addActionListener(e -> runSqlStatements());
+        sqlRunScriptsBtn = new javax.swing.JButton("执行脚本文件");
+        Buttons.primary(sqlRunScriptsBtn);
+        sqlRunScriptsBtn.setEnabled(false);
+        sqlRunScriptsBtn.setToolTipText("按清单顺序逐个执行，每个文件一个事务；全部成功才提交，"
+                + "中途出错本文件回滚后继续下一个。执行前请先选好目标库。");
+        sqlRunScriptsBtn.addActionListener(e -> executeRunScripts());
+        javax.swing.JPanel opRight = new javax.swing.JPanel(
+                new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT,
+                        UiScale.px(6), UiScale.px(2)));
+        opRight.add(sqlRunBtn);
+        opRight.add(sqlRunScriptsBtn);
+        javax.swing.JPanel op = new javax.swing.JPanel(new java.awt.BorderLayout());
+        op.add(sqlRunDropBox, java.awt.BorderLayout.WEST);
+        op.add(opRight, java.awt.BorderLayout.EAST);
+        sqlRunActionBar = op;
+        javax.swing.JPanel south = new javax.swing.JPanel(new java.awt.BorderLayout(
+                0, UiScale.px(2)));
+        south.add(new javax.swing.JSeparator(), java.awt.BorderLayout.NORTH);
+        south.add(op, java.awt.BorderLayout.CENTER);
+        page.add(south, java.awt.BorderLayout.SOUTH);
         return page;
     }
 
@@ -2336,6 +2468,211 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 结果与失败原因都已经写在右侧结果区里，这里不再弹窗打断：
             // 这一页是给人来回试语句的，每试一次弹一次模态框会点不完
         }, sqlRunLog);
+    }
+
+    /** 第三页队列里的一行：只登记路径与大小，正文等轮到它执行时再读。 */
+    private static final class RunScript {
+        final String path;
+        final long size;
+        String status = "待执行";
+
+        RunScript(String path, long size) {
+            this.path = path;
+            this.size = size;
+        }
+    }
+
+    /** 点虚线区或右键菜单的选择器：只认 .sql，多选。 */
+    private void chooseRunScripts() {
+        JFileChooser chooser = new FolderAwareChooser();
+        chooser.setDialogTitle("选择 SQL 脚本");
+        chooser.setMultiSelectionEnabled(true);
+        chooser.setAcceptAllFileFilterUsed(true);
+        FileNameExtensionFilter sql = new FileNameExtensionFilter("SQL 脚本 (*.sql)", "sql");
+        chooser.setFileFilter(sql);
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        List<String> paths = new ArrayList<String>();
+        for (File f : chooser.getSelectedFiles()) {
+            paths.add(f.getPath());
+        }
+        addRunScriptPaths(paths);
+    }
+
+    /** 拖进来的路径只收 .sql；混着别的文件时点名哪些没进去。 */
+    private void onRunScriptsDropped(List<String> paths) {
+        List<String> keep = new ArrayList<String>();
+        List<String> wrong = new ArrayList<String>();
+        for (String p : paths) {
+            if (p != null && p.toLowerCase().endsWith(".sql")) {
+                keep.add(p);
+            } else if (p != null) {
+                wrong.add(p);
+            }
+        }
+        if (keep.isEmpty()) {
+            sqlRunLog.log("[提示] 拖入的不是 SQL 脚本文件，已忽略。");
+            return;
+        }
+        if (!wrong.isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            for (String p : wrong) {
+                if (sb.length() > 0) {
+                    sb.append("、");
+                }
+                sb.append(baseName(p));
+            }
+            sqlRunLog.log("[跳过] 不是 SQL 脚本，未读入：" + sb);
+        }
+        addRunScriptPaths(keep);
+    }
+
+    /** 登记脚本路径；重复的并入清单不动，读不到大小的点名未加入。 */
+    private void addRunScriptPaths(List<String> files) {
+        List<RunScript> added = new ArrayList<RunScript>();
+        List<String> dups = new ArrayList<String>();
+        List<String> failed = new ArrayList<String>();
+        for (String f : files) {
+            boolean dup = false;
+            for (RunScript s : sqlRunFiles) {
+                if (s.path.equals(f)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) {
+                dups.add(f);
+                continue;
+            }
+            File file = new File(f);
+            if (!file.isFile()) {
+                failed.add(f);
+                continue;
+            }
+            RunScript row = new RunScript(f, file.length());
+            sqlRunFiles.add(row);
+            added.add(row);
+        }
+        refreshRunTable();
+        StringBuilder lines = new StringBuilder();
+        for (RunScript s : added) {
+            lines.append("[已加入] ").append(s.path).append(LogText.NL);
+        }
+        for (String p : dups) {
+            lines.append("[跳过] ").append(p).append("：已在列表").append(LogText.NL);
+        }
+        for (String p : failed) {
+            lines.append("[未加入] ").append(p).append("：文件不存在或无法访问")
+                    .append(LogText.NL);
+        }
+        String summary = "===== 添加完成：" + added.size() + " 个脚本，"
+                + failed.size() + " 个无法访问，" + dups.size() + " 个重复 =====";
+        if (failed.isEmpty()) {
+            sqlRunLog.log(summary);
+        } else {
+            sqlRunLog.error(summary);
+        }
+        if (lines.length() == 0) {
+            return;                     // 全是重复时也要弹一次：用户会问"点了怎么没反应"
+        }
+        dialog("添加结果", lines.toString().trim(),
+                failed.isEmpty() ? javax.swing.JOptionPane.INFORMATION_MESSAGE
+                        : javax.swing.JOptionPane.WARNING_MESSAGE);
+    }
+
+    /** 清单表按模型重画：序号、文件名、大小、状态，一行对一行。 */
+    private void refreshRunTable() {
+        sqlRunFilesModel.setRowCount(0);
+        for (int i = 0; i < sqlRunFiles.size(); i++) {
+            RunScript s = sqlRunFiles.get(i);
+            sqlRunFilesModel.addRow(new Object[]{String.valueOf(i + 1),
+                    baseName(s.path), FileSizes.format(s.size), s.status});
+        }
+        syncRunStates();
+    }
+
+    /** 与第一页「清空待上传文件」同一语义：整份清出清单，磁盘上的脚本不动。 */
+    private void clearRunScripts() {
+        int n = sqlRunFiles.size();
+        sqlRunFiles.clear();
+        refreshRunTable();
+        if (n > 0) {
+            sqlRunLog.log("[清空] 已清空 " + n + " 个待执行脚本");
+        } else {
+            sqlRunLog.log("[清空] 清单里没有脚本文件，无需清空");
+        }
+    }
+
+    /** 按清单顺序执行脚本文件；每个文件一个事务，日志与汇总都写这一页。 */
+    private void executeRunScripts() {
+        final Config cfg = currentConfig();
+        if (cfg == null || !cfg.hasDatabase()) {
+            warn(LogText.NO_DB_HINT);
+            return;
+        }
+        if (sqlRunFiles.isEmpty()) {
+            warn("请先添加 SQL 脚本文件。");
+            return;
+        }
+        final boolean overwrite = sqlRunDropBox.isSelected();
+        String note = overwrite ? "；已勾选「覆盖已存在表」，每个脚本先 DROP 它要建的表" : "";
+        sqlRunLog.log("===== 开始执行脚本文件（目标库 " + cfg.database + "，"
+                + sqlRunFiles.size() + " 个文件，每个文件一个事务" + note + "）=====");
+        final List<String> paths = new ArrayList<String>();
+        for (RunScript s : sqlRunFiles) {
+            paths.add(s.path);
+            s.status = "待执行";
+        }
+        refreshRunTable();
+        runTask("正在执行脚本文件到目标库…",
+                sink -> com.excel2mysql.core.SqlFileRun.run(paths, overwrite, cfg, sink),
+                out -> finishRunScripts((com.excel2mysql.core.SqlFileRun.Result) out),
+                sqlRunLog);
+    }
+
+    /** 收尾：先把逐文件结局写回清单，再出一行汇总与一颗结果弹窗。 */
+    private void finishRunScripts(com.excel2mysql.core.SqlFileRun.Result res) {
+        java.util.Map<String, String> labels = new java.util.HashMap<String, String>();
+        labels.put("ok", "成功");
+        labels.put("fail", "失败");
+        labels.put("skip", "跳过");
+        labels.put("cancel", "已取消");
+        java.util.Map<String, String> byPath = new java.util.HashMap<String, String>();
+        for (com.excel2mysql.core.SqlFileRun.FileOutcome f : res.files) {
+            byPath.put(f.path, labels.containsKey(f.status) ? labels.get(f.status) : f.status);
+        }
+        for (RunScript s : sqlRunFiles) {
+            String outcome = byPath.get(s.path);
+            if (outcome != null) {
+                s.status = outcome;
+            }
+        }
+        refreshRunTable();
+        if (res.connFailed) {
+            return;                     // 连不上库时已经报过详细原因，不再重复汇总
+        }
+        String note = res.cancelled ? "（已取消，剩余脚本未执行）" : "";
+        String line = "===== 执行完成：成功 " + res.ok + " 个文件，失败 " + res.fail
+                + " 个文件" + note + " =====";
+        if (res.fail > 0) {
+            sqlRunLog.error(line);
+        } else {
+            sqlRunLog.log(line);
+        }
+        StringBuilder body = new StringBuilder();
+        body.append("成功 ").append(res.ok).append(" 个文件，失败 ").append(res.fail)
+                .append(" 个文件").append(note).append("。").append(LogText.NL)
+                .append("目标库 ").append(res.target);
+        for (com.excel2mysql.core.SqlFileRun.FileOutcome f : res.files) {
+            body.append(LogText.NL).append("[")
+                    .append(labels.containsKey(f.status) ? labels.get(f.status) : f.status)
+                    .append("] ").append(f.path).append("：").append(f.detail);
+        }
+        body.append(LogText.NL).append("详见日志。");
+        dialog("执行完成", body.toString(),
+                res.fail > 0 ? javax.swing.JOptionPane.WARNING_MESSAGE
+                        : javax.swing.JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** 「示例 (?)」打开的那个对话框：左边挑，右边看全文，可复制也可插进编辑区。 */
@@ -2448,6 +2785,52 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JButton sqlRunButton() {
         return sqlRunBtn;
+    }
+
+    /** 第三页脚本队列：自检与对撞器按这几个口取证，不去摸控件树。 */
+    public DropArea sqlRunDropArea() {
+        return sqlRunDrop;
+    }
+
+    public javax.swing.JTable sqlRunFilesTable() {
+        return sqlRunFilesTable;
+    }
+
+    public javax.swing.JButton sqlRunFilesClearButton() {
+        return sqlRunFilesClearBtn;
+    }
+
+    public javax.swing.JButton sqlRunScriptsButton() {
+        return sqlRunScriptsBtn;
+    }
+
+    public javax.swing.JCheckBox sqlRunDropBox() {
+        return sqlRunDropBox;
+    }
+
+    /** 底部动作条那一行：对撞器按真实容器数这一排按钮，而不是各抄一份名单。 */
+    public java.awt.Container sqlRunActionRow() {
+        return sqlRunActionBar;
+    }
+
+    public void addRunScriptsFromUi(List<String> paths) {
+        addRunScriptPaths(paths);
+    }
+
+    public void clearRunScriptsFromUi() {
+        clearRunScripts();
+    }
+
+    public void runScriptsFromUi() {
+        executeRunScripts();
+    }
+
+    public int sqlRunFileCount() {
+        return sqlRunFiles.size();
+    }
+
+    public String sqlRunFileStatus(int index) {
+        return index >= 0 && index < sqlRunFiles.size() ? sqlRunFiles.get(index).status : "";
     }
 
     public javax.swing.JButton sqlRunHelpButton() {

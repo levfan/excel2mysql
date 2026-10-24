@@ -1348,7 +1348,8 @@ public final class SqlPage extends JPanel {
         sink.log("正在切分 " + items.size() + " 个脚本的语句…");
         final List<List<String>> plans = new ArrayList<List<String>>();
         for (Src s : items) {
-            plans.add(SqlScript.splitStatements(s.text));
+            // 只留真能执行的语句：只写注释的脚本不该占连接、也不该被算成"执行过一次"
+            plans.add(SqlScript.executableStatements(s.text));
         }
         int totalStatements = 0;
         for (List<String> stmts : plans) {
@@ -1382,13 +1383,13 @@ public final class SqlPage extends JPanel {
                 skipped++;
                 files.add(new RunFile(s.path, "skip", "没有可执行的语句"));
                 sink.log("[跳过] " + fname + "：没有可执行的语句");
-                sink.step(fname);
                 continue;
             }
             final int size = stmts.size();
             final int chunk = Math.max(1, size / 100);
             final int[] reported = {0};
-            SqlRunner.FileResult r = SqlRunner.runText(client, fname, s.text,
+            // 按已经切分好的那份跑：executableStatements 的过滤结果与下面计数同源
+            SqlRunner.FileResult r = SqlRunner.runStatements(client, fname, stmts,
                     new SqlRunner.StatementHook() {
                         @Override
                         public boolean cancelled() {
@@ -1406,8 +1407,7 @@ public final class SqlPage extends JPanel {
             // 把余数补齐，进度条总数才落得准
             sink.advance(Math.max(0, size - reported[0]), fname + " 收尾");
             if (r.cancelled) {
-                // 取消的文件既不算成功也不算失败，但它确实被处理过了
-                ok++;
+                // 取消的文件既不算成功也不算失败：汇总里的成功数不能把回滚掉的那份算进去
                 files.add(new RunFile(s.path, "cancel", "已执行 " + r.executed + "/" + size
                         + " 条，本文件事务已回滚"));
                 sink.log("[已取消] " + fname + "：已执行 " + r.executed + "/" + size + " 条，"

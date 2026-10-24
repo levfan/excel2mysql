@@ -33,6 +33,9 @@ public final class Tables {
     public static final String SQL_TABLE_TITLE =
             "待处理的脚本表（双击表名或表注释编辑，双击其他列看元数据）";
     public static final String COLUMN_TABLE_TITLE = "字段清单";
+    /** 第三页「SQL 执行器」的脚本队列：标题里顺带写明执行粒度。 */
+    public static final String RUN_TABLE_TITLE =
+            "待执行脚本（按清单顺序执行，每个文件一个事务）";
 
     /** 给一个容器套上"表格标识"标题边框，边距与第一页同一套。 */
     public static javax.swing.JComponent titled(javax.swing.JComponent box, String title) {
