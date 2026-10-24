@@ -1948,6 +1948,16 @@ check("K29 主按钮用强调色，保存降为次级样式，停止/生成不�
       and not w.btn_gen_std.styleSheet()
       and not w.btn_gen_simple.styleSheet(),
       (w.btn_import.styleSheet()[:20], w.btn_sql_save.styleSheet()[:20]))
+# 禁用态要真的看着像不能点：Python 靠 QSS 的 :disabled 档，Java 那边则要求建按钮时
+# 就按当下状态上色（现场那句"没导东西、点一下颜色才变"就是它先涂了强调色）。
+# 两边各钉同一组色值，谁漂了谁变红。
+_p_dis = app_main.PRIMARY_BUTTON_QSS.split("QPushButton:disabled")[-1]
+_s_dis = app_main.SECONDARY_BUTTON_QSS.split("QPushButton:disabled")[-1]
+check("K30 主按钮初始是禁用态，且禁用档的色值与 Java 侧同值",
+      not w.btn_import.isEnabled()
+      and "#aac4f0" in _p_dis and "#f5f8ff" in _p_dis
+      and "#f7f9fc" in _s_dis and "#9aa7b8" in _s_dis and "#c9d4e4" in _s_dis,
+      (_p_dis[:40], _s_dis[:40]))
 w.main_tabs.setCurrentIndex(0)
 _app.processEvents()
 w.close()
@@ -5248,10 +5258,11 @@ for _nm, _win, _want in _suites:
     _win.deleteLater()
 _app.processEvents()
 
+_copy_path = ("C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物"
+              "\\03-Java-图形与命令行-带JRE\\sql_meta_data_file_20261022")
 _copy_box = app_main.build_popup_box(
     None, "生成结果",
-    "已生成 124 个文件（共 124 张表）。\n目录：\n"
-    "C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物\\03-Java-图形与命令行-带JRE\\sql_meta_data_file_20261022",
+    "已生成 124 个文件（共 124 张表）。\n目录：\n" + _copy_path,
     "information", box_class=_REAL_POPUP_BOX)
 _copy_box.show()
 _app.processEvents()
@@ -5260,11 +5271,31 @@ check("U8 结果弹窗正文可用鼠标选中并 Ctrl+C 复制",
       bool(_copy_body.textInteractionFlags() & _Qt.TextSelectableByMouse)
       and _copy_body.text().startswith("已生成 124 个文件"),
       (_copy_body.text()[:12], str(_copy_body.textInteractionFlags())))
-check("U8b 结果弹窗至少 820x420，产物路径与文件清单看得完整",
-      _copy_box.width() >= 820 and _copy_box.height() >= 420,
-      (_copy_box.width(), _copy_box.height()))
+from PySide6.QtWidgets import QScrollArea as _QScrollArea
+_copy_scroll = _copy_box.findChild(_QScrollArea)
+# 弹窗改成"按正文要多大给多大"之后，这条判据从"至少 820x420"换成
+# "产物路径那一行不许被挤断、也不带用不上的滚动条"——那块地板正是
+# 一句话提示也摊开半屏空白、滚动条常驻的来路（与 Java 自检同一组判据）
+check("U8b 结果弹窗按正文给尺寸：长路径把宽度顶到 880，且没有用不上的滚动条",
+      str(_copy_box.property("e2mWant")).startswith("880x")
+      and not _copy_scroll.verticalScrollBar().isVisible(),
+      (_copy_box.property("e2mWant"), _copy_box.width(), _copy_box.height(),
+       _copy_scroll.verticalScrollBar().isVisible()))
 _copy_box.close()
 _copy_box.deleteLater()
+_app.processEvents()
+_tiny_box = app_main.build_popup_box(None, "提示", "清单里没有脚本文件，无需清空",
+                                     "warning", box_class=_REAL_POPUP_BOX)
+_tiny_box.show()
+_app.processEvents()
+_tiny_scroll = _tiny_box.findChild(_QScrollArea)
+check("U8c 一句话的提示框不再占半屏",
+      _tiny_box.width() < 820 and _tiny_box.height() <= 240
+      and not _tiny_scroll.verticalScrollBar().isVisible(),
+      (_tiny_box.width(), _tiny_box.height(),
+       _tiny_scroll.verticalScrollBar().isVisible()))
+_tiny_box.close()
+_tiny_box.deleteLater()
 _app.processEvents()
 
 # 故意要一个装不下的尺寸：夹取逻辑没生效的话这条会红。

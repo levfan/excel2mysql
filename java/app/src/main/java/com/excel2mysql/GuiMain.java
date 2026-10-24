@@ -100,11 +100,30 @@ public final class GuiMain {
                 if (!frame.initialsBox().isSelected() || !frame.upperBox().isSelected()) {
                     problems.add("两颗命名开关应默认勾选（取拼音首字母 / 转大写）");
                 }
+                // 主按钮的底色必须跟着启用状态走：列表还空着时「开始导入」是禁用的，
+                // 涂成强调色会让它看着就能点（现场那句"没导任何东西，点一下颜色才变"）
+                if (frame.importButton().isEnabled()) {
+                    problems.add("没有待导入的表，「开始导入」却处于启用态");
+                }
+                if (!com.excel2mysql.gui.Buttons.primaryDisabledColor()
+                        .equals(frame.importButton().getBackground())) {
+                    problems.add("禁用态的「开始导入」底色不是禁用色，而是 "
+                            + frame.importButton().getBackground());
+                }
                 // 后面几十处旧用例的期望值仍按全拼、小写写；先取消勾选保持口径不变，
                 // 命名开关自己的用例（naming_switches）会重新勾上再验一遍
                 frame.initialsBox().setSelected(false);
                 frame.upperBox().setSelected(false);
                 String addSummary = frame.addFiles(files);
+                // 有了待导入的表，同一颗按钮要转回强调色（禁用色留在上面那条断言里钉着）
+                if (!frame.importButton().isEnabled()) {
+                    problems.add("加载夹具后「开始导入」仍是禁用态");
+                }
+                if (!com.excel2mysql.gui.Buttons.primaryColor()
+                        .equals(frame.importButton().getBackground())) {
+                    problems.add("启用后的「开始导入」底色不是强调色，而是 "
+                            + frame.importButton().getBackground());
+                }
                 int tables = frame.tables().size();
                 int fileRows = frame.fileModel().getRowCount();
                 int rows = frame.fileModel().rowTotal();
@@ -1823,9 +1842,26 @@ public final class GuiMain {
                 || ((javax.swing.JTextArea) copyBody).isEditable()) {
             problems.add("生成结果弹窗正文不可复制：应使用只读文本区");
         }
-        if (popupSize.width < UiScale.px(820) || popupSize.height < UiScale.px(420)) {
-            problems.add("生成结果弹窗正文太小，产物路径看不清：" + popupSize);
+        // 弹窗按正文要多大给多大之后，这条判据换成"产物路径那一行不许被挤断"：
+        // 以前断的是"至少 820x420"，那正是让一句话的提示也摊开半屏空白的那块地板。
+        // 量的必须是真弹窗里的正文控件——单独 new 出来的文本区还没被塞进滚动区，
+        // 折行文本区自己的首选宽度恒等于 130，拿它当"窗口有多宽"会假红
+        String pathLine = "C:\\Users\\acliu\\Desktop\\excel2mysql-1021-三端产物\\"
+                + "03-Java-图形与命令行-带JRE\\sql_meta_data_file_20261022";
+        String genBody = "已生成 124 个文件（共 124 张表）。\n目录：\n" + pathLine;
+        com.excel2mysql.gui.MessageDialog genDlg = com.excel2mysql.gui.MessageDialog.create(
+                frame, "生成结果", genBody, null, javax.swing.JOptionPane.PLAIN_MESSAGE);
+        genDlg.validate();
+        javax.swing.JTextArea genArea = genDlg.textArea();
+        int pathLineWidth = genArea.getFontMetrics(genArea.getFont()).stringWidth(pathLine);
+        if (genArea.getWidth() < pathLineWidth) {
+            problems.add("生成结果弹窗窄到放不下产物路径那一行：正文宽 "
+                    + genArea.getWidth() + " < 路径 " + pathLineWidth);
         }
+        if (genDlg.scrollPane().getVerticalScrollBar().isVisible()) {
+            problems.add("三行内容的生成结果弹窗也带着滚动条");
+        }
+        genDlg.dispose();
         // Python 的消息框吃应用默认字体 9pt；144dpi 下应折成 18px。
         // 期望值独立算，不拿 MessageDialog.FONT_SIZE 自己比自己。
         int wantPopupPx = wantFontPx(9);
@@ -1889,9 +1925,9 @@ public final class GuiMain {
             problems.add("样本里没有宽过内容区的段落，折行这条判据咬不住东西：最宽段 "
                     + widest + "px / 控件宽 " + body.getWidth());
         }
-        if (md.getWidth() < UiScale.px(820) || md.getHeight() < UiScale.px(420)) {
-            problems.add("结果弹窗本身小于按 DPI 折算的 "
-                    + UiScale.px(820) + "x" + UiScale.px(420) + "：" + md.getSize());
+        if (md.getHeight() < UiScale.px(420)) {
+            problems.add("40 行长报错的弹窗没有长到接近上限（尺寸被重复折算？）："
+                    + md.getSize());
         }
         // 弹窗尺寸常量是设计值，只能由 Windows.clientSize 折一次；先折再传会变成 1.5 倍
         java.awt.Dimension mdClient = md.getContentPane().getPreferredSize();
@@ -1906,6 +1942,21 @@ public final class GuiMain {
             problems.add("结果弹窗不能拖动改大小，长路径只能横向挤着看");
         }
         md.dispose();
+        // 反过来：一句话的提示不该占半屏，也不该带着一条用不上的滚动条
+        com.excel2mysql.gui.MessageDialog tiny = com.excel2mysql.gui.MessageDialog.create(
+                frame, "提示", "清单里没有脚本文件，无需清空", null,
+                javax.swing.JOptionPane.WARNING_MESSAGE);
+        if (tiny.getWidth() >= UiScale.px(820) || tiny.getHeight() > UiScale.px(240)) {
+            problems.add("一句话的提示框还是很大一块：" + tiny.getSize());
+        }
+        tiny.validate();
+        if (tiny.scrollPane().getVerticalScrollBar().isVisible()) {
+            problems.add("内容只有一行也给了竖直滚动条（正文被尺寸地板顶高了）");
+        }
+        if (!tiny.isResizable()) {
+            problems.add("短提示框也不能拖动改大小：" + tiny.getSize());
+        }
+        tiny.dispose();
 
         java.io.File stdDir = new java.io.File(outRoot, "sql_meta_data_file_" + today());
         String[] produced = stdDir.list();
