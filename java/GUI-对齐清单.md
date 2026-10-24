@@ -3431,3 +3431,132 @@ Data truncation:Out of range value for column 'unit_price_amount' at row1」。
   - Java `intDecimalType` 上限改 18 → 自检报「超出 BIGINT 的整数没改用 DECIMAL(n,0)：VARCHAR(64)」，
     退出码 1；还原后 `Infer.java` SHA-256 `29df5d62…`。
 - 验证与版本号同 72 节；桌面交付包未重打。
+
+## 74. 三个页签的视觉层次重构（斑马纹 / 命名工具条 / 底部三层 / 强调色）
+
+用户给的三条建议：①表格加斑马纹、序号列收窄；②底部把「前缀配置」与「执行动作」分两组、
+主按钮用强调色、次要按钮弱化，并把「表名转大写」这类选项挪出底部；③底部再分三层
+（命名配置 / 预览与清理 / 执行与输出）。三条都成立，只在一处改了落点：
+
+- 命名开关没有并进「底部第一层」，而是提到**表格上沿的命名规则工具条**。
+  理由有二：这一排管的是"名字怎么起"，管的东西是表格里的表名与字段名，与前缀输入框
+  （管"给哪张表加哪一段"）不是一件事；底部那一行已经有覆盖开关 + 进度条 + 四颗按钮，
+  再加两颗长文案复选框会把这一行的最小宽度顶过离屏 768px 的预算（同 71 节那颗
+  「提示 + 三颗按钮合成一行」的坑，用例 U7 抓的就是它）。
+- 底部三层收敛成两层：分隔线之上是表格区自己的事，之下左列「覆盖已存在表 + 页内进度条」
+  （进度跟着执行走，同一层），右侧「停止 / 开始导入 / 生成标准 / 生成简易」。
+  第一页把「清空待上传文件 / 生成表结构预览 / 预览 DDL」三颗等宽排在表格下方，
+  第二页把「清空待上传文件」留在前缀行的下一排——两页的按钮数量与功能本来就不同，
+  只对齐形状，不给第二页添按钮（用户明确过这一条）。
+
+两栈同一套语义与同一组数：
+
+- 斑马纹：Qt 侧 `setAlternatingRowColors(True)` + `alternate-background-color: #f4f8fc`；
+  Swing 的 `JTable` 没有交替色，改由 `Tables.zebra` 挂一个委托型 `TableCellRenderer`
+  （包住的还是列上原来的渲染器，列自定义渲染不被顶掉），并给表格打
+  `excel2mysql.zebra` 客户标记供自检读。
+- 序号列 44px（两页同值，第一页其余列 320/200/280/80/90/160，第二页 300/260/200/280）。
+- 强调色 `#2f6feb` 实底白字用在「开始导入」「执行修改后ddl脚本到当前库」「执行」（第三页）；
+  次级样式（浅底 `#f4f8ff` + 描边 `#8fb4ea`）用在「保存修改后ddl脚本」；
+  「停止」「生成标准/简易」保持系统默认样式，一屏只留一个视觉重点。
+  Swing 侧 Windows 外观会吃掉 `setBackground`，所以新增 `gui/Buttons.java`：
+  换 `BasicButtonUI`、置 opaque/contentAreaFilled、挂 hover/press/disable 三个监听，
+  并把角色写进客户属性 `excel2mysql.buttonRole` 供自检与对撞读。
+- 底部与表格区之间一条 1px 分隔线（`#dbe3ee`）；第二页那层横向滚动区还要显式把
+  `QScrollArea` 与其视口子控件的背景设成透明，否则动作带上会多出一条灰带。
+
+- 对撞：新增 `table.file.zebra`、`table.sql.zebra` 两把键（两边都从真控件上读），
+  共 273 键逐键一致、退出码 0。
+- 用例：Python 侧新增 K24-K29（命名条是表格区布局第 1 项、两表斑马纹 + 序号 44、
+  Excel 页底部分隔线 + 左列开关与进度同父 + 右侧四颗顺序、SQL 页同形、
+  主按钮样式串含 `#2f6feb` 而保存含 `#8fb4ea` 且停止/生成不带样式串）；
+  Java 自检新增 `Tables.isZebra`、`nameBar` 在表格区 NORTH 且与表格同父、
+  `pageProgressBar().getParent() == dropExistingBox().getParent()`、`Buttons.role(...)` 等于 primary。
+- 变异抽查（逐字节还原后核 md5）：
+  - 把命名条挪回表格下方 → K24/K27 红；列宽 44 改 54 → K25 红；去掉分隔线 → K26/K28 红；
+    去掉「开始导入」的强调样式 → K29 红。K26 只断结构不断颜色，样式那一改它不动，
+    这是设计如此（颜色归 K29 管）。还原后 `main.py` md5 `01bc26ac…` 与改前一致。
+  - Java 列宽仍按 44 断言（上一轮改成 68 那次是 UiScale 换算，这里钉死配置值）。
+- 逐屏取证：`java/tools/py_ui_shot.py` 与 `com.excel2mysql.verify.UiShot` 各出十屏对照，
+  两栈的表格区/底部条形状一致（离屏态 Qt 拿不到中文字体，文字渲染成方框是取证环境的现象，
+  不是产品缺陷；布局与列宽照常可比）。
+
+## 75. 连续拖入压缩包报错：GBK 条目名、ZIP64 中央目录、解压落点编号
+
+现场反馈「Java 版连续多次拖入并解析 zip 包就报解析错，像是 zip 被占用；Python 没这问题」，
+没有留下原文。先按可复现的形状取证，再定位——三条都是 Java 线独有：
+
+1. **GBK 条目名的包连打开都炸**。`new ZipFile(file)` 在 JDK 8 里按 UTF-8 **严格**解条目名，
+   非 UTF-8 字节不替换而是抛 `IllegalArgumentException: MALFORMED`
+   （栈顶 `java.util.zip.ZipCoder.toString(ZipCoder.java:58)`）。
+   Windows 自带「发送到压缩文件夹」写的正是 GBK 条目名，于是枚举第一条非 ASCII 名字就炸：
+   预扫 `catch (Exception) → return 0`（静默算少进度项），解压那条把异常抛到
+   `ImportParse` 的通用分支，日志成「展开异常 … MALFORMED」。
+   修法：`ZipImport.open()` 显式按 GBK 打开（带 bit11 的条目 JDK 仍按 UTF-8 解，两类包都对）；
+   `MergeCheck.scanXlsx` 同口径加固。Python 线本来就是对的（zipfile 按 cp437 宽容解 +
+   `decode_name` 折回），所以现场只有 Java 报错。
+2. **ZIP64 的包把中文名毁成一串问号**。自建的中央目录扫描只读旧 EOCD 的 16/32 位字段，
+   而 ZIP64 把条目数与目录偏移写在 64 位的 ZIP64 EOCD 里、旧字段填 `0xFFFF` / `0xFFFFFFFF`，
+   守卫 `total <= 0 || cdOffset + cdSize > len` 于是整份返回空映射 → 位标记全按"没标记 UTF-8"处理
+   → `decodeName` 把本来就是中文的名字 `getBytes(CP437)`（Java 不抛异常、静默替换成 `?`）
+   → 落点 `??????????.xlsx` → 写盘报「文件名、目录名或卷标语法不正确」。
+   修法两层：扫描器补读 ZIP64 EOCD 与定位块（含 EOCD 注释的偏移），
+   以及 `decodeName` **只在名字能原样往返 cp437 时**才折回 GBK，且折出替换符就弃用——
+   这样任何扫描失明都只是"不折"，不再是"毁名"。Python 侧同一口径由
+   `encode("cp437")` 抛 `UnicodeEncodeError` 天然兜住，本轮把它写成用例 H6e 钉住。
+3. **解压落点编号会拐回用过的号**。Python 传给 `parse_import_files` 的 `dest_start` 是
+   会话内累计已解文件数（`len(self._zip_origin)`，只增不减），批内又按本批已解数偏移，
+   所以号一路向前；Java 用的是 `zipDestSeq += 1`（按批次），而批内照样按文件数跳号，
+   于是一个多包批次之后再接几批就会撞上已用过的目录号，把前一批解出来的文件原地覆盖，
+   包内同名的文件还会被路径判重当成「已在待导入列表」而静默少一张表。
+   修法：Java 的编号起点改为 `zipOrigin.size()`（与 Python 同式，删掉 `zipDestSeq` 字段），
+   并在 EDT 上取好再进解析线程（那字段由主线程在 `finishAdd` 里改）。
+   自检里按现场用法拖三批（先 [A,B] 再两次单包 B）断言表数、路径互不相同且都在盘上。
+
+顺带查出并修掉的两处文案与一处夹具口径：
+
+- 加密包：JDK 在打开阶段就整包拒绝带 bit0 的压缩包，回的是英文那句
+  `invalid CEN header (encrypted entry)`，所以「压缩包已加密（…），请先解密后再导入」
+  这句中文话在 Java 线一直是走不到的死分支。现在扫描器记下第一个带 bit0 的条目名，
+  打开失败时优先给那句中文，与 Python 线同字。
+- 写入失败那句原来只带 `e.getMessage()`，现场抄不回原因；改带 `LogText.describe(e)`
+  （异常类型 + 系统原文）。
+- Python 的 GBK 包夹具 `build_gbk_zip()` 注释写"清掉 bit11"，代码实际清的是低字节 bit3
+  （「带数据描述符」）——因为 zipfile 对纯 ASCII 占位名根本不置 bit11，结果碰巧对。
+  改成按 16 位字段整体清 bit11，口径与注释一致。Java 侧自建同款夹具时踩过这个坑：
+  清错位的夹具照样抛 MALFORMED，红得看不出原因。
+
+- 实测**否掉**的两条猜测（记下免得下轮又去查）：
+  - POI 临时文件随解析次数堆积：连解 10 轮后 `%TEMP%\poifiles` 仍是 1 项 / 0 KB 且全部可删；
+  - 「读句柄没关导致写入被占用」：Java 在 Windows 上开文件是共享模式，
+    握着一个 `ZipFile` 与 `InputStream` 时重写同一路径不报错、旧句柄也照样读完剩余字节。
+  - 由此，71/72 节留在 `WorkbookReader` 里那句「压缩比阈值是不是现场原因，本轮没证明」
+    现在有了答案：不是它（阈值已置 0，本轮三条都能复现并修掉）。
+- 用例：Python 侧新增 H6e（不可折回的中文名原样保留）、H6f（合成 ZIP64 EOCD 的包照解、
+  条目名不坏）、H6g（加密条目点名是哪一条）、Q35c（三个同名包跨批次落点互不重叠）；
+  Java 自检新增 `zip_field_shapes`（GBK 包、ZIP64 包、ZIP64 加密条目、连续三批拖入），
+  夹具由 `writeGbkNameZip` / `promote_to_zip64` / `setEncryptedFlag` 现造，不落二进制文件。
+- 变异抽查（每处还原后核 md5）：
+  - `open()` 回退成默认字符集 → 自检两条红（GBK 包解不开 + 预扫返 0），退出码 1；
+  - 去掉 `decodeName` 的往返守卫 → 红在「写入 …\??????.xlsx 失败：…文件名、目录名或卷标语法不正确」，
+    正是现场那句；
+  - 去掉 ZIP64 EOCD 读取 → 红在「加密条目报的不是已加密」，露出英文 `invalid CEN header`；
+  - 解压编号改回固定起点 → 红两条：表数少 1 与「[重复跳过] 丙表（t_c）.xlsx 已在待导入列表」。
+  还原后 `ZipImport.java` md5 `d42b3459…`、`MainFrame.java` `c4c52d07…`、
+  `GuiMain.java` `82982493…` 与改前逐字节一致。
+- **金标准过期**：本轮跑 Java 十步闸门时第 8、9 步红，红的原因是 73 节那次 1264 修复
+  只重放了类型/推断两份金标准，`sql.jsonl.gz` 与 `meta.jsonl.gz` 没重放，期望值还停在
+  「DECIMAL 压到 30 位」与「超 BIGINT 仍给 BIGINT」。重放 `java/tools/export_sql_golden.py`
+  与 `java/tools/export_meta_golden.py` 后逐条核对：
+  `sql.jsonl.gz` 391 条里变 8 条（2 条 ddl 的 `DECIMAL(30,7)`→`DECIMAL(40,7)`、
+  6 条 convert 的 `['float','7.0']`→`['Decimal',"Decimal('7')"]`），
+  `meta.jsonl.gz` 32 条记录里变 12 行（同一列的类型与承载它的元数据 Sheet 单元格、
+  另一列 BIGINT→`DECIMAL(28,0)`），除这两列外没有第三处变化。
+  `SqlDiffer.encodeValue` 补一档 `Decimal`（Python 侧编码器按 `type(v).__name__` 打标签，
+  两边标签不一致就会假红），补完 394 项 0 处不一致、META-DIFF 2692 格 0 处不一致。
+- 本轮全量验证：`pack_test.py`（带真库凭据）通过 735 / 失败 0 / 跳过 5；
+  `pack_test38.py` 3.12 线 252/0/4、3.8 线 261/0/1；Java 十步闸门退出码 0；
+  GUI 对撞 273 键一致。
+- 版本号：74 与 75 两轮合并按 patch 从 2.0.3 升到 2.0.4（`version.py`、三个 pom、
+  `构建验证.bat`、`help_doc.py`、`java/assets/conn.ini`、`HelpDoc.java`、README 同步；
+  用例 T15 逐处核回）。桌面交付包未重打，仍是 1.1.3。
