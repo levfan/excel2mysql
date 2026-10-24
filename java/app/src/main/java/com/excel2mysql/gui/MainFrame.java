@@ -58,7 +58,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private static final int SQL_RUN_FONT_SIZE = LogPanel.DEFAULT_FONT_SIZE;
 
     private final FileRowModel fileModel = new FileRowModel();
-    private final javax.swing.JTable table = new javax.swing.JTable(fileModel) {
+    private final javax.swing.JTable table =
+            new EmptyHintTable(fileModel, EmptyHintTable.FILE_HINT) {
         @Override
         public java.awt.Component prepareRenderer(javax.swing.table.TableCellRenderer renderer,
                                                   int row, int column) {
@@ -647,11 +648,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         dropExisting.setMaximumSize(new Dimension(
                 Integer.MAX_VALUE, dropExisting.getPreferredSize().height));
         JPanel opLeft = new JPanel();
+        opLeft.setOpaque(false);
         opLeft.setLayout(new javax.swing.BoxLayout(opLeft, javax.swing.BoxLayout.Y_AXIS));
         opLeft.add(dropExisting);
         opLeft.add(javax.swing.Box.createVerticalStrut(UiScale.px(2)));
         opLeft.add(pageProgress);
-        JPanel op = new JPanel(new BorderLayout());
+        opRight.setOpaque(false);
+        excelActionBar = new ActionBar(new BorderLayout());
+        JPanel op = excelActionBar;
         op.add(opLeft, BorderLayout.CENTER);
         op.add(opRight, BorderLayout.EAST);
         JPanel south = new JPanel(new BorderLayout(0, UiScale.px(2)));
@@ -2069,6 +2073,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private java.awt.Component excelDrop;
     private java.awt.Component excelFileBox;
     private java.awt.Component excelLogBox;
+    /** 第一页底部动作条的浅色底板（对撞器读它的底色与"开关和按钮在同一块里"）。 */
+    private ActionBar excelActionBar;
     /** 用户亲手拖过任一条分隔条后，默认摆放就交还给用户。 */
     private boolean splitUserMoved;
     /** 程序自己摆分隔条期间不把随之而来的 Resize 当成用户动作。 */
@@ -2261,7 +2267,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 return false;
             }
         };
-        sqlRunFilesTable = new javax.swing.JTable(sqlRunFilesModel);
+        sqlRunFilesTable = new EmptyHintTable(sqlRunFilesModel, EmptyHintTable.RUN_HINT);
         Tables.style(sqlRunFilesTable);
         sqlRunFilesTable.setFillsViewportHeight(true);
         sqlRunFilesTable.getTableHeader().setReorderingAllowed(false);
@@ -2394,9 +2400,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JPanel opRight = new javax.swing.JPanel(
                 new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT,
                         UiScale.px(6), UiScale.px(2)));
+        opRight.setOpaque(false);
         opRight.add(sqlRunBtn);
         opRight.add(sqlRunScriptsBtn);
-        javax.swing.JPanel op = new javax.swing.JPanel(new java.awt.BorderLayout());
+        javax.swing.JPanel op = new ActionBar(new java.awt.BorderLayout());
         op.add(sqlRunDropBox, java.awt.BorderLayout.WEST);
         op.add(opRight, java.awt.BorderLayout.EAST);
         sqlRunActionBar = op;
@@ -2811,6 +2818,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 底部动作条那一行：对撞器按真实容器数这一排按钮，而不是各抄一份名单。 */
     public java.awt.Container sqlRunActionRow() {
         return sqlRunActionBar;
+    }
+
+    /** 三个页签的浅色底板：底色与"覆盖开关是否和主按钮同块"都由对撞器从真控件读。 */
+    public ActionBar excelActionBar() {
+        return excelActionBar;
+    }
+
+    public ActionBar sqlRunActionBarWidget() {
+        return (ActionBar) sqlRunActionBar;
     }
 
     public void addRunScriptsFromUi(List<String> paths) {

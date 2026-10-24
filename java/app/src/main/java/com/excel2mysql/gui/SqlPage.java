@@ -261,7 +261,7 @@ public final class SqlPage extends JPanel {
                 }
             }
         };
-        table = new JTable(model);
+        table = new EmptyHintTable(model, EmptyHintTable.SQL_HINT);
         Tables.style(table);
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
@@ -368,11 +368,12 @@ public final class SqlPage extends JPanel {
         // 保存/执行/生成四颗动作按钮与覆盖开关挪到底部动作条（与第一页同一形状）：
         // 开关在左、按钮在右，且都在分隔条之外，不跟着表格段被挤压
         JPanel runBtns = flow();
+        runBtns.setOpaque(false);
         runBtns.add(save);
         runBtns.add(runButton);
         runBtns.add(genStd);
         runBtns.add(genSimple);
-        JPanel op = new JPanel(new BorderLayout());
+        JPanel op = new ActionBar(new BorderLayout());
         rowAct = op;
         // 默认不勾选：勾选后执行副本先 DROP 脚本要建的表；只影响执行，不改脚本正文
         dropExisting.setToolTipText("<html>勾选后，执行前先对脚本里每条 CREATE TABLE 的建表目标"
@@ -745,6 +746,11 @@ public final class SqlPage extends JPanel {
     /** 对撞器读斑马纹开关用（与第一页 fileTable() 同一用途）。 */
     public javax.swing.JTable tableWidget() {
         return table;
+    }
+
+    /** 第二页底部那块浅色底板：底色与"覆盖开关和主按钮同块"对撞器从这里读。 */
+    public ActionBar actionBar() {
+        return (ActionBar) rowAct;
     }
 
     public int selectedRowCount() {

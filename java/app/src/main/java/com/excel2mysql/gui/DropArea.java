@@ -42,10 +42,11 @@ public final class DropArea extends javax.swing.JPanel {
     /** 第三页（SQL 执行器）的脚本队列：同一块拖拽区，多一句"按列表顺序执行"。 */
     public static final String RUN_HINT =
             "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选；按列表顺序执行）";
-    private static final Color LINE = new Color(0x88, 0x88, 0x88);
+    private static final Color LINE = new Color(0xa8, 0xbc, 0xd8);
     private static final Color LINE_HOVER = new Color(0x2f, 0x6f, 0xeb);
-    private static final Color BG = new Color(0xf7, 0xf9, 0xfc);
-    private static final Color BG_HOVER = new Color(0xee, 0xf4, 0xff);
+    private static final Color BG = new Color(0xea, 0xf2, 0xfd);
+    private static final Color BG_HOVER = new Color(0xd8, 0xe8, 0xff);
+    private static final Color TEXT = new Color(0x2c, 0x4a, 0x72);
 
     private final Handler handler;
     private final Runnable onChoose;
@@ -202,7 +203,7 @@ public final class DropArea extends javax.swing.JPanel {
             g2.drawRoundRect(inset, inset, getWidth() - 2 * inset - 1,
                     getHeight() - 2 * inset - 1, radius, radius);
 
-            g2.setColor(new Color(0x33, 0x33, 0x33));
+            g2.setColor(TEXT);
             // Python 是 QFont("", 12)：默认字族、12pt，与界面同源
             g2.setFont(getFont().deriveFont(Font.PLAIN, (float) UiScale.fontPt(12)));
             FontMetrics fm = g2.getFontMetrics();
@@ -217,5 +218,14 @@ public final class DropArea extends javax.swing.JPanel {
         } finally {
             g2.dispose();
         }
+    }
+
+    /** 对撞器读的是真组件上的底色，不是两边各抄一份常量。 */
+    public Color fillColor() {
+        return BG;
+    }
+
+    public Color hoverFillColor() {
+        return BG_HOVER;
     }
 }
