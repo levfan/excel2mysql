@@ -376,6 +376,30 @@ def main():
     put("drop.hint", win.drop.label.text())
     put("drop.sql.hint", win.sql_drop.label.text())
     put("drop.sql.accepts", "true" if win.sql_drop.acceptDrops() else "false")
+    # 拖拽区的浅色底与悬停高亮：读真控件存的色值，两栈同值才算同一块区域
+    put("drop.fill", win.drop.fill_color)
+    put("drop.fill.hover", win.drop.hover_color)
+    put("drop.sql.fill", win.sql_drop.fill_color)
+    put("drop.sql.fill.hover", win.sql_drop.hover_color)
+    put("sqlrun.drop.fill", win.sql_run_drop.fill_color)
+    put("sqlrun.drop.fill.hover", win.sql_run_drop.hover_color)
+    # 空清单时表格里的引导语与上方虚线区呼应
+    put("table.file.empty", win.file_table.empty_hint)
+    put("table.sql.empty", win.sql_table.empty_hint)
+    put("table.sqlrun.empty", win.sql_run_table.empty_hint)
+    # 底部动作条底板：覆盖开关与主按钮是否在同一块浅色底里（1|1 才算归组）
+    put("action.excel.bg", win.excel_action_bar.fill_color)
+    put("action.excel.group", "%d|%d" % (
+        int(win.excel_action_bar.isAncestorOf(win.chk_drop)),
+        int(win.excel_action_bar.isAncestorOf(win.btn_import))))
+    put("action.sql.bg", win.sql_action_bar.fill_color)
+    put("action.sql.group", "%d|%d" % (
+        int(win.sql_action_bar.isAncestorOf(win.chk_sql_drop)),
+        int(win.sql_action_bar.isAncestorOf(win.btn_sql_run))))
+    put("action.run.bg", win.run_action_bar.fill_color)
+    put("action.run.group", "%d|%d" % (
+        int(win.run_action_bar.isAncestorOf(win.chk_run_drop)),
+        int(win.run_action_bar.isAncestorOf(win.btn_run_scripts))))
 
     def _sql_segment(w):
         if w is win.sql_drop:

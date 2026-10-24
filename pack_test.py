@@ -841,6 +841,85 @@ check("F10b 三个日志框的最小高度都至少装得下 4 行（截图复�
       [(v.minimumHeight(), v.fontMetrics().height())
        for v in (w.log, w.sql_log, w.sql_run_log)])
 
+# 三处交互引导：拖拽区底色/hover、空表提示、覆盖开关与执行按钮同底板。
+# 色值与分组都从活控件上取，改坏了哪一处都会在这里变红。
+check("F10c 三个拖拽区跑起来就是淡蓝底，悬停色更深一层",
+      all(d.fill_color == "#eaf2fd" and d.hover_color == "#d8e8ff"
+          and d.fill_color != d.hover_color
+          for d in (w.drop, w.sql_drop, w.sql_run_drop)),
+      [(d.fill_color, d.hover_color) for d in (w.drop, w.sql_drop, w.sql_run_drop)])
+
+
+def _fill_px(widget):
+    img = widget.grab().toImage()
+    return img.pixelColor(12, img.height() // 2).name()
+
+
+from PySide6.QtCore import QEvent as _QEvent
+_da = app_main.DropArea()
+_da.resize(420, 120)
+_da.show()
+_app.processEvents()
+# 先把真实鼠标是否恰好落在这块小窗上归一：真光标停在里面会先触发一次 Enter
+_app.sendEvent(_da, _QEvent(_QEvent.Leave))
+_app.processEvents()
+_da_base = _fill_px(_da)
+_app.sendEvent(_da, _QEvent(_QEvent.Enter))
+_app.processEvents()
+_da_hover = _fill_px(_da)
+_app.sendEvent(_da, _QEvent(_QEvent.Leave))
+_app.processEvents()
+_da_after = _fill_px(_da)
+_da.close()
+_da.deleteLater()
+_app.processEvents()
+check("F10d 悬停走真实 Enter/Leave 事件并当场换色，离开后回到原底色（抓屏取证）",
+      (_da_base, _da_hover, _da_after) == ("#eaf2fd", "#d8e8ff", "#eaf2fd"),
+      (_da_base, _da_hover, _da_after))
+
+check("F10e 三张清单的空态文案都指向自己上方那块虚线区",
+      w.file_table.empty_hint == "请把 Excel 文件或 ZIP 压缩包拖到上方虚线区"
+      and w.sql_table.empty_hint == "请把 SQL 脚本拖到上方虚线区"
+      and w.sql_run_table.empty_hint == "请把 SQL 文件拖到上方虚线区，按清单顺序执行"
+      and all("上方虚线区" in t for t in (w.file_table.empty_hint,
+                                       w.sql_table.empty_hint,
+                                       w.sql_run_table.empty_hint)),
+      (w.file_table.empty_hint, w.sql_table.empty_hint, w.sql_run_table.empty_hint))
+
+_bt = app_main.EmptyHintTable(0, 7, "请把 SQL 脚本拖到上方虚线区")
+_bt.resize(560, 180)
+_bt.show()
+_app.processEvents()
+_img = _bt.viewport().grab().toImage()
+_bg = _img.pixelColor(2, 2)
+_ink = 0
+for _y in range(0, _img.height(), 2):
+    for _x in range(0, _img.width(), 2):
+        _c = _img.pixelColor(_x, _y)
+        if (abs(_c.red() - _bg.red()) + abs(_c.green() - _bg.green())
+                + abs(_c.blue() - _bg.blue())) > 30:
+            _ink += 1
+_bt.close()
+_bt.deleteLater()
+_app.processEvents()
+check("F10f 空表真的把图标和提示画在视口里（抓屏数非底色像素，不是只比字符串）",
+      _ink > 60, f"ink={_ink} viewport={_img.width()}x{_img.height()}")
+
+check("F10g 三页底部动作条都包住了「覆盖已存在表」和执行按钮（真控件的父子关系）",
+      w.excel_action_bar.isAncestorOf(w.chk_drop)
+      and w.excel_action_bar.isAncestorOf(w.btn_import)
+      and w.sql_action_bar.isAncestorOf(w.chk_sql_drop)
+      and w.sql_action_bar.isAncestorOf(w.btn_sql_run)
+      and w.run_action_bar.isAncestorOf(w.chk_run_drop)
+      and w.run_action_bar.isAncestorOf(w.btn_run_scripts))
+check("F10h 三块底板用同一个浅色，且与页面底色不同（有底色块才看得出归组）",
+      {w.excel_action_bar.fill_color, w.sql_action_bar.fill_color,
+       w.run_action_bar.fill_color} == {"#f4f7fc"},
+      (w.excel_action_bar.fill_color, w.sql_action_bar.fill_color,
+       w.run_action_bar.fill_color))
+
+
+
 from PySide6.QtWidgets import QPlainTextEdit
 from PySide6.QtGui import QTextCursor, QColor
 v = QPlainTextEdit()
@@ -2120,13 +2199,14 @@ check("K20 表格区那层组框不影响三段分栏：中间那一段仍是装
 # 底部动作条与第一页同一形状：覆盖开关在左，四颗动作按钮在右；只重排，没有新增按钮。
 # 四颗按钮包在横向滚动区里（窄屏才出滚动条），所以要先穿过那一层再读按钮顺序
 _sql_page = w.main_tabs.widget(1)
-_op = _sql_page.layout().itemAt(_sql_page.layout().count() - 1).layout()
+_op = w.sql_action_bar.layout()
 _op_items = [_op.itemAt(i).widget() for i in range(_op.count())]
 _run_box = _op_items[-1]
 _run_row = _run_box.widget().layout()
 _run_items = [_run_row.itemAt(i).widget() for i in range(_run_row.count())]
 check("K21 底部动作条：覆盖开关在最左，保存/执行/生成四颗在最右（与第一页同一形状）",
-      _op_items[0] is w.chk_sql_drop
+      _op.count() == 2
+      and _op_items[0] is w.chk_sql_drop
       and all(x is None for x in _op_items[1:-1])
       and all(x is None for x in _run_items[:-4])
       and _run_items[-4:] == [w.btn_sql_save, w.btn_sql_run,
@@ -2165,7 +2245,7 @@ check("K25 两张主表格都有斑马纹，序号列收窄到 44px",
        w.file_table.columnWidth(0), w.sql_table.columnWidth(0)))
 _el = _excel_page.layout()
 _hline1 = _el.itemAt(_el.count() - 2).widget()
-_xop = _el.itemAt(_el.count() - 1).layout()
+_xop = w.excel_action_bar.layout()
 _xleft = _xop.itemAt(0).layout()
 check("K26 Excel 底部三层：分隔线 + 左列覆盖开关/进度条 + 右侧动作按钮",
       _hline1 is not None and _hline1.height() == 1
@@ -2191,7 +2271,7 @@ _sl_page_lay = _sql_page.layout()
 _sql_hline = _sl_page_lay.itemAt(_sl_page_lay.count() - 2).widget()
 check("K28 SQL 页底部动作条与表格区之间有分隔线",
       _sql_hline is not None and _sql_hline.height() == 1
-      and _sl_page_lay.itemAt(_sl_page_lay.count() - 1).layout() is not None)
+      and _sl_page_lay.itemAt(_sl_page_lay.count() - 1).widget() is w.sql_action_bar)
 check("K29 主按钮用强调色，保存降为次级样式，停止/生成不被误标",
       "#2f6feb" in w.btn_import.styleSheet()
       and "#2f6feb" in w.btn_sql_run.styleSheet()

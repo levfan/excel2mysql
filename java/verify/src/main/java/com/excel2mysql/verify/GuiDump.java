@@ -2,8 +2,10 @@ package com.excel2mysql.verify;
 
 import com.excel2mysql.core.MetaExport;
 import com.excel2mysql.core.TableOps;
+import com.excel2mysql.gui.ActionBar;
 import com.excel2mysql.gui.AboutDialog;
 import com.excel2mysql.gui.DDLDialog;
+import com.excel2mysql.gui.EmptyHintTable;
 import com.excel2mysql.gui.HelpDialog;
 import com.excel2mysql.gui.LogPanel;
 import com.excel2mysql.gui.MainFrame;
@@ -135,6 +137,25 @@ public final class GuiDump {
                 put("drop.sql.hint", frame.sqlPage().sqlDropArea().hintText());
                 put("drop.sql.accepts",
                         frame.sqlPage().sqlDropArea().acceptsDrops() ? "true" : "false");
+                // 拖拽区的底色/描边色、空表的提示语、动作条的分组，都从活控件上取
+                put("drop.fill", hex(frame.dropArea().fillColor()));
+                put("drop.fill.hover", hex(frame.dropArea().hoverFillColor()));
+                put("drop.sql.fill", hex(frame.sqlPage().sqlDropArea().fillColor()));
+                put("drop.sql.fill.hover", hex(frame.sqlPage().sqlDropArea().hoverFillColor()));
+                put("sqlrun.drop.fill", hex(frame.sqlRunDropArea().fillColor()));
+                put("sqlrun.drop.fill.hover", hex(frame.sqlRunDropArea().hoverFillColor()));
+                put("table.file.empty", ((EmptyHintTable) frame.fileTable()).emptyHint());
+                put("table.sql.empty", ((EmptyHintTable) frame.sqlPage().tableWidget()).emptyHint());
+                put("table.sqlrun.empty", ((EmptyHintTable) frame.sqlRunFilesTable()).emptyHint());
+                put("action.excel.bg", hex(frame.excelActionBar().fillColor()));
+                put("action.excel.group", grouped(frame.excelActionBar(),
+                        frame.dropExistingBox(), frame.importButton()));
+                put("action.sql.bg", hex(frame.sqlPage().actionBar().fillColor()));
+                put("action.sql.group", grouped(frame.sqlPage().actionBar(),
+                        frame.sqlPage().dropExistingBox(), frame.sqlPage().runButton()));
+                put("action.run.bg", hex(frame.sqlRunActionBarWidget().fillColor()));
+                put("action.run.group", grouped(frame.sqlRunActionBarWidget(),
+                        frame.sqlRunDropBox(), frame.sqlRunScriptsButton()));
                 put("split.sql.order", frame.sqlPage().segmentOrder());
                 // 日志默认高度 = 它自己的最小高度（用户口径：默认压到最低，仍可拖）。
                 // 比的是真控件量出来的高度，不是各栈抄一份配置值。
@@ -946,6 +967,18 @@ public final class GuiDump {
 
     private static void put(String key, String value) {
         D.put(key, norm(value));
+    }
+
+    /** 色值统一成 #rrggbb 小写，Python 侧存的就是这个写法。 */
+    private static String hex(java.awt.Color c) {
+        return c == null ? "" : String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
+    }
+
+    /** "覆盖开关在主按钮那块底板里吗"——两栈都从真控件上取父子关系。 */
+    private static String grouped(java.awt.Component bar, java.awt.Component a,
+                                  java.awt.Component b) {
+        return (javax.swing.SwingUtilities.isDescendingFrom(a, bar) ? "1" : "0") + "|"
+                + (javax.swing.SwingUtilities.isDescendingFrom(b, bar) ? "1" : "0");
     }
 
     private static final java.util.regex.Pattern PATH_RE =

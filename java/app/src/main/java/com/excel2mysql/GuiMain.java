@@ -100,6 +100,8 @@ public final class GuiMain {
                 if (!frame.initialsBox().isSelected() || !frame.upperBox().isSelected()) {
                     problems.add("两颗命名开关应默认勾选（取拼音首字母 / 转大写）");
                 }
+                // 空表引导语只在表还空着时画得出来，趁添加夹具之前验
+                ui_guidance(frame, problems);
                 // 主按钮的底色必须跟着启用状态走：列表还空着时「开始导入」是禁用的，
                 // 涂成强调色会让它看着就能点（现场那句"没导任何东西，点一下颜色才变"）
                 if (frame.importButton().isEnabled()) {
@@ -712,6 +714,91 @@ public final class GuiMain {
         if (frame.ddlText().contains("DROP TABLE IF EXISTS")) {
             problems.add("没勾「覆盖已存在表」DDL 预览里却出现了 DROP");
         }
+    }
+
+    /**
+     * 三处交互引导：拖拽区有底色与悬停色、空表画引导语、覆盖开关与执行按钮同一块底板。
+     * 空表那句要在像素上真的出现——只断言字符串相等，改坏了绘制路径也照样绿。
+     */
+    private static void ui_guidance(MainFrame frame, List<String> problems) {
+        String fileFill = hex(frame.dropArea().fillColor());
+        String fileHover = hex(frame.dropArea().hoverFillColor());
+        if (!"#eaf2fd".equals(fileFill) || !"#d8e8ff".equals(fileHover)) {
+            problems.add("首页拖拽区底色/悬停色不对：" + fileFill + "/" + fileHover);
+        }
+        if (!fileFill.equals(hex(frame.sqlPage().sqlDropArea().fillColor()))
+                || !fileFill.equals(hex(frame.sqlRunDropArea().fillColor()))) {
+            problems.add("第二/三页拖拽区底色与首页不一致");
+        }
+        if (!"#f4f7fc".equals(hex(frame.excelActionBar().fillColor()))
+                || !"#f4f7fc".equals(hex(frame.sqlPage().actionBar().fillColor()))
+                || !"#f4f7fc".equals(hex(frame.sqlRunActionBarWidget().fillColor()))) {
+            problems.add("三页动作条底板色不一致");
+        }
+        if (!SwingUtilities.isDescendingFrom(frame.dropExistingBox(), frame.excelActionBar())
+                || !SwingUtilities.isDescendingFrom(frame.importButton(), frame.excelActionBar())) {
+            problems.add("首页「覆盖已存在表」与「开始导入」不在同一块底板里");
+        }
+        if (!SwingUtilities.isDescendingFrom(frame.sqlPage().dropExistingBox(),
+                frame.sqlPage().actionBar())
+                || !SwingUtilities.isDescendingFrom(frame.sqlPage().runButton(),
+                frame.sqlPage().actionBar())) {
+            problems.add("第二页「覆盖已存在表」与「执行」不在同一块底板里");
+        }
+        if (!SwingUtilities.isDescendingFrom(frame.sqlRunDropBox(), frame.sqlRunActionBarWidget())
+                || !SwingUtilities.isDescendingFrom(frame.sqlRunScriptsButton(),
+                frame.sqlRunActionBarWidget())) {
+            problems.add("第三页「覆盖已存在表」与「执行脚本」不在同一块底板里");
+        }
+        hint_painted((com.excel2mysql.gui.EmptyHintTable) frame.fileTable(),
+                "首页文件表", problems);
+        hint_painted((com.excel2mysql.gui.EmptyHintTable) frame.sqlPage().tableWidget(),
+                "第二页清单", problems);
+        hint_painted((com.excel2mysql.gui.EmptyHintTable) frame.sqlRunFilesTable(),
+                "第三页清单", problems);
+    }
+
+    private static void hint_painted(com.excel2mysql.gui.EmptyHintTable table,
+            String who, List<String> problems) {
+        if (table.getRowCount() != 0) {
+            problems.add(who + "在自检这里应该是空表");
+            return;
+        }
+        if (table.emptyHint().isEmpty()) {
+            problems.add(who + "没有空态提示语");
+            return;
+        }
+        table.setSize(560, 180);
+        table.doLayout();
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(560, 180,
+                java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        try {
+            table.paint(g);
+        } finally {
+            g.dispose();
+        }
+        int bg = img.getRGB(0, 0) & 0xffffff;
+        int ink = 0;
+        for (int y = 0; y < img.getHeight(); y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                int rgb = img.getRGB(x, y) & 0xffffff;
+                int dr = Math.abs(((rgb >> 16) & 0xff) - ((bg >> 16) & 0xff));
+                int dg = Math.abs(((rgb >> 8) & 0xff) - ((bg >> 8) & 0xff));
+                int db = Math.abs((rgb & 0xff) - (bg & 0xff));
+                if (dr + dg + db > 30) {
+                    ink++;
+                }
+            }
+        }
+        if (ink < 100) {
+            problems.add(who + "的空态提示没画出来（非底色像素 " + ink + "）");
+        }
+    }
+
+    private static String hex(java.awt.Color c) {
+        return c == null ? ""
+                : String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
     }
 
     /**
