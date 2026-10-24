@@ -292,6 +292,8 @@ public final class GuiMain {
                 task_crash(frame, problems);
                 // ZIP 展开、汇总计数与临时目录清理
                 zip_roundtrip(frame, files, problems);
+                // 压缩包的三条现场形状：GBK 条目名、ZIP64 中央目录、连续多批拖入的落点编号
+                zip_field_shapes(frame, files, problems);
                 // 建不出表的输入必须在解析阶段就拒（空表 / 只有表头 / 内容是文本的假 .xlsx）
                 checkRejects(frame, problems);
                 // 命令行的 --prefix 对 .sql 也要生效，且 dry-run 要能预览脚本
@@ -2041,6 +2043,26 @@ public final class GuiMain {
         if (hasSqlInitials) {
             problems.add("SQL 页不应再有「表名与字段名取拼音首字母」开关");
         }
+        // 命名规则工具条贴表格上沿（与第一页同一处），序号列收窄，表格加斑马纹
+        java.awt.Container sqlNameBar = page.upperBox().getParent();
+        java.awt.Container sqlNameHost = sqlNameBar == null ? null : sqlNameBar.getParent();
+        if (sqlNameHost == null || !(sqlNameHost.getLayout() instanceof java.awt.BorderLayout)
+                || ((java.awt.BorderLayout) sqlNameHost.getLayout())
+                        .getLayoutComponent(java.awt.BorderLayout.NORTH) != sqlNameBar
+                || !sqlNameHost.isAncestorOf(page.tableWidget())) {
+            problems.add("SQL 页命名规则没贴在表格上沿");
+        }
+        if (!com.excel2mysql.gui.Tables.isZebra(page.tableWidget())) {
+            problems.add("SQL 页表格没有斑马纹");
+        }
+        if (page.tableWidget().getColumnModel().getColumn(0).getPreferredWidth()
+                != wantPx(44)) {
+            problems.add("SQL 页序号列宽不是 " + wantPx(44) + "，实际 "
+                    + page.tableWidget().getColumnModel().getColumn(0).getPreferredWidth());
+        }
+        if (!"primary".equals(com.excel2mysql.gui.Buttons.role(page.runButton()))) {
+            problems.add("SQL 页「执行」不是强调按钮");
+        }
         page.upperBox().doClick();
         String toggleLog = page.logPanel().text();
         if (!toggleLog.contains("[提示] 表名与字段名大小写切换为：大写"
@@ -3110,6 +3132,342 @@ public final class GuiMain {
     }
 
     /**
+     * 压缩包这三条现场形状，一条都不能靠"报一句错"过关：GBK 条目名、ZIP64 中央目录、
+     * 连续多批拖入时的解压目录编号。
+     *
+     * <p>GBK 条目名（Windows 自带「发送到压缩文件夹」写的那一款）：JDK 默认按 UTF-8
+     * <b>严格</b>解条目名，非 UTF-8 字节直接抛 IllegalArgumentException: MALFORMED，
+     * 于是枚举第一条就炸，整包解不出来。ZIP64 的条目数与目录偏移写在 64 位字段里，
+     * 旧 EOCD 那三格是占位值，自建的中央目录扫描只按旧字段取会整份失明，
+     * 位标记查不到就把中文名按 cp437→GBK 折成一串问号，写盘报「路径语法不正确」。
+     * 编号按批次 +1、批内却按已解文件数跳号，多包批次之后再接着拖几批就会拐回用过的
+     * 目录号：前一批解出来的那份被原地覆盖，同名文件还会判成「已在待导入列表」而静默少一张表。
+     */
+    private static void zip_field_shapes(MainFrame frame, List<String> files,
+                                         List<String> problems) {
+        if (files.size() < 3) {
+            problems.add("压缩包形状自检至少要 3 个 xlsx 夹具");
+            return;
+        }
+        File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-zipshape").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建压缩包形状自检目录失败：" + e);
+            return;
+        }
+        try {
+            byte[] b0 = java.nio.file.Files.readAllBytes(new File(files.get(0)).toPath());
+            byte[] b1 = java.nio.file.Files.readAllBytes(new File(files.get(1)).toPath());
+            byte[] b2 = java.nio.file.Files.readAllBytes(new File(files.get(2)).toPath());
+
+            // 1. GBK 条目名的包：解出来必须还是那句中文文件名，不能是乱码也不能是问号
+            File gbk = new File(dir, "gbk.zip");
+            writeGbkNameZip(gbk, "水库基础信息.xlsx", b0);
+            String gbkOut = new File(dir, "out_gbk").getPath();
+            try {
+                com.excel2mysql.core.ZipImport.Result r =
+                        com.excel2mysql.core.ZipImport.extract(gbk.getPath(), gbkOut);
+                if (r.files.size() != 1) {
+                    problems.add("GBK 条目名的包没解出那一张表，实际 " + r.files.size() + " 张");
+                } else {
+                    String base = new File(r.files.get(0).path).getName();
+                    if (!"水库基础信息.xlsx".equals(base)) {
+                        problems.add("GBK 条目名还原错了：" + base);
+                    }
+                    if (!new File(r.files.get(0).path).isFile()) {
+                        problems.add("GBK 包解出来的落点不在盘上：" + r.files.get(0).path);
+                    }
+                }
+            } catch (Exception e) {
+                problems.add("GBK 条目名的包解不开：" + e);
+            }
+            if (com.excel2mysql.core.ZipImport.countExcelEntries(gbk.getPath()) != 1) {
+                problems.add("GBK 条目名的包预扫条数不是 1（预扫静默返 0 就等于进度项数算少）");
+            }
+
+            // 2. ZIP64 中央目录：条目数与目录偏移都在 64 位字段里
+            File z64 = new File(dir, "zip64.zip");
+            writeUtf8NameZip(z64, new String[]{"readme.txt", "北京水库基础信息表（dim_reservoir）.xlsx"},
+                    new byte[][]{"不是 Excel".getBytes("UTF-8"), b1});
+            appendZip64Eocd(z64);
+            if (com.excel2mysql.core.ZipImport.countExcelEntries(z64.getPath()) != 1) {
+                problems.add("ZIP64 包预扫不到那一张表：中央目录按 16/32 位 EOCD 取就失明");
+            }
+            try {
+                com.excel2mysql.core.ZipImport.Result r =
+                        com.excel2mysql.core.ZipImport.extract(z64.getPath(),
+                                new File(dir, "out_z64").getPath());
+                if (r.files.size() != 1) {
+                    problems.add("ZIP64 包没解出那一张表，实际 " + r.files.size() + " 张");
+                } else {
+                    String base = new File(r.files.get(0).path).getName();
+                    if (base.indexOf('?') >= 0 || !"北京水库基础信息表（dim_reservoir）.xlsx".equals(base)) {
+                        problems.add("ZIP64 包的中文条目名被折坏了：" + base);
+                    }
+                }
+            } catch (Exception e) {
+                problems.add("ZIP64 包解不开：" + e);
+            }
+
+            // 3. ZIP64 里的加密条目：位标记写在中央目录，扫描器读不到 64 位字段就报不出
+            //    「已加密」，只会拖到写盘那一刻给一句看不出差错在哪的失败
+            File zenc = new File(dir, "zip64_enc.zip");
+            String encName = "加密表（ods_t_enc）.xlsx";
+            writeUtf8NameZip(zenc, new String[]{encName}, new byte[][]{b1});
+            appendZip64Eocd(zenc);
+            setEncryptedFlag(zenc, encName);
+            try {
+                com.excel2mysql.core.ZipImport.extract(zenc.getPath(),
+                        new File(dir, "out_enc").getPath());
+                problems.add("ZIP64 包里的加密条目没被认出来（扫描器只按 16/32 位 EOCD 取就会这样）");
+            } catch (com.excel2mysql.core.ZipImport.ZipArchiveException e) {
+                if (e.getMessage() == null || e.getMessage().indexOf("已加密") < 0) {
+                    problems.add("加密条目报的不是「已加密」：" + e.getMessage());
+                }
+            }
+
+            // 4. 连续多批拖入：两个不同的包都叫 B.zip，批内还夹着一个多包批次
+            File d1 = new File(dir, "d1");
+            File d2 = new File(dir, "d2");
+            File d3 = new File(dir, "d3");
+            d1.mkdirs();
+            d2.mkdirs();
+            d3.mkdirs();
+            File zipA = new File(d1, "A.zip");
+            writeUtf8NameZip(zipA, new String[]{"甲表（t_a）.xlsx", "乙表（t_b）.xlsx"},
+                    new byte[][]{b0, b1});
+            File zipB1 = new File(d1, "B.zip");
+            File zipB2 = new File(d2, "B.zip");
+            File zipB3 = new File(d3, "B.zip");
+            writeUtf8NameZip(zipB1, new String[]{"丙表（t_c）.xlsx"}, new byte[][]{b2});
+            writeUtf8NameZip(zipB2, new String[]{"丙表（t_c）.xlsx"}, new byte[][]{b1});
+            writeUtf8NameZip(zipB3, new String[]{"丙表（t_c）.xlsx"}, new byte[][]{b0});
+
+            int logMark = frame.logPanel().text().length();
+            int before = frame.tables().size();
+            List<String> one = new ArrayList<String>();
+            one.add(zipA.getPath());
+            one.add(zipB1.getPath());
+            frame.addFiles(one);
+            List<String> only = new ArrayList<String>();
+            only.add(zipB2.getPath());
+            frame.addFiles(only);
+            List<String> only3 = new ArrayList<String>();
+            only3.add(zipB3.getPath());
+            frame.addFiles(only3);
+            int got = frame.tables().size() - before;
+            if (got != 5) {
+                problems.add("连续三批拖入应新增 5 张表（A 里 2 张 + 三个 B 各 1 张），实际 " + got);
+            }
+            String tail = frame.logPanel().text().substring(logMark);
+            if (tail.contains("[重复跳过]")) {
+                problems.add("不同包的同名文件被判成了「重复跳过」——解压目录编号拐回了用过的号："
+                        + tailLineWith(tail, "[重复跳过]"));
+            }
+            java.util.Set<String> seen = new java.util.HashSet<String>();
+            for (com.excel2mysql.core.TableOps.Table t : frame.tables()) {
+                if (t.filepath == null || !new File(t.filepath).isFile()) {
+                    problems.add("列表里有一张表的来源文件不在盘上：" + t.tableName + " → " + t.filepath);
+                }
+                if (t.filepath != null && !seen.add(t.filepath)) {
+                    problems.add("两张表指向同一个解压落点（后一批把前一批覆盖了）：" + t.filepath);
+                }
+            }
+        } catch (Exception e) {
+            problems.add("压缩包形状自检没跑成：" + e);
+        }
+        frame.cleanZipTemp();
+        deleteTree(dir);
+        frame.clearAll();
+    }
+
+    /** 日志尾部里第一条含某个标记的行，自检报错时要能指出是哪一句。 */
+    private static String tailLineWith(String text, String needle) {
+        for (String line : text.split("\n")) {
+            if (line.contains(needle)) {
+                return line;
+            }
+        }
+        return "";
+    }
+
+    /** 普通 UTF-8 命名的包（bit11 置着），条目名与内容都由调用方给。 */
+    private static void writeUtf8NameZip(File out, String[] names, byte[][] bodies)
+            throws java.io.IOException {
+        java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                new java.io.FileOutputStream(out), java.nio.charset.Charset.forName("UTF-8"));
+        for (int i = 0; i < names.length; i++) {
+            zos.putNextEntry(new java.util.zip.ZipEntry(names[i]));
+            zos.write(bodies[i]);
+            zos.closeEntry();
+        }
+        zos.close();
+    }
+
+    /**
+     * 造一个条目名按 GBK 存、且不打 UTF-8 标记的包——与 Windows「发送到压缩文件夹」同一款。
+     *
+     * <p>Python 的 zipfile、Java 的 ZipOutputStream 都对非 ASCII 名字一律写 UTF-8 并置
+     * bit11，没法直接产出这种包。这里先用等长纯 ASCII 占位名打包（保证字节数与偏移不变），
+     * 再按头部结构把名字字段原地换成 GBK 字节并清掉 bit11。
+     */
+    private static void writeGbkNameZip(File out, String cnName, byte[] body)
+            throws java.io.IOException {
+        byte[] gbk = cnName.getBytes("GBK");
+        StringBuilder ph = new StringBuilder();
+        for (int i = 0; i < gbk.length; i++) {
+            ph.append('P');
+        }
+        writeUtf8NameZip(out, new String[]{ph.toString()}, new byte[][]{body});
+        byte[] raw = java.nio.file.Files.readAllBytes(out.toPath());
+        // 本地头：flag 在 6、名字长度在 26、名字从 30 起；中央目录：flag 8、长度 28、名字 46。
+        // bit11 在这个 16 位字段的**高字节**第 3 位（偏移 7 / 9）——清低字节只是清掉
+        // bit3「带数据描述符」。JDK 的 ZipOutputStream 连纯 ASCII 名都照样置 bit11，
+        // 清错了位等于没清：条目名仍按 UTF-8 严格解，当场抛 MALFORMED。
+        int[] sigs = {0x04034b50, 0x02014b50};
+        int[] flagOff = {7, 9};
+        int[] lenOff = {26, 28};
+        int[] nameOff = {30, 46};
+        byte[] placeholder = ph.toString().getBytes("UTF-8");
+        for (int s = 0; s < 2; s++) {
+            for (int i = 0; i + 4 <= raw.length; i++) {
+                if (le32(raw, i) != sigs[s]) {
+                    continue;
+                }
+                int nlen = le16(raw, i + lenOff[s]);
+                boolean hit = true;
+                for (int k = 0; k < placeholder.length; k++) {
+                    if (raw[i + nameOff[s] + k] != placeholder[k]) {
+                        hit = false;
+                        break;
+                    }
+                }
+                if (hit) {
+                    System.arraycopy(gbk, 0, raw, i + nameOff[s], gbk.length);
+                    raw[i + flagOff[s]] &= 0xF7;      // 清 bit11
+                }
+            }
+        }
+        java.nio.file.Files.write(out.toPath(), raw);
+    }
+
+    /**
+     * 把一个普通包改写成 ZIP64：追加 64 位的 EOCD 与它的定位块，
+     * 再把旧 EOCD 那三格填成占位值（0xFFFF / 0xFFFFFFFF）——真实工具产出 ZIP64 时就是这么写的。
+     */
+    private static void appendZip64Eocd(File zip) throws java.io.IOException {
+        byte[] buf = java.nio.file.Files.readAllBytes(zip.toPath());
+        int eocd = -1;
+        for (int i = buf.length - 22; i >= 0; i--) {
+            if (le32(buf, i) == 0x06054b50) {
+                eocd = i;
+                break;
+            }
+        }
+        if (eocd < 0) {
+            throw new java.io.IOException("夹具里没有 EOCD，改不出 ZIP64");
+        }
+        long cdSize = le32(buf, eocd + 12) & 0xFFFFFFFFL;
+        long cdOffset = le32(buf, eocd + 16) & 0xFFFFFFFFL;
+        int total = le16(buf, eocd + 10);
+        java.io.ByteArrayOutputStream z64 = new java.io.ByteArrayOutputStream();
+        byte[] rec = new byte[56];
+        putLe32(rec, 0, 0x06064b50);
+        putLe64(rec, 4, 44);
+        putLe16(rec, 12, 60);
+        putLe16(rec, 14, 45);
+        putLe32(rec, 16, 0);
+        putLe32(rec, 20, 0);
+        putLe64(rec, 24, total);
+        putLe64(rec, 32, total);
+        putLe64(rec, 40, cdSize);
+        putLe64(rec, 48, cdOffset);
+        byte[] loc = new byte[20];
+        putLe32(loc, 0, 0x07064b50);
+        putLe32(loc, 4, 0);
+        putLe64(loc, 8, eocd);                        // 64 位记录就贴在旧 EOCD 前面
+        putLe32(loc, 16, 1);
+        byte[] e = new byte[22];
+        putLe32(e, 0, 0x06054b50);
+        putLe16(e, 4, 0);
+        putLe16(e, 6, 0);
+        putLe16(e, 8, 0xFFFF);
+        putLe16(e, 10, 0xFFFF);
+        putLe32(e, 12, 0xFFFFFFFF);
+        putLe32(e, 16, 0xFFFFFFFF);
+        putLe16(e, 20, 0);
+        z64.write(rec);
+        z64.write(loc);
+        z64.write(e);
+        java.io.ByteArrayOutputStream all = new java.io.ByteArrayOutputStream();
+        all.write(buf, 0, eocd);
+        all.write(z64.toByteArray());
+        java.nio.file.Files.write(zip.toPath(), all.toByteArray());
+    }
+
+    /**
+     * 给指定条目的通用位标记补上 bit0（加密）。真实加密要算密码编码那一套，
+     * 而本项目只看这一位决定「这个包打不开是因为加密」，所以夹具只把位写对。
+     */
+    private static void setEncryptedFlag(File zip, String entryName) throws java.io.IOException {
+        byte[] raw = java.nio.file.Files.readAllBytes(zip.toPath());
+        byte[] name = entryName.getBytes("UTF-8");
+        int[] sigs = {0x04034b50, 0x02014b50};
+        int[] flagOff = {6, 8};
+        int[] lenOff = {26, 28};
+        int[] nameOff = {30, 46};
+        for (int s = 0; s < 2; s++) {
+            for (int i = 0; i + 4 <= raw.length; i++) {
+                if (le32(raw, i) != sigs[s]) {
+                    continue;
+                }
+                int nlen = le16(raw, i + lenOff[s]);
+                if (nlen != name.length) {
+                    continue;
+                }
+                boolean hit = true;
+                for (int k = 0; k < nlen; k++) {
+                    if (raw[i + nameOff[s] + k] != name[k]) {
+                        hit = false;
+                        break;
+                    }
+                }
+                if (hit) {
+                    raw[i + flagOff[s]] |= 0x01;
+                }
+            }
+        }
+        java.nio.file.Files.write(zip.toPath(), raw);
+    }
+
+    private static int le16(byte[] b, int at) {
+        return (b[at] & 0xFF) | ((b[at + 1] & 0xFF) << 8);
+    }
+
+    private static long le32(byte[] b, int at) {
+        return (b[at] & 0xFFL) | ((b[at + 1] & 0xFFL) << 8)
+                | ((b[at + 2] & 0xFFL) << 16) | ((b[at + 3] & 0xFFL) << 24);
+    }
+
+    private static void putLe16(byte[] b, int at, int v) {
+        b[at] = (byte) (v & 0xFF);
+        b[at + 1] = (byte) ((v >> 8) & 0xFF);
+    }
+
+    private static void putLe32(byte[] b, int at, long v) {
+        for (int i = 0; i < 4; i++) {
+            b[at + i] = (byte) ((v >> (8 * i)) & 0xFF);
+        }
+    }
+
+    private static void putLe64(byte[] b, int at, long v) {
+        for (int i = 0; i < 8; i++) {
+            b[at + i] = (byte) ((v >> (8 * i)) & 0xFF);
+        }
+    }
+
+    /**
      * 进度框那条折行规则的红线：预算、行数、不丢字、截断时留话。
      *
      * <p>结果弹窗已经不再自己折行（正文原样交给 JTextArea 按右边界折），
@@ -3854,7 +4212,7 @@ public final class GuiMain {
             dropping.dispose();
         }
 
-        int[] want = {54, 320, 200, 280, 80, 90, 160};
+        int[] want = {44, 320, 200, 280, 80, 90, 160};
         javax.swing.table.TableColumnModel cols = frame.fileTable().getColumnModel();
         if (cols.getColumnCount() != want.length) {
             problems.add("文件表应有 7 列（序号 + 原 6 列），实际 " + cols.getColumnCount());
@@ -3869,6 +4227,25 @@ public final class GuiMain {
         if (frame.fileTable().getAutoResizeMode()
                 != javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN) {
             problems.add("文件表最后一列没有吃掉剩余宽度");
+        }
+        if (!com.excel2mysql.gui.Tables.isZebra(frame.fileTable())) {
+            problems.add("文件表没有斑马纹");
+        }
+        // 命名规则工具条贴表格上沿：两颗开关与表格同组，但排在表格之前
+        java.awt.Container nameBar = frame.initialsBox().getParent();
+        java.awt.Container nameHost = nameBar == null ? null : nameBar.getParent();
+        if (nameHost == null || !(nameHost.getLayout() instanceof java.awt.BorderLayout)
+                || ((java.awt.BorderLayout) nameHost.getLayout())
+                        .getLayoutComponent(java.awt.BorderLayout.NORTH) != nameBar
+                || !nameHost.isAncestorOf(frame.fileTable())) {
+            problems.add("Excel 页命名规则没贴在表格上沿");
+        }
+        // 底部左列是覆盖开关 + 页内进度，两颗动作按钮不再分两层
+        if (frame.pageProgressBar().getParent() != frame.dropExistingBox().getParent()) {
+            problems.add("Excel 页进度条与覆盖开关不在同一列");
+        }
+        if (!"primary".equals(com.excel2mysql.gui.Buttons.role(frame.importButton()))) {
+            problems.add("Excel 页「开始导入」不是强调按钮");
         }
 
         javax.swing.SpinnerNumberModel port =

@@ -1320,8 +1320,8 @@ def build_gbk_zip(path, names):
             plan[ph] = gbk
             z.writestr(ph.decode("ascii"), make_xlsx_bytes())
     raw = bytearray(open(path, "rb").read())
-    for sig, name_off, len_off in ((b"PK\x03\x04", LFH_NAME_OFF, LFH_NAMELEN_OFF),
-                                   (b"PK\x01\x02", CDH_NAME_OFF, CDH_NAMELEN_OFF)):
+    for sig, name_off, len_off, flag_off in ((b"PK\x03\x04", LFH_NAME_OFF, LFH_NAMELEN_OFF, 6),
+                                             (b"PK\x01\x02", CDH_NAME_OFF, CDH_NAMELEN_OFF, 8)):
         pos = 0
         while True:
             j = bytes(raw).find(sig, pos)
@@ -1331,7 +1331,9 @@ def build_gbk_zip(path, names):
             field = bytes(raw[j + name_off:j + name_off + nlen])
             if field in plan:
                 raw[j + name_off:j + name_off + nlen] = plan[field]
-            raw[j + 6 if sig == b"PK\x03\x04" else j + 8] &= ~0x08   # 清 bit11
+                # bit11 在这个 16 位字段的高字节；按 16 位整体清才真的清掉它
+                v = int.from_bytes(raw[j + flag_off:j + flag_off + 2], "little")
+                raw[j + flag_off:j + flag_off + 2] = (v & ~0x800).to_bytes(2, "little")
             pos = j + 4
     open(path, "wb").write(bytes(raw))
 
@@ -1357,6 +1359,78 @@ u2 = zipfile.ZipInfo("水库基础信息.xlsx".encode("gbk").decode("cp437"))
 u2.flag_bits = 0
 check("H6d decode_name 对无标记条目按 cp437→gbk 回退",
       decode_name(u2) == "水库基础信息.xlsx", decode_name(u2))
+# 名字本身不是 cp437 解出来的（真中文）就不能折：cp437 里没有汉字，
+# 折回去每个字变成一个问号，落点直接被 Windows 判成「文件名、目录名或卷标语法不正确」。
+# Java 线正是这么炸的（那边 getBytes 不抛异常、静默替换成 ?），这里把口径钉住。
+u3 = zipfile.ZipInfo("水库基础信息.xlsx")
+u3.flag_bits = 0
+check("H6e 无标记又折不动的中文名原样保留，不折成一串问号",
+      decode_name(u3) == "水库基础信息.xlsx", decode_name(u3))
+
+
+def patch_zip_flags(path, name, set_bits=0, clear_bits=0):
+    """按头部结构给指定条目的通用位标记置位/清位（本地头与中央目录都改）。"""
+    raw = bytearray(open(path, "rb").read())
+    target = name.encode("utf-8")
+    for sig, flag_off, len_off, name_off in ((b"PK\x03\x04", 6, 26, 30),
+                                             (b"PK\x01\x02", 8, 28, 46)):
+        pos = 0
+        while True:
+            j = bytes(raw).find(sig, pos)
+            if j < 0:
+                break
+            nlen = int.from_bytes(raw[j + len_off:j + len_off + 2], "little")
+            if nlen == len(target) and bytes(raw[j + name_off:j + name_off + nlen]) == target:
+                v = int.from_bytes(raw[j + flag_off:j + flag_off + 2], "little")
+                v = (v | set_bits) & ~clear_bits
+                raw[j + flag_off:j + flag_off + 2] = v.to_bytes(2, "little")
+            pos = j + 4
+    open(path, "wb").write(bytes(raw))
+
+
+def promote_to_zip64(path):
+    """给一个普通包补上 ZIP64 EOCD 与定位块，并把旧 EOCD 那三格填成占位值。
+
+    真实工具在条目数超 65535 或中央目录超 4GB 时就是这么写的。合成这个形状是
+    为了让夹具只有几百字节——否则用例得先写十三万个文件才造得出同一个形状。
+    """
+    raw = open(path, "rb").read()
+    e = raw.rfind(b"PK\x05\x06")
+    total = int.from_bytes(raw[e + 10:e + 12], "little")
+    cd_size = int.from_bytes(raw[e + 12:e + 16], "little")
+    cd_off = int.from_bytes(raw[e + 16:e + 20], "little")
+    rec = (b"PK\x06\x06" + (44).to_bytes(8, "little") + (60).to_bytes(2, "little")
+           + (45).to_bytes(2, "little") + (0).to_bytes(4, "little") + (0).to_bytes(4, "little")
+           + total.to_bytes(8, "little") + total.to_bytes(8, "little")
+           + cd_size.to_bytes(8, "little") + cd_off.to_bytes(8, "little"))
+    loc = (b"PK\x06\x07" + (0).to_bytes(4, "little") + e.to_bytes(8, "little")
+           + (1).to_bytes(4, "little"))
+    eocd = (b"PK\x05\x06" + (0).to_bytes(2, "little") + (0).to_bytes(2, "little")
+            + (0xFFFF).to_bytes(2, "little") + (0xFFFF).to_bytes(2, "little")
+            + (0xFFFFFFFF).to_bytes(4, "little") + (0xFFFFFFFF).to_bytes(4, "little")
+            + (0).to_bytes(2, "little"))
+    open(path, "wb").write(raw[:e] + rec + loc + eocd)
+
+
+_CN64 = "北京水库基础信息表（dim_reservoir）.xlsx"
+z64p = os.path.join(ztmp, "zip64.zip")
+build_zip2(z64p, [_CN64])
+promote_to_zip64(z64p)
+r64 = extract_excel_archive(z64p, os.path.join(ztmp, "out_z64"))
+check("H6f ZIP64 形状的包照解，中文条目名不被折坏",
+      len(r64["files"]) == 1 and os.path.basename(r64["files"][0]["path"]) == _CN64,
+      [f["origin"] for f in r64["files"]])
+
+zenc = os.path.join(ztmp, "enc.zip")
+build_zip2(zenc, ["加密表（ods_t_enc）.xlsx"])
+patch_zip_flags(zenc, "加密表（ods_t_enc）.xlsx", set_bits=0x1)
+_enc = "没抛异常"
+try:
+    extract_excel_archive(zenc, os.path.join(ztmp, "out_enc"))
+except ZipArchiveError as exc:
+    _enc = str(exc)
+check("H6g 加密条目报「压缩包已加密」并点名是哪一条",
+      "已加密" in _enc and "加密表" in _enc, _enc)
 
 # 同名不同目录不得互相覆盖
 zdup = os.path.join(ztmp, "dup.zip")
@@ -1818,6 +1892,62 @@ check("K23 第二页按钮集合与改动前完全一致（只重排布局，没
           "批量应用前缀", "替换首个前缀", "清空待上传文件", "清除日志",
           "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
           "生成标准excel文件", "生成简易excel文件"]), _sql_btns)
+# ---- 三页视觉层次：命名规则上移、斑马纹、序号收窄、底部三层 ----
+_excel_page = w.main_tabs.widget(0)
+_fl = sp.widget(1).layout()
+_name_lay = _fl.itemAt(0).layout()
+check("K24 命名规则工具条贴表格上沿（Excel 页），不再挤在前缀行里",
+      _name_lay is not None
+      and _name_lay.itemAt(1).widget() is w.chk_initials
+      and _name_lay.itemAt(2).widget() is w.chk_upper
+      and _fl.itemAt(1).widget() is w.file_table,
+      [_name_lay.itemAt(i).widget().__class__.__name__
+       if _name_lay.itemAt(i).widget() is not None else "弹簧"
+       for i in range(_name_lay.count())] if _name_lay is not None else "命名行不在首位")
+check("K25 两张主表格都有斑马纹，序号列收窄到 44px",
+      w.file_table.alternatingRowColors()
+      and w.sql_table.alternatingRowColors()
+      and w.file_table.columnWidth(0) == 44
+      and w.sql_table.columnWidth(0) == 44,
+      (w.file_table.alternatingRowColors(), w.sql_table.alternatingRowColors(),
+       w.file_table.columnWidth(0), w.sql_table.columnWidth(0)))
+_el = _excel_page.layout()
+_hline1 = _el.itemAt(_el.count() - 2).widget()
+_xop = _el.itemAt(_el.count() - 1).layout()
+_xleft = _xop.itemAt(0).layout()
+check("K26 Excel 底部三层：分隔线 + 左列覆盖开关/进度条 + 右侧动作按钮",
+      _hline1 is not None and _hline1.height() == 1
+      and _xleft.itemAt(0).widget() is w.chk_drop
+      and _xleft.itemAt(1).widget() is w.progress
+      and _xop.itemAt(1).widget() is None
+      and [_xop.itemAt(i).widget() for i in range(_xop.count() - 4, _xop.count())]
+          == [w.btn_stop, w.btn_import, w.btn_gen_std, w.btn_gen_simple],
+      (_hline1.height() if _hline1 is not None else "缺",
+       [_xop.itemAt(i).widget().text()
+        if isinstance(_xop.itemAt(i).widget(), _QPushButton)
+        else (_xop.itemAt(i).widget().__class__.__name__
+              if _xop.itemAt(i).widget() is not None else "弹簧")
+        for i in range(_xop.count())]))
+_sl = sp2.widget(1).layout()
+_sname = _sl.itemAt(0).layout()
+check("K27 命名规则工具条贴表格上沿（SQL 页）",
+      _sname is not None
+      and _sname.itemAt(1).widget() is w.chk_sql_upper
+      and _sl.itemAt(1).widget() is w.sql_table,
+      _sname.itemAt(0).widget().text() if _sname is not None else "缺")
+_sl_page_lay = _sql_page.layout()
+_sql_hline = _sl_page_lay.itemAt(_sl_page_lay.count() - 2).widget()
+check("K28 SQL 页底部动作条与表格区之间有分隔线",
+      _sql_hline is not None and _sql_hline.height() == 1
+      and _sl_page_lay.itemAt(_sl_page_lay.count() - 1).layout() is not None)
+check("K29 主按钮用强调色，保存降为次级样式，停止/生成不被误标",
+      "#2f6feb" in w.btn_import.styleSheet()
+      and "#2f6feb" in w.btn_sql_run.styleSheet()
+      and "#8fb4ea" in w.btn_sql_save.styleSheet()
+      and not w.btn_stop.styleSheet()
+      and not w.btn_gen_std.styleSheet()
+      and not w.btn_gen_simple.styleSheet(),
+      (w.btn_import.styleSheet()[:20], w.btn_sql_save.styleSheet()[:20]))
 w.main_tabs.setCurrentIndex(0)
 _app.processEvents()
 w.close()
@@ -3711,6 +3841,30 @@ check("Q35 同一个压缩包再加一次解到别的子目录，不覆盖第一
       n1 == 2 and len(zw2.tables) == 4 and all(os.path.isfile(x) for x in paths1),
       (n1, len(zw2.tables)))
 check("Q35b 两批同包产出的表名互不冲突", len(set(names2)) == 4, names2)
+
+# 连续多批拖入、且多个批次共用同一个压缩包文件名（现场常见：不同目录下的同名包）。
+# 解压子目录的号按「会话内已解出的文件数」走：批内一次拖两个包时号会跳好几位，
+# 而按批次 +1 的那套写法过几批就会拐回已经用过的号上，把前一批解出来的文件原地覆盖掉，
+# 同名文件还会被判成「已在待导入列表」而静默少一张表。Java 线原来就是这么算的。
+_qz = os.path.join(ztmp, "qnum")
+for _sub in ("d1", "d2", "d3"):
+    os.makedirs(os.path.join(_qz, _sub), exist_ok=True)
+_qa = os.path.join(_qz, "d1", "A.zip")
+build_zip2(_qa, ["甲表（t_a）.xlsx", "乙表（t_b）.xlsx"])
+_qb = []
+for _sub in ("d1", "d2", "d3"):
+    _p = os.path.join(_qz, _sub, "B.zip")
+    build_zip2(_p, ["丙表（t_c）.xlsx"])
+    _qb.append(_p)
+w_num = app_main.MainWindow()
+w_num._add_files([_qa, _qb[0]])
+w_num._add_files([_qb[1]])
+w_num._add_files([_qb[2]])
+_num_paths = [t["filepath"] for t in w_num.tables]
+check("Q35c 连续多批拖入不给两个包用同一个解压目录",
+      len(w_num.tables) == 5 and len(set(_num_paths)) == 5
+      and all(os.path.isfile(x) for x in _num_paths),
+      (len(w_num.tables), len(set(_num_paths))))
 
 # ---- 解析中途取消：部分结果 + 弹窗首行标注 ----
 _cancel = {"v": False}

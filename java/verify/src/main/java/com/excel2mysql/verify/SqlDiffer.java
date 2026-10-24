@@ -405,6 +405,13 @@ public final class SqlDiffer {
             out.add(v.toString());
             return out;
         }
+        if (v instanceof java.math.BigDecimal) {
+            // Python 侧的编码器按 `type(v).__name__` 打标签，DECIMAL 列的字面值转出来是
+            // Decimal；这边必须给同一个标签与同一种写法，否则两边都对也判成不等价
+            out.add("Decimal");
+            out.add("Decimal('" + v + "')");
+            return out;
+        }
         if (v instanceof Double) {
             out.add("float");
             out.add(com.excel2mysql.core.PyNumber.repr(((Double) v).doubleValue()));
