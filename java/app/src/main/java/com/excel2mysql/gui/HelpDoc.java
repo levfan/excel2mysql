@@ -94,7 +94,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.0.8.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.0.9.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -586,6 +586,8 @@ public final class HelpDoc {
                     "<li><b>两个前缀按钮只改显示</b>：不弹进度框、也不写脚本；「保存修改后ddl脚本」" + NL +
                     "「执行修改后ddl脚本到当前库」「生成标准excel文件」「生成简易excel文件」这四个动作按钮" + NL +
                     "点下去时才把显示名写进脚本，并弹出进度框、结束后给出结果弹窗。" + NL +
+                    "清单为空（还没读入脚本、或点了「清空待上传文件」）时，这四颗按钮在原有禁用样式上置灰，" + NL +
+                    "读入第一个脚本后自动恢复可点。" + NL +
                     "前缀框清空后再点任一前缀按钮，显示恢复为脚本原名；列表里没有脚本、" + NL +
                     "或脚本里解析不出 <code>CREATE TABLE</code> 时，点这两颗按钮会弹窗说明，" + NL +
                     "不会假装改了 0 个表名</li>" + NL +
