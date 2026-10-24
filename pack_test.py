@@ -1498,7 +1498,8 @@ check("F43 界面执行脚本文件：按清单顺序跑完，表格状态写回
               for t, x in POPUPS),
       ([s["status"] for s in w.sql_run_files], POPUPS))
 check("F43b 执行前先写一条带目标库与文件数的开工日志",
-      "开始执行脚本文件（目标库 d，2 个文件，每个文件一个事务）" in w.sql_run_log.toPlainText(),
+      "开始执行脚本文件（目标库 d，2 个文件；手写脚本每个文件一个事务，"
+      "整库 dump 逐条提交）" in w.sql_run_log.toPlainText(),
       w.sql_run_log.toPlainText()[:300])
 app_main.connect = _real_connect
 w._conn_cfg = _old_cfg
@@ -1506,6 +1507,89 @@ w.sql_run_files = []
 w._refresh_run_table()
 w.chk_run_drop.setChecked(False)
 
+# ---- 整库 dump：识别、切句与"逐条提交、出错继续"的执行语义 ----
+# 现场那份 MariaDB dump 的形状：sandbox 标记、版本注释、带前行注释的库级语句、
+# DELIMITER 包起来的触发器、结尾收工标记。导入用户库时这些都必须原样认出来。
+_dump_text = (
+    "-- MariaDB dump 10.19  Distrib 10.11.6-MariaDB\n"
+    "--\n"
+    "-- Host: localhost    Database: demo\n"
+    "/*M!999999\\- enable the sandbox mode */;\n"
+    "/*!40101 SET NAMES utf8mb4 */;\n"
+    "-- Current Database\n"
+    "CREATE DATABASE `demo`;\n"
+    "USE `demo`;\n"
+    "DROP TABLE IF EXISTS `t_demo`;\n"
+    "CREATE TABLE `t_demo` (`id` int);\n"
+    "INSERT INTO `t_demo` VALUES (1);\n"
+    "DELIMITER ;;\n"
+    "/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `trg`"
+    " BEFORE INSERT ON `t_demo` FOR EACH ROW BEGIN\n"
+    "  SET NEW.id = NEW.id;\n"
+    "END */;;\n"
+    "DELIMITER ;\n"
+    "-- Dump completed\n")
+_dump_path = os.path.join(_tmpdir, "run_dump.sql")
+open(_dump_path, "w", encoding="utf-8", newline="").write(_dump_text)
+_dump_stmts = app_main.dump_statements(_dump_text)
+check("F44 整库 dump 的切句：版本注释保留、DELIMITER 触发器整句、库级语句可辨",
+      app_main.is_dump_script(_dump_text)
+      and len(_dump_stmts) == 7
+      and _dump_stmts[1].lstrip().startswith("-- Current Database")
+      and app_main.dump_skip_reason(_dump_stmts[1]) == "CREATE DATABASE"
+      and app_main.dump_skip_reason(_dump_stmts[2]) == "USE"
+      and app_main.dump_skip_reason(_dump_stmts[4]) == ""
+      and "TRIGGER" in _dump_stmts[6] and "BEGIN" in _dump_stmts[6]
+      and "END" in _dump_stmts[6]
+      and not any(s.strip() == "END" for s in _dump_stmts),
+      [(i, s[:40]) for i, s in enumerate(_dump_stmts, 1)])
+check("F44b 只有收工标记也认成 dump；手写脚本不会被误判",
+      app_main.is_dump_script("CREATE TABLE t (id int);\n-- Dump completed\n")
+      and not app_main.is_dump_script(open(_run_a, encoding="utf-8").read()),
+      (app_main.is_dump_script("-- Dump completed"),))
+_sink_d = _FileSink()
+_conn_d = _FConn()
+app_main.connect = lambda cfg: _conn_d
+_res_d = app_main.sql_run_files_task([_dump_path], False, _CFG_D, _sink_d)
+check("F45 dump 不开事务、逐条提交，库级语句跳过不执行",
+      _res_d["ok"] == 1 and _res_d["files"][0]["status"] == "ok"
+      and _res_d["files"][0]["detail"] == "5 条语句已提交，跳过 2 条库级语句"
+      and "begin" not in _conn_d.calls and "rollback" not in _conn_d.calls
+      and _conn_d.calls.count("commit") == 5
+      and not any("CREATE DATABASE" in c or c.lstrip().upper().startswith("USE")
+                  for c in _conn_d.calls),
+      (_res_d["files"], _conn_d.calls))
+check("F45b dump 通道在日志里说明走法与跳过的库级语句",
+      any("识别为整库 dump" in t and "逐条提交" in t for t in _sink_d.logs)
+      and sum(1 for t in _sink_d.logs if t.startswith("[跳过]")) == 2
+      and any("5 条语句已提交，跳过 2 条库级语句" in t for t in _sink_d.logs),
+      _sink_d.logs)
+_sink_de = _FileSink()
+_conn_de = _FConn(fail_on="INSERT INTO `t_demo`")
+app_main.connect = lambda cfg: _conn_de
+_res_de = app_main.sql_run_files_task([_dump_path], False, _CFG_D, _sink_de)
+check("F46 dump 中某条报错不整批回滚：出错前的已提交，后续语句继续执行",
+      _res_de["fail"] == 1
+      and _res_de["files"][0]["detail"]
+      == "已执行 4/7 条，1 条语句报错（逐条提交，已成功的已落库）"
+      and _conn_de.calls.count("commit") == 4
+      and _conn_de.calls.count("rollback") == 1
+      and any("TRIGGER" in c for c in _conn_de.calls),
+      (_res_de["files"], _conn_de.calls))
+check("F46b 报错逐条点名并带出错语句原文",
+      any("第 6/7 条语句报错" in t and "INSERT INTO `t_demo`" in t
+          for t in _sink_de.errors), _sink_de.errors)
+_sink_dc = _FileSink(cancel_after=1)
+_conn_dc = _FConn()
+app_main.connect = lambda cfg: _conn_dc
+_res_dc = app_main.sql_run_files_task([_dump_path], False, _CFG_D, _sink_dc)
+check("F47 dump 中途取消：已提交的保留，不整文件回滚",
+      _res_dc["files"][0]["status"] == "cancel"
+      and _res_dc["files"][0]["detail"]
+      == "已执行 1/7 条（逐条提交，已执行的已落库）"
+      and _conn_dc.calls.count("commit") == 1
+      and "rollback" not in _conn_dc.calls, (_res_dc["files"], _conn_dc.calls))
+app_main.connect = _real_connect
 
 
 def _boom(cfg):
@@ -2290,6 +2374,31 @@ check("K30 主按钮初始是禁用态，且禁用档的色值与 Java 侧同值
       and "#aac4f0" in _p_dis and "#f5f8ff" in _p_dis
       and "#f7f9fc" in _s_dis and "#9aa7b8" in _s_dis and "#c9d4e4" in _s_dis,
       (_p_dis[:40], _s_dis[:40]))
+# ---- SQL 执行器页：编辑区与结果区初始化压到最小，把高度让给脚本清单 ----
+w.main_tabs.setCurrentIndex(2)
+_app.processEvents()
+sp3 = w.sql_run_split_v
+_tail3 = sp3.widget(2)
+_tail3_min = max(_tail3.minimumHeight(), _tail3.minimumSizeHint().height())
+check("K31 第三页三段依次是拖拽区 / 脚本清单 / 编辑区与结果，且不可折叠",
+      isinstance(sp3, QSplitter) and sp3.orientation() == Qt.Vertical
+      and sp3.count() == 3
+      and sp3.widget(0) is w.sql_run_drop
+      and sp3.widget(1).findChild(QTableWidget) is w.sql_run_table
+      and sp3.widget(2) is w.sql_run_split
+      and sp3.childrenCollapsible() is False, sp3.sizes())
+check("K32 编辑区与结果区初始化压到自己的最小高度，脚本清单拿到其余高度",
+      abs(_tail3.height() - _tail3_min) <= 4
+      and sp3.sizes()[1] > sp3.sizes()[2],
+      (_tail3.height(), _tail3_min, sp3.sizes()))
+check("K33 编辑区与结果区同档最小高度（4 行字高），空清单的图标和引导语放得下",
+      w.sql_run_input.minimumHeight() == app_main.log_min_height(w.sql_run_input)
+      == w.sql_run_log.minimumHeight()
+      and w.sql_run_table.viewport().height()
+      >= 44 + 10 + w.sql_run_table.fontMetrics().height(),
+      (w.sql_run_input.minimumHeight(), w.sql_run_log.minimumHeight(),
+       w.sql_run_table.viewport().height(),
+       w.sql_run_table.fontMetrics().height()))
 w.main_tabs.setCurrentIndex(0)
 _app.processEvents()
 w.close()

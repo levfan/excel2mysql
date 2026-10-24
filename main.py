@@ -65,6 +65,7 @@ from core.sql_script import (
     extract_create_tables, split_sql_statements,
     parse_create_tables, rename_table_sql, apply_display_renames,
     set_table_comment, prepend_drop_tables,
+    is_dump_script, dump_statements, dump_skip_reason,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES
@@ -140,7 +141,7 @@ TABLE_ROW_PADDING = 6
 # 两栈同一句、由对撞器逐条比（读的是真控件上的标题，不是这里抄一份）。
 FILE_TABLE_TITLE = "待导入文件（单击表名改名，双击其他列改字段）"
 SQL_TABLE_TITLE = "待处理的脚本表（双击表名或表注释编辑，双击其他列看元数据）"
-RUN_TABLE_TITLE = "待执行脚本（按清单顺序执行，每个文件一个事务）"
+RUN_TABLE_TITLE = "待执行脚本（按清单顺序执行）"
 COLUMN_TABLE_TITLE = "字段清单"
 
 # 日志框的最小高度按"看得见的行数"约定，不按像素：同一档字号在 Qt 与 Swing 里
@@ -157,7 +158,10 @@ def log_min_height(view) -> int:
 
 
 class LogMinPlacer(QObject):
-    """默认把日志段压在自己的最小高度，直到用户亲手拖过把手。
+    """默认把末段压在自己的最小高度，直到用户亲手拖过把手。
+
+    第一、二页的末段是日志；第三页的末段是「SQL 文本 + 执行结果」，
+    它同样要压到最小，把高度让给上面那张清单表（空清单的图标要看得全）。
 
     QSplitter 在尺寸总和不等于可用高度时会按 stretch 因子再分一次，
     构造时直接 setSizes([..., log_min]) 仍会多给日志一截；而窗口从构造到
@@ -166,10 +170,10 @@ class LogMinPlacer(QObject):
     一旦 splitterMoved 出现，日志高度就归用户，程序不再抢。
     """
 
-    def __init__(self, splitter, log_panel):
+    def __init__(self, splitter, tail_panel):
         super().__init__(splitter)
         self.splitter = splitter
-        self.log_panel = log_panel
+        self.log_panel = tail_panel
         self.user_moved = False
         self.adjusting = False
         splitter.splitterMoved.connect(self._mark_user_moved)
@@ -1199,12 +1203,87 @@ def sql_execute_task(items, cfg, sink):
             "cancelled": sink.cancelled, "conn_failed": False}
 
 
-def sql_run_files_task(paths, overwrite, cfg, sink):
-    """「SQL 执行器」页的脚本文件队列：按清单顺序逐个执行，每个文件一个事务。
+DUMP_ERROR_LIMIT = 20
 
-    与第二页 sql_execute_task 的事务语义、日志文案同一套；差别只在读盘时机——
-    轮到哪个文件才读哪个，导入一份大 dump 不必先把所有脚本正文都按在内存里。
-    进度按语句推进；读到新文件时总数随之增加（ProgressSink 的总数只增不减）。
+
+def _run_dump_file(conn, fname, stmts, sink, chunk, target):
+    """按整库 dump 的方式执行一个文件：不开事务、每条一提交、出错继续。
+
+    返回 (outcome, detail)。dump 里的 DDL 与 LOCK TABLES 本来就会隐式提交，
+    "整文件回滚"在这里是个兑现不了的承诺；改成逐条提交后，某条失败不会再带走
+    前面已经成功的数据，收尾就按"已执行多少条、几条报错"如实汇总。
+    """
+    cur = conn.cursor()
+    total = len(stmts)
+    executed = errors = skipped_nav = over_limit = reported = 0
+    cancelled = False
+    try:
+        for pos, st in enumerate(stmts, 1):
+            if sink.cancelled:
+                cancelled = True
+                break
+            nav = dump_skip_reason(st)
+            if nav:
+                skipped_nav += 1
+                sink.log(f"[跳过] {fname} 第 {pos}/{total} 条：{nav}"
+                         "（目标库由界面选择）")
+                continue
+            try:
+                cur.execute(st)
+                if cur.description is not None:
+                    cur.fetchall()
+                conn.commit()           # 逐条提交：后面某条失败时，前面的成果不再被带走
+                executed += 1
+            except Exception as e:
+                errors += 1
+                if errors <= DUMP_ERROR_LIMIT:
+                    sink.log_error((
+                        f"[执行失败] {fname} 第 {pos}/{total} 条语句报错，目标库 {target}\n"
+                        + indent_detail(describe_db_error(e)) + "\n"
+                        + "    出错语句：\n" + format_statement(st)))
+                else:
+                    over_limit += 1
+                try:
+                    conn.rollback()     # 清掉这一条可能留下的半截状态；已提交的语句不受影响
+                except Exception:
+                    pass
+                if not getattr(conn, "open", True):
+                    sink.log_error(f"[连接中断] {fname} 第 {pos}/{total} 条后连接已断开，"
+                                   "剩余语句未执行")
+                    break
+            if pos - reported >= chunk:
+                reported = pos
+                sink.advance(chunk, f"{fname} 第 {pos}/{total} 条")
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+    sink.advance(total - reported, f"{fname} 收尾")   # 把余数补齐，进度落准
+    if over_limit:
+        sink.log_error(f"[执行失败] {fname} 另有 {over_limit} 条语句报错未逐条列出")
+    if errors:
+        sink.log_error(f"[dump 完成] {fname}：已执行 {executed}/{total} 条，"
+                       f"{errors} 条语句报错；逐条提交，已成功的已落库")
+        return "fail", (f"已执行 {executed}/{total} 条，{errors} 条语句报错"
+                        "（逐条提交，已成功的已落库）")
+    if cancelled:
+        sink.log(f"[已取消] {fname}：已执行 {executed}/{total} 条；"
+                 "逐条提交，已执行的已落库")
+        return "cancel", f"已执行 {executed}/{total} 条（逐条提交，已执行的已落库）"
+    note = f"，跳过 {skipped_nav} 条库级语句" if skipped_nav else ""
+    sink.log(f"[提交] {fname}：{executed} 条语句已提交{note}")
+    return "ok", f"{executed} 条语句已提交{note}"
+
+
+def sql_run_files_task(paths, overwrite, cfg, sink):
+    """「SQL 执行器」页的脚本文件队列：按清单顺序逐个执行。
+
+    手写脚本每个文件一个事务；识别为整库 dump 的文件走另一条通道（不开事务、
+    逐条提交、出错继续），因为 dump 里的 DDL / LOCK TABLES 会隐式提交，
+    "整文件回滚"在那里兑现不了。差别只在读盘时机——轮到哪个文件才读哪个，
+    导入一份大 dump 不必先把所有脚本正文都按在内存里。进度按语句推进；
+    读到新文件时总数随之增加（ProgressSink 的总数只增不减）。
     """
     target = f"{cfg['database']}@{cfg['host']}:{cfg['port']}"
     ok_files = fail_files = skipped = 0
@@ -1230,7 +1309,11 @@ def sql_run_files_task(paths, overwrite, cfg, sink):
             sink.log(f"[覆盖] {fname}：" + (
                 "执行前先 DROP " + "、".join(dropped) if dropped
                 else "脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除"))
-        stmts = executable_statements(text)
+        dump = is_dump_script(text)
+        stmts = dump_statements(text) if dump else executable_statements(text)
+        if dump:
+            sink.log(f"[dump] {fname}：识别为整库 dump，按 dump 方式执行"
+                     "（不开启事务，逐条提交；出错继续，最后汇总）")
         if not stmts:
             skipped += 1
             files.append({"path": path, "status": "skip",
@@ -1252,6 +1335,18 @@ def sql_run_files_task(paths, overwrite, cfg, sink):
         reported_total += len(stmts)
         sink.set_total(reported_total)
         chunk = max(1, len(stmts) // 100)           # 每个文件最多约 100 次刷新
+        if dump:
+            outcome, detail = _run_dump_file(conn, fname, stmts, sink, chunk, target)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            files.append({"path": path, "status": outcome, "detail": detail})
+            if outcome == "ok":
+                ok_files += 1
+            elif outcome == "fail":
+                fail_files += 1
+            continue
         reported = 0
         failed = False
         executed = 0
@@ -2905,6 +3000,9 @@ class MainWindow(QWidget):
 
         self.sql_run_input = QPlainTextEdit(SQL_RUN_DEFAULT)
         self.sql_run_input.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
+        # 编辑区与结果区同一档最小高度：初始化时整段压到最小，把高度让给上面的
+        # 脚本清单；清单为空时那张表的图标 + 引导语才不会被挤掉
+        self.sql_run_input.setMinimumHeight(log_min_height(self.sql_run_input))
         # 不折行：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
         self.sql_run_input.setLineWrapMode(QPlainTextEdit.NoWrap)
         # 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
@@ -2964,7 +3062,10 @@ class MainWindow(QWidget):
         self.sql_run_split_v.setStretchFactor(0, 0)
         self.sql_run_split_v.setStretchFactor(1, 1)
         self.sql_run_split_v.setStretchFactor(2, 2)
-        self.sql_run_split_v.setSizes([110, 150, 320])
+        # 编辑区与结果这一段默认只占它的最小高度（4 行），其余都给脚本清单；
+        # 真布局出来后每次 Resize 都按绝对高度重摆（见 LogMinPlacer），用户拖过就交还
+        self.sql_run_split_v.setSizes([110, 360, 200])
+        self.sql_run_tail_placer = LogMinPlacer(self.sql_run_split_v, self.sql_run_split)
         lay.addWidget(self.sql_run_split_v, 1)
 
         # 底部动作条与第二页同一形状：覆盖开关在左、动作按钮在右，且在分隔条之外
@@ -2987,8 +3088,9 @@ class MainWindow(QWidget):
         self.btn_run_scripts = QPushButton("执行脚本文件")
         self.btn_run_scripts.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.btn_run_scripts.setToolTip(
-            "按清单顺序逐个执行，每个文件一个事务；全部成功才提交，\n"
-            "中途出错本文件回滚后继续下一个。执行前请先选好目标库。")
+            "按清单顺序逐个执行：手写脚本每个文件一个事务，全部成功才提交；\n"
+            "整库 dump 自动识别，改为不开事务、逐条提交、出错继续并汇总。\n"
+            "执行前请先选好目标库。")
         self.btn_run_scripts.setEnabled(False)
         self.btn_run_scripts.clicked.connect(self.on_run_scripts_execute)
         op.addWidget(self.btn_sql_run_exec)
@@ -3108,7 +3210,8 @@ class MainWindow(QWidget):
         note = "；已勾选「覆盖已存在表」，每个脚本先 DROP 它要建的表" if overwrite else ""
         append_log(self.sql_run_log,
                    f"===== 开始执行脚本文件（目标库 {db}，"
-                   f"{len(self.sql_run_files)} 个文件，每个文件一个事务{note}）=====")
+                   f"{len(self.sql_run_files)} 个文件；手写脚本每个文件一个事务，"
+                   f"整库 dump 逐条提交{note}）=====")
         paths = [s["path"] for s in self.sql_run_files]
         for s in self.sql_run_files:
             s["status"] = "待执行"

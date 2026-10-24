@@ -226,11 +226,48 @@ def split_sql_statements(text: str) -> list:
       - '...' / "..." 字符串（支持 \\' 与 '' 转义）
       - `...` 反引号标识符（`` 转义）
       - -- 与 # 行注释、/* */ 块注释
-    空语句忽略；不支持 DELIMITER 存储过程脚本。
+    空语句忽略；不支持 DELIMITER 存储过程脚本——那是整库 dump 的写法，
+    那条通道走 split_dump_statements。
     """
+    return _split_sql(text, with_delimiter=False)
+
+
+def split_dump_statements(text: str) -> list:
+    """按整库 dump 的规则切句：在分号切分之上认 DELIMITER 指令。
+
+    mysqldump 导出存储过程 / 函数 / 触发器时会写 `DELIMITER ;;`，函数体里的
+    分号不能当语句结束；DELIMITER 本身是客户端指令，不发给服务端。
+    """
+    return _split_sql(text, with_delimiter=True)
+
+
+# 行首的 DELIMITER 指令；只认整行（后面除空白外没有别的内容）
+_DELIMITER_RE = re.compile(r"[ \t]*DELIMITER[ \t]+(\S+)[ \t]*(?:\r?\n|$)", re.IGNORECASE)
+
+
+def _looks_like_delimiter(text: str, at: int) -> bool:
+    """这一行是不是 DELIMITER 指令：先做 9 个字符的比较，避免每行都拼一次缓冲。"""
+    n = len(text)
+    i = at
+    while i < n and text[i] in " \t":
+        i += 1
+    return text[i:i + 9].upper() == "DELIMITER"
+
+
+def _split_sql(text: str, with_delimiter: bool) -> list:
     stmts, buf = [], []
     i, n = 0, len(text)
+    delim = ";"
     while i < n:
+        if (with_delimiter and (i == 0 or text[i - 1] == "\n")
+                and _looks_like_delimiter(text, i)
+                and not has_executable_content("".join(buf))):
+            m = _DELIMITER_RE.match(text, i)
+            if m is not None:
+                delim = m.group(1)
+                buf = []
+                i = m.end()
+                continue
         ch = text[i]
         nxt = text[i + 1] if i + 1 < n else ""
         if ch in ("'", '"', "`"):
@@ -264,12 +301,12 @@ def split_sql_statements(text: str) -> list:
             buf.append(text[i:j])
             i = j
             continue
-        if ch == ";":
+        if text.startswith(delim, i):
             s = "".join(buf).strip()
             if s:
                 stmts.append(s)
             buf = []
-            i += 1
+            i += len(delim)
             continue
         buf.append(ch)
         i += 1
@@ -320,6 +357,119 @@ def has_executable_content(stmt: str) -> bool:
             continue
         return True                # 既不是空白也不是注释 → 有可执行内容
     return False
+
+
+# ---------------------------------------------------------------------------
+# 整库 dump：识别与按 dump 方式执行需要的分类
+# ---------------------------------------------------------------------------
+
+# mysqldump / MariaDB dump / phpMyAdmin 导出都会带这几句里的一句。只有识别成 dump
+# 的文件才走"逐条提交、出错继续"那条通道；手写脚本仍按每文件一个事务执行。
+_DUMP_HEAD_MARKERS = (
+    "-- mysql dump",
+    "-- mariadb dump",
+    "-- mysql shell dump",
+    "-- phpmyadmin sql dump",
+    "enable the sandbox mode",
+)
+_DUMP_TAIL_MARKER = "-- dump completed"
+_DUMP_HEAD_CHARS = 8192
+_DUMP_TAIL_CHARS = 4096
+
+_DUMP_NAV_RE = re.compile(r"(?is)^\s*(CREATE\s+DATABASE|DROP\s+DATABASE|USE)\b")
+
+
+def is_dump_script(text: str) -> bool:
+    """这份脚本是不是整库 dump：看抬头 / 结尾那几句导出工具才会写的话。
+
+    判据故意用导出工具的固定抬头，而不是"含很多 SET"之类的猜测：
+    走错通道的代价是事务语义与回滚承诺完全变样，宁可让没带抬头的手写脚本按普通脚本执行。
+    """
+    head = (text or "")[:_DUMP_HEAD_CHARS].lower()
+    if any(marker in head for marker in _DUMP_HEAD_MARKERS):
+        return True
+    return _DUMP_TAIL_MARKER in (text or "")[-_DUMP_TAIL_CHARS:].lower()
+
+
+def has_executable_content_dump(stmt: str) -> bool:
+    """dump 模式的内容判据：`/*!40101 SET ... */` 是服务端真会执行的语句。
+
+    普通块注释与 `/*M!...*/`（MariaDB 客户端沙箱标记）仍不算；`/*!999999\\- ...`
+    这种只在客户端生效、发给服务端会变成空查询的写法也按没有内容处理。
+    """
+    i, n = 0, len(stmt)
+    while i < n:
+        ch = stmt[i]
+        nxt = stmt[i + 1] if i + 1 < n else ""
+        if ch.isspace():
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            i += 1
+            while i < n:
+                if stmt[i] == "\\" and quote != "`":
+                    i += 2
+                    continue
+                if stmt[i] == quote:
+                    if i + 1 < n and stmt[i + 1] == quote:
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            return True
+        if (ch == "-" and nxt == "-") or ch == "#":
+            j = stmt.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if ch == "/" and nxt == "*":
+            j = stmt.find("*/", i + 2)
+            if stmt.startswith("/*!", i) and not stmt.startswith("/*M!", i):
+                inner = stmt[i + 3:j if j != -1 else n]
+                body = re.sub(r"^\d*", "", inner).strip()
+                if body and not body.startswith("\\"):
+                    return True
+            i = n if j == -1 else j + 2
+            continue
+        return True
+    return False
+
+
+def dump_statements(text: str) -> list:
+    """整库 dump 的可执行语句：认 DELIMITER，并保留 `/*!...*/` 版本注释语句。"""
+    return [s for s in split_dump_statements(text) if has_executable_content_dump(s)]
+
+
+def dump_skip_reason(stmt: str) -> str:
+    """这句是 dump 里的库级导航语句吗，返回关键字（空串表示不是）。
+
+    目标库由界面选择，dump 自带的 `CREATE DATABASE` / `DROP DATABASE` / `USE`
+    不该改写现场选好的库；其中 DROP DATABASE 更不能执行，否则会把目标库整个删掉。
+    语句开头常带着 `--` 注释块（真 dump 的 "Current Database" 那段就在 CREATE DATABASE 前面），
+    所以先把开头的空白与注释剥掉再认；`/*!40000 DROP DATABASE ... */` 这类版本注释里的正文也要认。
+    """
+    s = str(stmt or "").strip()
+    while s:
+        if s.startswith("--") or s.startswith("#"):
+            j = s.find("\n")
+            s = "" if j == -1 else s[j + 1:].lstrip()
+            continue
+        if s.startswith("/*"):
+            j = s.find("*/", 2)
+            inner = s[2:j if j != -1 else len(s)]
+            rest = "" if j == -1 else s[j + 2:].lstrip()
+            if s.startswith("/*!") and not s.startswith("/*M!"):
+                inner = re.sub(r"^\d*", "", inner[1:]).strip()
+                m = _DUMP_NAV_RE.match(inner)
+                return re.sub(r"\s+", " ", m.group(1).upper()) if m is not None else ""
+            s = rest
+            continue
+        break
+    m = _DUMP_NAV_RE.match(s)
+    if m is None:
+        return ""
+    return re.sub(r"\s+", " ", m.group(1).upper())
 
 
 # ---------------------------------------------------------------------------
