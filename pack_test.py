@@ -2882,6 +2882,8 @@ d2 = _last_dialog()
 check("O19 「添加文件」弹了进度框并等任务收尾",
       d2 is not None and "解析" in d2.title and d2.accepted,
       [d.title for d in _FakeProgress.made])
+# 与 O24 同一个理：落表是排在 EDT 上的收尾回调，机器忙时会晚一步
+_wait_until(lambda: len(ow.tables) == 1, 8)
 check("O20 解析结果照常落到待导入列表",
       len(ow.tables) == 1 and ow.file_table.item(0, 1).text() == "甲工程.xlsx",
       [t["table_name"] for t in ow.tables])
@@ -2911,12 +2913,17 @@ check("O23 进度只前进不回退，且每个文件的解析阶段都实时报
       and any("读取工作簿" in (u[2] or "") for u in d3.updates)
       and any("推断字段类型" in (u[2] or "") for u in d3.updates),
       [u[2] for u in d3.updates])
+# 进度项数与阶段文字是工作线程回报的，落表却是排在 EDT 上的收尾回调：
+# 机器被别的活压满时（打包闸门里就是这样），回调会晚到一步，
+# 这里不等它落地就断言，读到的就是"任务还在跑"的中间态。
+_wait_until(lambda: len(ow2.tables) == 2, 8)
 check("O24 异步路径下 zip 仍展开成两张表", len(ow2.tables) == 2, len(ow2.tables))
 
 # 前缀批量应用：异步 + 落表
 ow2.ed_prefix.setText("dim_")
 _FakeProgress.made.clear()
 ow2.on_apply_prefix()
+_wait_until(lambda: bool(_FakeProgress.made), 8)
 d4 = _last_dialog()
 check("O25 「批量应用前缀」走模态进度框",
       d4 is not None and "前缀" in d4.title and d4.accepted)
