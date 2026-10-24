@@ -94,7 +94,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.0.4.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.0.5.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -794,7 +794,9 @@ public final class HelpDoc {
                     "<li><b>弹窗里的文字一定会被折进窗口里</b>：提示、警告、出错这三类弹窗显示的就是那段" + NL +
                     "原文，折行由正文控件按<b>内容区右边界</b>做——一行长路径、一整段异常信息都不会把窗口" + NL +
                     "撑到屏幕外，<b>把弹窗拉大，文字会跟着重新排</b>，不会空着半幅宽却提前换行。" + NL +
-                    "正文长过一屏时框里出滚动条，整份都在弹窗里翻得到；底部日志也始终是完整的那一份</li>" + NL +
+                    "正文长过一屏时框里出滚动条，整份都在弹窗里翻得到；底部日志也始终是完整的那一份。" + NL +
+                    "弹窗<b>按正文要多大就给多大</b>（宽 420~880、高 170~640，再夹进当前屏幕）：" + NL +
+                    "一句话的提示就是一张小窗，不会摊开半屏空白，也不会带一条用不上的滚动条</li>" + NL +
                     "<li>各窗口（主窗口、本说明、「关于」、表结构预览、DDL 预览、进度框）的尺寸" + NL +
                     "按<b>客户区</b>给定，并在打开前按当前屏幕的可用区夹一次：" + NL +
                     "1024x768 的老机器上整窗加标题栏仍在屏内，底部的按钮不会被任务栏吃掉</li>" + NL +

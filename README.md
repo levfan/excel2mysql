@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v2.0.4** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v2.0.5** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -284,7 +284,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.0.4` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.0.5` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -378,9 +378,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-2.0.4-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-2.0.4-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-2.0.4-win64\excel2mysql-2.0.4.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-2.0.5-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-2.0.5-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-2.0.5-win64\excel2mysql-2.0.5.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -726,6 +726,11 @@ qtvirtualkeyboardplugin`。后两个是插件文件本身——它们依赖的 D
 - **结果弹窗的正文就是原文**：不预先往文本里插换行，横向由正文控件按**内容区右边界**
   折行（Qt 的标签、Swing 的 `JTextArea` 都会自己折），窗口拉大就跟着重排；
   纵向装不下时出滚动条，30 行报错整份都在框里翻得到。
+- **弹窗按正文要多大就给多大**：宽 420~880、高 170~640（设计像素），再夹进当前屏幕的可用区。
+  以前那块"至少 820x420"的地板有两个副作用：一句话的提示也摊开半屏空白，
+  而且正文控件被地板顶得永远比视口高一点点，**滚动条从此常驻**——用户看到的
+  "提示框太大、默认就有滚动条"是同一块地板的两面。高度必须先定宽再问"按这个宽度折完有多高"，
+  按原文行数估高的话，长句在窄处多折的那几行刚好会把滚动条顶出来。
 - 这条规则以前是两边各按「72 显示列 / 24 行」自己折好再显示，用户看到的却是
   "框很大、字很短就被折断"：列预算跟弹窗的实际像素宽没有任何约束关系，
   同一句「执行完成」在 Java 那颗弹窗里只排到 **55%** 的宽度（实测 691/1250 像素），
@@ -737,12 +742,14 @@ qtvirtualkeyboardplugin`。后两个是插件文件本身——它们依赖的 D
   Java 侧统一走 `Windows.clientSize`，Python 侧统一走 `ui_help.fit_client`。
 - **打开前按当前屏幕夹一次**：客户区不小于内容要求的最小尺寸、整窗落在可用区内并居中，
   底部的按钮不会被任务栏吃掉。
-- **取证分两层**：配置值（`window.want`、`dlg.*.want`）跨线逐键比；实测尺寸受现场屏幕
+- **取证分两层**：配置值（`window.want`、`dlg.*.want`、`popup.want.*`）跨线逐键比；实测尺寸受现场屏幕
   影响，记成 `env.*` 只留档不比。排版由 `popup.display.raw` 一把键钉住——两边显示的
   必须就是同一份原文（谁再往正文里插换行，这把键立刻不等）。各线自己再核一遍
-  「整窗在可用区内、长句真的被折成多行、折点贴着右边界不小于 90%」
-  （`pack_test.py` 的 U 组 11 条、`GuiMain` 的弹窗段落）。
-  期望值写的是量出来的相对关系与契约数字（820/420/880 这些配置尺寸），
+  「整窗在可用区内、长句真的被折成多行、折点贴着右边界不小于 90%、一句话的提示框既小又不带滚动条」
+  （`pack_test.py` 的 U 组 12 条、`GuiMain` 的弹窗段落）。
+  `popup.want.short/tall/longwidth` 三把键取的是**落在夹取边界上**的样本（420x170、420x640、宽 880），
+  这样两边字体度量差几个像素也不会造成假红；中间值由各线的用例自己量。
+  期望值写的是量出来的相对关系与契约数字（420~880 宽、170~640 高这些配置区间），
   不是拿常量当期望值——那种断言把预算改成 400 也照样绿，咬不住东西。
 
 ## 长任务进度框（非模态 + 子线程）
