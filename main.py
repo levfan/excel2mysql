@@ -1477,7 +1477,7 @@ def _sql_naming(name, initials, upper, is_table):
 
 
 def sql_meta_export_task(items, out_root, with_meta, upper, sink):
-    """「SQL 脚本改名入库」页的生成标准/简易 Excel：先从脚本正文解析表定义，再走同一套导出。
+    """「SQL 脚本改名」页的生成标准/简易 Excel：先从脚本正文解析表定义，再走同一套导出。
 
     items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
     所以"先批量改前缀、再生成交付件"这条路是通的——产物里的表名就是新表名。
@@ -1758,7 +1758,7 @@ class MainWindow(QWidget):
         fit_client(self, 1100, 780)
         self.tables = []            # 解析后的表定义列表
         self.worker = None
-        self.sql_files = []         # SQL 脚本改名入库页：[{"path","text","modified","rename_map"}]
+        self.sql_files = []         # SQL 脚本改名页：[{"path","text","modified","rename_map"}]
         # SQL 执行器页的待执行脚本：只登记路径/大小/状态，正文等到执行时再读
         self.sql_run_files = []
         self._sql_rows = []         # 表格每一行对应的实际表名，避免显示大小写与脚本内容混淆
@@ -1859,12 +1859,12 @@ class MainWindow(QWidget):
         conn_lay.addWidget(self.conn_form)
         root.addWidget(conn)
 
-        # 2. 功能页签：Excel 导入 / SQL 脚本改名入库 / SQL 执行器（位于数据库信息下方）
+        # 2. 功能页签：Excel 导入 / SQL 脚本改名 / SQL 执行器（位于数据库信息下方）
         self.main_tabs = QTabWidget()
         excel_page = QWidget()
         excel_lay = QVBoxLayout(excel_page)
 
-        # 2.0 当前目标库状态条：与「SQL 脚本改名入库」页顶部同源，随目标库选择联动刷新
+        # 2.0 当前目标库状态条：与「SQL 脚本改名」页顶部同源，随目标库选择联动刷新
         self.lbl_imp_db = QLabel()
         self.lbl_imp_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
         excel_lay.addWidget(self.lbl_imp_db)
@@ -2042,7 +2042,7 @@ class MainWindow(QWidget):
         excel_lay.addWidget(self.excel_action_bar)
 
         self.main_tabs.addTab(excel_page, "Excel 导入")
-        self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本改名入库")
+        self.main_tabs.addTab(self._build_sql_page(), "SQL 脚本改名")
         self.main_tabs.addTab(self._build_sql_run_page(), "SQL 执行器")
         root.addWidget(self.main_tabs, 1)
         # 切页签 / 切换目标库 / 改主机端口时，刷新状态栏与三页顶部那条指向
@@ -2083,7 +2083,7 @@ class MainWindow(QWidget):
                                            % (db, cfg["host"], cfg["port"], cfg["user"]))
             state_style = "color: #1a7f37; font-weight: bold;"
             head = "目标库：%s —— " % db
-            tails = ["Excel 数据将导入到这个库", "SQL 脚本将执行到这个库",
+            tails = ["Excel 数据将导入到这个库", "改好表名后的 DDL 执行到这个库",
                      "编辑区 SQL 与脚本文件都执行到这个库"]
         else:
             # 告警条的说法要看当前是展开还是收起：让人去点的那颗按钮必须真的在界面上
@@ -2126,7 +2126,7 @@ class MainWindow(QWidget):
     RES_RUN = "run"
     RES_LABEL = {
         "excel": "Excel 导入页的待导入列表",
-        "sql": "SQL 脚本改名入库页的脚本列表",
+        "sql": "SQL 脚本改名页的脚本列表",
         "run": "SQL 执行器页的执行结果区（编辑区 SQL 与脚本清单共用）",
     }
 
@@ -2265,7 +2265,7 @@ class MainWindow(QWidget):
     def on_clear_log(self):
         self.log.clear()
 
-    # -------------------- SQL 脚本改名入库页 --------------------
+    # -------------------- SQL 脚本改名页 --------------------
     def _build_sql_page(self):
         page = QWidget()
         lay = QVBoxLayout(page)
