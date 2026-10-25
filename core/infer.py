@@ -137,7 +137,9 @@ def _is_money(comment: str, field: str) -> bool:
 # 口径（发布日期、金额、数量），按名字定类型比一律 VARCHAR 更接近建表人的意图。
 # 只在"这列一个值都没有"时参与，有值照旧走数据判定；结构定义模式的人工类型不受影响。
 _NAME_TIME_CN = "时间"      # 含"日期时间"——先查时间，才会落 DATETIME 而不是 DATE
-_NAME_DATE_CN = "日期"
+# 「有效期」「到期」存的是日期本身；「期限」「时限」不收——那些常写"3 年""6 个月"，
+# 是时长甚至是一段文本，判成 DATE 会建出一列装不进数据的日期
+_NAME_DATE_CN = ("日期", "有效期", "到期")
 # 时刻类只写"几点"：不含日期，落 TIME 而不是 DATETIME
 _NAME_CLOCK_CN = ("时刻", "时点")
 # 时长先于金额与时间判定：「付款周期」「结算周期」带着钱味词根，但存的是天/月数
@@ -171,7 +173,7 @@ _NAME_MEASURE_CN = ("长度", "宽度", "高度", "厚度", "深度", "距离", 
                     "壁厚", "净高", "净空", "埋深", "覆土", "进深", "开间", "视距",
                     "弧长", "弦长", "振幅", "挠度", "沉降", "位移", "变形量",
                     "噪声", "噪音", "分贝", "辐射", "总磷", "总氮", "含水",
-                    "航程", "航速", "转速", "亩产")
+                    "航程", "航速", "转速", "亩产", "血糖", "视力", "剂量", "用药量")
 # 合计类既可能是钱也可能是数量：给一位小数都装得下的 DECIMAL(18,4)，
 # 猜 INT 会在写进 12.5 这类值时静默取整
 _NAME_SUM_CN = ("总计", "小计", "合计", "共计", "累计", "汇总", "总量", "总值")
@@ -201,7 +203,9 @@ _NAME_INT_CN = ("数量", "个数", "人数", "次数", "库存", "张数", "件
                 "出库数", "入库数", "在库数", "在册数", "在位数", "配发数",
                 "消耗数", "报废数", "维修数", "检修数", "领用数", "归还数",
                 "发放数", "盘盈数", "盘亏数", "官兵数", "兵员数", "装备数",
-                "台套数", "辆数", "参与数")
+                "台套数", "辆数", "参与数",
+                # 结尾是「率」但存的是次/分这类整数：显式列在这里，才不会被裸「率」抢成小数档
+                "心率", "脉搏", "剂次", "环数", "圈数")
 _NAME_AGE_CN = ("年龄", "工龄", "教龄", "党龄", "军龄", "年限", "岁数", "周岁")
 _NAME_RANK_CN = ("序号", "排序", "排名", "名次", "页码", "页数", "层数", "楼层",
                  "优先级", "位次", "座次", "位序", "顺位", "序位")
@@ -232,7 +236,8 @@ _NAME_TITLE_CN = ("名称", "姓名", "标题", "题目", "主题", "类别", "�
                   "负责人", "经办人", "审核人", "批准人", "填报人", "编制人",
                   "责任人", "申请人", "受理人", "创建人", "修改人", "更新人",
                   "删除人", "录入人", "制单人", "复核人", "移交人", "接收人",
-                  "密级", "级别", "层级", "建制", "番号", "部队")
+                  "密级", "级别", "层级", "建制", "番号", "部队",
+                  "课目", "驾驶员", "附件", "状态", "标记")
 _NAME_URL_EN = re.compile(r"(?:^|_)(?:url|uri|link|links|href|path|paths|"
                           r"permalink|domain|homepage)(?:_|$)", re.IGNORECASE)
 _NAME_TEXT_EN = re.compile(
@@ -297,9 +302,10 @@ def _name_based_type(comment: str, field: str):
     金额复用 _is_money 的双侧匹配与比率/标识否决；英文一律按成词的词根匹配
     （贴着下划线或首尾），所以 update、birthday 不会误中。
     判定顺序即优先级：时长 > 金额 > 合计 > 时间 > 时刻 > 日期 > 布尔 >
-    显式比率/系数 > 评分 > 经纬度 > 计量 > 裸「率」 > 大计数 > 计数 > 年龄 >
-    序号 > 年份 > 链接/路径 > 长文本 > 名称类。文本三档放最后，是为了不让「描述」「名称」
+    显式比率/系数 > 评分 > 经纬度 > 计量 > 大计数 > 计数 > 年龄 > 序号 > 年份 >
+    裸「率」 > 链接/路径 > 长文本 > 名称类。文本三档放最后，是为了不让「描述」「名称」
     抢掉带数字语义的复合表头（如「数量说明」仍按计数走）。
+    裸「率」排在所有显式词条之后：点名过的整数列（心率）不该被一个字的启发式抢走。
     时长与金额同时命中时按结尾判：「付款周期」存天数、「工时费」存钱。
     """
     c = str(comment or "").strip()
@@ -318,7 +324,7 @@ def _name_based_type(comment: str, field: str):
         return _note(c, "DATETIME", "时间")
     if any(k in c for k in _NAME_CLOCK_CN):
         return _note(c, "TIME", "时刻")
-    if _NAME_DATE_CN in c or _NAME_DATE_EN.search(fl):
+    if any(k in c for k in _NAME_DATE_CN) or _NAME_DATE_EN.search(fl):
         return _note(c, "DATE", "日期")
     if _name_hit(c, fl, _NAME_BOOL_CN, _NAME_BOOL_EN):
         return _note(c, "TINYINT(1)", "布尔")
@@ -330,8 +336,6 @@ def _name_based_type(comment: str, field: str):
         return _note(c, "DECIMAL(18,8)", "经纬度/坐标")
     if _name_hit(c, fl, _NAME_MEASURE_CN, _NAME_MEASURE_EN):
         return _note(c, "DECIMAL(18,4)", "计量")
-    if "率" in c:
-        return _note(c, "DECIMAL(18,6)", "比率/系数")
     if _name_hit(c, fl, _NAME_BIG_CN, _NAME_BIG_EN):
         return _note(c, "BIGINT", "大计数（访问/播放量）")
     if _name_hit(c, fl, _NAME_INT_CN, _NAME_INT_EN):
@@ -342,6 +346,10 @@ def _name_based_type(comment: str, field: str):
         return _note(c, "INT", "序号/排名")
     if _name_hit(c, fl, _NAME_CAL_CN, _NAME_CAL_EN):
         return _note(c, "INT", "年份/月份")
+    # 裸「率」排在所有显式词条之后：心率、药剂次这类结尾是"率/次"的整数列
+    # 只要词表里点名过，就不该被一个字的启发式抢成小数档
+    if "率" in c:
+        return _note(c, "DECIMAL(18,6)", "比率/系数")
     if _name_hit(c, fl, _NAME_URL_CN, _NAME_URL_EN):
         return _note(c, "VARCHAR(512)", "链接/路径")
     if _name_hit(c, fl, _NAME_TEXT_CN, _NAME_TEXT_EN):
