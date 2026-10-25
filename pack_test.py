@@ -532,6 +532,27 @@ check("B22v 拼音字段名不许被英文布尔词根抢走：can_kao_lv 不是
       [c["type"] for c in _pinyin]
       == ["DECIMAL(18,6)", "INT", "DECIMAL(16,2)", "VARCHAR(64)"],
       [(c["comment"], c["field"], c["type"]) for c in _pinyin])
+_med = infer_columns(pd.DataFrame({k: [] for k in (
+    "心率", "脉搏", "剂次", "环数", "圈数", "血糖", "视力", "剂量", "用药量",
+    "收缩压", "舒张压", "血型", "过敏史", "体检结论", "用药剂量")}))
+check("B22w 卫勤口径：心率/脉搏按整数次每分，血糖视力剂量按小数，血压血型仍存文本",
+      [c["type"] for c in _med]
+      == ["INT", "INT", "INT", "INT", "INT",
+          "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+          "VARCHAR(64)", "VARCHAR(64)",
+          "VARCHAR(64)", "VARCHAR(64)", "TEXT", "DECIMAL(18,4)"],
+      [(c["comment"], c["type"]) for c in _med])
+_mid = infer_columns(pd.DataFrame({k: [] for k in (
+    "课目", "驾驶员", "附件", "状态", "标记", "记录状态", "校验标记",
+    "药品批号", "装备附件", "有效期", "到期日", "证件有效期",
+    "整改期限", "完成时限", "保密期限")}))
+check("B22x 训练与中台口径：课目驾驶员状态进名称档，有效期到期日落日期档，期限类不收",
+      [c["type"] for c in _mid]
+      == ["VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)",
+          "VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)", "VARCHAR(64)",
+          "VARCHAR(255)", "DATE", "DATE", "DATE",
+          "VARCHAR(64)", "VARCHAR(64)", "VARCHAR(64)"],
+      [(c["comment"], c["type"]) for c in _mid])
 _text = infer_columns(pd.DataFrame({k: [] for k in (
     "官网网址", "附件地址", "文件路径", "详细描述", "经营范围", "案情",
     "项目名称", "联系人", "规格型号", "详细地址")}))
