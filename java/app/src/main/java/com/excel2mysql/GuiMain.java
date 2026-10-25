@@ -20,6 +20,10 @@ import java.util.concurrent.CountDownLatch;
  */
 public final class GuiMain {
 
+    /** 主窗口刚建好那一刻的日志：日志面板有 2000 行上限，自检跑久了会把启动句挤出去，
+     *  要看"启动时说了什么"的断言必须用这份快照，不能到最后再读面板。 */
+    private static String startupLog = "";
+
     public static void main(String[] argv) {
         List<String> args = Arrays.asList(argv);
         if (args.contains("--selftest")) {
@@ -95,6 +99,7 @@ public final class GuiMain {
             MainFrame frame = null;
             try {
                 frame = new MainFrame();   // 建窗也在 try 里：构造期抛异常要让自检拿到退出码，而不是把闸门挂死
+                startupLog = frame.logPanel().text();
                 com.excel2mysql.gui.MainFrame.connCandidates = keepCandidates;
                 holder[0] = frame;
                 if (!frame.initialsBox().isSelected() || !frame.upperBox().isSelected()) {
@@ -1114,7 +1119,7 @@ public final class GuiMain {
                             "年份"}, null);
             frame.addFiles(java.util.Arrays.asList(c.getPath()));
             com.excel2mysql.core.TableOps.Table tc = lastTable(frame);
-            String[] wantTypes = {"DATE", "DATETIME", "DECIMAL(16,2)", "INT", "VARCHAR(64)",
+            String[] wantTypes = {"DATE", "DATETIME", "DECIMAL(16,2)", "INT", "TEXT",
                     "INT", "DECIMAL(18,6)", "DECIMAL(10,2)", "DECIMAL(18,8)",
                     "DECIMAL(18,4)", "TINYINT(1)", "INT", "INT"};
             if (tc == null || tc.columns.size() != wantTypes.length) {
@@ -1125,6 +1130,28 @@ public final class GuiMain {
                     if (!wantTypes[i].equals(got)) {
                         problems.add("空模板按名定类型第 " + (i + 1) + " 列期望 "
                                 + wantTypes[i] + "，实际 " + got);
+                    }
+                }
+            }
+            // 3b) 用户点名的汇总列：总计/小计必须是数值。词表其余词条不在这里重复——
+            // 它们由夹具「空列词表全量」在第 6 步金标准差分里逐列比过，
+            // 这里再加几十列会把日志顶到 2000 行上限，后面读日志窗口的断言就要假红
+            File c2 = writeNamingFixture(tmp, "采集模板（t_empty_sums）.xlsx",
+                    new String[]{"总计", "小计", "合计", "付款周期", "打卡时刻",
+                            "其他"}, null);
+            frame.addFiles(java.util.Arrays.asList(c2.getPath()));
+            com.excel2mysql.core.TableOps.Table tc2 = lastTable(frame);
+            String[] wantSums = {"DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+                    "INT", "TIME", "VARCHAR(64)"};
+            if (tc2 == null || tc2.columns.size() != wantSums.length) {
+                problems.add("汇总列夹具字段数不对："
+                        + (tc2 == null ? "(无表)" : tc2.columns.size()));
+            } else {
+                for (int i = 0; i < wantSums.length; i++) {
+                    String got = tc2.columns.get(i).type;
+                    if (!wantSums[i].equals(got)) {
+                        problems.add("汇总列按名定类型第 " + (i + 1) + " 列期望 "
+                                + wantSums[i] + "，实际 " + got);
                     }
                 }
             }
@@ -2518,6 +2545,12 @@ public final class GuiMain {
     private static String tailOf(String text) {
         int from = Math.max(0, text.length() - 300);
         return text.substring(from);
+    }
+
+    /** 日志最后一句：判断"刚才那一下有没有说话"用它，别用行数（日志有 2000 行上限）。 */
+    private static String lastLine(String text) {
+        int nl = text.lastIndexOf('\n');
+        return nl < 0 ? text : text.substring(nl + 1);
     }
 
     /** 按文字找按钮：自检按用户的方式点按钮，才验得到"返回提示 → 弹窗"这段接线。 */
@@ -4892,9 +4925,11 @@ public final class GuiMain {
             problems.add("endTask 之后任务位没释放，第三次点不动了");
         }
         frame.endTask();
-        int lines = frame.logPanel().lineCount();
+        String beforeStop = frame.logPanel().text();
         frame.stopTask();
-        if (frame.logPanel().lineCount() == lines) {
+        // 比最后一行而不是比行数：日志收口到 2000 行上限后，新说一句会同时挤掉最旧一句，
+        // 行数不变但话确实说了，比行数会假红
+        if (lastLine(frame.logPanel().text()).equals(lastLine(beforeStop))) {
             problems.add("空点「停止」什么都不说，用户会以为自己按错了");
         }
         if (!frame.logPanel().contains("没有正在执行的任务")) {
@@ -5029,7 +5064,7 @@ public final class GuiMain {
             f3.dispose();
 
             // 没有配置文件那一条看主窗口的启动句：它就是在没有 conn.ini 的目录下建起来的
-            String log0 = frame.logPanel().text();
+            String log0 = startupLog;
             if (!log0.contains("没找到 conn.ini") || !"127.0.0.1".equals(frame.currentConfig().host)
                     || !"root".equals(frame.currentConfig().user)) {
                 problems.add("没有配置文件时没说清是按默认值起界面：" + tail(log0));
