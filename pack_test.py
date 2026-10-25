@@ -553,6 +553,15 @@ check("B22x 训练与中台口径：课目驾驶员状态进名称档，有效�
           "VARCHAR(255)", "DATE", "DATE", "DATE",
           "VARCHAR(64)", "VARCHAR(64)", "VARCHAR(64)"],
       [(c["comment"], c["type"]) for c in _mid])
+_gun = infer_columns(pd.DataFrame({k: [] for k in (
+    "射程", "射高", "射速", "仰角", "炮径", "弹径", "装药量", "自重",
+    "发数", "航次", "口径", "续航")}))
+check("B22y 装备车炮口径：射程仰角弹径按计量，发数航次按整数，口径与续航按各自歧义办",
+      [c["type"] for c in _gun]
+      == ["DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+          "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+          "INT", "INT", "VARCHAR(64)", "INT"],
+      [(c["comment"], c["type"]) for c in _gun])
 _text = infer_columns(pd.DataFrame({k: [] for k in (
     "官网网址", "附件地址", "文件路径", "详细描述", "经营范围", "案情",
     "项目名称", "联系人", "规格型号", "详细地址")}))
