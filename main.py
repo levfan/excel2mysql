@@ -65,7 +65,7 @@ from core.sql_script import (
     extract_create_tables, split_sql_statements,
     parse_create_tables, rename_table_sql, apply_display_renames,
     set_table_comment, prepend_drop_tables,
-    is_dump_script, dump_statements, dump_skip_reason,
+    is_dump_script, dump_statements, dump_skip_reason, dump_database_switch,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES
@@ -1215,8 +1215,9 @@ def _run_dump_file(conn, fname, stmts, sink, chunk, target):
     """
     cur = conn.cursor()
     total = len(stmts)
-    executed = errors = skipped_nav = over_limit = reported = 0
+    executed = errors = skipped_drop = over_limit = reported = 0
     cancelled = False
+    db_note = ""
     try:
         for pos, st in enumerate(stmts, 1):
             if sink.cancelled:
@@ -1224,9 +1225,9 @@ def _run_dump_file(conn, fname, stmts, sink, chunk, target):
                 break
             nav = dump_skip_reason(st)
             if nav:
-                skipped_nav += 1
+                skipped_drop += 1
                 sink.log(f"[跳过] {fname} 第 {pos}/{total} 条：{nav}"
-                         "（目标库由界面选择）")
+                         "（删库语句不执行）")
                 continue
             try:
                 cur.execute(st)
@@ -1234,6 +1235,13 @@ def _run_dump_file(conn, fname, stmts, sink, chunk, target):
                     cur.fetchall()
                 conn.commit()           # 逐条提交：后面某条失败时，前面的成果不再被带走
                 executed += 1
+                db = dump_database_switch(st)
+                if db:
+                    # dump 自己切库，后续语句就落在这个库里；汇总要说的是它，不是界面选的那个
+                    _, sep, rest = target.partition("@")
+                    target = f"{db}{sep}{rest}"
+                    db_note = f"，目标库 {db}"
+                    sink.log(f"[切库] {fname}：目标库换成 {db}")
             except Exception as e:
                 errors += 1
                 if errors <= DUMP_ERROR_LIMIT:
@@ -1271,9 +1279,9 @@ def _run_dump_file(conn, fname, stmts, sink, chunk, target):
         sink.log(f"[已取消] {fname}：已执行 {executed}/{total} 条；"
                  "逐条提交，已执行的已落库")
         return "cancel", f"已执行 {executed}/{total} 条（逐条提交，已执行的已落库）"
-    note = f"，跳过 {skipped_nav} 条库级语句" if skipped_nav else ""
-    sink.log(f"[提交] {fname}：{executed} 条语句已提交{note}")
-    return "ok", f"{executed} 条语句已提交{note}"
+    note = f"，跳过 {skipped_drop} 条删库语句" if skipped_drop else ""
+    sink.log(f"[提交] {fname}：{executed} 条语句已提交{db_note}{note}")
+    return "ok", f"{executed} 条语句已提交{db_note}{note}"
 
 
 def sql_run_files_task(paths, overwrite, cfg, sink):

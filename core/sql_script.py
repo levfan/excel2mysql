@@ -376,7 +376,26 @@ _DUMP_TAIL_MARKER = "-- dump completed"
 _DUMP_HEAD_CHARS = 8192
 _DUMP_TAIL_CHARS = 4096
 
-_DUMP_NAV_RE = re.compile(r"(?is)^\s*(CREATE\s+DATABASE|DROP\s+DATABASE|USE)\b")
+_DUMP_NAV_RE = re.compile(r"(?is)^\s*DROP\s+DATABASE\b")
+_DUMP_SWITCH_RE = re.compile(r"(?is)^\s*USE\s+([^\s;]+)")
+
+# 剥注释用：版本注释 `/*!40101 SET ... */` 的正文服务端真会执行，摊平留下；
+# 普通块注释与 MariaDB 客户端沙箱标记 `/*M!...*/` 整块去掉
+_DUMP_VERSION_COMMENT_RE = re.compile(r"/\*!\d*\s*(.*?)\s*\*/", re.S)
+_DUMP_BLOCK_COMMENT_RE = re.compile(r"/\*[^*]*(?:\*(?!/)[^*]*)*\*/", re.S)
+_DUMP_LINE_COMMENT_RE = re.compile(r"(?m)^[ \t]*(?:--|#).*$")
+
+
+def _dump_statement_head(stmt: str) -> str:
+    """语句开头那截把注释摊平后的样子，只用来认第一个关键字。
+
+    只截 300 字符：认的是语句开头，正文里出现的 `--` 或 `/*` 不该参与判定。
+    """
+    s = str(stmt or "")[:300]
+    s = _DUMP_LINE_COMMENT_RE.sub("", s)
+    s = _DUMP_VERSION_COMMENT_RE.sub(lambda m: m.group(1), s)
+    s = _DUMP_BLOCK_COMMENT_RE.sub(" ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def is_dump_script(text: str) -> bool:
@@ -442,34 +461,27 @@ def dump_statements(text: str) -> list:
 
 
 def dump_skip_reason(stmt: str) -> str:
-    """这句是 dump 里的库级导航语句吗，返回关键字（空串表示不是）。
+    """这句是 dump 里不该执行的语句吗，返回关键字（空串表示照常执行）。
 
-    目标库由界面选择，dump 自带的 `CREATE DATABASE` / `DROP DATABASE` / `USE`
-    不该改写现场选好的库；其中 DROP DATABASE 更不能执行，否则会把目标库整个删掉。
-    语句开头常带着 `--` 注释块（真 dump 的 "Current Database" 那段就在 CREATE DATABASE 前面），
-    所以先把开头的空白与注释剥掉再认；`/*!40000 DROP DATABASE ... */` 这类版本注释里的正文也要认。
+    只有删库语句被拦下：`CREATE DATABASE` 与 `USE` 是 dump 在说"这些表建在哪个库里"，
+    跳过它们等于把用户要导的那个库抹掉，表会散进界面随手选中的库。而 `DROP DATABASE`
+    执行一次就把目标库整个删掉，风险不对等，仍然只跳过、不执行。
+    语句开头常带着 `--` 注释块（真 dump 的 "Current Database" 那段就在建库语句前面），
+    `/*!40000 DROP DATABASE ... */` 也要认，所以先把注释摊平再认第一个关键字。
     """
-    s = str(stmt or "").strip()
-    while s:
-        if s.startswith("--") or s.startswith("#"):
-            j = s.find("\n")
-            s = "" if j == -1 else s[j + 1:].lstrip()
-            continue
-        if s.startswith("/*"):
-            j = s.find("*/", 2)
-            inner = s[2:j if j != -1 else len(s)]
-            rest = "" if j == -1 else s[j + 2:].lstrip()
-            if s.startswith("/*!") and not s.startswith("/*M!"):
-                inner = re.sub(r"^\d*", "", inner[1:]).strip()
-                m = _DUMP_NAV_RE.match(inner)
-                return re.sub(r"\s+", " ", m.group(1).upper()) if m is not None else ""
-            s = rest
-            continue
-        break
-    m = _DUMP_NAV_RE.match(s)
+    return "DROP DATABASE" if _DUMP_NAV_RE.match(_dump_statement_head(stmt)) else ""
+
+
+def dump_database_switch(stmt: str) -> str:
+    """这句是 dump 里的切库语句（`USE ...`）吗，返回它切过去的库名（不是切库返回空串）。
+
+    建库不改会话库，只有 `USE` 改；日志与收尾汇总要说的是"后续语句落在哪个库"，
+    所以这里只认 `USE`。名字两边的反引号与引号都剥掉，库名里带 `-` 或 `.` 也照原样取。
+    """
+    m = _DUMP_SWITCH_RE.match(_dump_statement_head(stmt))
     if m is None:
         return ""
-    return re.sub(r"\s+", " ", m.group(1).upper())
+    return m.group(1).strip("`\"'")
 
 
 # ---------------------------------------------------------------------------
