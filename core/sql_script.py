@@ -220,6 +220,156 @@ def set_table_comment(text: str, table_name: str, comment: str) -> tuple:
     return text, 0
 
 
+_COL_COMMENT_RE = re.compile(r"(?i)\bCOMMENT\s+")
+_COL_TYPE_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_$]*(?:\s*\([^()]*\))?)")
+_FIELD_BAD_RE = re.compile(r"[\s`;\"'\\]")
+
+
+def _paren_tokens(masked_piece: str) -> list:
+    """约束行里第一个括号名单中的列名（PRIMARY KEY (a,b) / KEY `i` (`c`)）。"""
+    open_at = masked_piece.find("(")
+    if open_at == -1:
+        return []
+    close = _match_paren(masked_piece, open_at)
+    if close == -1:
+        return []
+    names = []
+    for token in masked_piece[open_at + 1:close].split(","):
+        name, _rest = _leading_name(token)
+        if name:
+            names.append(name)
+    return names
+
+
+def _column_comment_span(masked_piece: str, piece: str):
+    """列定义里 COMMENT 字面量的 (起, 止)；只有关键字没有字面量、或在字符串里，返回 None。"""
+    for m in _COL_COMMENT_RE.finditer(masked_piece):
+        i = m.end()
+        if i >= len(piece) or piece[i] not in ("'", '"'):
+            continue
+        quote = piece[i]
+        j = i + 1
+        while j < len(piece):
+            if piece[j] == "\\" and quote != "`":
+                j += 2
+                continue
+            if piece[j] == quote:
+                if j + 1 < len(piece) and piece[j + 1] == quote:
+                    j += 2
+                    continue
+                return (m.start(), j + 1)
+            j += 1
+    return None
+
+
+def edit_column(text: str, table_name: str, field: str, new_field: str = None,
+                new_comment: str = None, new_type: str = None) -> tuple:
+    """改脚本里某一列的字段名 / 字段注释 / 数据类型，返回 (新文本, 是否改动, 原因)。
+
+    只动那一行的那一段：字段名换标识符、类型换名字后面的那个类型词（UNSIGNED、
+    NOT NULL、DEFAULT、AUTO_INCREMENT 这些原样留着），注释换 COMMENT 的字面量
+    （原来没有就补在行尾）。改完这一行以外的字节级内容一个都不变。
+
+    被主键或索引列名单引用的字段拒绝改名：索引行里写的还是旧名字，
+    放过去就会生成一句引用不存在列的 DDL，报错要等建表时才炸，比在这儿拒绝难查得多。
+    同名表被写两遍只改第一处，与表注释、元数据导出「同名表只按第一处」是同一条规则。
+    """
+    name = str(table_name or "").strip().strip("`")
+    old = str(field or "").strip().strip("`")
+    if not name or not old:
+        return text, False, "没给表名或字段名"
+    edits = {"field": new_field, "comment": new_comment, "type": new_type}
+    if all(v is None for v in edits.values()):
+        return text, False, "没有要改的内容"
+    want_field = edits["field"] is not None
+    if want_field:
+        nf = str(edits["field"]).strip().strip("`")
+        if not nf:
+            return text, False, "字段名不能为空"
+        if _FIELD_BAD_RE.search(nf):
+            return text, False, "字段名不能含空格、引号、反引号或分号：%s" % nf
+        if len(nf) > 64:
+            return text, False, "字段名超过 64 个字符：%s" % nf
+    want_type = edits["type"] is not None
+    if want_type:
+        nt = str(edits["type"]).strip()
+        if not nt:
+            return text, False, "数据类型不能为空"
+        if _FIELD_BAD_RE.search(nt.replace("(", "").replace(")", "").replace(",", "")):
+            return text, False, "数据类型写法不对：%s" % nt
+    masked = _mask_comments(text)
+    for m in _CREATE_TABLE_RE.finditer(masked):
+        if m.group(1) != name:
+            continue
+        open_at = masked.find("(", m.end())
+        if open_at == -1:
+            return text, False, "那句 CREATE TABLE 没有列定义（LIKE / AS SELECT 写法）"
+        close = _match_paren(masked, open_at)
+        if close == -1:
+            return text, False, "那句 CREATE TABLE 的括号配不上，无法定位列定义"
+        body, body_masked = text[open_at + 1:close], masked[open_at + 1:close]
+        # 先按顶层逗号切出每一行，同时记下它在原文里的偏移：替换要落在原文上
+        pieces, at = [], 0
+        for raw in _split_top_level(body, body_masked):
+            pieces.append((at, raw))
+            at += len(raw) + 1                      # +1 是那个分隔逗号
+        constraint_names, target = [], None
+        for start, raw in pieces:
+            if not raw.strip():
+                continue
+            masked_raw = _mask_comments(raw)
+            head = masked_raw.lstrip()
+            if _CONSTRAINT_HEAD_RE.match(head):
+                constraint_names.extend(_paren_tokens(head))
+                continue
+            got, tail = _leading_name(raw)
+            if got and got.lower() == old.lower():
+                target = (start, raw, tail)
+        if target is None:
+            return text, False, "表「%s」里没有字段「%s」（可能被改写或删除了）" % (name, old)
+        if want_field:
+            nf = str(edits["field"]).strip().strip("`")
+            if nf.lower() != old.lower() and old.lower() in [c.lower() for c in constraint_names]:
+                return text, False, ("字段「%s」被主键或索引列名单引用，改名会留下引用旧列的定义"
+                                     % old)
+        start, raw, tail = target
+        piece = raw
+        ws = len(piece) - len(piece.lstrip())
+        name_at = ws
+        name_end = ws + len(piece.lstrip()) - len(tail)     # tail 是名字之后剩下的部分
+        tail_at = name_end                                   # 类型词在这个偏移之后
+        want_c = edits["comment"] is not None
+        # 三处替换按从右到左落笔，先动的段落不会挪后动的偏移
+        spans = []
+        if want_c:
+            literal = "'" + str(edits["comment"] or "").strip().replace("'", "''") + "'"
+            span = _column_comment_span(_mask_comments(piece), piece)
+            if span is None:
+                cut = len(piece.rstrip())          # 插在内容末尾，不落进尾部换行里
+                spans.append((cut, cut, " COMMENT " + literal))
+            else:
+                spans.append((span[0], span[1], "COMMENT " + literal))
+        if want_type:
+            mt = _COL_TYPE_RE.match(tail)
+            if mt is None:
+                return text, False, "读不出字段「%s」的类型，先别改" % old
+            spans.append((tail_at + mt.start(1), tail_at + mt.end(1),
+                          str(edits["type"]).strip()))
+        if want_field:
+            nf = str(edits["field"]).strip().strip("`")
+            if nf.lower() != old.lower():
+                quoted = piece[name_at:name_at + 1] == "`"
+                new_name = "`" + nf.replace("`", "``") + "`" if quoted else nf
+                spans.append((name_at, name_end, new_name))
+        for a, b, sub in sorted(spans, key=lambda s: s[0], reverse=True):
+            piece = piece[:a] + sub + piece[b:]
+        if piece == raw:
+            return text, False, "填回去的和原来一样，脚本未改"
+        return text[:open_at + 1 + start] + piece + text[open_at + 1 + start + len(raw):], True, ""
+    return text, False, "脚本里找不到表「%s」的 CREATE TABLE" % name
+
+
+
 def split_sql_statements(text: str) -> list:
     """
     按分号切分 SQL 语句，正确跳过以下内容中的分号：

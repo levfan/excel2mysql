@@ -27,8 +27,9 @@ from core.mysql_io import build_ddl, build_insert_sql, _convert  # noqa: E402
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment  # noqa: E402
 from core.sql_execute import render_table  # noqa: E402
 from core.sql_script import (  # noqa: E402
-    apply_table_prefix_sql, extract_create_tables, replace_first_segment_sql,
-    parse_create_tables, set_table_comment, split_sql_statements,
+    apply_table_prefix_sql, edit_column, extract_create_tables,
+    replace_first_segment_sql, parse_create_tables, set_table_comment,
+    split_sql_statements,
 )
 
 OUT_DIR = os.path.join(ROOT, "java", "verify", "golden")
@@ -68,6 +69,45 @@ COMMENT_SCRIPTS = [
     "CREATE TABLE t_j (`id` INT);\nINSERT INTO t_j VALUES (1);",
 ]
 COMMENT_VALUES = ["新注释", "带'单引号'", "", "  两端空格要削掉  ", "换行\n也可以放", "含;分号"]
+
+# 某一列的改写（元数据弹窗那三列可编辑）：只动那一行的那一段，被主键/索引名单引用的
+# 字段拒绝改名——放过去就是一句引用不存在列的 DDL，等建表时才炸比在这儿拒绝难查得多。
+# 两条线各写一份"找那一行、换那一段"，少对一处就会写出跑不了的脚本，所以逐形状对字节比。
+COLUMN_SCRIPTS = [
+    "CREATE TABLE `t_c1` (\n"
+    "  `id` INT NOT NULL COMMENT '主键',\n"
+    "  `amount` DECIMAL(10,2) DEFAULT '0.00' COMMENT '金额',\n"
+    "  `name` VARCHAR(64) NOT NULL,\n"
+    "  PRIMARY KEY (`id`),\n"
+    "  KEY `idx_name` (`name`)\n"
+    ") ENGINE=InnoDB COMMENT='演示表';\n",
+    "CREATE TABLE t_c2 (`id` INT, `note` VARCHAR(8) COMMENT '带''翻倍''的');",
+    "CREATE TABLE t_c3 (`id` INT, `v` DECIMAL(10,2) UNSIGNED NOT NULL DEFAULT 0);",
+    "CREATE TABLE t_c4 LIKE t_c2;",
+    "CREATE TABLE t_c5 (`a` INT);\nCREATE TABLE t_c5 (`a` INT, `b` INT);",
+    "CREATE TABLE `t_c6` (`x` INT COMMENT '行注释', -- `y` INT 是注释里的列\n  `y` INT);",
+]
+# (字段名, 新字段名, 新注释, 新类型)：None 表示这一项不改
+COLUMN_EDITS = [
+    ("id", "pk", None, None),
+    ("id", None, "编号", None),
+    ("id", None, None, "BIGINT"),
+    ("amount", None, "金额（元）", None),
+    ("amount", None, None, "DECIMAL(16,4)"),
+    ("amount", "money", None, None),
+    ("name", None, "姓名", None),
+    ("name", "n", None, None),
+    ("x", "y", "", "VARCHAR(2)"),
+    ("note", None, "带'单引号'的", None),
+    ("v", None, None, "DECIMAL(20,6)"),
+    ("a", "b", None, None),
+    ("nope", "x", None, None),
+    ("id", "", None, None),
+    ("id", "a b", None, None),
+    ("id", "a`b", None, None),
+    ("id", None, None, ""),
+    ("id", None, None, "a;b"),
+]
 
 CONVERT_TYPES = ["INT", "BIGINT", "DECIMAL(10,2)", "VARCHAR(64)", "TEXT", "DATE", "DATETIME"]
 CONVERT_VALUES = [None, "", "  ", "7", "7.0", "-007", "1,234", "abc", "2023-01-02",
@@ -169,6 +209,15 @@ def sql_cases():
                 new_text, changed = set_table_comment(text, t["name"], c)
                 yield {"op": "comment", "in": text, "table": t["name"], "comment": c,
                        "out": new_text, "changed": changed}
+    for text in COLUMN_SCRIPTS:
+        for t in extract_create_tables(text):
+            for fld, nf, nc, nt in COLUMN_EDITS:
+                new_text, changed, reason = edit_column(text, t["name"], fld, nf, nc, nt)
+                # changed 存 0/1：金标准里 Boolean 与 Number 是两种取值，
+                # Java 侧按 int 读，这里统一成整数才不会出现单边 Cast 失败
+                yield {"op": "col-edit", "in": text, "table": t["name"], "field": fld,
+                       "new_field": nf, "new_comment": nc, "new_type": nt,
+                       "out": new_text, "changed": 1 if changed else 0, "reason": reason}
 
 
 def ddl_cases():

@@ -305,6 +305,249 @@ public final class SqlScript {
         return name == null ? "" : name.trim().replace("`", "");
     }
 
+    /** 只削两侧的空白与包边反引号：中间的反引号要留着，它决定这个名字合不合法。 */
+    private static String trimIdent(String name) {
+        String s = name == null ? "" : name.trim();
+        if (s.length() >= 2 && s.charAt(0) == '`' && s.charAt(s.length() - 1) == '`') {
+            s = s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
+    /** 一列改写的结果：正文、是否真改了、没改成时的原因。与 Python 的三元组同义。 */
+    public static final class ColumnEdit {
+        public String text = "";
+        public boolean changed;
+        public String reason = "";
+    }
+
+    private static final Pattern COL_COMMENT_KW = Pattern.compile("(?i)\\bCOMMENT\\s+");
+    private static final Pattern COL_TYPE = Pattern.compile(
+            "^\\s*([A-Za-z_][A-Za-z0-9_$]*(?:\\s*\\([^()]*\\))?)");
+    private static final Pattern FIELD_BAD = Pattern.compile("[\\s`;\"'\\\\]");
+
+    /** 约束行里第一个括号名单中的列名：PRIMARY KEY (a,b) 与 KEY `i` (`c`) 都取到列名。 */
+    private static List<String> parenTokens(String maskedHead) {
+        List<String> names = new ArrayList<String>();
+        int open = maskedHead.indexOf('(');
+        if (open < 0) {
+            return names;
+        }
+        int close = matchParen(maskedHead, open);
+        if (close < 0) {
+            return names;
+        }
+        for (String token : maskedHead.substring(open + 1, close).split(",")) {
+            String name = leadingName(token).name;
+            if (!name.isEmpty()) {
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    /**
+     * 列定义里 COMMENT 字面量的 {起, 止}（含关键字）；只有关键字没有字面量、
+     * 或者根本没提到 COMMENT 时返回 null。掩码副本用来认关键字，取值走原文。
+     */
+    private static int[] columnCommentSpan(String maskedPiece, String piece) {
+        Matcher m = COL_COMMENT_KW.matcher(maskedPiece);
+        while (m.find()) {
+            int i = m.end();
+            if (i >= piece.length() || (piece.charAt(i) != '\'' && piece.charAt(i) != '"')) {
+                continue;
+            }
+            char quote = piece.charAt(i);
+            int j = i + 1;
+            while (j < piece.length()) {
+                if (piece.charAt(j) == '\\' && quote != '`') {
+                    j += 2;
+                    continue;
+                }
+                if (piece.charAt(j) == quote) {
+                    if (j + 1 < piece.length() && piece.charAt(j + 1) == quote) {
+                        j += 2;
+                        continue;
+                    }
+                    return new int[]{m.start(), j + 1};
+                }
+                j++;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 改脚本里某一列的字段名 / 字段注释 / 数据类型，三个新值传 null 表示这一项不改。
+     *
+     * 只动那一行的那一段：字段名换标识符、类型换名字后面那个类型词（UNSIGNED、NOT NULL、
+     * DEFAULT、AUTO_INCREMENT 原样留着），注释换 COMMENT 的字面量、原来没有就补在内容末尾。
+     * 被主键或索引名单引用的字段拒绝改名——索引行写的还是旧名字，放过去就生成一句
+     * 引用不存在列的 DDL，等建表时才炸比在这儿拒绝难查得多。
+     * 同名表被写两遍只改第一处，与表注释、元数据导出「同名表只按第一处」是同一条规则。
+     * 判定与 Python 侧的 edit_column 逐形状对撞（金标准 op "col-edit"）。
+     */
+    public static ColumnEdit editColumn(String text, String tableName, String field,
+                                        String newField, String newComment, String newType) {
+        ColumnEdit out = new ColumnEdit();
+        out.text = text == null ? "" : text;
+        String name = trimIdent(tableName);
+        String old = trimIdent(field);
+        if (name.isEmpty() || old.isEmpty()) {
+            out.reason = "没给表名或字段名";
+            return out;
+        }
+        boolean wantField = newField != null;
+        boolean wantComment = newComment != null;
+        boolean wantType = newType != null;
+        if (!wantField && !wantComment && !wantType) {
+            out.reason = "没有要改的内容";
+            return out;
+        }
+        String nf = "";
+        if (wantField) {
+            nf = trimIdent(newField);
+            if (nf.isEmpty()) {
+                out.reason = "字段名不能为空";
+                return out;
+            }
+            if (FIELD_BAD.matcher(nf).find()) {
+                out.reason = "字段名不能含空格、引号、反引号或分号：" + nf;
+                return out;
+            }
+            if (nf.length() > 64) {
+                out.reason = "字段名超过 64 个字符：" + nf;
+                return out;
+            }
+        }
+        String nt = null;
+        if (wantType) {
+            nt = newType.trim();
+            if (nt.isEmpty()) {
+                out.reason = "数据类型不能为空";
+                return out;
+            }
+            if (FIELD_BAD.matcher(nt.replace("(", "").replace(")", "")
+                    .replace(",", "")).find()) {
+                out.reason = "数据类型写法不对：" + nt;
+                return out;
+            }
+        }
+        String src = out.text;
+        String masked = maskComments(src);
+        Matcher head = CREATE_TABLE.matcher(masked);
+        while (head.find()) {
+            if (!name.equals(head.group(1))) {
+                continue;
+            }
+            int open = masked.indexOf('(', head.end());
+            if (open < 0) {
+                out.reason = "那句 CREATE TABLE 没有列定义（LIKE / AS SELECT 写法）";
+                return out;
+            }
+            int close = matchParen(masked, open);
+            if (close < 0) {
+                out.reason = "那句 CREATE TABLE 的括号配不上，无法定位列定义";
+                return out;
+            }
+            String body = src.substring(open + 1, close);
+            String bodyMasked = masked.substring(open + 1, close);
+            List<String> pieces = splitTopLevel(body, bodyMasked);
+            List<String> constraintNames = new ArrayList<String>();
+            int start = -1;
+            String raw = null;
+            int nameEnd = -1;
+            int at = 0;
+            for (String piece : pieces) {
+                if (!piece.trim().isEmpty()) {
+                    String maskedPiece = maskComments(piece);
+                    String headMasked = lstrip(maskedPiece);
+                    if (CONSTRAINT_HEAD.matcher(headMasked).find()) {
+                        constraintNames.addAll(parenTokens(headMasked));
+                    } else {
+                        NameAt na = leadingName(piece);
+                        if (!na.name.isEmpty() && na.name.equalsIgnoreCase(old) && raw == null) {
+                            start = at;
+                            raw = piece;
+                            nameEnd = na.end;
+                        }
+                    }
+                }
+                at += piece.length() + 1;
+            }
+            if (raw == null) {
+                out.reason = "表「" + name + "」里没有字段「" + old + "」（可能被改写或删除了）";
+                return out;
+            }
+            if (wantField && !nf.equalsIgnoreCase(old)) {
+                for (String ref : constraintNames) {
+                    if (ref.equalsIgnoreCase(old)) {
+                        out.reason = "字段「" + old + "」被主键或索引列名单引用，改名会留下引用旧列的定义";
+                        return out;
+                    }
+                }
+            }
+            // 三处替换按从右到左落笔，先动的段落不会挪后动的偏移
+            List<int[]> spans = new ArrayList<int[]>();
+            List<String> subs = new ArrayList<String>();
+            int ws = raw.length() - lstrip(raw).length();
+            int tailAt = nameEnd;
+            String tail = raw.substring(nameEnd);
+            if (wantComment) {
+                String literal = "'" + newComment.trim().replace("'", "''") + "'";
+                int[] span = columnCommentSpan(maskComments(raw), raw);
+                if (span == null) {
+                    int cut = rstrip(raw).length();     // 插在内容末尾，不落进尾部换行里
+                    spans.add(new int[]{cut, cut});
+                    subs.add(" COMMENT " + literal);
+                } else {
+                    spans.add(new int[]{span[0], span[1]});
+                    subs.add("COMMENT " + literal);
+                }
+            }
+            if (wantType) {
+                Matcher tm = COL_TYPE.matcher(tail);
+                if (!tm.find()) {
+                    out.reason = "读不出字段「" + old + "」的类型，先别改";
+                    return out;
+                }
+                spans.add(new int[]{tailAt + tm.start(1), tailAt + tm.end(1)});
+                subs.add(nt);
+            }
+            if (wantField && !nf.equalsIgnoreCase(old)) {
+                boolean quoted = raw.charAt(ws) == '`';
+                spans.add(new int[]{ws, nameEnd});
+                subs.add(quoted ? "`" + nf.replace("`", "``") + "`" : nf);
+            }
+            Integer[] order = new Integer[spans.size()];
+            for (int i = 0; i < order.length; i++) {
+                order[i] = i;
+            }
+            final List<int[]> ref = spans;
+            java.util.Arrays.sort(order, new java.util.Comparator<Integer>() {
+                @Override
+                public int compare(Integer a, Integer b) {
+                    return ref.get(b)[0] - ref.get(a)[0];
+                }
+            });
+            String patched = raw;
+            for (int idx : order) {
+                int[] sp = spans.get(idx);
+                patched = patched.substring(0, sp[0]) + subs.get(idx) + patched.substring(sp[1]);
+            }
+            if (patched.equals(raw)) {
+                out.reason = "填回去的和原来一样，脚本未改";
+                return out;
+            }
+            int from = open + 1 + start;
+            out.text = src.substring(0, from) + patched + src.substring(from + raw.length());
+            out.changed = true;
+            return out;
+        }
+        out.reason = "脚本里找不到表「" + name + "」的 CREATE TABLE";
+        return out;
+    }
+
     /**
      * 按分号切语句，正确跳过 '...' / "..." 字符串（支持反斜杠与双写引号转义）、
      * `...` 反引号标识符、-- 与 # 行注释、块注释。不支持 DELIMITER 存储过程脚本——
@@ -1048,6 +1291,15 @@ public final class SqlScript {
             i++;
         }
         return s.substring(i);
+    }
+
+    /** 尾部空白去掉后的样子，只要长度用（内容末尾的下标）。 */
+    private static String rstrip(String s) {
+        int i = s.length();
+        while (i > 0 && Character.isWhitespace(s.charAt(i - 1))) {
+            i--;
+        }
+        return s.substring(0, i);
     }
 
 }

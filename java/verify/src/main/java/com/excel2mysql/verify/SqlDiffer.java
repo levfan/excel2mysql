@@ -117,6 +117,26 @@ public final class SqlDiffer {
                 report("comment(" + table + ")", in, same,
                         abbrev(got.text) + " changed=" + (got.changed ? 1 : 0),
                         abbrev(want) + " changed=" + wantChanged);
+            } else if ("col-edit".equals(op)) {
+                // 单列改写：字段名 / 类型 / 注释三段各自定位替换，两条线各写一份
+                // 「找那一行、换那一段」，落点错一处就会写出跑不了的脚本，
+                // 所以连拒绝理由的文案一起逐字符对
+                checked++;
+                String table = (String) rec.get("table");
+                String fld = (String) rec.get("field");
+                SqlScript.ColumnEdit got = SqlScript.editColumn(in, table, fld,
+                        (String) rec.get("new_field"), (String) rec.get("new_comment"),
+                        (String) rec.get("new_type"));
+                String want = (String) rec.get("out");
+                int wantChanged = ((Number) rec.get("changed")).intValue();
+                String wantReason = (String) rec.get("reason");
+                boolean same = got.text.equals(want)
+                        && (got.changed ? 1 : 0) == wantChanged
+                        && got.reason.equals(wantReason);
+                report("col-edit(" + table + "." + fld + ")", in, same,
+                        abbrev(got.text) + " changed=" + (got.changed ? 1 : 0)
+                                + " reason=" + got.reason,
+                        abbrev(want) + " changed=" + wantChanged + " reason=" + wantReason);
             } else if ("clean".equals(op)) {
                 checked++;
                 String got = Prefix.clean(in);
