@@ -82,7 +82,7 @@ Excel 页说"Excel 数据将导入到这个库"，「SQL 脚本改名」页说"�
 <code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。
 想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>
 <li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-2.2.2.jar --check</code>。</li>
+<code>jre\\bin\\java.exe -jar excel2mysql-2.3.0.jar --check</code>。</li>
 <li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。
 双击 jar 文件本身不会有任何反应。</li>
 </ul>
@@ -412,11 +412,16 @@ MySQL 直接报语法错误</li>
 <tr><td>日期对象或带分隔符的日期串</td><td><code>DATE</code></td></tr>
 <tr><td>含小数</td><td><code>DECIMAL(p,s)</code> 按实测位数定宽（MySQL 上限：总精度 65、小数 30；装不下退文本）</td></tr>
 <tr><td>文本</td><td><code>VARCHAR(n)</code>，按全量最大 UTF-8 字节 + 20% 余量取档位</td></tr>
-<tr><td><b>整列没有值</b>（采集模板还没填数）</td><td>按字段名关键字定：日期→<code>DATE</code>、
-时间→<code>DATETIME</code>、金额→<code>DECIMAL(16,2)</code>、是否/标志→<code>TINYINT(1)</code>、
+<tr><td><b>整列没有值</b>（采集模板还没填数）</td><td>按字段名关键字定，二十类按优先级排：
+时长→<code>INT</code>、金额→<code>DECIMAL(16,2)</code>、合计/汇总（总计、小计、合计、累计）→
+<code>DECIMAL(18,4)</code>、时间→<code>DATETIME</code>、时刻→<code>TIME</code>、
+日期→<code>DATE</code>、是否/标志→<code>TINYINT(1)</code>、
 比率/系数→<code>DECIMAL(18,6)</code>、评分→<code>DECIMAL(10,2)</code>、
-经纬度→<code>DECIMAL(18,8)</code>、长度/重量/温度等计量→<code>DECIMAL(18,4)</code>、
-数量/年龄/序号/年份→<code>INT</code>，其余 <code>VARCHAR(64)</code></td></tr>
+经纬度→<code>DECIMAL(18,8)</code>、长度/重量/温度/强度等计量→<code>DECIMAL(18,4)</code>、
+播放量/访问量/粉丝数等大计数→<code>BIGINT</code>、
+数量/年龄/序号/年份→<code>INT</code>、网址/链接/路径→<code>VARCHAR(512)</code>、
+备注/说明/描述等长文本→<code>TEXT</code>、名称/类别/地址→<code>VARCHAR(255)</code>，
+其余 <code>VARCHAR(64)</code></td></tr>
 <tr><td>超长文本</td><td>超 16383 字节 → <code>TEXT</code>，超 65535 字节 → <code>MEDIUMTEXT</code></td></tr>
 </table>
 <h3>几个容易踩的点已经处理掉了</h3>
@@ -427,19 +432,45 @@ MySQL 直接报语法错误</li>
 保证金…，英文 amount/price/cost/fee/salary/balance…）的数值列一律
 <code>DECIMAL(16,2)</code></li>
 <li><b>空列按字段名定类型，且每条都留痕</b>：整列一个值都没有时，先看字段名——
-发布日期 → <code>DATE</code>、更新时间 → <code>DATETIME</code>、
-订单金额 → <code>DECIMAL(16,2)</code>、数量/年龄/序号/年份 → <code>INT</code>、
-是否/有无/开关/标志 → <code>TINYINT(1)</code>、
-率/比例/系数/权重 → <code>DECIMAL(18,6)</code>、
-得分/评分/成绩 → <code>DECIMAL(10,2)</code>、
+发布日期 → <code>DATE</code>、更新时间 → <code>DATETIME</code>、打卡时刻 → <code>TIME</code>、
+订单金额 → <code>DECIMAL(16,2)</code>、总计/小计/合计/累计 → <code>DECIMAL(18,4)</code>、
+工期/周期/时长/工时 → <code>INT</code>、数量/年龄/序号/票数/课时/人次/出库数/官兵数/装备数 → <code>INT</code>、
+是否/有无/开关/可否 → <code>TINYINT(1)</code>、
+率/比例/系数/权重/概率/配比（含在位率/完好率/出动率）→ <code>DECIMAL(18,6)</code>、
+得分/评分/成绩/满意度/星级/考核分/体能分/总评 → <code>DECIMAL(10,2)</code>、
 经度/纬度/坐标 → <code>DECIMAL(18,8)</code>、
-长度/面积/重量/温度/频率 → <code>DECIMAL(18,4)</code>，其余仍
+长度/面积/重量/温度/频率/强度/硬度/能耗/吨位/含沙量/壁厚/振幅/挠度/噪声/总磷 → <code>DECIMAL(18,4)</code>，
+播放量/阅读量/曝光量/访问量/下载量/粉丝数/评论数 → <code>BIGINT</code>，
+官网网址/附件地址/文件路径/短链 → <code>VARCHAR(512)</code>、
+备注/说明/描述/详情/经营范围/案情/留言/条款/笔录/处置情况/主要做法/工作纪要 → <code>TEXT</code>、
+名称/姓名/标题/类别/规格/材质/部门/地址/职称/岗位/科室/楼盘/品名/创建人/审核人/负责人/
+密级/级别/建制/番号/部队 → <code>VARCHAR(255)</code>，其余仍
 <code>VARCHAR(64)</code>；英文按成词匹配（<code>create_date</code>、<code>qty</code>、
-<code>is_deleted</code>、<code>longitude</code> 命中，<code>update</code>、<code>birthday</code>
-不误中）。金额优先于其他语义；显式比率词优先于计量词，裸「率」放在计量词之后，
-所以频率、功率按计量，容积率按比率。有值的列照旧按数据判定；
+<code>is_deleted</code>、<code>longitude</code>、<code>sub_total</code>、<code>home_url</code>、
+<code>remark_text</code>、<code>page_views</code>、<code>principal</code>、<code>ordinal</code>
+命中，<code>update</code>、<code>birthday</code>、
+<code>phone_number</code> 不误中）。
+时长优先于金额与时间（<code>付款周期</code>、<code>结算周期</code> 存的是天/月数，
+不是钱也不是时刻）；金额优先于其他数值语义；显式比率词优先于计量词，裸「率」放在计量词之后，
+所以频率、功率按计量，容积率按比率。文本三档排在最后，
+不让「描述」「名称」抢掉带数字语义的复合表头（<code>数量说明</code> 仍按计数）。
+有值的列照旧按数据判定；
 结构定义表里人工写的类型优先。每次按名定类型都写进
 <code>[类型修正] … 按表头语义调整</code> 日志行，现场能对上是哪一列、为什么</li>
+<li><b>文本档只放宽不收紧</b>：链接给 512、长文本给 TEXT、名称给 255，
+都是往宽了走。没有把编码/电话这类列收窄到 <code>VARCHAR(32)</code>——
+空列看不出真实长度，收窄会让后来填进来的长值变成截断报错，比按 64 建列更糟</li>
+<li><b>只涨不减的大计数给 BIGINT</b>：播放量、阅读量、曝光量、访问量、下载量、粉丝数
+这类列的 INT 上限（21 亿）是真会撞的，撞上的表现是写入报 1264 或被抬成上限值；
+普通计次计个（人次、班次、票数、订单数）仍给 INT，不给所有计数都翻倍占宽</li>
+<li><b>词表的每一条都逐列比过</b>：两条线的类型判定靠一张"全量词表"夹具对齐——
+表头由词表本身导出（1059 列），少抄一条词、两条线给出不一样类型，构建验证当场就报差异。
+英文词根也过了一遍拼音音节表：<code>参考率</code> 转拼音是 <code>can_kao_lv</code>，
+所以 <code>can</code> 这种"既是英文词又是拼音"的词根不能用来判布尔列（已摘掉）</li>
+<li><b>钱味词根在中间不算金额</b>：<code>付款单位</code>、<code>缴费方式</code>、
+<code>工资名单</code> 存的是名字，按结尾判定否决金额语义，落回名称档或不加判断；
+<code>支付金额</code>、<code>应收款</code> 这类钱在尾巴上的照旧是
+<code>DECIMAL(16,2)</code></li>
 <li><b>只收成词的关键词，不认裸「费」「价」</b>：<code>费县</code>（地名）、
 <code>评价</code> 不会被误判成金额</li>
 <li><b>比率类一律否决金额语义</b>：含 率/比例/百分比/占比，或名字含
