@@ -790,8 +790,8 @@ w._refresh_db_labels()
 check("F3 目标库提示条：Excel 页显示导入措辞",
       "testdb" in w.lbl_imp_db.text() and "Excel 数据将导入到这个库" in w.lbl_imp_db.text(),
       w.lbl_imp_db.text())
-check("F4 目标库提示条：SQL 页说的是改好名后的 DDL 才执行到这个库",
-      "改好表名后的 DDL 执行到这个库" in w.lbl_sql_db.text(), w.lbl_sql_db.text())
+check("F4 目标库提示条：SQL 页说的是解析并修改 DDL 脚本",
+      "解析并修改ddl脚本" in w.lbl_sql_db.text(), w.lbl_sql_db.text())
 check("F4b 目标库提示条：SQL 执行器页说的是编辑区与脚本文件两段",
       "编辑区 SQL 与脚本文件都执行到这个库" in w.lbl_run_db.text()
       and "testdb" in w.lbl_run_db.text(), w.lbl_run_db.text())

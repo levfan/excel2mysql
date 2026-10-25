@@ -2084,7 +2084,7 @@ class MainWindow(QWidget):
                                            % (db, cfg["host"], cfg["port"], cfg["user"]))
             state_style = "color: #1a7f37; font-weight: bold;"
             head = "目标库：%s —— " % db
-            tails = ["Excel 数据将导入到这个库", "改好表名后的 DDL 执行到这个库",
+            tails = ["Excel 数据将导入到这个库", "解析并修改ddl脚本",
                      "编辑区 SQL 与脚本文件都执行到这个库"]
         else:
             # 告警条的说法要看当前是展开还是收起：让人去点的那颗按钮必须真的在界面上

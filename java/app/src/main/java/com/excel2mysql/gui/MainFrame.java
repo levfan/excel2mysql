@@ -876,7 +876,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         String head = "目标库：" + db + " —— ";
         impHint.setOk(head + "Excel 数据将导入到这个库");
         if (sqlPage != null) {
-            sqlPage.setHint(true, head + "改好表名后的 DDL 执行到这个库");
+            sqlPage.setHint(true, head + "解析并修改ddl脚本");
         }
         if (sqlRunDbHint != null) {
             sqlRunDbHint.setOk(head + "编辑区 SQL 与脚本文件都执行到这个库");

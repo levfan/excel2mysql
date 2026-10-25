@@ -1459,9 +1459,9 @@ public final class GuiMain {
                 || !frame.excelHintIsOk()) {
             problems.add("选定库之后 Excel 页提示条不对：" + frame.excelHintText());
         }
-        if (!frame.sqlPage().hintText().contains("改好表名后的 DDL 执行到这个库")
+        if (!frame.sqlPage().hintText().contains("解析并修改ddl脚本")
                 || !frame.sqlPage().hintIsOk()) {
-            problems.add("SQL 页提示条没说清执行的是改好名后的 DDL："
+            problems.add("SQL 页提示条没说清这一页是解析并修改 DDL 脚本："
                     + frame.sqlPage().hintText());
         }
         if (!frame.runDbHintText().contains("编辑区 SQL 与脚本文件都执行到这个库")
