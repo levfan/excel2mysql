@@ -38,7 +38,8 @@ public final class HelpDoc {
                     "<tr><td>3</td><td>切到<b>「Excel 导入」</b>页签，把文件拖进虚线区，或点一下虚线区选文件</td></tr>" + NL +
                     "<tr><td>4</td><td>需要统一命名时，填<b>表名前缀</b>后点<b>「批量应用前缀」</b>（加一段）" + NL +
                     "或<b>「替换首个前缀」</b>（换掉已有首段，见「表名前缀：加与换」）</td></tr>" + NL +
-                    "<tr><td>5</td><td>点<b>「生成表结构预览」</b>核对/修改字段名、类型、主键</td></tr>" + NL +
+                    "<tr><td>5</td><td>点<b>「生成表结构预览」</b>核对/修改字段名、数据类型、主键，" + NL +
+                    "这一页还能改这张表的<b>表注释</b></td></tr>" + NL +
                     "<tr><td>6</td><td>点<b>「预览 DDL」</b>确认建表语句，然后<b>「开始导入」</b></td></tr>" + NL +
                     "<tr><td>7</td><td>看底部日志的逐表结果</td></tr>" + NL +
                     "</table>" + NL +
@@ -94,7 +95,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.1.2.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.2.0.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -104,7 +105,7 @@ public final class HelpDoc {
                     "<h3>界面功能：图形版与 Java 版等价</h3>" + NL +
                     "<p>两边都有这些动作：拖文件与点击虚线区选文件、ZIP 展开、<code>.xlsx</code> 与" + NL +
                     "<code>.xls</code>、拼音表名、「批量应用前缀」与「替换首个前缀」、" + NL +
-                    "「生成表结构预览」（可编辑字段名、类型与主键）、「预览 DDL」、" + NL +
+                    "「生成表结构预览」（可编辑字段名、数据类型与主键，还能改表注释）、「预览 DDL」、" + NL +
                     "「SQL 脚本改名」页的保存与执行、" + NL +
                     "「SQL 执行器」页的脚本清单（拖入 <code>.sql</code>、按清单顺序执行、手写脚本每个文件一个事务、" + NL +
                     "整库 dump 自动识别后改为逐条提交）、" + NL +
@@ -471,7 +472,13 @@ public final class HelpDoc {
                     "<code>2^63</code>，这种量级的数建议当文本列导，或在结构定义 Sheet 里写成" + NL +
                     "<code>DECIMAL(20,0)</code></li>" + NL +
                     "</ul>" + NL +
-                    "<p>所有推断结果都可以在<b>「生成表结构预览」</b>里逐列改。</p>"
+                    "<p>所有推断结果都可以在<b>「生成表结构预览」</b>里逐列改：弹窗一张表一页，" + NL +
+                    "五列分别是<b>主键</b>勾选框、<b>字段名(拼音/首字母)</b>、<b>字段注释(中文表头)</b>、" + NL +
+                    "<b>数据类型</b>、<b>表内数据最大字节长度</b>。前三列随你改，" + NL +
+                    "最后一列<b>是按全量数据实测出来的读数，只给看不给改</b>——它写的是这一列真实占了多少字节，" + NL +
+                    "改成别的名数字并不会让建出来的列变宽，能改的只有数据类型（字节上限由程序重算）。" + NL +
+                    "每页表格上方还有<b>「表注释」</b>输入框，改的就是这张表 <code>COMMENT='…'</code> 那句，" + NL +
+                    "与第二个页签同一个含义；保存时主键校验不过会整次不生效并说明原因</p>"
         ),
         new Section("prefix", "表名前缀：加与换",
                 "<h2>表名前缀：加与换</h2>" + NL +
@@ -575,9 +582,19 @@ public final class HelpDoc {
                     "<code>INSERT</code></b></td></tr>" + NL +
                     "<tr><td>生成简易excel文件</td><td>同上，只留 <b>数据</b> 一个 Sheet</td></tr>" + NL +
                     "<tr><td>双击行（文件 / 原表名 / 表注释列）</td><td>打开该表从 <code>CREATE TABLE</code>" + NL +
-                    "解析出的元数据，逐列查看字段名、注释、类型、长度、主键与可空；这里是只读视图。" + NL +
-                    "字段定义在<b>读入脚本那一刻就按表解析好存着</b>，几十万行的脚本双击也是立刻弹出，" + NL +
-                    "不用等那一秒多的重解析</td></tr>" + NL +
+                    "解析出的元数据，逐列看<b>字段名、字段注释、数据类型、主键、可空</b>五列。" + NL +
+                    "<b>数据类型是一整列</b>，按 <code>VARCHAR(64)</code>、<code>DECIMAL(10,2)</code>" + NL +
+                    "这种完整写法显示，与第一个页签「生成表结构预览」里那一列同名同形，" + NL +
+                    "不再把长度、精度拆成单独的列去拼。前三列（字段名 / 字段注释 / 数据类型）<b>可直接编辑</b>：" + NL +
+                    "改哪一格就只动那句 <code>CREATE TABLE</code> 里那一行的那一段，" + NL +
+                    "<code>UNSIGNED</code> / <code>NOT NULL</code> / <code>DEFAULT</code> /" + NL +
+                    "<code>AUTO_INCREMENT</code> 这些修饰原样保留，注释里的单引号按 MySQL 口径翻倍写出，" + NL +
+                    "原本没写 <code>COMMENT</code> 的补在这一行末尾；<b>主键与可空两列只读</b>，" + NL +
+                    "要改得动脚本正文。被 <code>PRIMARY KEY</code> 或索引列名单引用的字段<b>拒绝改名</b>" + NL +
+                    "（放过去就生成一句引用不存在列的 DDL，等建表时才炸比当场拒绝难查），" + NL +
+                    "弹窗会说明为什么没落盘。改动同样先留在内存，清单与两份生成件立刻跟着变，" + NL +
+                    "点「保存修改后ddl脚本」才落副本。字段定义在<b>读入脚本那一刻就按表解析好存着</b>，" + NL +
+                    "几十万行的脚本双击也是立刻弹出，不用等那一秒多的重解析</td></tr>" + NL +
                     "<tr><td>双击「当前表名」</td><td>直接编辑这一行的表名，并同步改写该脚本里的" + NL +
                     "<code>CREATE / DROP / INSERT / ALTER / TRUNCATE</code> 引用；改动先留在内存，" + NL +
                     "点「保存修改后ddl脚本」才落副本</td></tr>" + NL +
@@ -871,8 +888,8 @@ public final class HelpDoc {
                     "建模语句总数（多个文件共用一套编号）；清单从左到右是" + NL +
                     "<b>序号 / 文件 / 原表名 / 当前表名 / 表注释</b>，最后一列取脚本里" + NL +
                     "<code>CREATE TABLE ... COMMENT='…'</code> 那句，与「Excel 导入」那页的「表注释」同一含义，" + NL +
-                    "脚本里没写就没有（不留一个空占位）；双击<b>当前表名</b>或<b>表注释</b>编辑，" + NL +
-                    "双击其余列查看该表元数据</li>" + NL +
+                    "脚本里没写就没有（不留一个空占位）；双击<b>当前表名</b>或<b>表注释</b>编辑，双击其余列打开该表元数据" + NL +
+                    "（字段名、字段注释、数据类型三格也能就地改，改完写回那句 <code>CREATE TABLE</code>）</li>" + NL +
                     "<li>来自 ZIP 的文件，鼠标悬停「文件」列会显示完整来源，形如" + NL +
                     "<code>数据打包.zip!北京/水库基础信息.xlsx</code></li>" + NL +
                     "<li>导入成功的文件会自动从待导入列表移除，<b>失败的文件保留</b>，可以调整后重试；" + NL +
