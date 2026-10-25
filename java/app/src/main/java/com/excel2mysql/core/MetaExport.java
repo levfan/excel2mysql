@@ -44,7 +44,7 @@ public final class MetaExport {
 
     public static final String STD_PREFIX = "meta_data_file";
     public static final String SIMPLE_PREFIX = "simple_meta_data_file";
-    /** 「SQL 脚本改名入库」那页的生成物目录前缀，见 {@link #outputDir(String, boolean, String, String)}。 */
+    /** 「SQL 脚本改名」那页的生成物目录前缀，见 {@link #outputDir(String, boolean, String, String)}。 */
     public static final String SQL_DIR_TAG = "sql_";
 
     private static final Pattern TYPE_WITH_LEN =
@@ -128,7 +128,7 @@ public final class MetaExport {
      * 日期目录名收在这里生成：标准件 meta_data_file_年月日、简易件 simple_meta_data_file_年月日。
      * 命名规则只写一处，界面那边就不可能拼错成两层目录。
      *
-     * `dirTag` 只用来把不同页的产物分开（「SQL 脚本改名入库」那页传 sql_）：
+     * `dirTag` 只用来把不同页的产物分开（「SQL 脚本改名」那页传 sql_）：
      * 两页都往同一个日期目录里写时，同名表会互相覆盖，两颗按钮也只好互相等。
      */
     public static String outputDir(String outRoot, boolean withMeta, String day) {

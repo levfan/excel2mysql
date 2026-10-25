@@ -129,7 +129,7 @@ def write_table(table, path, with_meta):
 
 STD_PREFIX = "meta_data_file"
 SIMPLE_PREFIX = "simple_meta_data_file"
-# 「SQL 脚本改名入库」那一页的生成物另起一个目录：两页都往程序同级的同一个日期目录里写时，
+# 「SQL 脚本改名」那一页的生成物另起一个目录：两页都往程序同级的同一个日期目录里写时，
 # 同名表会互相覆盖，两颗按钮也只好互相等。加一个目录前缀，两边就各写各的。
 SQL_DIR_TAG = "sql_"
 
