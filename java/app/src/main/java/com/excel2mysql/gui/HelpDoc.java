@@ -444,19 +444,21 @@ public final class HelpDoc {
                     "保证金…，英文 amount/price/cost/fee/salary/balance…）的数值列一律" + NL +
                     "<code>DECIMAL(16,2)</code></li>" + NL +
                     "<li><b>空列按字段名定类型，且每条都留痕</b>：整列一个值都没有时，先看字段名——" + NL +
-                    "发布日期 → <code>DATE</code>、更新时间 → <code>DATETIME</code>、打卡时刻 → <code>TIME</code>、" + NL +
+                    "发布日期 → <code>DATE</code>、有效期/证件有效期/到期日 → <code>DATE</code>、" + NL +
+                    "更新时间 → <code>DATETIME</code>、打卡时刻 → <code>TIME</code>、" + NL +
                     "订单金额 → <code>DECIMAL(16,2)</code>、总计/小计/合计/累计 → <code>DECIMAL(18,4)</code>、" + NL +
-                    "工期/周期/时长/工时 → <code>INT</code>、数量/年龄/序号/票数/课时/人次/出库数/官兵数/装备数 → <code>INT</code>、" + NL +
+                    "工期/周期/时长/工时 → <code>INT</code>、数量/年龄/序号/票数/课时/人次/出库数/官兵数/装备数/" + NL +
+                    "心率/脉搏/剂次/环数 → <code>INT</code>、" + NL +
                     "是否/有无/开关/可否 → <code>TINYINT(1)</code>、" + NL +
                     "率/比例/系数/权重/概率/配比（含在位率/完好率/出动率）→ <code>DECIMAL(18,6)</code>、" + NL +
                     "得分/评分/成绩/满意度/星级/考核分/体能分/总评 → <code>DECIMAL(10,2)</code>、" + NL +
                     "经度/纬度/坐标 → <code>DECIMAL(18,8)</code>、" + NL +
-                    "长度/面积/重量/温度/频率/强度/硬度/能耗/吨位/含沙量/壁厚/振幅/挠度/噪声/总磷 → <code>DECIMAL(18,4)</code>，" + NL +
+                    "长度/面积/重量/温度/频率/强度/硬度/能耗/吨位/含沙量/壁厚/振幅/挠度/噪声/总磷/血糖/视力/剂量 → <code>DECIMAL(18,4)</code>，" + NL +
                     "播放量/阅读量/曝光量/访问量/下载量/粉丝数/评论数 → <code>BIGINT</code>，" + NL +
                     "官网网址/附件地址/文件路径/短链 → <code>VARCHAR(512)</code>、" + NL +
                     "备注/说明/描述/详情/经营范围/案情/留言/条款/笔录/处置情况/主要做法/工作纪要 → <code>TEXT</code>、" + NL +
                     "名称/姓名/标题/类别/规格/材质/部门/地址/职称/岗位/科室/楼盘/品名/创建人/审核人/负责人/" + NL +
-                    "密级/级别/建制/番号/部队 → <code>VARCHAR(255)</code>，其余仍" + NL +
+                    "密级/级别/建制/番号/课目/驾驶员/附件/状态/标记 → <code>VARCHAR(255)</code>，其余仍" + NL +
                     "<code>VARCHAR(64)</code>；英文按成词匹配（<code>create_date</code>、<code>qty</code>、" + NL +
                     "<code>is_deleted</code>、<code>longitude</code>、<code>sub_total</code>、<code>home_url</code>、" + NL +
                     "<code>remark_text</code>、<code>page_views</code>、<code>principal</code>、<code>ordinal</code>" + NL +
@@ -479,6 +481,11 @@ public final class HelpDoc {
                     "表头由词表本身导出（1059 列），少抄一条词、两条线给出不一样类型，构建验证当场就报差异。" + NL +
                     "英文词根也过了一遍拼音音节表：<code>参考率</code> 转拼音是 <code>can_kao_lv</code>，" + NL +
                     "所以 <code>can</code> 这种\"既是英文词又是拼音\"的词根不能用来判布尔列（已摘掉）</li>" + NL +
+                    "<li><b>有些词故意不收，收了反而建出错</b>：血压列在 Excel 里常写 <code>120/80</code>、" + NL +
+                    "血型写 <code>A 型 Rh 阴性</code>、过敏史写\"青霉素过敏\"，判成数值档会让写入直接报错，" + NL +
+                    "这三类留在默认 <code>VARCHAR(64)</code>。「整改期限」「完成时限」也一样——里面装的是" + NL +
+                    "\"3 年\"\"6 个月\"这类时长甚至一段文本，只有 <code>有效期</code>、<code>到期日</code>" + NL +
+                    "这种确定是日期的才落到 <code>DATE</code></li>" + NL +
                     "<li><b>钱味词根在中间不算金额</b>：<code>付款单位</code>、<code>缴费方式</code>、" + NL +
                     "<code>工资名单</code> 存的是名字，按结尾判定否决金额语义，落回名称档或不加判断；" + NL +
                     "<code>支付金额</code>、<code>应收款</code> 这类钱在尾巴上的照旧是" + NL +
