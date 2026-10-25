@@ -115,6 +115,8 @@ def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         ROOT, "java", "verify", "golden", "meta.jsonl.gz")
     files = sorted(f for f in os.listdir(FIX) if f.lower().endswith((".xlsx", ".xls")))
+    # 同上：一千多列的词表全量夹具走的是类型线，元数据导出这一路不吃它
+    files = [f for f in files if u"词表全量" not in f]
     work = tempfile.mkdtemp(prefix="e2m-meta-golden-")
     records = []
     skipped = 0

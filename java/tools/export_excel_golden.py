@@ -30,6 +30,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -181,6 +182,108 @@ def make_star_template(path):
     wb.save(path)
 
 
+# 空列按字段名定类型的词表：每个类别都放代表词，另放复合表头与"钱味词根但存名字"
+# 的否决样本。这张表没有数据行，两侧的类型全部来自词表，所以它是词表的跨线逐列对撞面
+NAME_KIND_HEADERS = [
+    u"总计", u"小计", u"合计", u"共计", u"累计", u"汇总", u"总量", u"总值",
+    u"订单金额", u"交易额", u"成交价", u"租金", u"水电费", u"增值税", u"净利润",
+    u"总资产", u"应收款", u"保证金", u"投资总额", u"分红", u"工资", u"销售额",
+    u"资产名称", u"付款单位", u"缴费方式", u"工资名单", u"预算说明",
+    u"工期", u"周期", u"付款周期", u"结算周期", u"时长", u"间隔",
+    u"打卡时刻", u"发车时点", u"发布日期", u"更新时间", u"日期时间",
+    u"是否有效", u"有无附件", u"标识", u"开关",
+    u"系数", u"毛利率", u"合格率", u"容积率", u"概率", u"占比", u"权重",
+    u"满意度", u"星级", u"平均得分", u"绩点",
+    u"经度", u"纬度", u"坐标", u"高程",
+    u"长度", u"强度", u"硬度", u"能耗", u"吨位", u"跨度", u"坡度", u"粒径",
+    u"负荷", u"含沙量", u"扬程", u"温度", u"频率", u"功率", u"速率",
+    u"数量", u"票数", u"名额", u"课时", u"学分", u"场次", u"访问量", u"下载量",
+    u"销量", u"产量", u"存量", u"粉丝数", u"订单数", u"企业数", u"库存",
+    u"年龄", u"工龄", u"年限",
+    u"序号", u"排名", u"优先级", u"页码",
+    u"年份", u"月份", u"季度", u"天数",
+    u"官网网址", u"附件地址", u"文件路径", u"域名", u"下载链接",
+    u"备注说明", u"详细描述", u"经营范围", u"注意事项", u"案情", u"问题",
+    u"项目名称", u"联系人", u"所属部门", u"规格型号", u"详细地址", u"工艺",
+    u"数量说明", u"金额区间", u"编号", u"身份证", u"电话",
+    u"total_amount", u"sub_total", u"gross_profit", u"rent_fee", u"project_name",
+    u"home_url", u"file_path", u"remark_text", u"user_count", u"avg_score",
+    u"is_active", u"duration_seconds", u"created_date", u"update", u"birthday",
+    u"phone_number", u"order_status", u"material_code",
+    # 第二轮扩充：大计数、计量与计数的新词、金额新词、文本三档新词、英文新词根
+    u"播放量", u"阅读量", u"曝光量", u"浏览量", u"订阅数", u"分享量", u"投票数",
+    u"人次", u"班次", u"车次", u"趟次", u"轮次", u"根数", u"块数", u"栋数",
+    u"行数", u"列数", u"站点数", u"接口数", u"遍数",
+    u"壁厚", u"净高", u"埋深", u"振幅", u"挠度", u"沉降", u"位移", u"噪声",
+    u"分贝", u"总磷", u"开间", u"进深", u"含水",
+    u"违约金", u"本金", u"借款", u"月供", u"尾款", u"造价", u"概算", u"水费",
+    u"装卸费", u"措施费", u"规费", u"价差", u"退税", u"客单价", u"收费标准",
+    u"位次", u"座次", u"顺位", u"时延", u"可否", u"能否", u"配比", u"扣分",
+    u"月数", u"上旬", u"短链", u"留言", u"条款", u"笔录", u"诉求", u"称谓",
+    u"职称", u"岗位", u"科室", u"楼盘", u"街道", u"线路", u"品名", u"语种",
+    u"page_views", u"impressions", u"shares", u"principal", u"premium",
+    u"latency_ms", u"alias_name", u"ordinal", u"message_body", u"shares_held",
+    # 第三轮：部队用户的领域口径（勤务保障、兵力装备台账、数据中台元数据）
+    u"伙食费", u"油料费", u"维修费", u"值班费", u"过路费", u"取暖费", u"被装费",
+    u"出库数", u"入库数", u"在库数", u"在册数", u"在位数", u"配发数", u"消耗数",
+    u"报废数", u"维修数", u"领用数", u"盘盈数", u"官兵数", u"兵员数", u"装备数",
+    u"台套数", u"辆数", u"参与数",
+    u"工时", u"机时", u"台时", u"工时费",
+    u"考核分", u"理论分", u"实操分", u"体能分", u"综合分", u"总评",
+    u"航程", u"航速", u"转速", u"亩产", u"在位率", u"完好率", u"参考率",
+    u"创建人", u"审核人", u"负责人", u"密级", u"级别", u"建制", u"番号", u"部队",
+    u"owner",
+    u"处置情况", u"主要做法", u"工作纪要", u"整改期限", u"统计口径", u"装备名称",
+    u"维修费合计", u"出库数量",
+]
+
+
+def make_name_kinds(path):
+    """整列无值的词表夹具：类型全靠字段名定，两栈必须逐列给同一个类型词。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "数据"
+    ws.append(NAME_KIND_HEADERS)
+    wb.save(path)
+
+
+def all_word_headers():
+    """把 Python 词表里的每一条词都变成一列，排成第二张夹具。
+
+    为什么不靠人肉挑样本：词表现在有近千条，人工样本永远只覆盖点到的那几个，
+    「两栈逐条同序」就成了口头承诺。全量词条进夹具后，每一条都必须在 Java 线
+    给出同一个类型词，少一条词、错一个顺序、Java 漏抄一条都会在这里露出来。
+    """
+    import core.infer as infer
+
+    words = []
+    for name in sorted(dir(infer)):
+        if name == "_MONEY_CN" or (name.startswith("_NAME_") and name.endswith("_CN")):
+            value = getattr(infer, name)
+            words.extend([value] if isinstance(value, str) else list(value))
+    for name in sorted(dir(infer)):
+        if name in ("_MONEY_EN", "_RATE_EN") or (
+                name.startswith("_NAME_") and name.endswith("_EN")):
+            for hit in re.finditer(r"\?:([a-z_|]+)\)", getattr(infer, name).pattern):
+                words.extend(hit.group(1).split("|"))
+    seen, out = set(), []
+    for w in words:
+        w = str(w).strip()
+        if w and w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out
+
+
+def make_name_words(path):
+    """词表全量夹具：一条词都不漏，代价是这张表有一千来列。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "数据"
+    ws.append(all_word_headers())
+    wb.save(path)
+
+
 def make_head_note(path):
     """表头带注释：成对括号、括号没配全、只挂日期格式串这三类写法都在一张表里。
 
@@ -251,6 +354,8 @@ FIXTURES = [
     (u"结构定义订单（ods_t_order_meta）.xlsx", make_meta),
     (u"必填表头（ods_t_star_form）.xlsx", make_star_form),
     (u"空采集模板（ods_t_star_tpl）.xlsx", make_star_template),
+    (u"空列词表（ods_t_name_kinds）.xlsx", make_name_kinds),
+    (u"空列词表全量（ods_t_name_words）.xlsx", make_name_words),
     (u"表头带注释（ods_t_head_note）.xlsx", make_head_note),
     (u"两行合并表头（ods_t_merged_header）.xlsx", make_merged_header),
     (u"超长拼音名统计（a_very_long_table_name_that_keeps_going_and_going_x）.xlsx",

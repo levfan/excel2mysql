@@ -398,13 +398,12 @@ check("B21g 表头部分空着、那一列又整列没值：仍按垃圾列丢�
 # 表里没有数据时字段名本身就写着口径：按关键字定类型，不再一律 VARCHAR(64)
 _empty_cols = infer_columns(pd.DataFrame({
     "发布日期": [], "更新时间": [], "订单金额": [], "数量": [], "备注说明": []}))
-check("B22 空列按字段名关键字定类型：日期/时间/金额/数量各归各位",
+check("B22 空列按字段名关键字定类型：日期/时间/金额/数量/长文本各归各位",
       [c["type"] for c in _empty_cols]
-      == ["DATE", "DATETIME", "DECIMAL(16,2)", "INT", "VARCHAR(64)"],
+      == ["DATE", "DATETIME", "DECIMAL(16,2)", "INT", "TEXT"],
       [c["type"] for c in _empty_cols])
-check("B22b 每个按名定的类型都带留痕文案，没命中的不带",
-      all(c.get("type_note") for c in _empty_cols[:4])
-      and not _empty_cols[4].get("type_note"),
+check("B22b 每个按名定的类型都带留痕文案",
+      all(c.get("type_note") for c in _empty_cols),
       [c.get("type_note") for c in _empty_cols])
 _mixed = infer_columns(pd.DataFrame({"数量": ["a", "b"], "发布日期": ["2020-01-01",
                                                                      "2020-01-02"]}))
@@ -421,17 +420,17 @@ _kinds = infer_columns(pd.DataFrame({
     "年龄": [], "工龄": [], "系数": [], "毛利率": [], "评分": [], "经度": [],
     "长度": [], "数量": [], "序号": [], "年份": [], "是否有效": [],
     "备注说明": []}))
-check("B22f 空列中文词表扩展：年龄/系数/评分/经纬度/计量/序号/年份/布尔各归各位",
+check("B22f 空列中文词表扩展：年龄/系数/评分/经纬度/计量/序号/年份/布尔/长文本各归各位",
       [c["type"] for c in _kinds]
       == ["INT", "INT", "DECIMAL(18,6)", "DECIMAL(18,6)", "DECIMAL(10,2)",
           "DECIMAL(18,8)", "DECIMAL(18,4)", "INT", "INT", "INT", "TINYINT(1)",
-          "VARCHAR(64)"],
+          "TEXT"],
       [c["type"] for c in _kinds])
-check("B22g 新分类留痕点名具体口径，没命中的不带文案",
-      all(c.get("type_note") for c in _kinds[:11]) and not _kinds[11].get("type_note")
+check("B22g 新分类留痕点名具体口径",
+      all(c.get("type_note") for c in _kinds)
       and "比率/系数" in _kinds[2]["type_note"] and "评分" in _kinds[4]["type_note"]
       and "经纬度/坐标" in _kinds[5]["type_note"] and "计量" in _kinds[6]["type_note"]
-      and "布尔" in _kinds[10]["type_note"],
+      and "布尔" in _kinds[10]["type_note"] and "长文本" in _kinds[11]["type_note"],
       [c.get("type_note") for c in _kinds])
 _priority = infer_columns(pd.DataFrame({
     "频率": [], "功率": [], "速率": [], "容积率": [], "毛利率": [], "订单金额": []}))
@@ -443,17 +442,125 @@ check("B22h 词表优先级：频率/功率/速率走计量，容积率/毛利�
 _en2 = infer_columns(pd.DataFrame({k: [] for k in (
     "age", "rate", "score", "longitude", "length", "is_deleted", "sort_no", "year",
     "update", "birthday", "remark", "status")}))
-check("B22i 英文词表扩展且成词匹配：age/rate/score/longitude/length/is_/sort/year 命中，update/status 不误中",
+check("B22i 英文词表扩展且成词匹配：age/rate/score/longitude/length/is_/sort/year/remark 命中，update/status 不误中",
       [c["type"] for c in _en2]
       == ["INT", "DECIMAL(18,6)", "DECIMAL(10,2)", "DECIMAL(18,8)",
           "DECIMAL(18,4)", "TINYINT(1)", "INT", "INT",
-          "VARCHAR(64)", "VARCHAR(64)", "VARCHAR(64)", "VARCHAR(64)"],
+          "VARCHAR(64)", "VARCHAR(64)", "TEXT", "VARCHAR(64)"],
       [(c["comment"], c["type"]) for c in _en2])
 _valued = infer_columns(pd.DataFrame({"年龄": ["1", "2"], "系数": ["1.25", "2.5"]}))
 check("B22j 有值时新词表同样让位数据判定，不套按名文案",
       _valued[0]["type"] == "INT" and _valued[1]["type"].startswith("DECIMAL")
       and not any(c.get("type_note") for c in _valued),
       [(c["type"], c.get("type_note")) for c in _valued])
+# 用户点名：总计/小计是数值口径，不该停在 VARCHAR(64)
+_sums = infer_columns(pd.DataFrame({k: [] for k in (
+    "总计", "小计", "合计", "共计", "累计", "汇总", "总量", "总值")}))
+check("B22k 汇总类一律给数值：总计/小计/合计/共计/累计/汇总/总量/总值",
+      all(c["type"] == "DECIMAL(18,4)" for c in _sums)
+      and all("合计/汇总" in c["type_note"] for c in _sums),
+      [(c["comment"], c["type"]) for c in _sums])
+_dur = infer_columns(pd.DataFrame({k: [] for k in (
+    "工期", "周期", "付款周期", "结算周期", "时长", "间隔", "打卡时刻", "发车时点")}))
+check("B22l 时长先于金额与时间判定（付款周期不是钱也不是时刻），时刻落 TIME",
+      [c["type"] for c in _dur]
+      == ["INT", "INT", "INT", "INT", "INT", "INT", "TIME", "TIME"],
+      [(c["comment"], c["type"]) for c in _dur])
+_more = infer_columns(pd.DataFrame({k: [] for k in (
+    "强度", "能耗", "吨位", "跨度", "粒径", "负荷", "含沙量",
+    "票数", "名额", "课时", "销量", "订单数")}))
+check("B22m 计量与计数词表扩充：工程量走 DECIMAL(18,4)，计次计个走 INT",
+      [c["type"] for c in _more]
+      == ["DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+          "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+          "INT", "INT", "INT", "INT", "INT"],
+      [(c["comment"], c["type"]) for c in _more])
+_big = infer_columns(pd.DataFrame({k: [] for k in (
+    "播放量", "阅读量", "曝光量", "访问量", "下载量", "粉丝数", "关注数",
+    "收藏数", "评论数", "点赞数", "人次", "班次", "行数", "站点数")}))
+check("B22r 只涨不减的大计数给 BIGINT，其余计数仍给 INT",
+      [c["type"] for c in _big] == ["BIGINT"] * 10 + ["INT"] * 4,
+      [(c["comment"], c["type"]) for c in _big])
+_round2 = infer_columns(pd.DataFrame({k: [] for k in (
+    "壁厚", "振幅", "挠度", "噪声", "总磷", "开间",
+    "违约金", "本金", "造价", "水费", "客单价", "收费标准",
+    "位次", "时延", "可否", "配比", "扣分", "月数", "上旬",
+    "短链", "留言", "条款", "称谓", "岗位", "楼盘")}))
+check("B22s 第二轮扩充的词各归各位（工程监测、金融、法律与组织人事口径）",
+      [c["type"] for c in _round2]
+      == ["DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)", "DECIMAL(18,4)",
+          "DECIMAL(18,4)", "DECIMAL(18,4)",
+          "DECIMAL(16,2)", "DECIMAL(16,2)", "DECIMAL(16,2)", "DECIMAL(16,2)",
+          "DECIMAL(16,2)", "VARCHAR(255)",
+          "INT", "INT", "TINYINT(1)", "DECIMAL(18,6)", "DECIMAL(10,2)", "INT", "INT",
+          "VARCHAR(512)", "TEXT", "TEXT", "VARCHAR(255)", "VARCHAR(255)",
+          "VARCHAR(255)"],
+      [(c["comment"], c["type"]) for c in _round2])
+_en4 = infer_columns(pd.DataFrame({k: [] for k in (
+    "page_views", "impressions", "shares", "principal", "premium", "latency_ms",
+    "alias_name", "ordinal", "message_body", "shares_held", "rental_unit")}))
+check("B22t 英文新词根成词命中，shares 既算大计数也不被 rate 词根带偏",
+      [c["type"] for c in _en4]
+      == ["BIGINT", "BIGINT", "BIGINT", "DECIMAL(16,2)", "DECIMAL(16,2)", "INT",
+          "VARCHAR(255)", "INT", "TEXT", "BIGINT", "VARCHAR(255)"],
+      [(c["comment"], c["type"]) for c in _en4])
+_domain = infer_columns(pd.DataFrame({k: [] for k in (
+    "伙食费", "油料费", "维修费", "值班费", "过路费",
+    "出库数", "在库数", "在位数", "配发数", "消耗数", "报废数", "领用数",
+    "官兵数", "兵员数", "装备数", "台套数", "辆数", "参与数",
+    "工时", "机时", "台时", "工时费",
+    "考核分", "理论分", "体能分", "综合分", "总评",
+    "航程", "航速", "转速", "亩产", "在位率", "完好率", "参考率",
+    "创建人", "审核人", "负责人", "密级", "级别", "建制", "番号", "部队",
+    "处置情况", "主要做法", "工作纪要", "整改期限", "统计口径", "装备名称",
+    "维修费合计", "出库数量")}))
+check("B22u 部队与中台口径：经费走金额、台账走计数、训考走评分、责任链走名称档",
+      [c["type"] for c in _domain]
+      == ["DECIMAL(16,2)"] * 5
+      + ["INT"] * 13
+      + ["INT", "INT", "INT", "DECIMAL(16,2)"]
+      + ["DECIMAL(10,2)"] * 5
+      + ["DECIMAL(18,4)"] * 4
+      + ["DECIMAL(18,6)"] * 3
+      + ["VARCHAR(255)"] * 8
+      + ["TEXT", "TEXT", "TEXT", "VARCHAR(64)", "VARCHAR(64)", "VARCHAR(255)",
+         "DECIMAL(16,2)", "INT"],
+      [(c["comment"], c["type"]) for c in _domain])
+_pinyin = infer_columns(pd.DataFrame({"参考率": [], "参与数": [], "残值": [],
+                                      "三产": []}))
+check("B22v 拼音字段名不许被英文布尔词根抢走：can_kao_lv 不是布尔列",
+      [c["type"] for c in _pinyin]
+      == ["DECIMAL(18,6)", "INT", "DECIMAL(16,2)", "VARCHAR(64)"],
+      [(c["comment"], c["field"], c["type"]) for c in _pinyin])
+_text = infer_columns(pd.DataFrame({k: [] for k in (
+    "官网网址", "附件地址", "文件路径", "详细描述", "经营范围", "案情",
+    "项目名称", "联系人", "规格型号", "详细地址")}))
+check("B22n 文本分三档：链接/路径 512、长文本 TEXT、名称类 255（只放宽不收紧）",
+      [c["type"] for c in _text]
+      == ["VARCHAR(512)", "VARCHAR(512)", "VARCHAR(512)", "TEXT", "TEXT", "TEXT",
+          "VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)", "VARCHAR(255)"],
+      [(c["comment"], c["type"]) for c in _text])
+_veto = infer_columns(pd.DataFrame({k: [] for k in (
+    "付款单位", "缴费方式", "工资名单", "预算说明", "数量说明", "支付金额")}))
+check("B22o 标识后缀否决金额、钱在尾巴上照旧归金额、数字语义词先于文本档",
+      [c["type"] for c in _veto]
+      == ["VARCHAR(255)", "VARCHAR(255)", "VARCHAR(64)", "TEXT", "INT",
+          "DECIMAL(16,2)"],
+      [(c["comment"], c["type"]) for c in _veto])
+_en3 = infer_columns(pd.DataFrame({k: [] for k in (
+    "total_amount", "sub_total", "gross_profit", "rent_fee", "project_name",
+    "home_url", "file_path", "remark_text", "user_count", "duration_seconds",
+    "phone_number", "order_status")}))
+check("B22p 英文新档成词命中，phone_number 不被数量词根误判成 INT",
+      [c["type"] for c in _en3]
+      == ["DECIMAL(16,2)", "DECIMAL(18,4)", "DECIMAL(16,2)", "DECIMAL(16,2)",
+          "VARCHAR(255)", "VARCHAR(512)", "VARCHAR(512)", "TEXT", "INT", "INT",
+          "VARCHAR(64)", "VARCHAR(64)"],
+      [(c["comment"], c["type"]) for c in _en3])
+_miss = infer_columns(pd.DataFrame({"其他": [], "自定义项": [], "台账编号": []}))
+check("B22q 词表没命中的仍按 VARCHAR(64) 建列且不写按名文案",
+      all(c["type"] == "VARCHAR(64)" and not c.get("type_note") for c in _miss),
+      [(c["comment"], c["type"], c.get("type_note")) for c in _miss])
 _meta_empty = pd.DataFrame({
     "序号": [1],
     "字段名(英文)": ["publish_date"],
