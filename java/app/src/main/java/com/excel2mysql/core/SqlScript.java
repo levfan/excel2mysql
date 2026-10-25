@@ -494,7 +494,36 @@ public final class SqlScript {
     private static final int DUMP_TAIL_CHARS = 4096;
 
     private static final Pattern DUMP_NAV = Pattern.compile(
-            "(?is)^\\s*(CREATE\\s+DATABASE|DROP\\s+DATABASE|USE)\\b");
+            "^\\s*DROP\\s+DATABASE\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern DUMP_SWITCH = Pattern.compile(
+            "^\\s*USE\\s+([^\\s;]+)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern DUMP_VERSION_COMMENT = Pattern.compile(
+            "/\\*!\\d*\\s*(.*?)\\s*\\*/", Pattern.DOTALL);
+    private static final Pattern DUMP_BLOCK_COMMENT = Pattern.compile(
+            "/\\*[^*]*(?:\\*(?!/)[^*]*)*\\*/", Pattern.DOTALL);
+    private static final Pattern DUMP_LINE_COMMENT = Pattern.compile(
+            "(?m)^[ \\t]*(?:--|#).*$");
+
+    /**
+     * 语句开头那截把注释摊平后的样子，只用来认第一个关键字。
+     *
+     * 只截前 300 字符：认的是语句开头，正文里出现的 `--` 或块注释不该参与判定。
+     * 版本注释 `/*!40101 SET ... *&#47;` 服务端真会执行，把正文摊平留下；普通块注释与
+     * MariaDB 客户端沙箱标记 `/*M!...*&#47;` 整块去掉。与 Python 的 _dump_statement_head 同序。
+     */
+    private static String dumpStatementHead(String stmt) {
+        String s = stmt == null ? "" : stmt;
+        s = s.length() > 300 ? s.substring(0, 300) : s;
+        s = DUMP_LINE_COMMENT.matcher(s).replaceAll("");
+        Matcher v = DUMP_VERSION_COMMENT.matcher(s);
+        StringBuffer flat = new StringBuffer();
+        while (v.find()) {
+            v.appendReplacement(flat, Matcher.quoteReplacement(v.group(1)));
+        }
+        v.appendTail(flat);
+        s = DUMP_BLOCK_COMMENT.matcher(flat.toString()).replaceAll(" ");
+        return s.replaceAll("\\s+", " ").trim();
+    }
 
     /** 这份脚本是不是整库 dump：看抬头 / 结尾那几句导出工具才会写的话。 */
     public static boolean isDumpScript(String text) {
@@ -584,41 +613,30 @@ public final class SqlScript {
     }
 
     /**
-     * 这句是 dump 里的库级导航语句吗，返回关键字（空串表示不是）。
+     * 这句是 dump 里不该执行的语句吗，返回关键字（空串表示照常执行）。
      *
-     * 目标库由界面选择，dump 自带的 CREATE DATABASE / DROP DATABASE / USE
-     * 不该改写现场选好的库；其中 DROP DATABASE 更不能执行，否则会把目标库整个删掉。
-     * 语句开头常带着 `--` 注释块（真 dump 的 "Current Database" 那段就在 CREATE DATABASE 前面），
-     * 所以先把开头的空白与注释剥掉再认；`/*!40000 DROP DATABASE ... *&#47;` 这类版本注释里的正文也要认。
+     * 只有删库语句被拦下：CREATE DATABASE 与 USE 是 dump 在说"这些表建在哪个库里"，
+     * 跳过它们等于把用户要导的那个库抹掉，表会散进界面随手选中的库；而 DROP DATABASE
+     * 执行一次就把目标库整个删掉，风险不对等，仍然只跳过、不执行。
+     * 语句开头常带着 `--` 注释块（真 dump 的 "Current Database" 那段就在建库语句前面），
+     * `/*!40000 DROP DATABASE ... *&#47;` 也要认，所以先把注释摊平再认第一个关键字。
      */
     public static String dumpSkipReason(String stmt) {
-        String s = stmt == null ? "" : stmt.trim();
-        while (!s.isEmpty()) {
-            if (s.startsWith("--") || s.startsWith("#")) {
-                int j = s.indexOf('\n');
-                s = j < 0 ? "" : s.substring(j + 1).trim();
-                continue;
-            }
-            if (s.startsWith("/*")) {
-                int j = s.indexOf("*/", 2);
-                String inner = s.substring(2, j < 0 ? s.length() : j);
-                String rest = j < 0 ? "" : s.substring(j + 2).trim();
-                if (s.startsWith("/*!") && !s.startsWith("/*M!")) {
-                    String body = inner.substring(1).replaceFirst("^\\d*", "").trim();
-                    Matcher m = DUMP_NAV.matcher(body);
-                    return m.lookingAt()
-                            ? m.group(1).replaceAll("\\s+", " ").toUpperCase(Locale.ROOT) : "";
-                }
-                s = rest;
-                continue;
-            }
-            break;
-        }
-        Matcher m = DUMP_NAV.matcher(s);
+        return DUMP_NAV.matcher(dumpStatementHead(stmt)).lookingAt() ? "DROP DATABASE" : "";
+    }
+
+    /**
+     * 这句是 dump 里的切库语句（`USE ...`）吗，返回它切过去的库名（不是切库返回空串）。
+     *
+     * 建库不改会话库，只有 USE 改；日志与收尾汇总要说的是"后续语句落在哪个库"。
+     * 名字两边的反引号与引号都剥掉，库名里带 `-` 或 `.` 也照原样取。
+     */
+    public static String dumpDatabaseSwitch(String stmt) {
+        Matcher m = DUMP_SWITCH.matcher(dumpStatementHead(stmt));
         if (!m.lookingAt()) {
             return "";
         }
-        return m.group(1).replaceAll("\\s+", " ").toUpperCase(Locale.ROOT);
+        return m.group(1).replaceAll("^[`\"]+", "").replaceAll("[`\"]+$", "");
     }
 
     // ------------------------------------------------------------------

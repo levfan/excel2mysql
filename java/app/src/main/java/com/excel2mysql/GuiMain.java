@@ -321,7 +321,7 @@ public final class GuiMain {
                 checkSqlCliPrefix(problems);
                 // 「只写注释也不算」的判据表，与 Python 侧 pack_test 的 E10/E11 同一张
                 checkCommentOnly(problems);
-                // 整库 dump 的识别、切句（DELIMITER / 版本注释）与库级语句跳过
+                // 整库 dump 的识别、切句（DELIMITER / 版本注释）与只有删库语句跳过
                 checkDumpScript(problems);
                 // 日志面板的线程安全：工作线程加行的同时有人在遍历，锁没加对就会炸 CME，
                 // 那个异常会把日志刷新整个带走——现场看到的就是"跑到一半日志不动了"
@@ -4110,7 +4110,7 @@ public final class GuiMain {
         }
     }
 
-    /** 整库 dump：识别看导出抬头/结尾，切句认 DELIMITER 与版本注释，库级导航语句只跳过不执行。 */
+    /** 整库 dump：识别看导出抬头/结尾，切句认 DELIMITER 与版本注释，只有删库语句跳过不执行。 */
     private static void checkDumpScript(List<String> problems) {
         String nl = String.valueOf((char) 10);
         String dump = "-- MySQL dump 10.13  Distrib 8.0.36, for Win64 (x86_64)" + nl
@@ -4162,17 +4162,30 @@ public final class GuiMain {
         if (trigger != 1) {
             problems.add("触发器应只有一条，实际 " + trigger);
         }
-        if (!"CREATE DATABASE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
+        if (!"".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
                 "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `db1`"))
-                || !"CREATE DATABASE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
+                || !"".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
                         "--" + nl + "-- Current Database: `db1`" + nl + "--" + nl + nl
                         + "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `db1`"))
                 || !"DROP DATABASE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
                         "/*!40000 DROP DATABASE IF EXISTS `db1`*/"))
-                || !"USE".equals(com.excel2mysql.core.SqlScript.dumpSkipReason("USE `db1`"))
+                || !"".equals(com.excel2mysql.core.SqlScript.dumpSkipReason("USE `db1`"))
                 || !"".equals(com.excel2mysql.core.SqlScript.dumpSkipReason(
                         "INSERT INTO `t1` VALUES (1)"))) {
-            problems.add("dump 库级导航语句的识别不对（含开头注释块的 CREATE DATABASE）");
+            problems.add("dump 里只有删库语句该跳过：建库或切库被误拦，或者删库没拦住");
+        }
+        if (!"db1".equals(com.excel2mysql.core.SqlScript.dumpDatabaseSwitch("USE `db1`"))
+                || !"db1".equals(com.excel2mysql.core.SqlScript.dumpDatabaseSwitch(
+                        "-- c" + nl + "USE `db1`;"))
+                || !"a-b.c".equals(com.excel2mysql.core.SqlScript.dumpDatabaseSwitch(
+                        "USE `a-b.c` /* x */;"))
+                || !"plain".equals(com.excel2mysql.core.SqlScript.dumpDatabaseSwitch(
+                        "USE plain;"))
+                || !"".equals(com.excel2mysql.core.SqlScript.dumpDatabaseSwitch(
+                        "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `db1`"))
+                || !"".equals(com.excel2mysql.core.SqlScript.dumpDatabaseSwitch(
+                        "/*!40000 DROP DATABASE IF EXISTS `db1`*/"))) {
+            problems.add("dump 的切库语句没取出库名，或者把建库与删库当成了切库");
         }
         if (!com.excel2mysql.core.SqlScript.hasExecutableContentDump(
                 "/*!40101 SET NAMES utf8 */")

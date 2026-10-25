@@ -191,9 +191,11 @@ public final class SqlFileRun {
         int reported = 0;
         int executed = 0;
         int errors = 0;
-        int skippedNav = 0;
+        int skippedDrop = 0;
         int overLimit = 0;
         boolean cancelled = false;
+        String target = out.target;     // dump 自己切库时只影响本文件后续语句的汇报
+        String dbNote = "";
         Statement st = null;
         try {
             st = db.connection().createStatement();
@@ -205,9 +207,9 @@ public final class SqlFileRun {
                 String sql = stmts.get(pos - 1);
                 String nav = SqlScript.dumpSkipReason(sql);
                 if (!nav.isEmpty()) {
-                    skippedNav++;
+                    skippedDrop++;
                     sink.log("[跳过] " + fname + " 第 " + pos + "/" + total + " 条："
-                            + nav + "（目标库由界面选择）");
+                            + nav + "（删库语句不执行）");
                     continue;
                 }
                 try {
@@ -219,11 +221,19 @@ public final class SqlFileRun {
                     }
                     db.connection().commit();   // 逐条提交：后面失败时，前面的成果不再被带走
                     executed++;
+                    String switched = SqlScript.dumpDatabaseSwitch(sql);
+                    if (!switched.isEmpty()) {
+                        // dump 自己切库，后续语句就落在这个库里；汇总要说的是它，不是界面选的那个
+                        int at = target.indexOf('@');
+                        target = at < 0 ? switched : switched + target.substring(at);
+                        dbNote = "，目标库 " + switched;
+                        sink.log("[切库] " + fname + "：目标库换成 " + switched);
+                    }
                 } catch (SQLException e) {
                     errors++;
                     if (errors <= DUMP_ERROR_LIMIT) {
                         sink.logError("[执行失败] " + fname + " 第 " + pos + "/" + total
-                                + " 条语句报错，目标库 " + out.target + LogText.NL
+                                + " 条语句报错，目标库 " + target + LogText.NL
                                 + LogText.indentDetail(LogText.describe(e)) + LogText.NL
                                 + "    出错语句：" + LogText.NL
                                 + LogText.formatStatement(sql));
@@ -282,9 +292,10 @@ public final class SqlFileRun {
                     + " 条；逐条提交，已执行的已落库");
         } else {
             out.ok++;
-            String note = skippedNav > 0 ? "，跳过 " + skippedNav + " 条库级语句" : "";
-            out.files.add(new FileOutcome(path, "ok", executed + " 条语句已提交" + note));
-            sink.log("[提交] " + fname + "：" + executed + " 条语句已提交" + note);
+            String note = skippedDrop > 0 ? "，跳过 " + skippedDrop + " 条删库语句" : "";
+            out.files.add(new FileOutcome(path, "ok",
+                    executed + " 条语句已提交" + dbNote + note));
+            sink.log("[提交] " + fname + "：" + executed + " 条语句已提交" + dbNote + note);
         }
     }
 
