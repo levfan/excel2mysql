@@ -296,6 +296,7 @@ public final class GuiMain {
                 sql_metadata_cache(frame, problems);
                 // 表注释手动改：写回 CREATE TABLE 的表选项，并一路带到弹窗与日志回执
                 sql_comment_edit(frame, problems);
+                sql_field_edit(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
                 // 程序同级 conn.ini 预填连接信息：读到 / 读不了 / 没有，三种说法各验一条
@@ -545,17 +546,31 @@ public final class GuiMain {
             problems.add("结构弹窗表头被简写了：" + dlg.columnHeader(0, 1) + " / "
                     + dlg.columnHeader(0, 2));
         }
-        // 末列写的是数据实测值，不是「类型」的声明容量；列名少了"表内数据"就会被读成后者
+        // 末列写的是数据实测值，不是「数据类型」的声明容量；列名少了"表内数据"就会被读成后者
         if (!"表内数据最大字节长度".equals(dlg.columnHeader(0, 4))) {
             problems.add("结构弹窗第 4 列表头不是「表内数据最大字节长度」："
                     + dlg.columnHeader(0, 4));
         }
-        if (!dlg.cellEditable(0, 0, 4)) {
-            problems.add("「表内数据最大字节长度」列被禁了编辑，Python 那边只是不回写");
+        if (!"数据类型".equals(dlg.columnHeader(0, 3))) {
+            problems.add("结构弹窗的类型列没与第二页、两份生成件统一叫「数据类型」："
+                    + dlg.columnHeader(0, 3));
+        }
+        if (dlg.cellEditable(0, 0, 4)) {
+            problems.add("「表内数据最大字节长度」还能编辑：改了从不回写，留着可编辑就是静默 no-op");
         }
         if (!dlg.cellEditable(0, 0, 1)) {
             problems.add("字段名列不可编辑，弹窗就白摆");
         }
+        // 表注释也在结构弹窗里改：初值取这张表的表注释，按确定才落回表定义
+        if (dlg.commentText(0) == null || dlg.commentText(0).isEmpty()) {
+            problems.add("结构弹窗的表注释输入框没带上这张表原来的注释");
+        }
+        String tableCommentBefore = frame.tables().get(0).tableComment;
+        dlg.setCommentText(0, "改了但没按确定");
+        if ("改了但没按确定".equals(frame.tables().get(0).tableComment)) {
+            problems.add("只填输入框没按确定，表注释却写回了表定义");
+        }
+        dlg.setCommentText(0, tableCommentBefore);
         // 点 X / 按 Esc 关掉要等同"取消"：没按确定就绝不能把编辑写回表定义
         com.excel2mysql.gui.StructureDialog dismissed =
                 new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
@@ -2673,6 +2688,103 @@ public final class GuiMain {
                 || kept.get("b") != seed.get("a")) {
             problems.add("新键撞车时没留先出现那一张，或整份被误丢掉："
                     + (kept == null ? "null" : kept.keySet()));
+        }
+    }
+
+    /** 当下开着的元数据框清单：自检要分辨"我刚开的那一个"，早前阶段可能还留着别的。 */
+    private static List<java.awt.Window> metadataWindows() {
+        List<java.awt.Window> out = new ArrayList<java.awt.Window>();
+        for (java.awt.Window w : java.awt.Window.getWindows()) {
+            if (w instanceof com.excel2mysql.gui.SqlMetadataDialog) {
+                out.add(w);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 元数据弹窗改字段：字段名 / 字段注释 / 数据类型三列要能改，且改的是脚本正文那一句
+     * CREATE TABLE 里的那一列（与 Python 侧 E15~E21、R69~R72b 同一批形状）。
+     *
+     * 被主键或索引名单引用的字段必须拒绝改名——放过去就是一句引用不存在列的 DDL。
+     */
+    private static void sql_field_edit(MainFrame frame, List<String> problems) {
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-fedit").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("改字段检查的临时目录失败：" + e);
+            return;
+        }
+        String nl = String.valueOf((char) 10);
+        java.io.File script = new java.io.File(dir, "改字段.sql");
+        writeText(script.getPath(),
+                "CREATE TABLE `t_fe1` (" + nl
+                        + "  `id` INT NOT NULL COMMENT '主键'," + nl
+                        + "  `amount` DECIMAL(10,2) DEFAULT '0.00' COMMENT '金额'," + nl
+                        + "  `name` VARCHAR(64) NOT NULL," + nl
+                        + "  PRIMARY KEY (`id`)," + nl
+                        + "  KEY `idx_name` (`name`)" + nl
+                        + ") ENGINE=InnoDB COMMENT='演示表';" + nl);
+        com.excel2mysql.gui.SqlPage page = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> paths = new ArrayList<String>();
+        paths.add(script.getPath());
+        page.addFiles(paths);
+        List<java.awt.Window> before = metadataWindows();
+        page.openMetadata(0);
+        com.excel2mysql.gui.SqlMetadataDialog dlg = null;
+        for (java.awt.Window w : metadataWindows()) {
+            if (!before.contains(w)) {
+                dlg = (com.excel2mysql.gui.SqlMetadataDialog) w;
+            }
+        }
+        if (dlg == null) {
+            problems.add("元数据弹窗没开出来，改字段的检查全部做不成");
+            return;
+        }
+        if (dlg.columnTotal() != 5
+                || !"数据类型".equals(dlg.headerAt(2)) || !"主键".equals(dlg.headerAt(3))
+                || !"可空".equals(dlg.headerAt(4))) {
+            problems.add("元数据弹窗还是把类型与长度拆成两列：" + dlg.headerAt(2) + " / "
+                    + dlg.headerAt(3) + " / " + dlg.headerAt(4));
+        }
+        if (!"DECIMAL(10,2)".equals(dlg.cellValue(1, 2))) {
+            problems.add("数据类型一列没写成完整形状：" + dlg.cellValue(1, 2));
+        }
+        if (!dlg.cellEditable(1, 0) || !dlg.cellEditable(1, 1) || !dlg.cellEditable(1, 2)
+                || dlg.cellEditable(1, 3) || dlg.cellEditable(1, 4)) {
+            problems.add("元数据弹窗的可编辑列不对（应前三列可改，主键与可空只读）");
+        }
+        dlg.editCell(1, 1, "金额（元）");
+        String text = page.textOf(script.getPath());
+        if (!text.contains("COMMENT '金额（元）'") || !page.isModified(script.getPath())
+                || !page.logPanel().contains("[字段改写]")) {
+            problems.add("改字段注释没写进脚本正文或没留回执：" + firstLine(text));
+        }
+        dlg.editCell(2, 2, "VARCHAR(128)");
+        text = page.textOf(script.getPath());
+        if (!text.contains("`name` VARCHAR(128) NOT NULL")) {
+            problems.add("改数据类型没只换类型词：" + text.replaceAll("\\s+", " "));
+        }
+        dlg.editCell(1, 0, "money");
+        text = page.textOf(script.getPath());
+        if (!text.contains("`money` DECIMAL(10,2)") || text.contains("`amount`")) {
+            problems.add("改字段名没只换那一行的标识符：" + secondLine(text));
+        }
+        // 被 PRIMARY KEY 引用的那一列拒绝改名，且那一格要填回原值
+        text = page.textOf(script.getPath());
+        dlg.editCell(0, 0, "pk");
+        if (page.textOf(script.getPath()).contains("`pk`")
+                || !"id".equals(dlg.cellValue(0, 0))
+                || !frame.lastDialogText().contains("引用")) {
+            problems.add("被主键引用的字段改名没被拦下，或那一格没填回原值");
+        }
+        closeMetadataDialogs();
+        if (page.metadataAtRow(0) == null || page.metadataAtRow(0).columns.size() != 3) {
+            problems.add("改完字段后解析缓存不对");
+        } else if (!"money".equals(page.metadataAtRow(0).columns.get(1).field)) {
+            problems.add("解析缓存没跟着改动走："
+                    + page.metadataAtRow(0).columns.get(1).field);
         }
     }
 

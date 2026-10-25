@@ -835,6 +835,11 @@ public final class SqlPage extends JPanel {
         showMetadataAtRow(row);
     }
 
+    /** 自检用：把某一行的元数据框开出来，走的正是双击那一条路。 */
+    public void openMetadata(int row) {
+        showMetadataAtRow(row);
+    }
+
     public SqlScript.ParsedTable metadataAtRow(int row) {
         if (row < 0 || row >= rowActual.size()) {
             return null;
@@ -1701,7 +1706,82 @@ public final class SqlPage extends JPanel {
             return;
         }
         new SqlMetadataDialog(host.owner(), parsed, metadataShownName(row),
-                upperBox.isSelected()).setVisible(true);
+                upperBox.isSelected(),
+                new SqlMetadataDialog.FieldEdit() {
+                    @Override
+                    public boolean apply(String field, String newField,
+                                         String newComment, String newType) {
+                        return applyFieldEdit(row, field, newField, newComment, newType);
+                    }
+                }).setVisible(true);
+    }
+
+    /**
+     * 元数据弹窗改了一格：把这一列的新写法写进脚本正文那句 CREATE TABLE，脚本先留在内存里。
+     *
+     * 返回 false 时弹窗会把那一格填回原值，所以拒绝的原因一定点名，
+     * 不留"改了没反应"的静默一次操作。
+     */
+    private boolean applyFieldEdit(int row, String field, String newField,
+                                   String newComment, String newType) {
+        if (row < 0 || row >= rowActual.size()) {
+            return false;
+        }
+        Entry entry = entryOfRow(row);
+        if (entry == null) {
+            return false;
+        }
+        String name = rowActual.get(row);
+        SqlScript.ParsedTable table = tableOf(entry, name);
+        Infer.Column col = null;
+        if (table != null) {
+            for (Infer.Column c : table.columns) {
+                if (c.field != null && c.field.equalsIgnoreCase(field)) {
+                    col = c;
+                    break;
+                }
+            }
+        }
+        if (col == null) {
+            return false;
+        }
+        SqlScript.ColumnEdit ed = SqlScript.editColumn(entry.text, name, field,
+                newField, newComment, newType);
+        if (!ed.changed) {
+            if (!ed.reason.isEmpty()) {
+                host.warn("字段「" + field + "」没改：" + ed.reason);
+            }
+            return false;
+        }
+        String wasField = col.field;
+        String wasComment = col.comment == null ? "" : col.comment;
+        String wasType = col.type == null ? "" : col.type;
+        entry.text = ed.text;
+        entry.modified = true;
+        // 解析缓存就地跟上，省掉整份脚本重扫（一份 dump 有几十万行）
+        if (newField != null) {
+            col.field = newField.trim();
+        }
+        if (newComment != null) {
+            col.comment = newComment;
+        }
+        if (newType != null) {
+            col.type = newType.trim();
+        }
+        refreshTable();
+        List<String> parts = new ArrayList<String>();
+        if (newField != null) {
+            parts.add("字段名 " + wasField + " → " + col.field);
+        }
+        if (newComment != null) {
+            parts.add("注释 " + (wasComment.isEmpty() ? "（空）" : wasComment)
+                    + " → " + (newComment.trim().isEmpty() ? "（空）" : newComment.trim()));
+        }
+        if (newType != null) {
+            parts.add("类型 " + wasType + " → " + col.type);
+        }
+        log("[字段改写] 表 `" + name + "` 的 " + String.join("，", parts) + "（已写进脚本；未落盘）");
+        return true;
     }
 
     private void log(String text) {

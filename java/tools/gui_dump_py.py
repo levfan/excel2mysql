@@ -725,9 +725,17 @@ def main():
     put("env.dlg.structure.size", "%dx%d" % (sd.width(), sd.height()))
     put("dlg.structure.tabs", "|".join(sd.tabs.tabText(i)
                                        for i in range(sd.tabs.count())))
-    first = sd.tabs.widget(0)
+    first = sd.tabs.widget(0).findChild(QTableWidget)
     put("dlg.structure.cols", "|".join(norm(first.horizontalHeaderItem(c).text())
                                        for c in range(first.columnCount())))
+    # 第 4 列是实测字节数（只读）、页上方那颗输入框是表注释（可改）：
+    # 这两件事两边各写一份，能不能改必须逐列对，不看就只能靠肉眼
+    put("dlg.structure.comment", norm(sd.comment_edits[0].text()))
+    put("dlg.structure.editable", "|".join(
+        "1" if (first.item(0, c) is not None and
+                 bool(first.item(0, c).flags() & Qt.ItemIsEditable)) else "0"
+        for c in range(1, 5)))
+
     def srow(r):
         cells = []
         for c in range(first.columnCount()):

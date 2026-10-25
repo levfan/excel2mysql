@@ -610,6 +610,15 @@ public final class GuiDump {
                         cols.append(sd.columnHeader(0, c));
                     }
                     put("dlg.structure.cols", cols.toString());
+                    put("dlg.structure.comment", norm(sd.commentText(0)));
+                    StringBuilder editable = new StringBuilder();
+                    for (int c = 1; c < 5; c++) {
+                        if (c > 1) {
+                            editable.append('|');
+                        }
+                        editable.append(sd.cellEditable(0, 0, c) ? "1" : "0");
+                    }
+                    put("dlg.structure.editable", editable.toString());
                     StringBuilder rows = new StringBuilder();
                     for (int r = 0; r < Math.min(3, sd.rowCount(0)); r++) {
                         if (r > 0) {

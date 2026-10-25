@@ -12,6 +12,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTable;
+import javax.swing.JTextField;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
@@ -20,17 +21,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 结构弹窗：一张表一个标签页，改字段名/注释/类型/主键。
- * 对应 Python 侧 main.py:1619-1693 的 StructureDialog（同样是全表标签页，不是单表）。
+ * 结构弹窗：一张表一个标签页，改表注释与字段名/注释/类型/主键。
+ * 对应 Python 侧 main.py 的 StructureDialog（同样是全表标签页，不是单表）。
  *
- * 第 4 列"表内数据最大字节长度"只显示不可回写——它是推断的中间量，改了不会改类型，
- * 只会让"改完看起来对、实际按新类型建表"这种错觉发生（Python 侧同样不回写）。
- * 列名写明"表内数据"：这一列是数据实测值，不是右边「类型」列的声明容量。
+ * 第 4 列"表内数据最大字节长度"是这一列数据在表里的实测字节数，不是类型声明的容量，
+ * 改了不会改类型，只会造出"看着改对了、建表仍按原类型"的错觉，所以两栈都把这一列设成不可编辑。
+ * 列名写"表内数据"并挨着「数据类型」放，是防止只写"最大字节长度"被读成 VARCHAR(n) 那一档。
  */
 public final class StructureDialog extends JDialog {
 
     private static final String[] COLUMNS = {"主键", "字段名(拼音/首字母)", "字段注释(中文表头)",
-            "类型", "表内数据最大字节长度"};
+            "数据类型", "表内数据最大字节长度"};
     private static final String TIP =
             "勾选一列或多列作为主键（多列即组合主键，主键约束至多一个）；"
             + "主键需全列非空且组合唯一，全部不勾选则不设主键";
@@ -40,6 +41,8 @@ public final class StructureDialog extends JDialog {
         final TableOps.Table table;
         final List<List<Object>> rows;
         final DefaultTableModel model;
+        /** 这张表上方的表注释输入框：确定后才写回表定义。 */
+        final JTextField commentField;
         /** 这张表的滚动容器；自检要顺着它往上读"有没有再套一层标识"。 */
         JScrollPane scroll;
 
@@ -54,15 +57,16 @@ public final class StructureDialog extends JDialog {
 
                 @Override
                 public boolean isCellEditable(int row, int col) {
-                    // 五列都可编辑，和 Python 侧一致；第 4 列"表内数据最大字节长度"改了也不回写，
-                    // 但禁掉编辑会让人以为它是锁死的关键信息
-                    return true;
+                    // 实测字节数那一列只给看不给改：改了不回写，留着可编辑就是静默 no-op
+                    return col != 4;
                 }
             };
             for (Infer.Column c : table.columns) {
                 this.model.addRow(new Object[]{Boolean.valueOf(c.primaryKey), c.field, c.comment,
                         c.type, String.valueOf(c.maxLen)});
             }
+            this.commentField = new JTextField(table.tableComment == null
+                    ? "" : table.tableComment);
         }
 
         /** 只收集到副本，不碰 table.columns——校验没过就不能让改动落到表定义上。 */
@@ -115,8 +119,15 @@ public final class StructureDialog extends JDialog {
             JScrollPane scroll = new JScrollPane(table);
             ed.scroll = scroll;
             scroll.setPreferredSize(new Dimension(UiScale.px(900), UiScale.px(420)));
-            // 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方
-            tabs.addTab(r.table.tableName, scroll);
+            // 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方；
+            // 表格上面那一行是这张表的表注释输入框（与 Python 侧同一形状）
+            JPanel page = new JPanel(new BorderLayout(0, UiScale.px(4)));
+            JPanel commentRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
+            commentRow.add(new JLabel("表注释："), BorderLayout.WEST);
+            commentRow.add(ed.commentField, BorderLayout.CENTER);
+            page.add(commentRow, BorderLayout.NORTH);
+            page.add(scroll, BorderLayout.CENTER);
+            tabs.addTab(r.table.tableName, page);
         }
 
         JButton ok = new JButton("确定");
@@ -186,9 +197,11 @@ public final class StructureDialog extends JDialog {
             return false;
         }
         for (int i = 0; i < editors.size(); i++) {
-            TableOps.Table t = editors.get(i).table;
+            Editor ed = editors.get(i);
+            TableOps.Table t = ed.table;
             t.columns.clear();
             t.columns.addAll(staged.get(i));
+            t.tableComment = ed.commentField.getText().trim();
         }
         confirmed = true;
         dispose();
@@ -243,6 +256,16 @@ public final class StructureDialog extends JDialog {
     /** 自检用：某个 tab 里那张表的容器，用来读它外面有没有再套一层标识。 */
     public javax.swing.JComponent tabTable(int tabIndex) {
         return editors.get(tabIndex).scroll;
+    }
+
+    /** 自检用：那张表的表注释输入框当前内容（确定之前它只是编辑中的值）。 */
+    public String commentText(int tabIndex) {
+        return editors.get(tabIndex).commentField.getText();
+    }
+
+    /** 自检用：填表注释，等价于用户在输入框里改完。 */
+    public void setCommentText(int tabIndex, String text) {
+        editors.get(tabIndex).commentField.setText(text == null ? "" : text);
     }
 
     /** 走同一条 applyEdits，只是不弹模态框——自检在 EDT 上，弹窗会把自己卡死。 */

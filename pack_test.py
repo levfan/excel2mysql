@@ -601,6 +601,77 @@ check("E13 没有建表语句时执行副本原样返回（不凭空多出 DROP�
 check("E14 注释里的建表不会被当成删除目标",
       prepend_drop_tables("/* CREATE TABLE ghost (id INT); */ SELECT 1;")[1] == [])
 
+# ---- 表元数据弹窗改字段：只动那一行的那一段，别的地方一个字节都不改 ----
+# edit_column 是这一轮新增的口径，还没实现时让用例判红而不是整轮崩在半路
+_edit_col_fn = getattr(app_main, "edit_column", None)
+_col_src = ("CREATE TABLE `t_demo` (\n"
+            "  `id` INT NOT NULL COMMENT '主键',\n"
+            "  `amount` DECIMAL(10,2) DEFAULT '0.00' COMMENT '金额',\n"
+            "  `name` VARCHAR(64) NOT NULL,\n"
+            "  PRIMARY KEY (`id`),\n"
+            "  KEY `idx_name` (`name`)\n"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='演示表';\n")
+
+
+def _edit_col(table, field, **kw):
+    if _edit_col_fn is None:
+        return _col_src, False, "<还没这个函数>"
+    return app_main.edit_column(_col_src, table, field, **kw)
+
+
+check("E15 改字段名只换那一行的标识符，类型与注释原样",
+      _edit_col_fn is not None
+      and _edit_col("t_demo", "amount", new_field="money")[1] is True
+      and "  `money` DECIMAL(10,2) DEFAULT '0.00' COMMENT '金额',"
+      in _edit_col("t_demo", "amount", new_field="money")[0]
+      and "`amount`" not in _edit_col("t_demo", "amount", new_field="money")[0],
+      _edit_col("t_demo", "amount", new_field="money"))
+check("E16 改字段注释替换已有的 COMMENT 字面量，单引号按 MySQL 翻倍",
+      _edit_col("t_demo", "amount", new_comment="O'Brien 金额")[1] is True
+      and "COMMENT 'O''Brien 金额'" in _edit_col("t_demo", "amount",
+                                                 new_comment="O'Brien 金额")[0]
+      and "DECIMAL(10,2) DEFAULT '0.00'" in _edit_col("t_demo", "amount",
+                                                      new_comment="x")[0],
+      _edit_col("t_demo", "amount", new_comment="O'Brien 金额"))
+check("E17 本来没有注释的列，注释补在行尾且不动 NOT NULL",
+      _edit_col("t_demo", "name", new_comment="姓名")[1] is True
+      and "  `name` VARCHAR(64) NOT NULL COMMENT '姓名',"
+      in _edit_col("t_demo", "name", new_comment="姓名")[0],
+      _edit_col("t_demo", "name", new_comment="姓名"))
+check("E18 改类型只换类型词，DEFAULT 与 COMMENT 跟着原样留下",
+      _edit_col("t_demo", "amount", new_type="DECIMAL(16,3)")[1] is True
+      and "  `amount` DECIMAL(16,3) DEFAULT '0.00' COMMENT '金额',"
+      in _edit_col("t_demo", "amount", new_type="DECIMAL(16,3)")[0]
+      and "DECIMAL(10,2)" not in _edit_col("t_demo", "amount",
+                                           new_type="DECIMAL(16,3)")[0],
+      _edit_col("t_demo", "amount", new_type="DECIMAL(16,3)"))
+check("E19 被主键或索引引用的字段拒绝改名，但注释与类型照改",
+      _edit_col("t_demo", "id", new_field="pk")[1] is False
+      and "引用" in _edit_col("t_demo", "id", new_field="pk")[2]
+      and _edit_col("t_demo", "name", new_field="n")[1] is False
+      and _edit_col("t_demo", "id", new_comment="编号")[1] is True
+      and _edit_col("t_demo", "id", new_type="BIGINT")[1] is True,
+      [_edit_col("t_demo", f, new_field=n) for f, n in (("id", "pk"), ("name", "n"))])
+check("E20 空名与非法名拒绝，找不到表或字段也原样返回并给出原因",
+      _edit_col("t_demo", "amount", new_field="")[1] is False
+      and _edit_col("t_demo", "amount", new_field="a b")[1] is False
+      and _edit_col("t_demo", "amount", new_field="a`b")[1] is False
+      and _edit_col("t_demo", "amount", new_type="")[1] is False
+      and _edit_col("nope", "amount", new_type="INT")[1] is False
+      and _edit_col("t_demo", "nope", new_type="INT")[1] is False
+      and _edit_col("t_demo", "amount", new_field="a;b")[1] is False,
+      [_edit_col("t_demo", "amount", new_field=x)
+       for x in ("", "a b", "a`b", "a;b")])
+_col_twice = _col_src + _col_src
+check("E21 同名表被写两遍只改第一处（与元数据导出同一口径）",
+      _edit_col_fn is not None
+      and _edit_col_fn(_col_twice, "t_demo", "id", new_comment="主键一号")[1] is True
+      and _edit_col_fn(_col_twice, "t_demo", "id", new_comment="主键一号")[0]
+      .count("主键一号") == 1
+      and "COMMENT '主键'," in _edit_col_fn(
+          _col_twice, "t_demo", "id", new_comment="主键一号")[0],
+      (_col_twice.count("CREATE TABLE"),))
+
 gbk = os.path.join(_tmpdir, "gbk.sql")
 open(gbk, "wb").write("CREATE TABLE `t` (`id` INT); -- 中文注释".encode("gbk"))
 check("B32 GBK 编码脚本可读取", "CREATE TABLE" in app_main.read_sql_text(gbk))
@@ -826,12 +897,53 @@ else:
 w.tables = [dict(t1)]
 dlg = app_main.StructureDialog(w.tables, w)
 check("F7 表结构预览对话框可构造", dlg.tabs.count() == 1, f"tabs={dlg.tabs.count()}")
-check("F7b 结构弹窗不重复加标识：tab 标题就是表名，tab 内容直接是那张表",
-      isinstance(dlg.tabs.widget(0), app_main.QTableWidget)
-      and box_title(dlg.tabs.widget(0)) == "",
+check("F7b 结构弹窗不重复加标识：tab 标题就是表名，表格上没有再套一层标题",
+      dlg.tabs.widget(0).findChild(app_main.QTableWidget) is not None
+      and box_title(dlg.tabs.widget(0).findChild(app_main.QTableWidget)) == "",
       box_title(dlg.tabs.widget(0)))
 check("F8 预览页每行有主键勾选框",
       dlg.editors and dlg.editors[0][1].cellWidget(0, 0) is not None)
+check("F48 结构弹窗列头：类型那一列与第二页、两份生成件同名「数据类型」",
+      [dlg.editors[0][1].horizontalHeaderItem(c).text()
+       for c in range(dlg.editors[0][1].columnCount())]
+      == ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "数据类型",
+          "表内数据最大字节长度"],
+      [dlg.editors[0][1].horizontalHeaderItem(c).text()
+       for c in range(dlg.editors[0][1].columnCount())])
+from PySide6.QtCore import Qt as _QtFlags
+check("F49 表内数据最大字节长度是实测值，只显示不给改（改了也从不回写）",
+      bool(dlg.editors[0][1].item(0, 3).flags() & _QtFlags.ItemIsEditable)
+      and bool(dlg.editors[0][1].item(0, 1).flags() & _QtFlags.ItemIsEditable)
+      and not bool(dlg.editors[0][1].item(0, 4).flags() & _QtFlags.ItemIsEditable),
+      [bool(dlg.editors[0][1].item(0, c).flags() & _QtFlags.ItemIsEditable)
+       for c in range(1, 5)])
+# 表注释输入框是这一轮新加的：还没有时让用例判红，而不是整轮崩在半路
+_ced = getattr(dlg, "comment_edits", None)
+check("F50 每个表标签页带一行可编辑的表注释，初值取这张表的表注释",
+      _ced is not None and len(_ced) == 1
+      and _ced[0].text() == (t1.get("table_comment") or ""),
+      (len(_ced) if _ced is not None else None, t1.get("table_comment")))
+_t1bad = {"table_name": "t_bad", "base_table_name": "t_bad", "table_comment": "原注释",
+          "df": pd.DataFrame({"a": [1, 2]}),
+          "columns": [{"field": "a", "comment": "甲", "type": "TEXT",
+                       "primary_key": True, "max_len": 1}]}
+_dlg2 = app_main.StructureDialog([_t1bad], w)
+_ced2 = getattr(_dlg2, "comment_edits", None)
+_popups_before = len(POPUPS)
+if _ced2 is not None:
+    _ced2[0].setText("不该落回")
+    _dlg2._on_accept()
+check("F50c 主键校验不过时表注释也不落回，弹窗保持打开并说明原因",
+      _ced2 is not None and len(POPUPS) > _popups_before
+      and _t1bad["table_comment"] == "原注释"
+      and "不能作为主键" in POPUPS[-1][1],
+      (_t1bad["table_comment"], POPUPS[-1] if POPUPS else None))
+if _ced is not None:
+    _ced[0].setText("订单主表")
+    dlg._on_accept()
+check("F50b 点确定把表注释写回这张表的定义",
+      _ced is not None and w.tables[0]["table_comment"] == "订单主表",
+      w.tables[0].get("table_comment"))
 ddl_dlg = app_main.DDLDialog(w.tables, True, w)
 check("F9 DDL 预览对话框可构造", ddl_dlg.tabs.count() == 1)
 check("F10 拖拽区已启用拖放", w.drop.acceptDrops())
@@ -4644,7 +4756,7 @@ ew2 = app_main.MainWindow()
 ew2._add_files([make_xlsx("空表主键.xlsx", {"S": pd.DataFrame(
     {"编号": pd.Series(dtype=object), "名称": pd.Series(dtype=object)})})])
 ed2 = _real_sd(ew2.tables, ew2)
-tw2 = ed2.tabs.widget(0)
+tw2 = ed2.editors[0][1]     # tab 页面里包了一层（表注释一行 + 表格），表格从 editors 拿
 check("Q41a 空表结构弹窗里可以勾选主键", tw2.cellWidget(0, 0) is not None)
 tw2.cellWidget(0, 0).setChecked(True)
 POPUPS.clear()
@@ -5088,6 +5200,51 @@ check("R45a2 元数据弹窗的字段表左上也有标识，标题里带列数"
       _meta is not None
       and box_title(_meta.tableWidget()) == "字段清单（共 3 列）",
       None if _meta is None else box_title(_meta.tableWidget()))
+_mt = _meta.tableWidget()
+check("R69 元数据弹窗列头是 字段名/字段注释/数据类型/主键/可空，不再单列长度",
+      [_mt.horizontalHeaderItem(c).text() for c in range(_mt.columnCount())]
+      == ["字段名", "字段注释", "数据类型", "主键", "可空"],
+      [_mt.horizontalHeaderItem(c).text() for c in range(_mt.columnCount())])
+check("R69b 数据类型一列写成完整形状（类型带长度或精度），与第一页那一列同口径",
+      _mt.item(0, 2).text() == "BIGINT(20)" and _mt.item(1, 2).text() == "DECIMAL(10,2)",
+      [_mt.item(r, 2).text() for r in range(3)])
+check("R70 可编辑的是字段名/字段注释/数据类型，主键与可空仍然只读",
+      [bool(_mt.item(0, c).flags() & Qt.ItemIsEditable) for c in range(5)]
+      == [True, True, True, False, False],
+      [bool(_mt.item(0, c).flags() & Qt.ItemIsEditable) for c in range(5)])
+_text_before = nw.sql_files[0]["text"]
+POPUPS.clear()
+_mt.item(1, 1).setText("金额（元）")
+check("R71 改字段注释写进脚本正文：那一行的 COMMENT 换新值，日志留痕并标成已改",
+      "COMMENT '金额（元）'" in nw.sql_files[0]["text"]
+      and "COMMENT '金额'," not in nw.sql_files[0]["text"]
+      and nw.sql_files[0]["modified"]
+      and "[字段改写]" in nw.sql_log.toPlainText()
+      and not POPUPS,
+      (nw.sql_files[0]["text"].splitlines()[2],
+       nw.sql_log.toPlainText().splitlines()[-1:], len(POPUPS)))
+_mt.item(2, 2).setText("varchar(64)")
+check("R71b 改数据类型只换类型词，DEFAULT 与注释原样留着",
+      "`客户名称` varchar(64) DEFAULT NULL COMMENT '客户'," in nw.sql_files[0]["text"],
+      nw.sql_files[0]["text"].splitlines()[3])
+POPUPS.clear()
+_mt.item(0, 0).setText("pk")
+check("R72 被主键引用的字段拒绝改名：正文不动，弹窗说清为什么",
+      "`id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键'," in nw.sql_files[0]["text"]
+      and "pk" not in nw.sql_files[0]["text"]
+      and POPUPS and "引用" in POPUPS[-1][1],
+      (nw.sql_files[0]["text"].splitlines()[1], POPUPS[-1] if POPUPS else None))
+_meta2 = nw._build_sql_metadata_dialog(0)
+check("R72b 解析缓存跟着改动走：再开一次元数据看到的是新值",
+      _meta2 is not None and _meta2.tableWidget().item(1, 1).text() == "金额（元）"
+      and _meta2.tableWidget().item(2, 2).text() == "varchar(64)",
+      None if _meta2 is None else [_meta2.tableWidget().item(1, 1).text(),
+                                   _meta2.tableWidget().item(2, 2).text()])
+# 这几条改的是共用夹具的脚本正文，后面的用例仍按原文写期望，这里把那份记录放回原样
+nw.sql_files[0]["text"] = _text_before
+nw.sql_files[0]["modified"] = False
+nw.sql_files[0]["parsed"] = None
+nw._refresh_sql_table()
 _nrow_text_before = nw.sql_files[0]["text"]
 _sql_headers = [nw.sql_table.horizontalHeaderItem(c).text()
                 for c in range(nw.sql_table.columnCount())]

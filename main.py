@@ -66,6 +66,7 @@ from core.sql_script import (
     parse_create_tables, rename_table_sql, apply_display_renames,
     set_table_comment, prepend_drop_tables,
     is_dump_script, dump_statements, dump_skip_reason, dump_database_switch,
+    edit_column,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES
@@ -2529,7 +2530,53 @@ class MainWindow(QWidget):
                 "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
             return None
         return SqlMetadataDialog(table, row["display"],
-                                 self.chk_sql_upper.isChecked(), self)
+                                 self.chk_sql_upper.isChecked(), self,
+                                 on_edit=functools.partial(self._apply_sql_field_edit,
+                                                           row_index))
+
+    def _apply_sql_field_edit(self, row_index, field, **kw):
+        """表元数据弹窗改了一格：把这一列的新写法写进脚本正文那句 CREATE TABLE。
+
+        返回 True/False，弹窗据此决定要不要把那一格填回原值；拒绝的原因一律点名，
+        不静默吞掉一次编辑（改不动总要让人看得见为什么改不动）。
+        """
+        if row_index >= len(self._sql_rows):
+            return False
+        row = self._sql_rows[row_index]
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return False
+        table = ensure_parsed(record).get(row["actual"])
+        col = next((c for c in ((table or {}).get("columns") or [])
+                    if str(c.get("field", "")).lower() == str(field).lower()), None)
+        if col is None:
+            return False
+        new_text, changed, reason = edit_column(record["text"], row["actual"], field, **kw)
+        if not changed:
+            if reason:
+                self._warn("字段「%s」没改：\n%s" % (field, reason))
+            return False
+        record["text"] = new_text
+        record["modified"] = True
+        # 解析缓存就地跟上，省掉整份脚本重扫（一份 dump 有几十万行）
+        before = (col.get("field"), col.get("comment") or "", col.get("type") or "")
+        for key, attr in (("new_field", "field"), ("new_comment", "comment"),
+                          ("new_type", "type")):
+            if key in kw:
+                col[attr] = str(kw[key]).strip()
+        self._refresh_sql_table()
+        parts = []
+        if "new_field" in kw:
+            parts.append("字段名 %s → %s" % (before[0], col["field"]))
+        if "new_comment" in kw:
+            parts.append("注释 %s → %s"
+                         % (before[1] or "（空）", str(kw["new_comment"]).strip() or "（空）"))
+        if "new_type" in kw:
+            parts.append("类型 %s → %s" % (before[2], col["type"]))
+        append_log(self.sql_log,
+                   "[字段改写] 表 `%s` 的 %s（已写进脚本；未落盘）"
+                   % (row["actual"], "，".join(parts)))
+        return True
 
     def on_sql_table_item_changed(self, item):
         """手动编辑「当前表名」或「表注释」会到这里；两者都同步改写脚本正文。"""
@@ -3818,13 +3865,15 @@ class StructureDialog(QDialog):
         tip.setStyleSheet("color: #666;")
         lay.addWidget(tip)
         self.tabs = QTabWidget()
+        self.comment_edits = []      # 与 editors 同序：每张表的表注释输入框
         for t in tables:
             tw = QTableWidget(len(t["columns"]), 5)
             style_table_font(tw)
             # 第 4 列是这一列数据在表内的实测最大字节数，不是类型声明的容量；
-            # 挨着「类型」放时只写"最大字节长度"会被读成 VARCHAR(n) 那一档
+            # 挨着「数据类型」放时只写"最大字节长度"会被读成 VARCHAR(n) 那一档
             tw.setHorizontalHeaderLabels(
-                ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "类型", "表内数据最大字节长度"])
+                ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "数据类型",
+                 "表内数据最大字节长度"])
             for i, c in enumerate(t["columns"]):
                 cb = QCheckBox()
                 cb.setChecked(bool(c.get("primary_key")))
@@ -3832,14 +3881,29 @@ class StructureDialog(QDialog):
                 tw.setItem(i, 1, QTableWidgetItem(c["field"]))
                 tw.setItem(i, 2, QTableWidgetItem(c["comment"]))
                 tw.setItem(i, 3, QTableWidgetItem(c["type"]))
-                tw.setItem(i, 4, QTableWidgetItem(str(c.get("max_len", ""))))
+                size_item = QTableWidgetItem(str(c.get("max_len", "")))
+                # 这一列是推断的中间量：改了不会改类型，只会出现"看着改对了、
+                # 建表仍按原类型"的错觉，所以只给看不给改（与 Java 侧同口径）
+                size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
+                tw.setItem(i, 4, size_item)
             tw.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
             tw.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
             tw.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
             # 末列按内容宽度走：表头 10 个字，默认 100px 会把它截成省略号
             tw.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
             # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方
-            self.tabs.addTab(tw, t["table_name"])
+            page = QWidget()
+            page_lay = QVBoxLayout(page)
+            page_lay.setContentsMargins(0, 0, 0, 0)
+            comment_row = QHBoxLayout()
+            comment_row.addWidget(QLabel("表注释："))
+            edit = QLineEdit(str(t.get("table_comment") or ""))
+            edit.setClearButtonEnabled(True)
+            comment_row.addWidget(edit, 1)
+            page_lay.addLayout(comment_row)
+            page_lay.addWidget(tw)
+            self.comment_edits.append(edit)
+            self.tabs.addTab(page, t["table_name"])
             self.editors.append((t, tw))
         lay.addWidget(self.tabs)
 
@@ -3851,7 +3915,7 @@ class StructureDialog(QDialog):
     def _on_accept(self):
         # 先把全部编辑收集到副本，主键校验通过后再写回，避免无效主键污染数据
         staged = []
-        for t, tw in self.editors:
+        for (t, tw), edit in zip(self.editors, self.comment_edits):
             cols = []
             for i, c in enumerate(t["columns"]):
                 nc = dict(c)
@@ -3867,10 +3931,10 @@ class StructureDialog(QDialog):
                 cb = tw.cellWidget(i, 0)
                 nc["primary_key"] = bool(cb and cb.isChecked())
                 cols.append(nc)
-            staged.append((t, cols))
+            staged.append((t, cols, edit.text().strip()))
 
         problems = []
-        for t, cols in staged:
+        for t, cols, _comment in staged:
             good, msg = validate_primary_key(t["df"], cols)
             if not good:
                 problems.append(f"表「{t['table_name']}」：{msg}")
@@ -3880,8 +3944,9 @@ class StructureDialog(QDialog):
                       "warning")
             return    # 校验不过不放行，保持弹窗打开让用户调整
 
-        for t, cols in staged:
+        for t, cols, comment in staged:
             t["columns"] = cols
+            t["table_comment"] = comment
         self.accept()
 
     def get_tables(self):
@@ -3889,13 +3954,19 @@ class StructureDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# SQL 脚本页的表元数据弹窗（只读）
+# SQL 脚本页的表元数据弹窗（字段名/注释/类型可改，改完回写脚本正文）
 # ---------------------------------------------------------------------------
 class SqlMetadataDialog(QDialog):
-    def __init__(self, table, display_name, upper, parent=None):
-        super().__init__(parent)
-        from core.meta_export import split_type
+    """一张表的字段清单。
 
+    数据类型一列写完整形状（VARCHAR(64)、DECIMAL(10,2)），与第一页那一列同一个口径，
+    不再拆成"类型 + 长度"两格。给了 on_edit 时字段名 / 字段注释 / 数据类型三列可改，
+    每改一格就调一次回调（回调只管这一列真正变了的那几项）；没给回调时整表只读，
+    自检与取证走这一路，不去动脚本。
+    """
+
+    def __init__(self, table, display_name, upper, parent=None, on_edit=None):
+        super().__init__(parent)
         self.setWindowTitle("表元数据（%s）" % display_name)
         fit_client(self, 980, 640)
         lay = QVBoxLayout(self)
@@ -3904,31 +3975,46 @@ class SqlMetadataDialog(QDialog):
         head.setTextInteractionFlags(Qt.TextSelectableByMouse)
         head.setWordWrap(True)
         lay.addWidget(head)
-        lay.addWidget(QLabel("这里按脚本里的 CREATE TABLE 原样展示；"
-                             "勾选「表名与字段名转大写」只切换显示，不回写脚本正文。"))
+        if on_edit is None:
+            tip = "这里按脚本里的 CREATE TABLE 原样展示；" \
+                  "勾选「表名与字段名转大写」只切换显示，不回写脚本正文。"
+        else:
+            tip = "字段名、字段注释、数据类型这三列可以直接改，改完就写进脚本正文（还没落盘）；" \
+                  "主键与可空照脚本里的定义显示，不在这里改。" \
+                  "「表名与字段名转大写」只切换显示，不回写脚本正文。"
+        lay.addWidget(QLabel(tip))
         cols = table.get("columns") or []
-        tw = QTableWidget(len(cols), 6)
+        tw = QTableWidget(len(cols), 5)
         style_table_font(tw)
-        tw.setHorizontalHeaderLabels(["字段名", "字段注释", "数据类型", "长度", "主键", "可空"])
-        tw.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        tw.setSelectionBehavior(QAbstractItemView.SelectRows)
+        tw.setHorizontalHeaderLabels(["字段名", "字段注释", "数据类型", "主键", "可空"])
+        self._on_edit = on_edit
+        self._upper = bool(upper)
+        self._loading = True
+        self._originals = []          # 每行的 (字段名, 注释, 类型) 原值，用来判断改了哪一格
+        if on_edit is not None:
+            tw.itemChanged.connect(self._on_item_changed)
         for i, c in enumerate(cols):
             field = c["field"]
-            typ, length = split_type(c.get("type") or "")
-            values = [field.upper() if upper else field, c.get("comment") or "",
-                      typ, length or "",
+            typ = c.get("type") or ""
+            comment = c.get("comment") or ""
+            self._originals.append((field, comment, typ))
+            values = [field.upper() if upper else field, comment, typ,
                       "是" if c.get("primary_key") else "",
                       "是" if c.get("nullable", True) else "否"]
             for j, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignCenter if j >= 4 else Qt.AlignLeft | Qt.AlignVCenter)
+                item.setTextAlignment(Qt.AlignCenter if j >= 3 else Qt.AlignLeft | Qt.AlignVCenter)
+                if j >= 3:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 tw.setItem(i, j, item)
+        self._loading = False
+        tw.setSelectionBehavior(QAbstractItemView.SelectRows)
         tw.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         tw.horizontalHeader().setStretchLastSection(True)
         tw.setColumnWidth(0, 230)
         tw.setColumnWidth(1, 280)
-        tw.setColumnWidth(2, 130)
-        tw.setColumnWidth(3, 80)
+        tw.setColumnWidth(2, 160)
+        tw.setColumnWidth(3, 70)
         tw.setColumnWidth(4, 70)
         # 表格左上的标识（与第一页「待导入文件」同一做法）：标题里带列数，
         # 不必滚到表格末尾数这一张表解析出了多少列
@@ -3945,6 +4031,44 @@ class SqlMetadataDialog(QDialog):
 
     def tableWidget(self):
         return self.field_table
+
+    def _on_item_changed(self, item):
+        """一格里改了什么都只交这一格对应的项；被拒绝时把这一格填回原值并说清原因。
+
+        交出去的是**脚本里的字段名**（不是大写开关改过的显示名），
+        否则勾着「转大写」时改不动任何一列。
+        """
+        if self._loading or self._on_edit is None or item.column() > 2:
+            return
+        row = item.row()
+        if row >= len(self._originals):
+            return
+        field, comment, typ = self._originals[row]
+        shown = lambda c: (self.field_table.item(row, c).text()
+                           if self.field_table.item(row, c) is not None else "")
+        kw = {}
+        if shown(0).strip() and shown(0).strip() != field:
+            kw["new_field"] = shown(0).strip()
+        if shown(1) != comment:
+            kw["new_comment"] = shown(1)
+        if shown(2).strip() and shown(2).strip() != typ:
+            kw["new_type"] = shown(2).strip()
+        if not kw:
+            return
+        if self._on_edit(field, **kw):
+            self._originals[row] = (kw.get("new_field", field),
+                                    kw.get("new_comment", comment),
+                                    kw.get("new_type", typ))
+            return
+        self._loading = True          # 填回原值别再触发一次 itemChanged
+        try:
+            for col, value in ((0, field.upper() if self._upper else field),
+                               (1, comment), (2, typ)):
+                cell = self.field_table.item(row, col)
+                if cell is not None:
+                    cell.setText(value)
+        finally:
+            self._loading = False
 
 
 # ---------------------------------------------------------------------------
