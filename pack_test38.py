@@ -1559,7 +1559,7 @@ check("Y23b 默认批大小 500：3 行就是一批",
 
 
 # ---------------------------------------------------------------------------
-section("Z SQL 脚本线（GUI「SQL 脚本改名入库」页的命令行版）")
+section("Z SQL 脚本线（GUI「SQL 脚本改名」页的命令行版）")
 
 sql_dir = os.path.join(_tmpdir, "sqls")
 shutil.rmtree(sql_dir, ignore_errors=True)

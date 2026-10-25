@@ -711,7 +711,7 @@ check("F1 MainWindow 构造成功，标题带版本号",
       w.windowTitle().startswith("Excel → MySQL 批量导入工具 v")
       and app_main.APP_VERSION in w.windowTitle(), w.windowTitle())
 check("F2 前两个页签齐全", [w.main_tabs.tabText(i) for i in range(2)]
-      == ["Excel 导入", "SQL 脚本改名入库"])
+      == ["Excel 导入", "SQL 脚本改名"])
 w.cb_db.blockSignals(True); w.cb_db.clear()
 w.cb_db.addItem("testdb", "testdb")
 w.cb_db.blockSignals(False)
@@ -719,8 +719,8 @@ w._refresh_db_labels()
 check("F3 目标库提示条：Excel 页显示导入措辞",
       "testdb" in w.lbl_imp_db.text() and "Excel 数据将导入到这个库" in w.lbl_imp_db.text(),
       w.lbl_imp_db.text())
-check("F4 目标库提示条：SQL 页显示执行措辞",
-      "SQL 脚本将执行到这个库" in w.lbl_sql_db.text(), w.lbl_sql_db.text())
+check("F4 目标库提示条：SQL 页说的是改好名后的 DDL 才执行到这个库",
+      "改好表名后的 DDL 执行到这个库" in w.lbl_sql_db.text(), w.lbl_sql_db.text())
 check("F4b 目标库提示条：SQL 执行器页说的是编辑区与脚本文件两段",
       "编辑区 SQL 与脚本文件都执行到这个库" in w.lbl_run_db.text()
       and "testdb" in w.lbl_run_db.text(), w.lbl_run_db.text())
@@ -1063,9 +1063,9 @@ check("F18 保存后 modified 标记复位，重复保存不再产生新写入",
       w.sql_files[-1]["modified"] is False)
 
 # ---- 第三个页签「SQL 执行器」：编辑区、脚本清单、示例对话框与执行语义 ----
-check("F19 页签顺序为 Excel 导入 / SQL 脚本改名入库 / SQL 执行器",
+check("F19 页签顺序为 Excel 导入 / SQL 脚本改名 / SQL 执行器",
       [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())]
-      == ["Excel 导入", "SQL 脚本改名入库", "SQL 执行器"],
+      == ["Excel 导入", "SQL 脚本改名", "SQL 执行器"],
       [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())])
 check("F20 编辑区开场就是那句连通检查且不折行",
       w.sql_run_input.toPlainText() == app_main.SQL_RUN_DEFAULT
@@ -2237,7 +2237,7 @@ check("K8 固定件不在分隔条内（提示条/操作条/进度条不跟着�
       w.lbl_imp_db.parent() is not sp and w.progress.parent() is not sp
       and w.btn_import.parent() is not sp)
 check("K9 初始三段高度都大于 0", all(x > 0 for x in sp.sizes()), sp.sizes())
-# ---- SQL 脚本改名入库页：三段可拖拽（拖拽区 / 表格区 / 日志），与第一页同一形状 ----
+# ---- SQL 脚本改名页：三段可拖拽（拖拽区 / 表格区 / 日志），与第一页同一形状 ----
 from PySide6.QtWidgets import QTableWidget
 
 w.main_tabs.setCurrentIndex(1)
@@ -4412,7 +4412,7 @@ check("Q51 别的页在跑不挡这一页：SQL 页的任务照样起得来",
 POPUPS.clear()
 cwin2._run_modal("第二个 SQL 页任务", _slow_task, (3,), log_view=cwin2.sql_log)
 check("Q51b 同一页的第二个任务仍然被挡，且说得出共用的是哪一份数据",
-      len(cwin2._tasks) == 2 and any("SQL 脚本改名入库页的脚本列表" in x
+      len(cwin2._tasks) == 2 and any("SQL 脚本改名页的脚本列表" in x
                                      for _t, x in POPUPS),
       [x.replace("\n", " ")[:120] for _t, x in POPUPS])
 check("Q51c 非模态：起任务这一句立刻返回，不等框关闭",
@@ -4848,7 +4848,7 @@ rw5.btn_replace_prefix.click()
 check("R26 没有文件时只提示，不报错",
       any(x == app_main.NO_FILE_HINT for _, x in POPUPS) and rw5.tables == [])
 
-# ---- SQL 脚本改名入库页 UI ----
+# ---- SQL 脚本改名页 UI ----
 rpath = os.path.join(_tmpdir, "换前缀样本.sql")
 open(rpath, "w", encoding="utf-8").write(rsql)
 sw3 = app_main.MainWindow()

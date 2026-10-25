@@ -1444,9 +1444,10 @@ public final class GuiMain {
                 || !frame.excelHintIsOk()) {
             problems.add("选定库之后 Excel 页提示条不对：" + frame.excelHintText());
         }
-        if (!frame.sqlPage().hintText().contains("SQL 脚本将执行到这个库")
+        if (!frame.sqlPage().hintText().contains("改好表名后的 DDL 执行到这个库")
                 || !frame.sqlPage().hintIsOk()) {
-            problems.add("SQL 页提示条没跟着联动：" + frame.sqlPage().hintText());
+            problems.add("SQL 页提示条没说清执行的是改好名后的 DDL："
+                    + frame.sqlPage().hintText());
         }
         if (!frame.runDbHintText().contains("编辑区 SQL 与脚本文件都执行到这个库")
                 || !frame.runDbHintText().contains("testdb") || !frame.runDbHintIsOk()) {
@@ -1988,7 +1989,7 @@ public final class GuiMain {
     }
 
     /**
-     * 「SQL 脚本改名入库」页那两颗生成按钮的自检：解析→导出→回读，全程离线。
+     * 「SQL 脚本改名」页那两颗生成按钮的自检：解析→导出→回读，全程离线。
      *
      * 用一个新的 SqlPage 实例而不是复用 sql_page 那个：那份页面已经被前面的读取/改名
      * 用例改过状态，混在一起查就分不清"这一条日志是刚才哪一步写的"。
@@ -2808,12 +2809,12 @@ public final class GuiMain {
 
     private static void sql_page(MainFrame frame, List<String> problems) {
         List<String> titles = frame.tabTitles();
-        if (!titles.contains("Excel 导入") || !titles.contains("SQL 脚本改名入库")) {
+        if (!titles.contains("Excel 导入") || !titles.contains("SQL 脚本改名")) {
             problems.add("页签不齐全：" + titles);
         }
         com.excel2mysql.gui.SqlPage page = frame.sqlPage();
         if (page == null) {
-            problems.add("界面上没有「SQL 脚本改名入库」页");
+            problems.add("界面上没有「SQL 脚本改名」页");
             return;
         }
         // 分栏配置照 Python：把手 6px、余量按 3:2 给表格与日志、初始 360（设计值按 DPI 折算）
@@ -4933,7 +4934,7 @@ public final class GuiMain {
         if (frame.runningTasks().size() != 2) {
             problems.add("同一页的第二个任务挤进来了：" + frame.runningTasks().size());
         }
-        if (!frame.lastDialogText().contains("SQL 脚本改名入库页的脚本列表")) {
+        if (!frame.lastDialogText().replace(" ", "").contains("SQL脚本改名页的脚本列表")) {
             problems.add("被挡下时没点名共用的是哪一份数据：" + frame.lastDialogText());
         }
         frame.endTask();
@@ -5174,7 +5175,7 @@ public final class GuiMain {
             // 弹窗正文是按 56 列折过存的那一份，长短语会在中间断行；日志那一份又会被
             // 生成任务的刷屏挤掉（每个文件两行）。比之前把空白去掉，两边都不受排版影响
             if (!flat.contains("已有任务在跑")
-                    || !flat.contains("SQL脚本改名入库页的脚本列表")) {
+                    || !flat.contains("SQL脚本改名页的脚本列表")) {
                 problems.add("SQL 页第二个动作被挡下时没点名共用的是这一页的脚本列表："
                         + tail(flat));
             }
