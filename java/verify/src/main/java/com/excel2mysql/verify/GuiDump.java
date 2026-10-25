@@ -133,6 +133,8 @@ public final class GuiDump {
                 put("conn.edit", frame.connEditVisible() ? "显示" : "隐藏");
                 put("hint.excel", frame.excelHintText());
                 put("hint.sql", frame.sqlPage().hintText());
+                put("intro.excel", norm(frame.excelIntroText()));
+                put("intro.sql", norm(frame.sqlPage().introText()));
                 put("drop.hint", frame.dropArea().hintText());
                 put("drop.sql.hint", frame.sqlPage().sqlDropArea().hintText());
                 put("drop.sql.accepts",

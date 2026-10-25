@@ -373,6 +373,8 @@ def main():
     put("conn.edit", "显示" if win.btn_conn_edit.isVisible() else "隐藏")
     put("hint.excel", win.lbl_imp_db.text())
     put("hint.sql", win.lbl_sql_db.text())
+    put("intro.excel", norm(win.imp_intro.text()))
+    put("intro.sql", norm(win.sql_intro.text()))
     put("drop.hint", win.drop.label.text())
     put("drop.sql.hint", win.sql_drop.label.text())
     put("drop.sql.accepts", "true" if win.sql_drop.acceptDrops() else "false")

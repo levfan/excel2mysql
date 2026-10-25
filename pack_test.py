@@ -795,6 +795,18 @@ check("F4 目标库提示条：SQL 页说的是解析并修改 DDL 脚本",
 check("F4b 目标库提示条：SQL 执行器页说的是编辑区与脚本文件两段",
       "编辑区 SQL 与脚本文件都执行到这个库" in w.lbl_run_db.text()
       and "testdb" in w.lbl_run_db.text(), w.lbl_run_db.text())
+check("F4c 页内介绍条：Excel 页说自己按中英表头建模回写库",
+      w.imp_intro.text() == "中英表头建模，回写库", w.imp_intro.text())
+check("F4d 页内介绍条：SQL 页说自己解析建表语句回写库",
+      w.sql_intro.text() == "解析建表语句，回写库", w.sql_intro.text())
+check("F4e 页内介绍条：SQL 执行器页那句介绍没被搬走",
+      w.sql_run_hint.text().startswith("两种用法"), w.sql_run_hint.text())
+check("F4f 三页介绍条用的是同一块醒目底板（样式必须逐字符相同且加粗）",
+      w.imp_intro.styleSheet() == w.sql_intro.styleSheet()
+      and w.sql_intro.styleSheet() == w.sql_run_hint.styleSheet()
+      and "font-weight: bold" in w.imp_intro.styleSheet(),
+      "|".join([w.imp_intro.styleSheet(), w.sql_intro.styleSheet(),
+                w.sql_run_hint.styleSheet()]))
 w.ed_port.setValue(3307)
 check("F5 改端口后状态栏的悬停提示实时联动（host:port 收在这条里）",
       "3307" in w.lbl_conn_state.toolTip(), w.lbl_conn_state.toolTip())

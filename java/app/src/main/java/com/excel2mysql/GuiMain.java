@@ -1468,6 +1468,33 @@ public final class GuiMain {
                 || !frame.runDbHintText().contains("testdb") || !frame.runDbHintIsOk()) {
             problems.add("SQL 执行器页的当前库条不对：" + frame.runDbHintText());
         }
+        // 三页各有一句介绍，而且必须是同一块底板：只有一页醒目等于没有这条规则
+        if (!"中英表头建模，回写库".equals(frame.excelIntroText())) {
+            problems.add("Excel 页顶部那句介绍不对：" + frame.excelIntroText());
+        }
+        if (!"解析建表语句，回写库".equals(frame.sqlPage().introText())) {
+            problems.add("SQL 页顶部那句介绍不对：" + frame.sqlPage().introText());
+        }
+        if (!frame.sqlRunHintText().startsWith("两种用法")) {
+            problems.add("SQL 执行器页那句介绍不见了：" + frame.sqlRunHintText());
+        }
+        javax.swing.JLabel intro1 = frame.excelIntro();
+        javax.swing.JLabel intro2 = frame.sqlPage().introField();
+        javax.swing.JLabel intro3 = frame.sqlRunIntro();
+        if (!intro1.getForeground().equals(intro2.getForeground())
+                || !intro2.getForeground().equals(intro3.getForeground())
+                || !intro1.getBackground().equals(intro2.getBackground())
+                || !intro2.getBackground().equals(intro3.getBackground())) {
+            problems.add("三页的介绍条不是同一块底板：前景 "
+                    + intro1.getForeground() + "/" + intro2.getForeground() + "/"
+                    + intro3.getForeground() + "，背景 " + intro1.getBackground() + "/"
+                    + intro2.getBackground() + "/" + intro3.getBackground());
+        }
+        if (intro1.getFont().getStyle() != java.awt.Font.BOLD
+                || intro2.getFont().getStyle() != java.awt.Font.BOLD
+                || intro3.getFont().getStyle() != java.awt.Font.BOLD) {
+            problems.add("介绍条没加粗：这页是干什么的一眼看不出来");
+        }
         // 页内那条不再重复 host:port；主机端口与用户名收进状态栏的悬停提示
         if (frame.excelHintText().contains("127.0.0.1")
                 || !"● 目标库 testdb".equals(frame.connStateText())
