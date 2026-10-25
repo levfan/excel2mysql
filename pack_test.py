@@ -1508,17 +1508,22 @@ w._refresh_run_table()
 w.chk_run_drop.setChecked(False)
 
 # ---- 整库 dump：识别、切句与"逐条提交、出错继续"的执行语义 ----
-# 现场那份 MariaDB dump 的形状：sandbox 标记、版本注释、带前行注释的库级语句、
-# DELIMITER 包起来的触发器、结尾收工标记。导入用户库时这些都必须原样认出来。
+# 现场那份 MariaDB dump 的形状：sandbox 标记、版本注释、带前行注释的建库与切库、
+# 版本注释里的删库语句、DELIMITER 包起来的触发器、结尾收工标记。
+# 建库与切库是"在这张 dump 指定的库里建表"，必须原样执行；只有删库语句不执行。
 _dump_text = (
-    "-- MariaDB dump 10.19  Distrib 10.11.6-MariaDB\n"
+    "-- MariaDB dump 10.19  Distrib 10.11.16-MariaDB\n"
     "--\n"
     "-- Host: localhost    Database: demo\n"
     "/*M!999999\\- enable the sandbox mode */;\n"
     "/*!40101 SET NAMES utf8mb4 */;\n"
-    "-- Current Database\n"
-    "CREATE DATABASE `demo`;\n"
+    "--\n"
+    "-- Current Database: `demo`\n"
+    "--\n"
+    "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `demo`"
+    " /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci */;\n"
     "USE `demo`;\n"
+    "/*!40000 DROP DATABASE IF EXISTS `dropme`*/;\n"
     "DROP TABLE IF EXISTS `t_demo`;\n"
     "CREATE TABLE `t_demo` (`id` int);\n"
     "INSERT INTO `t_demo` VALUES (1);\n"
@@ -1532,17 +1537,32 @@ _dump_text = (
 _dump_path = os.path.join(_tmpdir, "run_dump.sql")
 open(_dump_path, "w", encoding="utf-8", newline="").write(_dump_text)
 _dump_stmts = app_main.dump_statements(_dump_text)
-check("F44 整库 dump 的切句：版本注释保留、DELIMITER 触发器整句、库级语句可辨",
+# 切库取库名是这一轮新增的口径：还没实现时让用例判红，而不是整轮崩在半路
+_db_switch = getattr(app_main, "dump_database_switch", None)
+check("F44 整库 dump 的切句：版本注释保留、DELIMITER 触发器整句",
       app_main.is_dump_script(_dump_text)
-      and len(_dump_stmts) == 7
-      and _dump_stmts[1].lstrip().startswith("-- Current Database")
-      and app_main.dump_skip_reason(_dump_stmts[1]) == "CREATE DATABASE"
-      and app_main.dump_skip_reason(_dump_stmts[2]) == "USE"
-      and app_main.dump_skip_reason(_dump_stmts[4]) == ""
-      and "TRIGGER" in _dump_stmts[6] and "BEGIN" in _dump_stmts[6]
-      and "END" in _dump_stmts[6]
+      and len(_dump_stmts) == 8
+      and _dump_stmts[1].lstrip().startswith("--\n-- Current Database")
+      and "TRIGGER" in _dump_stmts[7] and "BEGIN" in _dump_stmts[7]
+      and "END" in _dump_stmts[7]
       and not any(s.strip() == "END" for s in _dump_stmts),
       [(i, s[:40]) for i, s in enumerate(_dump_stmts, 1)])
+check("F44d 建库与切库照常执行：只有删库语句被拦下",
+      app_main.dump_skip_reason(_dump_stmts[1]) == ""
+      and app_main.dump_skip_reason(_dump_stmts[2]) == ""
+      and app_main.dump_skip_reason(_dump_stmts[3]) == "DROP DATABASE"
+      and app_main.dump_skip_reason(_dump_stmts[4]) == "",
+      [app_main.dump_skip_reason(s) for s in _dump_stmts])
+check("F44e 只有 USE 算切库：库名取出来给日志用（反引号与前行注释都要剥）",
+      _db_switch is not None
+      and _db_switch(_dump_stmts[0]) == ""
+      and _db_switch(_dump_stmts[1]) == ""
+      and _db_switch(_dump_stmts[2]) == "demo"
+      and _db_switch(_dump_stmts[3]) == ""
+      and _db_switch("USE plain_db;") == "plain_db"
+      and _db_switch("-- c\nUSE `a-b.c`;") == "a-b.c"
+      and _db_switch("USE `demo` /* x */;") == "demo",
+      (getattr(app_main, "dump_database_switch", None),))
 check("F44b 只有收工标记也认成 dump；手写脚本不会被误判",
       app_main.is_dump_script("CREATE TABLE t (id int);\n-- Dump completed\n")
       and not app_main.is_dump_script(open(_run_a, encoding="utf-8").read()),
@@ -1551,18 +1571,23 @@ _sink_d = _FileSink()
 _conn_d = _FConn()
 app_main.connect = lambda cfg: _conn_d
 _res_d = app_main.sql_run_files_task([_dump_path], False, _CFG_D, _sink_d)
-check("F45 dump 不开事务、逐条提交，库级语句跳过不执行",
+check("F45 dump 不开事务、逐条提交，建库与切库真发进连接",
       _res_d["ok"] == 1 and _res_d["files"][0]["status"] == "ok"
-      and _res_d["files"][0]["detail"] == "5 条语句已提交，跳过 2 条库级语句"
+      and _res_d["files"][0]["detail"]
+      == "7 条语句已提交，目标库 demo，跳过 1 条删库语句"
       and "begin" not in _conn_d.calls and "rollback" not in _conn_d.calls
-      and _conn_d.calls.count("commit") == 5
-      and not any("CREATE DATABASE" in c or c.lstrip().upper().startswith("USE")
-                  for c in _conn_d.calls),
+      and _conn_d.calls.count("commit") == 7
+      and any("CREATE DATABASE" in c.upper() for c in _conn_d.calls)
+      and any(c.lstrip().upper().startswith("USE") for c in _conn_d.calls)
+      and not any("DROP DATABASE" in c.upper() for c in _conn_d.calls),
       (_res_d["files"], _conn_d.calls))
-check("F45b dump 通道在日志里说明走法与跳过的库级语句",
+check("F45b dump 通道在日志里说明走法、切库与跳过的删库语句",
       any("识别为整库 dump" in t and "逐条提交" in t for t in _sink_d.logs)
-      and sum(1 for t in _sink_d.logs if t.startswith("[跳过]")) == 2
-      and any("5 条语句已提交，跳过 2 条库级语句" in t for t in _sink_d.logs),
+      and sum(1 for t in _sink_d.logs if t.startswith("[跳过]")) == 1
+      and any(t.startswith("[跳过]") and "DROP DATABASE" in t and "删库语句不执行" in t
+              for t in _sink_d.logs)
+      and any(t.startswith("[切库]") and "demo" in t for t in _sink_d.logs)
+      and any("7 条语句已提交，目标库 demo，跳过 1 条删库语句" in t for t in _sink_d.logs),
       _sink_d.logs)
 _sink_de = _FileSink()
 _conn_de = _FConn(fail_on="INSERT INTO `t_demo`")
@@ -1571,13 +1596,13 @@ _res_de = app_main.sql_run_files_task([_dump_path], False, _CFG_D, _sink_de)
 check("F46 dump 中某条报错不整批回滚：出错前的已提交，后续语句继续执行",
       _res_de["fail"] == 1
       and _res_de["files"][0]["detail"]
-      == "已执行 4/7 条，1 条语句报错（逐条提交，已成功的已落库）"
-      and _conn_de.calls.count("commit") == 4
+      == "已执行 6/8 条，1 条语句报错（逐条提交，已成功的已落库）"
+      and _conn_de.calls.count("commit") == 6
       and _conn_de.calls.count("rollback") == 1
       and any("TRIGGER" in c for c in _conn_de.calls),
       (_res_de["files"], _conn_de.calls))
 check("F46b 报错逐条点名并带出错语句原文",
-      any("第 6/7 条语句报错" in t and "INSERT INTO `t_demo`" in t
+      any("第 7/8 条语句报错" in t and "INSERT INTO `t_demo`" in t
           for t in _sink_de.errors), _sink_de.errors)
 _sink_dc = _FileSink(cancel_after=1)
 _conn_dc = _FConn()
@@ -1586,7 +1611,7 @@ _res_dc = app_main.sql_run_files_task([_dump_path], False, _CFG_D, _sink_dc)
 check("F47 dump 中途取消：已提交的保留，不整文件回滚",
       _res_dc["files"][0]["status"] == "cancel"
       and _res_dc["files"][0]["detail"]
-      == "已执行 1/7 条（逐条提交，已执行的已落库）"
+      == "已执行 1/8 条（逐条提交，已执行的已落库）"
       and _conn_dc.calls.count("commit") == 1
       and "rollback" not in _conn_dc.calls, (_res_dc["files"], _conn_dc.calls))
 app_main.connect = _real_connect
@@ -5927,6 +5952,74 @@ else:
             for _k in _genv:
                 os.environ.pop(_k, None)
             app_main.program_dir = _gpdir
+
+        # G11 整库 dump 真库端到端：dump 自带的建库与切库要真执行，表落进 dump
+        # 指定的库而不是界面选中的库；版本注释里的删库语句必须不发出去
+        _g11db = "e2m_dump_probe"
+        _g11no = "e2m_dump_probe_nope"
+        _g11path = os.path.join(_tmpdir, "G11整库dump.sql")
+        open(_g11path, "w", encoding="utf-8", newline="").write(
+            "-- MariaDB dump 10.19  Distrib 10.11.16-MariaDB, for debian-linux-gnu (x86_64)\n"
+            "/*!40101 SET NAMES utf8mb4 */;\n"
+            "--\n"
+            "-- Current Database: `%s`\n"
+            "--\n"
+            "CREATE DATABASE /*!32312 IF NOT EXISTS*/ `%s`"
+            " /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci */;\n"
+            "USE `%s`;\n"
+            "/*!40000 DROP DATABASE IF EXISTS `%s`*/;\n"
+            "DROP TABLE IF EXISTS `t_probe`;\n"
+            "CREATE TABLE `t_probe` (`id` int, `name` varchar(20));\n"
+            "INSERT INTO `t_probe` VALUES (1, '甲');\n"
+            "-- Dump completed on 2026-10-25\n" % (_g11db, _g11db, _g11db, _g11no))
+        gconn = connect(_cfg)
+        with gconn.cursor() as c:
+            c.execute("SHOW DATABASES LIKE '%s'" % _g11db)
+            _g11_pre = c.fetchone() is not None
+        gconn.close()
+        _sink_g11 = _FileSink()
+        _res_g11 = app_main.sql_run_files_task(
+            [_g11path], False, dict(_cfg), _sink_g11)
+        check("G11 整库 dump 真库导入：建库与切库照常执行，表落在 dump 指定的库",
+              _res_g11["ok"] == 1 and _g11_pre is False
+              and ("目标库 %s" % _g11db) in _res_g11["files"][0]["detail"],
+              (_res_g11["files"], [t for t in _sink_g11.logs if t.startswith("[切库]")]))
+        gconn = connect(_cfg)
+        _g11_created = _g11_leak = _g11_dropped = False
+        _g11_rows = []
+        try:
+            with gconn.cursor() as c:
+                c.execute("SHOW DATABASES LIKE '%s'" % _g11db)
+                _g11_created = c.fetchone() is not None
+                _g11_rows = []
+                if _g11_created:
+                    c.execute("SELECT `id`, `name` FROM `%s`.`t_probe`" % _g11db)
+                    _g11_rows = list(c.fetchall())
+                c.execute("SHOW TABLES LIKE 't_probe'")   # 连接默认库仍是 testdb
+                _g11_leak = c.fetchone() is not None
+                c.execute("SHOW DATABASES LIKE '%s'" % _g11no)
+                _g11_dropped = c.fetchone() is not None
+            check("G11b dump 的建库语句真建出库、数据落进该库",
+                  _g11_created and _g11_rows == [(1, "甲")], (_g11_created, _g11_rows))
+            check("G11c 切库只影响这次执行：界面选中的库里没有 dump 的表",
+                  not _g11_leak, _g11_leak)
+            check("G11d 版本注释里的删库语句没被执行（日志点名跳过）",
+                  not _g11_dropped
+                  and any(t.startswith("[跳过]") and "DROP DATABASE" in t
+                          for t in _sink_g11.logs),
+                  (_g11_dropped, [t for t in _sink_g11.logs if t.startswith("[跳过]")]))
+        finally:
+            if _g11_created:            # 只清这一轮自己建出来的库，别动现场原有的同名库
+                with gconn.cursor() as c:
+                    c.execute("DROP DATABASE IF EXISTS `%s`" % _g11db)
+            with gconn.cursor() as c:
+                # 判据没生效时 dump 的表会落进界面选中的库，探针不留在那儿
+                c.execute("DROP TABLE IF EXISTS `t_probe`")
+            gconn.close()
+        with connect(_cfg).cursor() as _c:
+            _c.execute("SHOW DATABASES LIKE '%s'" % _g11db)
+            check("G11e 探针库已清理（只删本轮建出来的）", _c.fetchone() is None)
+
     except Exception as e:
         check("G0 连接 MySQL 失败", False, f"{type(e).__name__}: {e}")
         traceback.print_exc()
