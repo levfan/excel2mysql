@@ -64,6 +64,8 @@ _MONEY_CN = (
     "金额", "总额", "总价", "单价", "均价", "价格", "价目", "报价", "成交价", "结算价",
     "基准价", "中标价", "投标价", "采购价", "批发价", "零售价", "售价", "进价",
     "运价", "电价", "水价", "热价", "气价", "油价", "票价", "话费", "房价", "地价",
+    "价款", "底价", "起拍价", "限价", "现价", "定价", "指导价", "协议价", "参考价",
+    "评估价", "股价",
     "费用", "费额", "成本", "余额", "余款", "工资", "薪金", "薪资", "薪酬", "补贴",
     "津贴", "奖金", "收入", "支出", "开销", "付款", "收款", "支付", "缴费", "付费",
     "预算", "决算", "清算", "结算", "税额", "税金", "税费", "利息", "保费",
@@ -71,17 +73,44 @@ _MONEY_CN = (
     "出口额", "利润", "亏损", "毛利", "净利", "欠款", "贷款", "存款", "融资", "投资额",
     "资金", "额度", "补偿", "赔偿", "保证金", "押金", "定金", "预付款", "进度款",
     "工程款", "材料费", "人工费", "运输费", "服务费", "咨询费", "管理费", "仓储费",
+    "交易额", "成交额", "流水", "营收", "收支", "花费", "消费", "充值", "退款",
+    "运费", "邮费", "快递费", "停车费", "物业费", "手续费", "滞纳金", "佣金",
+    "中介费", "代理费", "租赁费", "租金", "房租", "餐费", "差旅费", "培训费",
+    "学费", "医疗费", "药费", "水电费", "燃气费", "网费", "维保费", "保养费",
+    "检测费", "认证费", "附加费", "增值税", "所得税", "消费税", "营业税", "关税",
+    "应收款", "应付款", "实收款", "实付款", "货款", "拨款", "补助", "救助金",
+    "抚恤金", "退休金", "养老金", "公积金", "保险金", "现金", "净值", "残值",
+    "产值", "货值", "收益", "分红", "股息", "红利", "投资收益", "投资总额",
+    "净利润", "毛利润", "利润额", "总资产", "净资产", "总负债", "资产总额",
+    "负债总额",
+    "违约金", "本金", "借款", "月供", "本息", "尾款", "首付", "首付款", "造价",
+    "概算", "水费", "电费", "车费", "船费", "杂费", "装卸费", "安装费", "调试费",
+    "措施费", "规费", "价差", "补差", "退税", "罚息", "客单价", "工时费", "台班费",
+    "承包费", "分包款", "收费",
+    "伙食费", "取暖费", "被装费", "油料费", "维修费", "值班费", "加班费", "油费",
+    "过路费", "养路费",
 )
 _MONEY_EN = re.compile(
     r"(?:^|_)(?:amount|amt|money|price|cost|fee|fees|salary|wage|wages|income|"
     r"expense|expenses|balance|budget|revenue|profit|payment|payable|receivable|"
-    r"charge|charges|fund|funds|tax|interest|capital)(?:$|_)",
+    r"charge|charges|fund|funds|tax|interest|capital|pay|fare|toll|refund|deposit|"
+    r"fine|penalty|royalty|commission|dividend|bonus|subsidy|allowance|cash|"
+    r"earnings|turnover|rent|loan|mortgage|arrears|receipt|receipts|billing|"
+    r"disbursement|expenditure|spending|worth|valuation|equity|dues|principal|"
+    r"installment|prepayment|deductible|tariff|premium|reimbursement|stipend|"
+    r"honorarium|gratuity|payout)(?:$|_)",
     re.IGNORECASE,
 )
 # 比率类列（利率/税率/百分比/占比）语义上含"率"或 rate，钱味关键词会误命中，
 # 一律否决：它们该按实测小数位定精度，而不是套金额的两位小数。
 _RATE_CN = ("率", "比例", "百分比", "占比", "增速", "幅度")
 _RATE_EN = re.compile(r"(?:rate|ratio|percent|percentage|pct|share)", re.IGNORECASE)
+# 标识类列的后缀同样要否决金额：「资产名称」「付款单位」「缴费方式」带着钱味词根
+# 但存的是名字，判成 DECIMAL 会把一整列文本写成 0.00。只按结尾判，
+# 「支付金额」「应收款」这类钱在尾巴上的照旧归金额。
+_NAME_ID_SUFFIX = ("名称", "姓名", "编号", "代码", "类型", "类别", "状态", "备注",
+                   "说明", "描述", "地址", "电话", "邮箱", "单位", "方式", "标志",
+                   "标识", "清单", "名单", "标准", "依据")
 _MONEY_SCALE = 2                # 金额固定保留 2 位小数（精确到分）
 _MONEY_PRECISION = 16           # 金额默认 DECIMAL(16,2)
 _INT_MAX = 2147483647
@@ -91,10 +120,12 @@ _DECIMAL_MAX_SCALE = 30         # MySQL DECIMAL 小数位上限
 
 
 def _is_money(comment: str, field: str) -> bool:
-    """表头中文或字段名英文命中金额语义关键词；比率类列一律否决。"""
+    """表头中文或字段名英文命中金额语义关键词；比率类与标识类列一律否决。"""
     c = str(comment or "")
     fl = str(field or "")
     if any(k in c for k in _RATE_CN) or _RATE_EN.search(c) or _RATE_EN.search(fl):
+        return False
+    if c.endswith(_NAME_ID_SUFFIX):
         return False
     if any(k in c for k in _MONEY_CN):
         return True
@@ -107,49 +138,145 @@ def _is_money(comment: str, field: str) -> bool:
 # 只在"这列一个值都没有"时参与，有值照旧走数据判定；结构定义模式的人工类型不受影响。
 _NAME_TIME_CN = "时间"      # 含"日期时间"——先查时间，才会落 DATETIME 而不是 DATE
 _NAME_DATE_CN = "日期"
-_NAME_BOOL_CN = ("是否", "有无", "开关", "布尔", "标志")
+# 时刻类只写"几点"：不含日期，落 TIME 而不是 DATETIME
+_NAME_CLOCK_CN = ("时刻", "时点")
+# 时长先于金额与时间判定：「付款周期」「结算周期」带着钱味词根，但存的是天/月数
+_NAME_DUR_CN = ("时长", "工期", "周期", "耗时", "用时", "间隔", "续航", "时延", "延时",
+                "工时", "机时", "台时")
+_NAME_DUR_EN = re.compile(r"(?:^|_)(?:duration|elapsed|period|latency)(?:_|$)",
+                          re.IGNORECASE)
+_NAME_BOOL_CN = ("是否", "有无", "开关", "布尔", "标志", "标识", "真假", "可否", "能否")
 # 显式比率/系数词先于计量词判定；裸「率」放到计量词之后再查，
 # 否则「频率」「功率」会被当成比率，而「容积率」需要留在比率这一侧
 _NAME_RATIO_CN = ("比例", "百分比", "占比", "增速", "幅度",
-                  "系数", "因数", "倍数", "折扣", "权重", "比重", "容积率")
-_NAME_SCORE_CN = ("得分", "评分", "分数", "成绩", "总分", "平均分", "绩点")
+                  "系数", "因数", "倍数", "折扣", "权重", "比重", "容积率",
+                  "概率", "比值", "份额", "百分点", "配比")
+_NAME_SCORE_CN = ("得分", "评分", "分数", "成绩", "总分", "平均分", "绩点",
+                  "分值", "满意度", "星级", "扣分", "加分", "基准分",
+                  "考核分", "理论分", "实操分", "体能分", "技能分", "综合分", "总评")
 _NAME_COORD_CN = ("经度", "纬度", "经纬度", "坐标")
 _NAME_MEASURE_CN = ("长度", "宽度", "高度", "厚度", "深度", "距离", "里程",
                     "面积", "体积", "容积", "重量", "毛重", "净重", "体重", "载重",
                     "容量", "温度", "湿度", "浓度", "密度", "压力", "速度", "速率",
                     "流量", "电量", "水量", "气量", "热量", "功率", "电压", "电流",
                     "频率", "海拔", "高程", "水位", "雨量", "身高", "含量", "纯度",
-                    "直径", "半径", "周长", "角度")
+                    "直径", "半径", "周长", "角度",
+                    "间距", "跨度", "坡度", "倾斜度", "粗糙度", "平整度", "压实度",
+                    "稠度", "黏度", "粘度", "硬度", "强度", "应力", "应变", "模量",
+                    "电阻", "电容", "电感", "阻抗", "能耗", "电耗", "水耗", "热耗",
+                    "油耗", "气耗", "煤耗", "产能", "吨位", "载荷", "荷载", "压强",
+                    "液压", "气压", "风速", "流速", "照度", "亮度", "色度", "浊度",
+                    "盐度", "酸度", "碱度", "温差", "体温", "扬程", "库容", "含沙量",
+                    "溶解氧", "氨氮", "断面", "管径", "线径", "粒径", "粒度", "负荷",
+                    "壁厚", "净高", "净空", "埋深", "覆土", "进深", "开间", "视距",
+                    "弧长", "弦长", "振幅", "挠度", "沉降", "位移", "变形量",
+                    "噪声", "噪音", "分贝", "辐射", "总磷", "总氮", "含水",
+                    "航程", "航速", "转速", "亩产")
+# 合计类既可能是钱也可能是数量：给一位小数都装得下的 DECIMAL(18,4)，
+# 猜 INT 会在写进 12.5 这类值时静默取整
+_NAME_SUM_CN = ("总计", "小计", "合计", "共计", "累计", "汇总", "总量", "总值")
+_NAME_SUM_EN = re.compile(
+    r"(?:^|_)(?:total|totals|subtotal|subtotals|sum|sums|aggregate|aggregates|"
+    r"cumulative|accumulation)(?:_|$)", re.IGNORECASE)
+# 大计数单独一档：浏览量这类只涨不减的数，INT 的 21 亿上限是真会撞的
+_NAME_BIG_CN = ("播放量", "阅读量", "曝光量", "点击量", "访问量", "下载量", "转发量",
+                "浏览量", "粉丝数", "关注数", "订阅数", "收藏数", "评论数", "点赞数",
+                "分享量", "投票数", "计数")
+_NAME_BIG_EN = re.compile(
+    r"(?:^|_)(?:views|visits|clicks|downloads|plays|impressions|pageviews|followers|"
+    r"fans|likes|comments|shares)(?:_|$)", re.IGNORECASE)
 _NAME_INT_CN = ("数量", "个数", "人数", "次数", "库存", "张数", "件数", "台数",
                 "点数", "条数", "户数", "笔数", "车数", "头数", "只数", "间数",
-                "亩数", "套数", "项数", "总数", "积分")
+                "亩数", "套数", "项数", "总数", "积分",
+                "票数", "名额", "席位", "床位", "车位", "家数", "座数", "部数",
+                "册数", "卷数", "箱数", "袋数", "瓶数", "轮数", "批数", "课时",
+                "学分", "题数", "场次", "集数", "股数", "频次",
+                "人次", "班次", "车次", "趟次", "架次", "艘次", "轮次", "届次",
+                "期次", "户次", "根数", "块数", "片数", "栋数", "幢数", "孔数",
+                "份数", "宗数", "组数", "排数", "行数", "列数", "栏数", "遍数",
+                "站点数", "接口数", "端口数", "会员数", "用户数", "访客数",
+                "员工数", "职工数", "学生数", "教师数", "企业数", "学校数",
+                "项目数", "案件数", "订单数", "交易量", "成交量", "出货量",
+                "进货量", "销售量", "销量", "产量", "存量", "余量",
+                "出库数", "入库数", "在库数", "在册数", "在位数", "配发数",
+                "消耗数", "报废数", "维修数", "检修数", "领用数", "归还数",
+                "发放数", "盘盈数", "盘亏数", "官兵数", "兵员数", "装备数",
+                "台套数", "辆数", "参与数")
 _NAME_AGE_CN = ("年龄", "工龄", "教龄", "党龄", "军龄", "年限", "岁数", "周岁")
 _NAME_RANK_CN = ("序号", "排序", "排名", "名次", "页码", "页数", "层数", "楼层",
-                 "优先级")
+                 "优先级", "位次", "座次", "位序", "顺位", "序位")
 _NAME_CAL_CN = ("年份", "年度", "月份", "季度", "周次", "周数", "天数",
-                "小时数", "分钟数", "秒数", "期数")
+                "小时数", "分钟数", "秒数", "期数", "月数", "旬")
+# 三档文本：链接/路径最宽，长文本直接 TEXT，名称类给 255。
+# 一律只放宽不收紧——默认档是 VARCHAR(64)，把 32 这类窄档写进词表会在真实数据
+# 超长时变成截断报错，比按 VARCHAR(64) 建列更糟。
+_NAME_URL_CN = ("网址", "网站", "链接", "超链接", "路径", "下载地址", "访问地址",
+                "图片地址", "附件地址", "文件地址", "主页", "官网", "域名", "短链")
+_NAME_TEXT_CN = ("备注", "说明", "描述", "详情", "内容", "摘要", "简介", "评价",
+                 "意见", "建议", "要求", "原因", "问题", "经过", "措施", "职责",
+                 "业绩", "事迹", "案情", "附注", "注释", "正文", "文本", "结论",
+                 "经营范围", "注意事项", "特点", "优势", "亮点",
+                 "留言", "反馈", "答复", "回复", "心得", "体会", "感想", "承诺",
+                 "条款", "批注", "点评", "陈述", "供述", "证言", "笔录", "诉求",
+                 "主张", "情况", "事由", "纪要", "做法", "成效")
+_NAME_TITLE_CN = ("名称", "姓名", "标题", "题目", "主题", "类别", "分类", "类型",
+                  "种类", "品种", "品牌", "型号", "规格", "材质", "颜色", "尺码",
+                  "单位", "部门", "机构", "公司", "企业", "组织", "学校", "医院",
+                  "项目", "工程", "标段", "来源", "渠道", "标签", "关键词", "地址",
+                  "联系人", "职务", "职业", "科目", "课程", "标准", "依据", "方式",
+                  "方法", "工艺", "工序", "阶段", "环节",
+                  "称谓", "职称", "岗位", "职位", "科室", "班组", "班级", "专业",
+                  "院系", "校区", "场馆", "楼盘", "小区", "街道", "社区", "村镇",
+                  "路段", "线路", "管线", "站点", "品名", "别名", "曾用名", "简称",
+                  "全称", "栏目", "频道", "语种", "币种",
+                  "负责人", "经办人", "审核人", "批准人", "填报人", "编制人",
+                  "责任人", "申请人", "受理人", "创建人", "修改人", "更新人",
+                  "删除人", "录入人", "制单人", "复核人", "移交人", "接收人",
+                  "密级", "级别", "层级", "建制", "番号", "部队")
+_NAME_URL_EN = re.compile(r"(?:^|_)(?:url|uri|link|links|href|path|paths|"
+                          r"permalink|domain|homepage)(?:_|$)", re.IGNORECASE)
+_NAME_TEXT_EN = re.compile(
+    r"(?:^|_)(?:remark|remarks|note|notes|memo|description|desc|detail|details|"
+    r"content|contents|summary|abstract|comment|comments|feedback|text|body|intro|"
+    r"introduction|overview|conclusion|suggestion|suggestions|requirement|"
+    r"requirements|reason|feature|features|advantage|advantages|message|messages|"
+    r"statement|statements|annotation|annotations)(?:_|$)",
+    re.IGNORECASE)
+_NAME_TITLE_EN = re.compile(
+    r"(?:^|_)(?:name|names|title|category|categories|type|types|kind|kinds|brand|"
+    r"model|spec|specs|material|color|colour|dept|department|organization|"
+    r"organisation|company|school|hospital|project|keyword|keywords|tag|tags|"
+    r"label|labels|address|source|channel|method|occupation|position|unit|alias|role"
+    r"|owner)(?:_|$)",
+    re.IGNORECASE)
 _NAME_TIME_EN = re.compile(r"(?:^|_)(?:time|timestamp|datetime)(?:_|$)", re.IGNORECASE)
 _NAME_DATE_EN = re.compile(r"(?:^|_)(?:date|dt)(?:_|$)", re.IGNORECASE)
 _NAME_BOOL_EN = re.compile(
-    r"(?:^|_)(?:is|has|bool|boolean|flag|enabled|active|valid|deleted|disabled|yn)"
-    r"(?:_|$)", re.IGNORECASE)
+    r"(?:^|_)(?:is|has|bool|boolean|flag|enabled|active|valid|deleted|disabled|yn|"
+    r"exists|allowed|need|required|checked|verified|approved|locked|"
+    r"visible|available|permitted|yesno|truefalse)(?:_|$)", re.IGNORECASE)
 _NAME_RATIO_EN = re.compile(
     r"(?:^|_)(?:rate|ratio|percent|percentage|pct|coefficient|factor|multiplier|"
-    r"discount)(?:_|$)", re.IGNORECASE)
-_NAME_SCORE_EN = re.compile(r"(?:^|_)(?:score|gpa)(?:_|$)", re.IGNORECASE)
+    r"discount|proportion|probability|likelihood|permille)(?:_|$)", re.IGNORECASE)
+_NAME_SCORE_EN = re.compile(r"(?:^|_)(?:score|gpa|grade|rating|ratings)(?:_|$)",
+                            re.IGNORECASE)
 _NAME_COORD_EN = re.compile(
-    r"(?:^|_)(?:longitude|latitude|lng|lat|lon|coord|coords|coordinate)(?:_|$)",
-    re.IGNORECASE)
+    r"(?:^|_)(?:longitude|latitude|lng|lat|lon|coord|coords|coordinate|gps|geo)"
+    r"(?:_|$)", re.IGNORECASE)
 _NAME_MEASURE_EN = re.compile(
     r"(?:^|_)(?:length|width|height|thickness|depth|distance|mileage|area|volume|"
     r"capacity|weight|temperature|humidity|density|pressure|speed|flow|power|"
-    r"voltage|frequency|elevation|altitude|diameter|radius|perimeter)(?:_|$)",
-    re.IGNORECASE)
-_NAME_INT_EN = re.compile(r"(?:^|_)(?:qty|quantity|count|cnt|stock)(?:_|$)",
-                          re.IGNORECASE)
+    r"voltage|frequency|elevation|altitude|diameter|radius|perimeter|span|"
+    r"spacing|slope|hardness|strength|stress|strain|modulus|resistance|"
+    r"capacitance|inductance|impedance|consumption|load|energy|velocity|torque|"
+    r"brightness|amplitude|deflection|settlement|displacement|noise|decibel|"
+    r"radiation|clearance)(?:_|$)", re.IGNORECASE)
+_NAME_INT_EN = re.compile(r"(?:^|_)(?:qty|quantity|count|cnt|stock|members|users|"
+                          r"items|pieces)(?:_|$)", re.IGNORECASE)
 _NAME_AGE_EN = re.compile(r"(?:^|_)(?:age)(?:_|$)", re.IGNORECASE)
 _NAME_RANK_EN = re.compile(
-    r"(?:^|_)(?:rank|sort|seq|sequence|serial|page|pages|floor|priority)(?:_|$)",
+    r"(?:^|_)(?:rank|ranking|sort|seq|sequence|serial|page|pages|floor|priority|"
+    r"ordinal)(?:_|$)",
     re.IGNORECASE)
 _NAME_CAL_EN = re.compile(
     r"(?:^|_)(?:year|month|quarter|week|hour|minute|second)(?:_|$)", re.IGNORECASE)
@@ -159,48 +286,68 @@ def _name_hit(c: str, fl: str, cn, en) -> bool:
     return any(k in c for k in cn) or bool(en.search(fl))
 
 
+def _note(c: str, typ: str, label: str) -> tuple:
+    """按名定类型的返回值：类型与一句留痕文案同源，别让两边写漏一边。"""
+    return typ, f"该列没有值，字段名「{c}」含{label}语义，按 {typ} 建列"
+
+
 def _name_based_type(comment: str, field: str):
     """空列的名字定类型：命中返回 (类型, 留痕文案)，没命中返回 None（照旧 VARCHAR）。
 
-    金额复用 _is_money 的双侧匹配与比率否决；英文一律按成词的词根匹配
+    金额复用 _is_money 的双侧匹配与比率/标识否决；英文一律按成词的词根匹配
     （贴着下划线或首尾），所以 update、birthday 不会误中。
-    判定顺序即优先级：金额 > 时间 > 日期 > 布尔 > 显式比率/系数 > 评分 >
-    经纬度 > 计量 > 裸「率」 > 计数 > 年龄 > 序号 > 年份。
+    判定顺序即优先级：时长 > 金额 > 合计 > 时间 > 时刻 > 日期 > 布尔 >
+    显式比率/系数 > 评分 > 经纬度 > 计量 > 裸「率」 > 大计数 > 计数 > 年龄 >
+    序号 > 年份 > 链接/路径 > 长文本 > 名称类。文本三档放最后，是为了不让「描述」「名称」
+    抢掉带数字语义的复合表头（如「数量说明」仍按计数走）。
+    时长与金额同时命中时按结尾判：「付款周期」存天数、「工时费」存钱。
     """
     c = str(comment or "").strip()
     fl = str(field or "")
-    if _is_money(c, fl):
-        typ = _decimal_type(0, 0, 4, money=True)
-        return typ, f"该列没有值，字段名「{c}」含金额语义，按 {typ} 建列"
+    money = _is_money(c, fl)
+    # 时长与金额都能命中时看结尾：「付款周期」「结算周期」结尾是周期，存的是天/月数；
+    # 「工时费」结尾是费，存的是钱
+    if _name_hit(c, fl, _NAME_DUR_CN, _NAME_DUR_EN) and not (
+            money and not c.endswith(_NAME_DUR_CN)):
+        return _note(c, "INT", "时长/周期")
+    if money:
+        return _note(c, _decimal_type(0, 0, 4, money=True), "金额")
+    if _name_hit(c, fl, _NAME_SUM_CN, _NAME_SUM_EN):
+        return _note(c, "DECIMAL(18,4)", "合计/汇总")
     if _NAME_TIME_CN in c or _NAME_TIME_EN.search(fl):
-        return "DATETIME", f"该列没有值，字段名「{c}」含时间语义，按 DATETIME 建列"
+        return _note(c, "DATETIME", "时间")
+    if any(k in c for k in _NAME_CLOCK_CN):
+        return _note(c, "TIME", "时刻")
     if _NAME_DATE_CN in c or _NAME_DATE_EN.search(fl):
-        return "DATE", f"该列没有值，字段名「{c}」含日期语义，按 DATE 建列"
+        return _note(c, "DATE", "日期")
     if _name_hit(c, fl, _NAME_BOOL_CN, _NAME_BOOL_EN):
-        return "TINYINT(1)", f"该列没有值，字段名「{c}」含布尔语义，按 TINYINT(1) 建列"
+        return _note(c, "TINYINT(1)", "布尔")
     if _name_hit(c, fl, _NAME_RATIO_CN, _NAME_RATIO_EN):
-        return ("DECIMAL(18,6)",
-                f"该列没有值，字段名「{c}」含比率/系数语义，按 DECIMAL(18,6) 建列")
+        return _note(c, "DECIMAL(18,6)", "比率/系数")
     if _name_hit(c, fl, _NAME_SCORE_CN, _NAME_SCORE_EN):
-        return ("DECIMAL(10,2)",
-                f"该列没有值，字段名「{c}」含评分语义，按 DECIMAL(10,2) 建列")
+        return _note(c, "DECIMAL(10,2)", "评分")
     if _name_hit(c, fl, _NAME_COORD_CN, _NAME_COORD_EN):
-        return ("DECIMAL(18,8)",
-                f"该列没有值，字段名「{c}」含经纬度/坐标语义，按 DECIMAL(18,8) 建列")
+        return _note(c, "DECIMAL(18,8)", "经纬度/坐标")
     if _name_hit(c, fl, _NAME_MEASURE_CN, _NAME_MEASURE_EN):
-        return ("DECIMAL(18,4)",
-                f"该列没有值，字段名「{c}」含计量语义，按 DECIMAL(18,4) 建列")
+        return _note(c, "DECIMAL(18,4)", "计量")
     if "率" in c:
-        return ("DECIMAL(18,6)",
-                f"该列没有值，字段名「{c}」含比率/系数语义，按 DECIMAL(18,6) 建列")
+        return _note(c, "DECIMAL(18,6)", "比率/系数")
+    if _name_hit(c, fl, _NAME_BIG_CN, _NAME_BIG_EN):
+        return _note(c, "BIGINT", "大计数（访问/播放量）")
     if _name_hit(c, fl, _NAME_INT_CN, _NAME_INT_EN):
-        return "INT", f"该列没有值，字段名「{c}」含数量语义，按 INT 建列"
+        return _note(c, "INT", "数量")
     if _name_hit(c, fl, _NAME_AGE_CN, _NAME_AGE_EN):
-        return "INT", f"该列没有值，字段名「{c}」含年龄/年限语义，按 INT 建列"
+        return _note(c, "INT", "年龄/年限")
     if _name_hit(c, fl, _NAME_RANK_CN, _NAME_RANK_EN):
-        return "INT", f"该列没有值，字段名「{c}」含序号/排名语义，按 INT 建列"
+        return _note(c, "INT", "序号/排名")
     if _name_hit(c, fl, _NAME_CAL_CN, _NAME_CAL_EN):
-        return "INT", f"该列没有值，字段名「{c}」含年份/月份语义，按 INT 建列"
+        return _note(c, "INT", "年份/月份")
+    if _name_hit(c, fl, _NAME_URL_CN, _NAME_URL_EN):
+        return _note(c, "VARCHAR(512)", "链接/路径")
+    if _name_hit(c, fl, _NAME_TEXT_CN, _NAME_TEXT_EN):
+        return _note(c, "TEXT", "长文本")
+    if _name_hit(c, fl, _NAME_TITLE_CN, _NAME_TITLE_EN):
+        return _note(c, "VARCHAR(255)", "名称/类别")
     return None
 
 

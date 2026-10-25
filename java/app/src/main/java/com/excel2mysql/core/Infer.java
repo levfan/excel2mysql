@@ -37,7 +37,12 @@ public final class Infer {
     private static final Pattern MONEY_EN = Pattern.compile(
             "(?:^|_)(?:amount|amt|money|price|cost|fee|fees|salary|wage|wages|income|"
           + "expense|expenses|balance|budget|revenue|profit|payment|payable|receivable|"
-          + "charge|charges|fund|funds|tax|interest|capital)(?:$|_)",
+          + "charge|charges|fund|funds|tax|interest|capital|pay|fare|toll|refund|deposit|"
+          + "fine|penalty|royalty|commission|dividend|bonus|subsidy|allowance|cash|"
+          + "earnings|turnover|rent|loan|mortgage|arrears|receipt|receipts|billing|"
+          + "disbursement|expenditure|spending|worth|valuation|equity|dues|principal|"
+          + "installment|prepayment|deductible|tariff|premium|reimbursement|stipend|"
+          + "honorarium|gratuity|payout)(?:$|_)",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern RATE_EN = Pattern.compile(
             "(?:rate|ratio|percent|percentage|pct|share)", Pattern.CASE_INSENSITIVE);
@@ -45,26 +50,63 @@ public final class Infer {
             "金额", "总额", "总价", "单价", "均价", "价格", "价目", "报价", "成交价", "结算价",
             "基准价", "中标价", "投标价", "采购价", "批发价", "零售价", "售价", "进价",
             "运价", "电价", "水价", "热价", "气价", "油价", "票价", "话费", "房价", "地价",
+            "价款", "底价", "起拍价", "限价", "现价", "定价", "指导价", "协议价", "参考价",
+            "评估价", "股价",
             "费用", "费额", "成本", "余额", "余款", "工资", "薪金", "薪资", "薪酬", "补贴",
             "津贴", "奖金", "收入", "支出", "开销", "付款", "收款", "支付", "缴费", "付费",
             "预算", "决算", "清算", "结算", "税额", "税金", "税费", "利息", "保费",
             "股金", "市值", "估值", "净产值", "总产值", "销售额", "营业额", "零售额", "进口额",
             "出口额", "利润", "亏损", "毛利", "净利", "欠款", "贷款", "存款", "融资", "投资额",
             "资金", "额度", "补偿", "赔偿", "保证金", "押金", "定金", "预付款", "进度款",
-            "工程款", "材料费", "人工费", "运输费", "服务费", "咨询费", "管理费", "仓储费"};
+            "工程款", "材料费", "人工费", "运输费", "服务费", "咨询费", "管理费", "仓储费",
+            "交易额", "成交额", "流水", "营收", "收支", "花费", "消费", "充值", "退款",
+            "运费", "邮费", "快递费", "停车费", "物业费", "手续费", "滞纳金", "佣金",
+            "中介费", "代理费", "租赁费", "租金", "房租", "餐费", "差旅费", "培训费",
+            "学费", "医疗费", "药费", "水电费", "燃气费", "网费", "维保费", "保养费",
+            "检测费", "认证费", "附加费", "增值税", "所得税", "消费税", "营业税", "关税",
+            "应收款", "应付款", "实收款", "实付款", "货款", "拨款", "补助", "救助金",
+            "抚恤金", "退休金", "养老金", "公积金", "保险金", "现金", "净值", "残值",
+            "产值", "货值", "收益", "分红", "股息", "红利", "投资收益", "投资总额",
+            "净利润", "毛利润", "利润额", "总资产", "净资产", "总负债", "资产总额",
+            "负债总额",
+            "违约金", "本金", "借款", "月供", "本息", "尾款", "首付", "首付款", "造价",
+            "概算", "水费", "电费", "车费", "船费", "杂费", "装卸费", "安装费", "调试费",
+            "措施费", "规费", "价差", "补差", "退税", "罚息", "客单价", "工时费", "台班费",
+            "承包费", "分包款", "收费",
+            "伙食费", "取暖费", "被装费", "油料费", "维修费", "值班费", "加班费", "油费",
+            "过路费", "养路费"};
     private static final String[] RATE_CN = {"率", "比例", "百分比", "占比", "增速", "幅度"};
+    // 标识类列的后缀同样要否决金额：「资产名称」「付款单位」「缴费方式」带着钱味词根
+    // 但存的是名字，判成 DECIMAL 会把一整列文本写成 0.00。只按结尾判，
+    // 「支付金额」「应收款」这类钱在尾巴上的照旧归金额
+    private static final String[] NAME_ID_SUFFIX = {
+            "名称", "姓名", "编号", "代码", "类型", "类别", "状态", "备注",
+            "说明", "描述", "地址", "电话", "邮箱", "单位", "方式", "标志",
+            "标识", "清单", "名单", "标准", "依据"};
 
     // 空列按字段名关键字定类型（与 core/infer.py 的 _name_based_type 逐条对齐）：
     // 只在"这列一个值都没有"时参与，有值照旧走数据判定；结构定义模式人工类型不受影响
     private static final String NAME_TIME_CN = "时间";   // 含"日期时间"——先查时间才落 DATETIME
     private static final String NAME_DATE_CN = "日期";
-    private static final String[] NAME_BOOL_CN = {"是否", "有无", "开关", "布尔", "标志"};
+    // 时刻类只写"几点"：不含日期，落 TIME 而不是 DATETIME
+    private static final String[] NAME_CLOCK_CN = {"时刻", "时点"};
+    // 时长先于金额与时间判定：「付款周期」「结算周期」带着钱味词根，但存的是天/月数
+    private static final String[] NAME_DUR_CN = {
+            "时长", "工期", "周期", "耗时", "用时", "间隔", "续航", "时延", "延时",
+            "工时", "机时", "台时"};
+    private static final Pattern NAME_DUR_EN = Pattern.compile(
+            "(?:^|_)(?:duration|elapsed|period|latency)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final String[] NAME_BOOL_CN = {
+            "是否", "有无", "开关", "布尔", "标志", "标识", "真假", "可否", "能否"};
     // 显式比率/系数词先于计量词判定；裸「率」放到计量词之后再查，
     // 否则「频率」「功率」会被当成比率，而「容积率」需要留在比率这一侧
     private static final String[] NAME_RATIO_CN = {"比例", "百分比", "占比", "增速", "幅度",
-            "系数", "因数", "倍数", "折扣", "权重", "比重", "容积率"};
+            "系数", "因数", "倍数", "折扣", "权重", "比重", "容积率",
+            "概率", "比值", "份额", "百分点", "配比"};
     private static final String[] NAME_SCORE_CN = {
-            "得分", "评分", "分数", "成绩", "总分", "平均分", "绩点"};
+            "得分", "评分", "分数", "成绩", "总分", "平均分", "绩点",
+            "分值", "满意度", "星级", "扣分", "加分", "基准分",
+            "考核分", "理论分", "实操分", "体能分", "技能分", "综合分", "总评"};
     private static final String[] NAME_COORD_CN = {"经度", "纬度", "经纬度", "坐标"};
     private static final String[] NAME_MEASURE_CN = {
             "长度", "宽度", "高度", "厚度", "深度", "距离", "里程",
@@ -72,44 +114,138 @@ public final class Infer {
             "容量", "温度", "湿度", "浓度", "密度", "压力", "速度", "速率",
             "流量", "电量", "水量", "气量", "热量", "功率", "电压", "电流",
             "频率", "海拔", "高程", "水位", "雨量", "身高", "含量", "纯度",
-            "直径", "半径", "周长", "角度"};
+            "直径", "半径", "周长", "角度",
+            "间距", "跨度", "坡度", "倾斜度", "粗糙度", "平整度", "压实度",
+            "稠度", "黏度", "粘度", "硬度", "强度", "应力", "应变", "模量",
+            "电阻", "电容", "电感", "阻抗", "能耗", "电耗", "水耗", "热耗",
+            "油耗", "气耗", "煤耗", "产能", "吨位", "载荷", "荷载", "压强",
+            "液压", "气压", "风速", "流速", "照度", "亮度", "色度", "浊度",
+            "盐度", "酸度", "碱度", "温差", "体温", "扬程", "库容", "含沙量",
+            "溶解氧", "氨氮", "断面", "管径", "线径", "粒径", "粒度", "负荷",
+            "壁厚", "净高", "净空", "埋深", "覆土", "进深", "开间", "视距",
+            "弧长", "弦长", "振幅", "挠度", "沉降", "位移", "变形量",
+            "噪声", "噪音", "分贝", "辐射", "总磷", "总氮", "含水",
+            "航程", "航速", "转速", "亩产"};
+    // 合计类既可能是钱也可能是数量：给一位小数都装得下的 DECIMAL(18,4)，
+    // 猜 INT 会在写进 12.5 这类值时静默取整
+    private static final String[] NAME_SUM_CN = {
+            "总计", "小计", "合计", "共计", "累计", "汇总", "总量", "总值"};
+    private static final Pattern NAME_SUM_EN = Pattern.compile(
+            "(?:^|_)(?:total|totals|subtotal|subtotals|sum|sums|aggregate|aggregates|"
+          + "cumulative|accumulation)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    // 大计数单独一档：浏览量这类只涨不减的数，INT 的 21 亿上限是真会撞的
+    private static final String[] NAME_BIG_CN = {
+            "播放量", "阅读量", "曝光量", "点击量", "访问量", "下载量", "转发量",
+            "浏览量", "粉丝数", "关注数", "订阅数", "收藏数", "评论数", "点赞数",
+            "分享量", "投票数", "计数"};
+    private static final Pattern NAME_BIG_EN = Pattern.compile(
+            "(?:^|_)(?:views|visits|clicks|downloads|plays|impressions|pageviews|"
+          + "followers|fans|likes|comments|shares)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final String[] NAME_INT_CN = {
             "数量", "个数", "人数", "次数", "库存", "张数", "件数", "台数", "点数", "条数",
             "户数", "笔数", "车数", "头数", "只数", "间数", "亩数", "套数", "项数", "总数",
-            "积分"};
+            "积分",
+            "票数", "名额", "席位", "床位", "车位", "家数", "座数", "部数",
+            "册数", "卷数", "箱数", "袋数", "瓶数", "轮数", "批数", "课时",
+            "学分", "题数", "场次", "集数", "股数", "频次",
+            "人次", "班次", "车次", "趟次", "架次", "艘次", "轮次", "届次",
+            "期次", "户次", "根数", "块数", "片数", "栋数", "幢数", "孔数",
+            "份数", "宗数", "组数", "排数", "行数", "列数", "栏数", "遍数",
+            "站点数", "接口数", "端口数", "会员数", "用户数", "访客数",
+            "员工数", "职工数", "学生数", "教师数", "企业数", "学校数",
+            "项目数", "案件数", "订单数", "交易量", "成交量", "出货量",
+            "进货量", "销售量", "销量", "产量", "存量", "余量",
+            "出库数", "入库数", "在库数", "在册数", "在位数", "配发数",
+            "消耗数", "报废数", "维修数", "检修数", "领用数", "归还数",
+            "发放数", "盘盈数", "盘亏数", "官兵数", "兵员数", "装备数",
+            "台套数", "辆数", "参与数"};
     private static final String[] NAME_AGE_CN = {
             "年龄", "工龄", "教龄", "党龄", "军龄", "年限", "岁数", "周岁"};
     private static final String[] NAME_RANK_CN = {
-            "序号", "排序", "排名", "名次", "页码", "页数", "层数", "楼层", "优先级"};
+            "序号", "排序", "排名", "名次", "页码", "页数", "层数", "楼层", "优先级",
+            "位次", "座次", "位序", "顺位", "序位"};
     private static final String[] NAME_CAL_CN = {
             "年份", "年度", "月份", "季度", "周次", "周数", "天数",
-            "小时数", "分钟数", "秒数", "期数"};
+            "小时数", "分钟数", "秒数", "期数", "月数", "旬"};
+    // 三档文本：链接/路径最宽，长文本直接 TEXT，名称类给 255。
+    // 一律只放宽不收紧——默认档是 VARCHAR(64)，把 32 这类窄档写进词表会在真实数据
+    // 超长时变成截断报错，比按 VARCHAR(64) 建列更糟。
+    private static final String[] NAME_URL_CN = {
+            "网址", "网站", "链接", "超链接", "路径", "下载地址", "访问地址",
+            "图片地址", "附件地址", "文件地址", "主页", "官网", "域名", "短链"};
+    private static final Pattern NAME_URL_EN = Pattern.compile(
+            "(?:^|_)(?:url|uri|link|links|href|path|paths|permalink|domain|homepage)"
+          + "(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final String[] NAME_TEXT_CN = {
+            "备注", "说明", "描述", "详情", "内容", "摘要", "简介", "评价",
+            "意见", "建议", "要求", "原因", "问题", "经过", "措施", "职责",
+            "业绩", "事迹", "案情", "附注", "注释", "正文", "文本", "结论",
+            "经营范围", "注意事项", "特点", "优势", "亮点",
+            "留言", "反馈", "答复", "回复", "心得", "体会", "感想", "承诺",
+            "条款", "批注", "点评", "陈述", "供述", "证言", "笔录", "诉求",
+            "主张", "情况", "事由", "纪要", "做法", "成效"};
+    private static final Pattern NAME_TEXT_EN = Pattern.compile(
+            "(?:^|_)(?:remark|remarks|note|notes|memo|description|desc|detail|details|"
+          + "content|contents|summary|abstract|comment|comments|feedback|text|body|intro|"
+          + "introduction|overview|conclusion|suggestion|suggestions|requirement|"
+          + "requirements|reason|feature|features|advantage|advantages|message|messages|"
+          + "statement|statements|annotation|annotations)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
+    private static final String[] NAME_TITLE_CN = {
+            "名称", "姓名", "标题", "题目", "主题", "类别", "分类", "类型",
+            "种类", "品种", "品牌", "型号", "规格", "材质", "颜色", "尺码",
+            "单位", "部门", "机构", "公司", "企业", "组织", "学校", "医院",
+            "项目", "工程", "标段", "来源", "渠道", "标签", "关键词", "地址",
+            "联系人", "职务", "职业", "科目", "课程", "标准", "依据", "方式",
+            "方法", "工艺", "工序", "阶段", "环节",
+            "称谓", "职称", "岗位", "职位", "科室", "班组", "班级", "专业",
+            "院系", "校区", "场馆", "楼盘", "小区", "街道", "社区", "村镇",
+            "路段", "线路", "管线", "站点", "品名", "别名", "曾用名", "简称",
+            "全称", "栏目", "频道", "语种", "币种",
+            "负责人", "经办人", "审核人", "批准人", "填报人", "编制人",
+            "责任人", "申请人", "受理人", "创建人", "修改人", "更新人",
+            "删除人", "录入人", "制单人", "复核人", "移交人", "接收人",
+            "密级", "级别", "层级", "建制", "番号", "部队"};
+    private static final Pattern NAME_TITLE_EN = Pattern.compile(
+            "(?:^|_)(?:name|names|title|category|categories|type|types|kind|kinds|brand|"
+          + "model|spec|specs|material|color|colour|dept|department|organization|"
+          + "organisation|company|school|hospital|project|keyword|keywords|tag|tags|"
+          + "label|labels|address|source|channel|method|occupation|position|unit|alias"
+          + "|role|owner)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_TIME_EN = Pattern.compile(
             "(?:^|_)(?:time|timestamp|datetime)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_DATE_EN = Pattern.compile(
             "(?:^|_)(?:date|dt)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_BOOL_EN = Pattern.compile(
-            "(?:^|_)(?:is|has|bool|boolean|flag|enabled|active|valid|deleted|disabled|yn)"
-          + "(?:_|$)", Pattern.CASE_INSENSITIVE);
+            "(?:^|_)(?:is|has|bool|boolean|flag|enabled|active|valid|deleted|disabled|yn|"
+          + "exists|allowed|need|required|checked|verified|approved|locked|"
+          + "visible|available|permitted|yesno|truefalse)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_RATIO_EN = Pattern.compile(
             "(?:^|_)(?:rate|ratio|percent|percentage|pct|coefficient|factor|multiplier|"
-          + "discount)(?:_|$)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern NAME_SCORE_EN = Pattern.compile(
-            "(?:^|_)(?:score|gpa)(?:_|$)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern NAME_COORD_EN = Pattern.compile(
-            "(?:^|_)(?:longitude|latitude|lng|lat|lon|coord|coords|coordinate)(?:_|$)",
+          + "discount|proportion|probability|likelihood|permille)(?:_|$)",
             Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_SCORE_EN = Pattern.compile(
+            "(?:^|_)(?:score|gpa|grade|rating|ratings)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NAME_COORD_EN = Pattern.compile(
+            "(?:^|_)(?:longitude|latitude|lng|lat|lon|coord|coords|coordinate|gps|geo)"
+          + "(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_MEASURE_EN = Pattern.compile(
             "(?:^|_)(?:length|width|height|thickness|depth|distance|mileage|area|volume|"
           + "capacity|weight|temperature|humidity|density|pressure|speed|flow|power|"
-          + "voltage|frequency|elevation|altitude|diameter|radius|perimeter)(?:_|$)",
-            Pattern.CASE_INSENSITIVE);
+          + "voltage|frequency|elevation|altitude|diameter|radius|perimeter|span|"
+          + "spacing|slope|hardness|strength|stress|strain|modulus|resistance|"
+          + "capacitance|inductance|impedance|consumption|load|energy|velocity|torque|"
+          + "brightness|amplitude|deflection|settlement|displacement|noise|decibel|"
+          + "radiation|clearance)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_INT_EN = Pattern.compile(
-            "(?:^|_)(?:qty|quantity|count|cnt|stock)(?:_|$)", Pattern.CASE_INSENSITIVE);
+            "(?:^|_)(?:qty|quantity|count|cnt|stock|members|users|"
+          + "items|pieces)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_AGE_EN = Pattern.compile(
             "(?:^|_)(?:age)(?:_|$)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_RANK_EN = Pattern.compile(
-            "(?:^|_)(?:rank|sort|seq|sequence|serial|page|pages|floor|priority)(?:_|$)",
+            "(?:^|_)(?:rank|ranking|sort|seq|sequence|serial|page|pages|floor|priority|"
+          + "ordinal)(?:_|$)",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern NAME_CAL_EN = Pattern.compile(
             "(?:^|_)(?:year|month|quarter|week|hour|minute|second)(?:_|$)",
@@ -171,6 +307,11 @@ public final class Infer {
         if (RATE_EN.matcher(c).find() || RATE_EN.matcher(fl).find()) {
             return false;
         }
+        for (String suffix : NAME_ID_SUFFIX) {
+            if (c.endsWith(suffix)) {
+                return false;
+            }
+        }
         for (String k : MONEY_CN) {
             if (c.contains(k)) {
                 return true;
@@ -179,66 +320,108 @@ public final class Infer {
         return MONEY_EN.matcher(fl).find();
     }
 
+    /** 按名定类型的返回值：类型与留痕文案同源，别让两边写漏一边。 */
+    private static String[] note(String c, String typ, String label) {
+        return new String[]{typ, "该列没有值，字段名「" + c + "」含" + label + "语义，按 "
+                + typ + " 建列"};
+    }
+
     /**
      * 空列的名字定类型：命中返回 {类型, 留痕文案}，没命中返回 null（照旧 VARCHAR）。
-     * 金额复用 isMoney 的双侧匹配与比率否决；英文一律按成词的词根匹配
+     * 金额复用 isMoney 的双侧匹配与比率/标识否决；英文一律按成词的词根匹配
      * （贴着下划线或首尾），所以 update、birthday 不会误中。
-     * 判定顺序即优先级：金额 &gt; 时间 &gt; 日期 &gt; 布尔 &gt; 显式比率/系数 &gt;
-     * 评分 &gt; 经纬度 &gt; 计量 &gt; 裸「率」 &gt; 计数 &gt; 年龄 &gt; 序号 &gt; 年份。
+     * 判定顺序即优先级：时长 &gt; 金额 &gt; 合计 &gt; 时间 &gt; 时刻 &gt; 日期 &gt; 布尔 &gt;
+     * 显式比率/系数 &gt; 评分 &gt; 经纬度 &gt; 计量 &gt; 裸「率」 &gt; 大计数 &gt; 计数 &gt;
+     * 年龄 &gt; 序号 &gt; 年份 &gt; 链接/路径 &gt; 长文本 &gt; 名称类。文本三档放最后，是为了不让
+     * 「描述」「名称」抢掉带数字语义的复合表头（如「数量说明」仍按计数走）。
+     * 时长与金额同时命中时按结尾判：「付款周期」存天数、「工时费」存钱。
      */
     public static String[] nameBasedType(String comment, String field) {
         String c = comment == null ? "" : Names.pyStrip(comment);
         String fl = field == null ? "" : field;
-        if (isMoney(c, fl)) {
-            String typ = decimalType(0, 0, 4, true);
-            return new String[]{typ, "该列没有值，字段名「" + c + "」含金额语义，按 " + typ + " 建列"};
+        boolean money = isMoney(c, fl);
+        // 时长与金额都能命中时看结尾：「付款周期」「结算周期」结尾是周期，存的是天/月数；
+        // 「工时费」结尾是费，存的是钱
+        if (nameHit(c, fl, NAME_DUR_CN, NAME_DUR_EN)
+                && !(money && !endsWithAny(c, NAME_DUR_CN))) {
+            return note(c, "INT", "时长/周期");
+        }
+        if (money) {
+            return note(c, decimalType(0, 0, 4, true), "金额");
+        }
+        if (nameHit(c, fl, NAME_SUM_CN, NAME_SUM_EN)) {
+            return note(c, "DECIMAL(18,4)", "合计/汇总");
         }
         if (c.contains(NAME_TIME_CN) || NAME_TIME_EN.matcher(fl).find()) {
-            return new String[]{"DATETIME", "该列没有值，字段名「" + c + "」含时间语义，按 DATETIME 建列"};
+            return note(c, "DATETIME", "时间");
+        }
+        if (containsAny(c, NAME_CLOCK_CN)) {
+            return note(c, "TIME", "时刻");
         }
         if (c.contains(NAME_DATE_CN) || NAME_DATE_EN.matcher(fl).find()) {
-            return new String[]{"DATE", "该列没有值，字段名「" + c + "」含日期语义，按 DATE 建列"};
+            return note(c, "DATE", "日期");
         }
         if (nameHit(c, fl, NAME_BOOL_CN, NAME_BOOL_EN)) {
-            return new String[]{"TINYINT(1)",
-                    "该列没有值，字段名「" + c + "」含布尔语义，按 TINYINT(1) 建列"};
+            return note(c, "TINYINT(1)", "布尔");
         }
         if (nameHit(c, fl, NAME_RATIO_CN, NAME_RATIO_EN)) {
-            return new String[]{"DECIMAL(18,6)",
-                    "该列没有值，字段名「" + c + "」含比率/系数语义，按 DECIMAL(18,6) 建列"};
+            return note(c, "DECIMAL(18,6)", "比率/系数");
         }
         if (nameHit(c, fl, NAME_SCORE_CN, NAME_SCORE_EN)) {
-            return new String[]{"DECIMAL(10,2)",
-                    "该列没有值，字段名「" + c + "」含评分语义，按 DECIMAL(10,2) 建列"};
+            return note(c, "DECIMAL(10,2)", "评分");
         }
         if (nameHit(c, fl, NAME_COORD_CN, NAME_COORD_EN)) {
-            return new String[]{"DECIMAL(18,8)",
-                    "该列没有值，字段名「" + c + "」含经纬度/坐标语义，按 DECIMAL(18,8) 建列"};
+            return note(c, "DECIMAL(18,8)", "经纬度/坐标");
         }
         if (nameHit(c, fl, NAME_MEASURE_CN, NAME_MEASURE_EN)) {
-            return new String[]{"DECIMAL(18,4)",
-                    "该列没有值，字段名「" + c + "」含计量语义，按 DECIMAL(18,4) 建列"};
+            return note(c, "DECIMAL(18,4)", "计量");
         }
         if (c.contains("率")) {
-            return new String[]{"DECIMAL(18,6)",
-                    "该列没有值，字段名「" + c + "」含比率/系数语义，按 DECIMAL(18,6) 建列"};
+            return note(c, "DECIMAL(18,6)", "比率/系数");
+        }
+        if (nameHit(c, fl, NAME_BIG_CN, NAME_BIG_EN)) {
+            return note(c, "BIGINT", "大计数（访问/播放量）");
         }
         if (nameHit(c, fl, NAME_INT_CN, NAME_INT_EN)) {
-            return new String[]{"INT", "该列没有值，字段名「" + c + "」含数量语义，按 INT 建列"};
+            return note(c, "INT", "数量");
         }
         if (nameHit(c, fl, NAME_AGE_CN, NAME_AGE_EN)) {
-            return new String[]{"INT",
-                    "该列没有值，字段名「" + c + "」含年龄/年限语义，按 INT 建列"};
+            return note(c, "INT", "年龄/年限");
         }
         if (nameHit(c, fl, NAME_RANK_CN, NAME_RANK_EN)) {
-            return new String[]{"INT",
-                    "该列没有值，字段名「" + c + "」含序号/排名语义，按 INT 建列"};
+            return note(c, "INT", "序号/排名");
         }
         if (nameHit(c, fl, NAME_CAL_CN, NAME_CAL_EN)) {
-            return new String[]{"INT",
-                    "该列没有值，字段名「" + c + "」含年份/月份语义，按 INT 建列"};
+            return note(c, "INT", "年份/月份");
+        }
+        if (nameHit(c, fl, NAME_URL_CN, NAME_URL_EN)) {
+            return note(c, "VARCHAR(512)", "链接/路径");
+        }
+        if (nameHit(c, fl, NAME_TEXT_CN, NAME_TEXT_EN)) {
+            return note(c, "TEXT", "长文本");
+        }
+        if (nameHit(c, fl, NAME_TITLE_CN, NAME_TITLE_EN)) {
+            return note(c, "VARCHAR(255)", "名称/类别");
         }
         return null;
+    }
+
+    private static boolean containsAny(String c, String[] words) {
+        for (String w : words) {
+            if (c.contains(w)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean endsWithAny(String c, String[] words) {
+        for (String w : words) {
+            if (c.endsWith(w)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean nameHit(String c, String fl, String[] cn, Pattern en) {
