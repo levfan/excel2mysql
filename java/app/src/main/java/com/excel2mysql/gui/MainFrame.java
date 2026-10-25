@@ -116,6 +116,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JPasswordField passField;
     private javax.swing.JComboBox<String> dbCombo;
     private HintLabel impHint;
+    /** 第一页顶部那句介绍（三页同一块底板，见 PageIntro）。 */
+    private javax.swing.JLabel impIntro;
     /** 连接区收起后的那一条状态栏（只报当前库），与「设置数据源信息」按钮一起常驻顶部。 */
     private HintLabel connState;
     private JButton btnConnEdit;
@@ -198,6 +200,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tabs = new javax.swing.JTabbedPane();
         sqlPage = new SqlPage(this);
         impHint = new HintLabel();
+        impIntro = PageIntro.of("中英表头建模，回写库");
         tabs.addTab("Excel 导入", buildCenter());
         tabs.addTab("SQL 脚本改名", sqlPage);
         tabs.addTab("SQL 执行器", buildSqlRunPage());
@@ -664,7 +667,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         south.add(op, BorderLayout.CENTER);
 
         JPanel page = new JPanel(new BorderLayout());
-        page.add(impHint, BorderLayout.NORTH);
+        // 目标库提示条在上、那句介绍紧跟在下面：两行都在页签内容的最上面一列
+        JPanel head = new JPanel(new BorderLayout());
+        head.add(impHint, BorderLayout.NORTH);
+        head.add(impIntro, BorderLayout.CENTER);
+        page.add(head, BorderLayout.NORTH);
         page.add(stacked, BorderLayout.CENTER);
         page.add(south, BorderLayout.SOUTH);
         return page;
@@ -898,6 +905,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public String excelHintText() {
         return impHint.hintText();
+    }
+
+    /** 第一页顶部那句介绍的原文：两栈逐字对撞用（Python 侧 win.imp_intro）。 */
+    public String excelIntroText() {
+        return impIntro.getText();
+    }
+
+    /** 介绍条本体：自检查三页是不是同一块底板。 */
+    public javax.swing.JLabel excelIntro() {
+        return impIntro;
     }
 
     /** 提示条本体：自检要查它是不是真能拖选，而不是只看文案。 */
@@ -2346,9 +2363,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JPanel north = new javax.swing.JPanel(new java.awt.BorderLayout());
         sqlRunDbHint = new HintLabel();
         north.add(sqlRunDbHint, java.awt.BorderLayout.NORTH);
-        sqlRunHint = new javax.swing.JLabel(
+        sqlRunHint = PageIntro.of(
                 "两种用法：把 .sql 脚本拖到下面清单里按顺序执行；"
-                + "或直接在编辑区写 SQL 临时执行（多条用分号分隔）");
+                        + "或直接在编辑区写 SQL 临时执行（多条用分号分隔）");
         north.add(sqlRunHint, java.awt.BorderLayout.CENTER);
         page.add(north, java.awt.BorderLayout.NORTH);
 
@@ -3012,6 +3029,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public String sqlRunHintText() {
         return sqlRunHint == null ? "" : sqlRunHint.getText();
+    }
+
+    /** 第三页的介绍条本体：自检查三页是不是同一块底板。 */
+    public javax.swing.JLabel sqlRunIntro() {
+        return sqlRunHint;
     }
 
     /** 编辑区是否折行：两条线都要求"一句 SQL 不折行"，否则分号位置得数着看。 */

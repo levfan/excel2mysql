@@ -238,6 +238,8 @@ public final class SqlPage extends JPanel {
     /** 底部动作条（覆盖开关 + 保存/执行/生成四颗），在分隔条之外。 */
     private java.awt.Container rowAct;
     private final HintLabel hint = new HintLabel();
+    /** 页签顶部那句介绍：与另两页同一块底板（Python 侧 win.sql_intro）。 */
+    private final javax.swing.JLabel intro = PageIntro.of("解析建表语句，回写库");
 
     public SqlPage(Host host) {
         this.host = host;
@@ -461,6 +463,7 @@ public final class SqlPage extends JPanel {
 
         JPanel north = new JPanel(new BorderLayout());
         north.add(hint, BorderLayout.NORTH);
+        north.add(intro, BorderLayout.CENTER);
         add(north, BorderLayout.NORTH);
         add(outerSplit, BorderLayout.CENTER);
         // 执行层与上方表格区之间的细分隔线（与第一页同一处）
@@ -537,6 +540,16 @@ public final class SqlPage extends JPanel {
 
     public String hintText() {
         return hint.hintText();
+    }
+
+    /** 那句介绍的原文：两栈逐字对撞用（Python 侧 win.sql_intro）。 */
+    public String introText() {
+        return intro.getText();
+    }
+
+    /** 介绍条本体：自检查三页是不是同一块底板。 */
+    public javax.swing.JLabel introField() {
+        return intro;
     }
 
     /** 提示条本体：自检查它能不能真的拖选复制。 */

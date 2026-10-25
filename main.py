@@ -333,6 +333,22 @@ SECONDARY_BUTTON_QSS = (
     " border-color: #c9d4e4; }"
 )
 
+PAGE_INTRO_QSS = (
+    "QLabel { color: #1f5fd0; background: #f4f8ff;"
+    " border: 1px solid #8fb4ea; border-left: 3px solid #2f6feb;"
+    " border-radius: 4px; padding: 4px 10px; font-weight: bold; }"
+)
+
+
+def page_intro(text):
+    """页签顶部那句介绍：三页同一块强调底板，一眼看出这一页把什么写进库。
+
+    强调色与主按钮同一支（#2f6feb），两栈同值（Java 侧 gui.PageIntro）。
+    """
+    lbl = QLabel(text)
+    lbl.setStyleSheet(PAGE_INTRO_QSS)
+    return lbl
+
 
 def hline():
     """动作区与上方内容之间的细分隔线（两栈同一处：Java 侧用 JSeparator）。"""
@@ -1870,6 +1886,10 @@ class MainWindow(QWidget):
         self.lbl_imp_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
         excel_lay.addWidget(self.lbl_imp_db)
 
+        # 2.0b 一句话介绍：与「SQL 执行器」那页同一块强调底板
+        self.imp_intro = page_intro("中英表头建模，回写库")
+        excel_lay.addWidget(self.imp_intro)
+
         # 2.1 文件拖拽区
         self.drop = DropArea()
         self.drop.files_dropped.connect(self.on_files_dropped)
@@ -2275,6 +2295,10 @@ class MainWindow(QWidget):
         self.lbl_sql_db = QLabel()
         self.lbl_sql_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.lbl_sql_db)
+
+        # 一句话介绍：与另两页同一块强调底板
+        self.sql_intro = page_intro("解析建表语句，回写库")
+        lay.addWidget(self.sql_intro)
 
         # 添加文件这一路与「Excel 导入」那页统一：拖进来或点这块区域选文件，
         # 不再单独放一颗「添加 SQL 文件」按钮（两页各一套入口只会让人找两遍）
@@ -3016,7 +3040,7 @@ class MainWindow(QWidget):
 
         # 提示单独占一行：QLabel 不折行，它的最小宽度就是整句的宽度，
         # 和按钮排在同一行会把整个窗口的最小宽度顶出小屏
-        self.sql_run_hint = QLabel(
+        self.sql_run_hint = page_intro(
             "两种用法：把 .sql 脚本拖到下面清单里按顺序执行；"
             "或直接在编辑区写 SQL 临时执行（多条用分号分隔）")
         lay.addWidget(self.sql_run_hint)
