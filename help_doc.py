@@ -77,7 +77,7 @@ Excel 页说"数据将导入到这个库"，「SQL 脚本改名入库」页说"�
 <code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。
 想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>
 <li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-2.1.0.jar --check</code>。</li>
+<code>jre\\bin\\java.exe -jar excel2mysql-2.1.1.jar --check</code>。</li>
 <li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。
 双击 jar 文件本身不会有任何反应。</li>
 </ul>
@@ -201,7 +201,7 @@ ZIP 里只有某个文件有合并区时，只拒绝那一个，同包其他干�
 <tr><td>「SQL 执行器」执行脚本文件</td><td>轮到哪个文件才读盘切句，再按语句 1 项推进
 （每个文件最多约 100 次刷新）；文件与文件之间查一次取消，取消后剩余文件不再执行。
 脚本是逐个读的，总语句数会边读边涨，进度条按"已完成项数不回退"处理。
-识别为整库 dump 的文件同样按语句 1 项推进，跳过的库级语句在文件收尾时一并补齐</td></tr>
+识别为整库 dump 的文件同样按语句 1 项推进，跳过的删库语句在文件收尾时一并补齐</td></tr>
 </table>
 <h3>任务在跑时点了别的按钮</h3>
 <p>挡下这一步时，会同时弹窗和写日志说清楚在等谁：任务名、跑到几成、已完成多少项、
@@ -679,10 +679,14 @@ dump 里的 <code>CREATE/DROP/ALTER</code> 与 <code>LOCK TABLES</code> 本来�
 dump 里认 <code>DELIMITER</code> 指令，触发器 / 存储过程的整句不会被函数体里的分号切碎；
 <code>/*!40101 SET … */</code> 这类版本注释语句照常发给服务端。只有识别成 dump 的文件才这样切句，
 手写脚本与编辑区仍按分号切（自己写 <code>DELIMITER</code> 的存储过程请先按 dump 形态导入）</li>
-<li>dump 自带的 <code>CREATE DATABASE</code> / <code>DROP DATABASE</code> / <code>USE</code>
-<b>跳过不执行</b>：目标库由界面选择，不让 dump 把连接切到别的库。每跳一条日志写
-<code>[跳过] 文件名 第 i/n 条：CREATE DATABASE（目标库由界面选择）</code>；
-收尾写 <code>[提交] 文件名：N 条语句已提交，跳过 M 条库级语句</code></li>
+<li>dump 自带的 <code>CREATE DATABASE</code> 与 <code>USE</code> <b>照常执行</b>：那两句说的正是
+"这批表建在哪个库里"，跳过它们等于把用户要导的那个库抹掉，表反而散进界面随手选中的库。
+切库之后日志写 <code>[切库] 文件名：目标库换成 demo</code>，后面的报错行与收尾都按切后的库说，
+收尾写 <code>[提交] 文件名：N 条语句已提交，目标库 demo，跳过 M 条删库语句</code>；
+界面选中的库不变，选库与库列表都还是按上方连接区走。
+只有 <code>DROP DATABASE</code>（含 <code>/*!40000 DROP DATABASE … */</code> 这种写法）不执行，
+逐条写 <code>[跳过] 文件名 第 i/n 条：DROP DATABASE（删库语句不执行）</code>——
+执行一次就把整个库删掉，这个风险与建库、切库不对等</li>
 <li>逐条提交的结局如实写进清单：有语句报错时<b>继续执行后面的语句</b>，清单写
 <code>已执行 4/7 条，1 条语句报错（逐条提交，已成功的已落库）</code>，
 日志逐条给出错语句与原因（最多详细列 20 条，超出只报还有几条）；

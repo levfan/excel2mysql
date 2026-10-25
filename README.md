@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v2.1.0** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v2.1.1** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -285,7 +285,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.1.0` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.1.1` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -379,9 +379,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-2.1.0-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-2.1.0-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-2.1.0-win64\excel2mysql-2.1.0.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-2.1.1-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-2.1.1-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-2.1.1-win64\excel2mysql-2.1.1.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -997,10 +997,14 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
   dump 里认 `DELIMITER` 指令，触发器 / 存储过程的整句不会被函数体里的分号切碎；
   `/*!40101 SET … */` 这类版本注释语句照常发给服务端。只有识别成 dump 的文件才这样切句，
   手写脚本与编辑区仍按分号切
-- **dump 的库级语句跳过**：`CREATE DATABASE` / `DROP DATABASE` / `USE` 不执行，目标库由界面选择，
-  不让 dump 把连接切到别的库；每跳一条日志写
-  `[跳过] 文件名 第 i/n 条：CREATE DATABASE（目标库由界面选择）`，
-  收尾写 `[提交] 文件名：N 条语句已提交，跳过 M 条库级语句`。
+- **dump 的建库与切库照常执行**：`CREATE DATABASE` 与 `USE` 是 dump 在说"这批表建在哪个库里"，
+  跳过它们等于把用户要导的那个库抹掉、表反而散进界面随手选中的库。切库后日志写
+  `[切库] 文件名：目标库换成 demo`，报错行与收尾都按切后的库说，
+  收尾写 `[提交] 文件名：N 条语句已提交，目标库 demo，跳过 M 条删库语句`；
+  界面选中的库与库列表不受影响，仍按上方连接区走。
+  只有 `DROP DATABASE`（含 `/*!40000 DROP DATABASE … */` 写法）不执行，每跳一条日志写
+  `[跳过] 文件名 第 i/n 条：DROP DATABASE（删库语句不执行）`——执行一次就把整个库删掉，
+  这个风险与建库、切库不对等。
   有语句报错时继续执行后面的语句，清单写
   `已执行 4/7 条，1 条语句报错（逐条提交，已成功的已落库）`，
   日志逐条给出错语句与原因（最多详细列 20 条，超出只报还有几条）；连接断开时剩余语句不再执行
