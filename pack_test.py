@@ -5959,6 +5959,16 @@ if not getattr(sys, "frozen", False):
     _gi = io.open(os.path.join(os.path.dirname(os.path.abspath(app_main.__file__)),
                                ".gitignore"), encoding="utf-8").read()
     check("T13 build_stamp.py 属生成物，不入库", "build_stamp.py" in _gi)
+    # 两条 Qt 用例轮都必须自己钉 offscreen：漏一条，打包时调用方的屏就会换一套
+    # 可用区/滚动条数字，同一份产物换个机器点开就红（2026-10-26 冻态那轮正是漏了这条）
+    import inspect as _inspect
+    _be_dev = _inspect.getsource(_be.run_dev_tests)
+    _be_frozen = _inspect.getsource(_be.build_and_run_frozen_tests)
+    check("T16 打包闸门两轮 Qt 用例都钉死 offscreen，不跟调用方的屏走",
+          'QT_QPA_PLATFORM="offscreen"' in _be_dev
+          and 'QT_QPA_PLATFORM="offscreen"' in _be_frozen,
+          ("dev", 'QT_QPA_PLATFORM="offscreen"' in _be_dev,
+           "frozen", 'QT_QPA_PLATFORM="offscreen"' in _be_frozen))
 else:
     skip("T11-T13 build_stamp 生成与入库排除",
          "冻结态包里没有 build_exe 模块与 .gitignore，只在开发态验")
