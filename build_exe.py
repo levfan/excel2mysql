@@ -231,7 +231,9 @@ def build_and_run_frozen_tests():
          "--workpath", "build_packtest", "packtest.spec"])
     if not os.path.isfile(TEST_EXE):
         raise RuntimeError("未产出 packtest.exe")
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # 冻结态用例集也必须钉 offscreen，与开发态那一轮同一档屏：U8b/U10/F35b 量的是
+    # 屏幕可用区与滚动条，继承调用方的屏就会换一套数字（真窗出窗由 check_launch 单独验）
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
     run([TEST_EXE], env=env)
     return "冻结态全部用例通过"
 
