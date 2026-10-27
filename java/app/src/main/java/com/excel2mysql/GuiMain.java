@@ -916,6 +916,18 @@ public final class GuiMain {
      */
     private static void paste_probe(MainFrame frame, List<String> files,
                                     List<String> problems) throws Exception {
+        // 按键绑定本身也要咬住：删掉 bindPasteShortcut() 时，只喂 pastePaths 的探针照旧全绿，
+        // 那就等于"能加文件"被验到了、"按 Ctrl+V 能加"没被验到。
+        javax.swing.KeyStroke pasteKey = javax.swing.KeyStroke.getKeyStroke(
+                java.awt.event.KeyEvent.VK_V, java.awt.event.InputEvent.CTRL_DOWN_MASK);
+        Object bound = frame.getRootPane().getInputMap(
+                javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW).get(pasteKey);
+        if (!"pasteFiles".equals(bound)) {
+            problems.add("Ctrl+V 没绑在窗口层级的根面板上（焦点在哪颗控件都该收）：" + bound);
+        }
+        if (frame.getRootPane().getActionMap().get("pasteFiles") == null) {
+            problems.add("根面板 ActionMap 里没有 pasteFiles 这个动作");
+        }
         // 粘贴添加走 pastePaths 这条缝：自检不去碰系统剪贴板（那台机此刻装着什么不可控）。
         // 两份真 xlsx 混一个 txt：计数要说清，txt 不混进清单
         List<String> pasted = new ArrayList<String>();
