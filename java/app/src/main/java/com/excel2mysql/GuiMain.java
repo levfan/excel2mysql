@@ -402,6 +402,7 @@ public final class GuiMain {
                     problems.add("普通日志被误标成错误级");
                 }
                 sql_exec_progress(problems);
+                sql_exec_result_sets(problems);
                 log_line_shape(frame, problems);
                 log_pane_height(frame, problems);
                 for (int i = 0; i < frame.logPanel().maxLines() + 50; i++) {
@@ -1179,6 +1180,139 @@ public final class GuiMain {
             problems.add("不传进度与取消时行为变了：跑了 " + executed2.size()
                     + " 句、提交=" + committed2[0]);
         }
+    }
+
+    /**
+     * 结果集交给界面的是列名与逐格取值，不再是一段等宽文本。
+     *
+     * 同一个假连接跑两遍：传回调（图形界面）与不传回调（命令行与金标准）。
+     * 只断言前一边的话，把命令行那条线的文本表格一起改掉也不会红——
+     * 而那份文本正是 sql.jsonl.gz 逐字符锁住的交付物。
+     */
+    private static void sql_exec_result_sets(List<String> problems) {
+        String[] head = {"id", "姓名", "department"};
+        String[][] body = {{"1", "张三丰", "Logistics Division"}, {"2", "李四", "卫勤处"}};
+        final List<com.excel2mysql.core.SqlExecute.ResultSetData> got =
+                new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        com.excel2mysql.core.SqlExecute.Results sink =
+                new com.excel2mysql.core.SqlExecute.Results() {
+                    @Override
+                    public void accept(com.excel2mysql.core.SqlExecute.ResultSetData data) {
+                        got.add(data);
+                    }
+                };
+        final StringBuilder text = new StringBuilder();
+        com.excel2mysql.core.SqlExecute.run(
+                fakeSelectConnection(head, body), "select * from t_mixed;",
+                line -> text.append(line).append('\n'), null, null, sink);
+        if (got.size() != 1) {
+            problems.add("传了回调却没收到结果集：收到 " + got.size() + " 个");
+            return;
+        }
+        com.excel2mysql.core.SqlExecute.ResultSetData d = got.get(0);
+        if (d.seq != 1 || !"select * from t_mixed".equals(d.sql)
+                || d.columns.size() != 3 || !"姓名".equals(d.columns.get(1))
+                || d.rows.size() != 2 || !"张三丰".equals(d.rows.get(0).get(1))
+                || !"卫勤处".equals(d.rows.get(1).get(2))
+                || d.total != 2 || d.printed != 2) {
+            problems.add("结果集形状不对：seq=" + d.seq + " sql=" + d.sql
+                    + " columns=" + d.columns + " rows=" + d.rows
+                    + " total=" + d.total + " printed=" + d.printed);
+        }
+        if (text.indexOf("+---") >= 0) {
+            problems.add("传了回调还在文本里画表格，同一份结果会有两处呈现：" + text);
+        }
+        final StringBuilder plain = new StringBuilder();
+        com.excel2mysql.core.SqlExecute.run(
+                fakeSelectConnection(head, body), "select * from t_mixed;",
+                line -> plain.append(line).append('\n'), null, null, null);
+        if (plain.indexOf("+---") < 0 || plain.indexOf("张三丰") < 0) {
+            problems.add("命令行那条线的文本表格没了（金标准逐字符锁着它）：" + plain);
+        }
+    }
+
+    /** 假一个只回给定结果集的 Connection：没有库也能验到 SqlExecute 里取结果那一段。 */
+    private static java.sql.Connection fakeSelectConnection(
+            final String[] head, final String[][] body) {
+        return (java.sql.Connection) java.lang.reflect.Proxy.newProxyInstance(
+                GuiMain.class.getClassLoader(), new Class<?>[]{java.sql.Connection.class},
+                (proxy, method, args) -> {
+                    if ("createStatement".equals(method.getName())) {
+                        return java.lang.reflect.Proxy.newProxyInstance(
+                                GuiMain.class.getClassLoader(),
+                                new Class<?>[]{java.sql.Statement.class},
+                                (p2, m2, a2) -> {
+                                    if ("execute".equals(m2.getName())) {
+                                        return Boolean.TRUE;
+                                    }
+                                    if ("getResultSet".equals(m2.getName())) {
+                                        return fakeResultSet(head, body);
+                                    }
+                                    if ("close".equals(m2.getName())) {
+                                        return null;
+                                    }
+                                    return defaultValue(m2.getReturnType());
+                                });
+                    }
+                    if ("isClosed".equals(method.getName())) {
+                        return Boolean.FALSE;
+                    }
+                    if ("toString".equals(method.getName())) {
+                        return "fake-select-connection";
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+    }
+
+    /** 假结果集自己带游标：一句 select 取一次，逐行往下走就够。 */
+    private static java.sql.ResultSet fakeResultSet(
+            final String[] head, final String[][] body) {
+        return (java.sql.ResultSet) java.lang.reflect.Proxy.newProxyInstance(
+                GuiMain.class.getClassLoader(), new Class<?>[]{java.sql.ResultSet.class},
+                new java.lang.reflect.InvocationHandler() {
+                    private int row = -1;
+
+                    @Override
+                    public Object invoke(Object proxy, java.lang.reflect.Method method,
+                                         Object[] args) {
+                        String name = method.getName();
+                        if ("next".equals(name)) {
+                            row++;
+                            return Boolean.valueOf(row < body.length);
+                        }
+                        if ("getString".equals(name)) {
+                            int col = ((Integer) args[0]).intValue() - 1;
+                            if (row < 0 || row >= body.length
+                                    || col < 0 || col >= body[row].length) {
+                                return null;
+                            }
+                            return body[row][col];
+                        }
+                        if ("getMetaData".equals(name)) {
+                            return java.lang.reflect.Proxy.newProxyInstance(
+                                    GuiMain.class.getClassLoader(),
+                                    new Class<?>[]{java.sql.ResultSetMetaData.class},
+                                    (p3, m3, a3) -> {
+                                        if ("getColumnCount".equals(m3.getName())) {
+                                            return Integer.valueOf(head.length);
+                                        }
+                                        if ("getColumnLabel".equals(m3.getName())
+                                                || "getColumnName".equals(m3.getName())) {
+                                            int i = ((Integer) a3[0]).intValue() - 1;
+                                            return i >= 0 && i < head.length ? head[i] : "";
+                                        }
+                                        return defaultValue(m3.getReturnType());
+                                    });
+                        }
+                        if ("close".equals(name)) {
+                            return null;
+                        }
+                        if ("toString".equals(name)) {
+                            return "fake-result-set";
+                        }
+                        return defaultValue(method.getReturnType());
+                    }
+                });
     }
 
     private static String describeSteps(List<int[]> steps) {
@@ -2089,6 +2223,9 @@ public final class GuiMain {
             problems.add("两颗清空的 tooltip 没说清各自管哪一边");
         }
 
+        // 执行结果用真表格画：中英文混排时文本表格没法读（用户 2026-10-28）
+        sql_run_result_table(frame, problems, clearLogBtn);
+
         // 脚本队列：清单表、覆盖开关与两颗按钮的初始态
         javax.swing.JTable runTable = frame.sqlRunFilesTable();
         if (runTable == null || runTable.getColumnCount() != 4
@@ -2192,6 +2329,142 @@ public final class GuiMain {
         }
         frame.showSqlSamples();
         frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+    }
+
+    /**
+     * 执行结果那张真表格：结果集到手后界面画得对不对。
+     *
+     * 喂结果集而不是跑 SQL——闸门这台机器上不保证有 MySQL，真库那半边由 SqlExecCli
+     * 与金标准盯着；这里要验的是"数据落到格子里"这一步，文本表格里英文和中文
+     * 混排必然错行（用户 2026-10-28 的原话是"不可阅读"）。
+     */
+    private static void sql_run_result_table(MainFrame frame, List<String> problems,
+                                             javax.swing.JButton clearLogBtn) {
+        String[] head = {"id", "姓名", "department"};
+        String[][] body = {{"1", "张三丰", "Logistics Division"}, {"2", "李四", "卫勤处"}};
+        java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> one =
+                new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        one.add(MainFrame.newResultSet(1, "select * from t_mixed", head, body));
+        frame.feedSqlRunSets(one, 0);
+        javax.swing.JTable t = frame.sqlRunResultTable();
+        if (!t.isVisible() || t.getRowCount() != 2 || t.getColumnCount() != 3
+                || !"姓名".equals(t.getColumnName(1))
+                || !"张三丰".equals(t.getValueAt(0, 1))
+                || !"卫勤处".equals(t.getValueAt(1, 2))) {
+            problems.add("结果集没落到真表格里：可见=" + t.isVisible()
+                    + " " + t.getRowCount() + " 行 " + t.getColumnCount() + " 列，"
+                    + "第 2 列叫 " + (t.getColumnCount() > 1 ? t.getColumnName(1) : "无")
+                    + "，取到 " + (t.getRowCount() > 0 ? t.getValueAt(0, 1) : "无"));
+        }
+        if (frame.sqlRunCellsEditable()) {
+            problems.add("结果表格应只读：用户改格子改的是显示，库里没动");
+        }
+        if (!"第 1 条 · 共 2 行".equals(frame.sqlRunCaptionText())) {
+            problems.add("表格上方那句说明没写清是第几条、共几行：" + frame.sqlRunCaptionText());
+        }
+        if (frame.sqlRunChooserVisible() || frame.sqlRunChooserItemCount() != 1) {
+            problems.add("只有一条结果集也摆了结果集下拉：可见=" + frame.sqlRunChooserVisible()
+                    + " 选项数=" + frame.sqlRunChooserItemCount());
+        }
+        StringBuilder widths = new StringBuilder();
+        // 列宽是 preferred，要排一次版才落成实际宽度：两个字段弹窗也是 pack() 之后才量
+        frame.validate();
+        if (!frame.sqlRunScrollsHorizontally()) {
+            problems.add("结果表格还开着列自适应：列名长一点就被挤成省略号，没得横向滚");
+        }
+        for (int c = 0; c < t.getColumnCount(); c++) {
+            if (!frame.sqlRunColumnFitsContent(c)) {
+                widths.append(" 第 ").append(c).append(" 列宽 ").append(t.getColumnModel()
+                        .getColumn(c).getWidth()).append(" 装不下内容");
+            }
+        }
+        if (widths.length() > 0) {
+            problems.add("结果表格的列宽裁掉了内容，横向滚也看不到全名：" + widths);
+        }
+        // 一批两条：下拉出现、默认停在最近那条，切回去表格与说明都得跟着换
+        java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> two =
+                new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        two.add(MainFrame.newResultSet(1, "select * from t_mixed", head, body));
+        two.add(MainFrame.newResultSet(2, "select a from t_second",
+                new String[]{"a"}, new String[][]{{"9"}}));
+        frame.feedSqlRunSets(two, 0);
+        if (!frame.sqlRunChooserVisible() || frame.sqlRunChooserItemCount() != 2
+                || t.getColumnCount() != 1 || !"9".equals(t.getValueAt(0, 0))
+                || !"第 2 条 · 共 1 行".equals(frame.sqlRunCaptionText())) {
+            problems.add("一批两条时没停在最近那条：可见=" + frame.sqlRunChooserVisible()
+                    + " 选项数=" + frame.sqlRunChooserItemCount()
+                    + " 列数=" + t.getColumnCount() + " 说明=" + frame.sqlRunCaptionText());
+        }
+        if (!frame.sqlRunChooserItemText(0).startsWith("第 1 条 · ")
+                || !frame.sqlRunChooserItemText(1).contains("t_second")) {
+            problems.add("下拉里的选项没交代是第几条、哪句 SQL："
+                    + frame.sqlRunChooserItemText(0) + " / " + frame.sqlRunChooserItemText(1));
+        }
+        frame.selectSqlRunSet(0);
+        if (t.getColumnCount() != 3 || !"张三丰".equals(t.getValueAt(0, 1))
+                || !"第 1 条 · 共 2 行".equals(frame.sqlRunCaptionText())) {
+            problems.add("切回第一条，表格或说明没跟着换：列数=" + t.getColumnCount()
+                    + " 说明=" + frame.sqlRunCaptionText());
+        }
+        // 一批 55 条 select 只留最近 50 条：内存要封顶，但丢掉的必须说出来
+        java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> capped =
+                new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        int[] dropped = {0};
+        for (int i = 1; i <= 55; i++) {
+            MainFrame.keepLatestSet(capped, dropped, MainFrame.newResultSet(i,
+                    "select " + i, new String[]{"n"}, new String[][]{{String.valueOf(i)}}));
+        }
+        if (capped.size() != MainFrame.MAX_RESULT_SETS || dropped[0] != 5) {
+            problems.add("结果集上限没按「丢最早的」执行：留 " + capped.size()
+                    + " 个、丢 " + dropped[0] + " 个");
+        } else if (capped.get(0).seq != 6 || capped.get(capped.size() - 1).seq != 55) {
+            problems.add("留下的是最早那 50 个而不是最近那 50 个：第一个是第 "
+                    + capped.get(0).seq + " 条、最后一个是第 "
+                    + capped.get(capped.size() - 1).seq + " 条");
+        }
+        frame.feedSqlRunSets(capped, dropped[0]);
+        if (frame.sqlRunChooserItemCount() != MainFrame.MAX_RESULT_SETS
+                || !"第 55 条 · 共 1 行".equals(frame.sqlRunCaptionText())
+                || !frame.sqlRunLogPanel().contains(
+                        "只保留最近 " + MainFrame.MAX_RESULT_SETS + " 个")) {
+            problems.add("丢弃了多余结果集却没说、或表格没停在最近那条：选项数="
+                    + frame.sqlRunChooserItemCount() + " 说明=" + frame.sqlRunCaptionText());
+        }
+        // 行数被截断时说明要老实讲：表格里只有前若干行，不写出来会被当成全量
+        com.excel2mysql.core.SqlExecute.ResultSetData cut =
+                MainFrame.newResultSet(1, "select * from big", head, body);
+        cut.total = 300;
+        cut.printed = 2;
+        java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> big =
+                new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        big.add(cut);
+        frame.feedSqlRunSets(big, 0);
+        if (!frame.sqlRunCaptionText().contains("共 300 行")
+                || !frame.sqlRunCaptionText().contains("只装前 2 行")) {
+            problems.add("结果集被截断时说明没交代只装了前几行：" + frame.sqlRunCaptionText());
+        }
+        // 超出保留上限也要留痕：静默丢掉前面的结果集，用户会以为表格就是整批
+        frame.sqlRunLogPanel().log("上一次留下的结果");
+        if (clearLogBtn != null) {
+            clearLogBtn.doClick();
+        }
+        if (t.getRowCount() != 0 || t.isVisible()
+                || frame.sqlRunChooserItemCount() != 0 || frame.sqlRunChooserVisible()
+                || !"还没有执行结果".equals(frame.sqlRunCaptionText())
+                || frame.sqlRunLogPanel().lineCount() != 0) {
+            problems.add("「清空结果区」没把表格、下拉与说明一起清："
+                    + t.getRowCount() + " 行 可见=" + t.isVisible()
+                    + " 选项数=" + frame.sqlRunChooserItemCount()
+                    + " 说明=" + frame.sqlRunCaptionText()
+                    + " 回执行数=" + frame.sqlRunLogPanel().lineCount());
+        }
+        // 一批全是写语句：不摆空表，说明要讲清为什么没有表格
+        frame.feedSqlRunSets(
+                new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>(), 0);
+        if (t.isVisible() || !frame.sqlRunCaptionText().startsWith("这一批没有返回结果集")) {
+            problems.add("没有结果集时摆了空表或说明不对：可见=" + t.isVisible()
+                    + " 说明=" + frame.sqlRunCaptionText());
+        }
     }
 
     /** 自检独立按 DPI 折算一遍，不引用 UiScale：产品侧折算被改坏时断言才会红。 */

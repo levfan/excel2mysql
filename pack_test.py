@@ -1396,23 +1396,35 @@ check("F22c 底部覆盖开关只作用于脚本文件，默认不勾选",
 
 
 class _RunCursor:
-    """顶替 pymysql 游标：记下每条 execute 的语句，按 fail_on 造一条报错。"""
+    """顶替 pymysql 游标：记下每条 execute 的语句，按 fail_on 造一条报错。
+
+    results 给定时，命中的那句按真游标那样带回 description 与逐行取值——
+    结果集走表格那条路必须有真的 description 才验得到。
+    """
 
     def __init__(self, owner):
         self.owner = owner
         self.description = None
+        self._pending = []
 
     def execute(self, sql):
         self.owner.calls.append(sql)
         if sql == self.owner.fail_on:
             raise RuntimeError("(1064, '语法错误')")
+        hit = (self.owner.results or {}).get(sql)
+        self.description = hit[0] if hit else None
+        self._pending = list(hit[1]) if hit else []
         return 2
+
+    def fetchone(self):
+        return self._pending.pop(0) if self._pending else None
 
 
 class _RunConn:
-    def __init__(self, fail_on=None):
+    def __init__(self, fail_on=None, results=None):
         self.calls = []
         self.fail_on = fail_on
+        self.results = results or {}
 
     def cursor(self):
         return _RunCursor(self)
@@ -1483,6 +1495,105 @@ check("F27 中途出错整批回滚：全程一次都不提交，失败那句直
 check("F28 失败行标红并附 DDL 隐式提交提醒",
       "第 2 条被拒绝" in _run_log and "隐式提交" in _run_log, _run_log)
 check("F29 执行结果不额外弹窗（这一页是给人来回试语句的）", not POPUPS, POPUPS)
+
+# ---- 执行结果用真表格画（用户 2026-10-28：中英文混排时文本表格不可阅读）----
+_mixed_cols = [("id",), ("姓名",), ("department",)]
+_mixed_rows = [(1, "张三丰", "Logistics Division"), (2, "李四", "卫勤处")]
+_sel_a = "select * from t_mixed"
+_sel_b = "select * from t_second"
+app_main.connect = lambda cfg: _RunConn(results={_sel_a: (_mixed_cols, _mixed_rows)})
+POPUPS.clear()
+w.sql_run_log.clear()
+w.sql_run_input.setPlainText(_sel_a + ";")
+w.on_sql_run()
+_rtab = w.sql_run_result_table
+check("F52 结果集落到真表格：表头与逐格取值都在表格里",
+      not _rtab.isHidden() and _rtab.rowCount() == 2 and _rtab.columnCount() == 3
+      and [_rtab.horizontalHeaderItem(c).text() for c in range(3)]
+          == ["id", "姓名", "department"]
+      and _rtab.item(0, 1).text() == "张三丰"
+      and _rtab.item(1, 2).text() == "卫勤处",
+      (_rtab.rowCount(), _rtab.columnCount(),
+       [_rtab.horizontalHeaderItem(c).text() for c in range(_rtab.columnCount())]))
+check("F53 ASCII 文本表格不再写进结果区：结果集只有一处呈现",
+      "+---" not in w.sql_run_log.toPlainText()
+      and "第 1/1 条" in w.sql_run_log.toPlainText(),
+      w.sql_run_log.toPlainText())
+check("F54 表格上方那句说明写清是第几条、共几行",
+      w.lbl_sql_run_caption.text() == "第 1 条 · 共 2 行",
+      w.lbl_sql_run_caption.text())
+check("F55 只有一条结果集时不摆结果集下拉",
+      w.cb_sql_run_set.isHidden() and w.cb_sql_run_set.count() == 1,
+      w.cb_sql_run_set.count())
+from PySide6.QtWidgets import QHeaderView as _Hdr
+check("F56 列宽随内容：最长那一格不被裁掉，且列没开着自适应（否则挤成省略号没得滚）",
+      all(_rtab.columnWidth(c) >= _rtab.sizeHintForColumn(c) for c in range(3))
+      and _rtab.horizontalHeader().sectionResizeMode(0) == _Hdr.Interactive
+      and not _rtab.horizontalHeader().stretchLastSection(),
+      [(_rtab.columnWidth(c), _rtab.sizeHintForColumn(c)) for c in range(3)]
+      + [str(_rtab.horizontalHeader().sectionResizeMode(0)),
+         _rtab.horizontalHeader().stretchLastSection()])
+app_main.connect = lambda cfg: _RunConn(results={_sel_a: (_mixed_cols, _mixed_rows),
+                                                 _sel_b: ([("a",)], [(9,)])})
+w.sql_run_input.setPlainText(_sel_a + ";\n" + _sel_b + ";")
+w.sql_run_log.clear()
+w.on_sql_run()
+check("F57 一批两条 select：下拉出现并默认停在最近那条",
+      not w.cb_sql_run_set.isHidden() and w.cb_sql_run_set.count() == 2
+      and w.cb_sql_run_set.currentIndex() == 1
+      and _rtab.columnCount() == 1 and _rtab.item(0, 0).text() == "9",
+      (w.cb_sql_run_set.count(), w.cb_sql_run_set.currentIndex(), _rtab.columnCount()))
+w.cb_sql_run_set.setCurrentIndex(0)
+check("F58 切回第一条：表格与说明跟着换成那一条的数据",
+      _rtab.columnCount() == 3 and _rtab.item(0, 1).text() == "张三丰"
+      and w.lbl_sql_run_caption.text() == "第 1 条 · 共 2 行",
+      (_rtab.columnCount(), w.lbl_sql_run_caption.text()))
+check("F61 结果表格只读：双击也开不了编辑器（改格子改的是显示，库里没动）",
+      _rtab.editTriggers() == app_main.QAbstractItemView.NoEditTriggers
+      and _rtab.selectionBehavior() == app_main.QAbstractItemView.SelectItems,
+      (str(_rtab.editTriggers()), str(_rtab.selectionBehavior())))
+# 一批 55 条 select：只留最近 50 条，内存封顶但丢掉的必须说出来
+from core.sql_execute import PREVIEW_ROWS as _PREVIEW
+_many = dict(("select %d from t" % i, ([("n",)], [(str(i),)])) for i in range(1, 56))
+app_main.connect = lambda cfg: _RunConn(results=_many)
+w.sql_run_input.setPlainText(";\n".join("select %d from t" % i for i in range(1, 56)) + ";")
+w.sql_run_log.clear()
+w.on_sql_run()
+check("F62 结果集多于上限：只留最近 50 个、丢掉的写在结果区里",
+      w.cb_sql_run_set.count() == app_main.MAX_RESULT_SETS
+      and w.cb_sql_run_set.currentIndex() == app_main.MAX_RESULT_SETS - 1
+      and w.lbl_sql_run_caption.text() == "第 55 条 · 共 1 行"
+      and "只保留最近 %d 个" % app_main.MAX_RESULT_SETS in w.sql_run_log.toPlainText(),
+      (w.cb_sql_run_set.count(), w.cb_sql_run_set.currentIndex(),
+       w.lbl_sql_run_caption.text(),
+       [l for l in w.sql_run_log.toPlainText().splitlines() if "只保留" in l]))
+# 行数超过预览上限：表格只装了前若干行，说明得老实讲，否则会被当成全量
+_wide = ([("n",)], [(str(i),) for i in range(_PREVIEW + 5)])
+app_main.connect = lambda cfg: _RunConn(results={"select * from big": _wide})
+w.sql_run_input.setPlainText("select * from big;")
+w.sql_run_log.clear()
+w.on_sql_run()
+check("F63 结果集被截断：说明写清共几行、只装了前几行",
+      _rtab.rowCount() == _PREVIEW
+      and w.lbl_sql_run_caption.text()
+          == "第 1 条 · 共 %d 行（表格只装前 %d 行，其余没取回来）" % (_PREVIEW + 5, _PREVIEW),
+      (_rtab.rowCount(), w.lbl_sql_run_caption.text()))
+w.on_sql_run_clear_result()
+check("F59 清空结果区：表格、下拉、说明与文本一起清",
+      _rtab.rowCount() == 0 and _rtab.isHidden()
+      and w.cb_sql_run_set.count() == 0 and w.cb_sql_run_set.isHidden()
+      and w.sql_run_log.toPlainText() == ""
+      and w.lbl_sql_run_caption.text() == "还没有执行结果",
+      (_rtab.rowCount(), _rtab.isHidden(), w.cb_sql_run_set.count(),
+       w.lbl_sql_run_caption.text()))
+app_main.connect = lambda cfg: _RunConn()
+w.sql_run_input.setPlainText("CREATE TABLE t_c (id INT);")
+w.sql_run_log.clear()
+w.on_sql_run()
+check("F60 一批全是写语句：不摆空表，说明写清为什么没有表格",
+      _rtab.isHidden()
+      and w.lbl_sql_run_caption.text().startswith("这一批没有返回结果集"),
+      w.lbl_sql_run_caption.text())
 
 # ---- 执行器任务的进度与取消：一屏上千条语句时，这两件决定用户是等还是走 ----
 class _PCur:
