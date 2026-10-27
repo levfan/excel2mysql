@@ -484,6 +484,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 }
             }
         });
+        // Del 键删掉选中的行（多选就是一次批量删）。绑在表自己的 WHEN_FOCUSED 上：
+        // 焦点在「表名」编辑器里时事件归编辑器先吃，改名字按 Del 删字符不会误删整行。
+        table.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0),
+                "deleteSelectedFiles");
+        table.getActionMap().put("deleteSelectedFiles", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                deleteSelectedFiles();
+            }
+        });
         int[] widths = {44, 320, 200, 280, 80, 90, 160};
         for (int i = 0; i < widths.length && i < table.getColumnCount(); i++) {
             table.getColumnModel().getColumn(i).setPreferredWidth(UiScale.px(widths[i]));
@@ -1250,8 +1261,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         Task other = conflict(resources);
         if (other != null) {
             // 静默吞掉点击、或只回一句"请稍等"，用户就只能在几个按钮之间一个个试
-            warn("已有任务在跑：" + other.describe() + "。这一步没执行——它和那个任务共用「"
-                    + sharedLabel(other) + "」，等它跑完或点进度框「取消」。");
+            warn(busyText(other));
             return false;
         }
         Task task = new Task(resources, lastTaskTitle, taskLogView);
@@ -1272,6 +1282,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             }
         }
         return null;
+    }
+
+    /**
+     * 拦下一次操作时要说的那句话：谁的任务、共用哪一份数据、怎么才能继续。
+     * 按钮与 Del 键两条入口共用一份话术，不然同一件事两处说法不同、各改一处就分叉。
+     */
+    private String busyText(Task other) {
+        return "已有任务在跑：" + other.describe() + "。这一步没执行——它和那个任务共用「"
+                + sharedLabel(other) + "」，等它跑完或点进度框「取消」。";
     }
 
     /** 冲突句里要说的是"那两个任务抢的是同一样东西"，光报资源代号没人看得懂。 */
@@ -2005,6 +2024,42 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         importBtn.setEnabled(!tables.isEmpty());
         syncGenButtons();
         log("已清空");
+    }
+
+    /**
+     * Del 键：把选中的行从待上传清单里去掉，多选就是一次批量删。
+     *
+     * 只出清单，不动磁盘上的原文件；ZIP 展开出来的临时文件仍按原计划在退出时清。
+     * 与「清空待上传文件」的区别是范围——按行删得先问有没有任务在解析这张表，
+     * 半途抽走正在被解析的那一行，任务回报的项数就对不上剩余清单了。
+     */
+    public void deleteSelectedFiles() {
+        Task other = conflict(RES_EXCEL);
+        if (other != null) {
+            warn(busyText(other));
+            return;
+        }
+        int[] rows = table.getSelectedRows();
+        if (rows == null || rows.length == 0) {
+            log("[删除] 没有选中文件，先在列表里点一行再按 Del");
+            return;
+        }
+        List<TableOps.Table> dropped = new ArrayList<TableOps.Table>();
+        for (int i = rows.length - 1; i >= 0; i--) {
+            if (rows[i] >= 0 && rows[i] < tables.size()) {
+                dropped.add(0, tables.remove(rows[i]));
+            }
+        }
+        for (TableOps.Table t : dropped) {
+            byTable.remove(t);
+            zipOrigin.remove(t.filepath);
+        }
+        fileModel.removeItems(dropped);
+        importBtn.setEnabled(!tables.isEmpty());
+        syncGenButtons();
+        refreshPreview();
+        log("[删除] 已移除 " + dropped.size() + " 个待上传文件，列表剩 "
+                + tables.size() + " 个");
     }
 
     /**

@@ -295,6 +295,22 @@ class EmptyHintTable(QTableWidget):
         painter.drawLine(cx + 7, arrow_tip - 7, cx, arrow_tip)
 
 
+class FileListTable(EmptyHintTable):
+    """待上传文件表：Del 键把"要删选中行"这件事交回主窗口。
+
+    按键这里只发信号、不做业务——删哪几张表、留痕怎么写、有任务在跑拦不拦，
+    都归主窗口一处说，避免快捷键和按钮两条入口各写一套规则。
+    """
+
+    del_pressed = Signal()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Delete:
+            self.del_pressed.emit()
+            return
+        super().keyPressEvent(e)
+
+
 class ActionBar(QFrame):
     """底部动作条的浅色底板：覆盖开关与执行按钮放进同一块底里。
 
@@ -1926,8 +1942,10 @@ class MainWindow(QWidget):
         name_row.addStretch(1)
         fl.addLayout(name_row)
 
-        self.file_table = EmptyHintTable(
+        self.file_table = FileListTable(
             0, 7, "请把 Excel 文件或 ZIP 压缩包拖到上方虚线区")
+        # 按整行选中：Del 删的是"这一行的文件"，按格选会让人以为删的是那一格
+        self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         style_table_font(self.file_table)
         self.file_table.setHorizontalHeaderLabels(
             ["序号", "文件", "表名", "表注释", "字段数", "数据行数", "主键"])
@@ -1948,6 +1966,7 @@ class MainWindow(QWidget):
         self.file_table.cellClicked.connect(self.on_file_table_clicked)
         self.file_table.cellDoubleClicked.connect(self.on_edit_structure_row)
         self.file_table.itemChanged.connect(self.on_file_table_item_changed)
+        self.file_table.del_pressed.connect(self.on_delete_selected_files)
         fl.addWidget(self.file_table)
 
         # 表名前缀（批量应用到全部表）
@@ -3604,6 +3623,30 @@ class MainWindow(QWidget):
         self.btn_import.setEnabled(False)
         self._sync_gen_buttons()
         self.progress.setValue(0)      # 清空待上传文件后不留上一次的进度残留
+
+    def on_delete_selected_files(self):
+        """Del 键：把选中的行从待上传列表里去掉，多选就是一次批量删。
+
+        只出清单，不动磁盘上的原文件；ZIP 展开出来的临时文件仍按原计划在退出时清。
+        """
+        other = self._conflict((self.RES_EXCEL,))
+        if other is not None:
+            # 半途抽走正在被解析的那一行，任务回报的项数就对不上剩余清单了
+            self._warn(self._busy_text(other))
+            return
+        rows = sorted({i.row() for i in self.file_table.selectionModel().selectedRows()},
+                      reverse=True)
+        rows = [r for r in rows if 0 <= r < len(self.tables)]
+        if not rows:
+            append_log(self.log, "[删除] 没有选中文件，先在列表里点一行再按 Del")
+            return
+        for r in rows:
+            self.tables.pop(r)
+        self._refresh_file_table()
+        self.btn_import.setEnabled(bool(self.tables))
+        self._sync_gen_buttons()
+        append_log(self.log, "[删除] 已移除 %d 个待上传文件，列表剩 %d 个"
+                   % (len(rows), len(self.tables)))
 
     def closeEvent(self, e):
         """退出时清掉 ZIP 展开出来的临时文件。"""
