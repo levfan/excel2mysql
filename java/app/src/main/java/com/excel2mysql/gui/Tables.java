@@ -29,7 +29,7 @@ public final class Tables {
      * 对撞器读的是真控件上的标题（不是两边各抄一份常量）。
      */
     public static final String FILE_TABLE_TITLE =
-            "待导入文件（单击表名改名，双击其他列改字段）";
+            "待导入文件（双击表名或表注释编辑，双击其他列改字段）";
     public static final String SQL_TABLE_TITLE =
             "待处理的脚本表（双击表名或表注释编辑，双击其他列看元数据）";
     public static final String COLUMN_TABLE_TITLE = "字段清单";

@@ -9,9 +9,9 @@ import java.util.List;
 
 /**
  * 文件表：一行一个已添加的文件，不是"一行一个字段"。
- * 对应 Python 侧 main.py:898-909 的 file_table。
+ * 对应 Python 侧 main.py 的 file_table。
  *
- * 只有「表名」列可就地编辑（单击进入编辑器，单独改这一张表的名字）；
+ * 「表名」与「表注释」两列可就地编辑（双击那一格进编辑器，与第二页同一交互）；
  * 字段级的改动仍走双击打开的结构弹窗。
  */
 public final class FileRowModel extends AbstractTableModel {
@@ -37,11 +37,21 @@ public final class FileRowModel extends AbstractTableModel {
         void rename(Item item, String requested);
     }
 
+    /** 表注释同样交给窗口落库：改完要刷清单、要在日志上留一句回执。 */
+    public interface CommentHandler {
+        void comment(Item item, String requested);
+    }
+
     private final List<Item> items = new ArrayList<Item>();
     private RenameHandler renameHandler;
+    private CommentHandler commentHandler;
 
     public void setRenameHandler(RenameHandler handler) {
         this.renameHandler = handler;
+    }
+
+    public void setCommentHandler(CommentHandler handler) {
+        this.commentHandler = handler;
     }
 
     public int getRowCount() {
@@ -57,22 +67,27 @@ public final class FileRowModel extends AbstractTableModel {
         return COLUMNS[col];
     }
 
-    /** 只有表名列可编辑：字段改动仍走双击的结构弹窗。 */
+    /** 表名与表注释两列可就地编辑：字段改动仍走双击的结构弹窗。 */
     @Override
     public boolean isCellEditable(int row, int col) {
-        return col == 2 && row >= 0 && row < items.size();
+        return (col == 2 || col == 3) && row >= 0 && row < items.size();
     }
 
     @Override
     public void setValueAt(Object value, int row, int col) {
-        if (col != 2 || row < 0 || row >= items.size()) {
+        if ((col != 2 && col != 3) || row < 0 || row >= items.size()) {
             return;
         }
         Item it = items.get(row);
-        String old = it.table.tableName;
         String requested = value == null ? "" : String.valueOf(value);
-        if (!requested.equals(old) && renameHandler != null) {
-            renameHandler.rename(it, requested);
+        if (col == 2) {
+            if (!requested.equals(it.table.tableName) && renameHandler != null) {
+                renameHandler.rename(it, requested);
+            }
+        } else if (commentHandler != null) {
+            // 注释允许改成空串，也允许"看着改了其实没改"（只多打了空格）：
+            // 两种都由窗口给回执，模型不替它判断要不要说话
+            commentHandler.comment(it, requested);
         }
         // 拒绝改名时模型不动，这里重绘一次让编辑器关掉后回显原值
         fireTableCellUpdated(row, col);

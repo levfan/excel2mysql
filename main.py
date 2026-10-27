@@ -40,7 +40,7 @@ import re
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent
 from PySide6.QtGui import (
     QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat,
-    QPainter, QPen, QPainterPath,
+    QPainter, QPen, QPainterPath, QKeySequence, QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -140,7 +140,7 @@ TABLE_ROW_PADDING = 6
 # 每张表格左上角那一句标识（组框标题）。用户口径：每个表格都要有标识，
 # 第一页的「待导入文件」就是样子——标题里顺带写明这一张表怎么操作。
 # 两栈同一句、由对撞器逐条比（读的是真控件上的标题，不是这里抄一份）。
-FILE_TABLE_TITLE = "待导入文件（单击表名改名，双击其他列改字段）"
+FILE_TABLE_TITLE = "待导入文件（双击表名或表注释编辑，双击其他列改字段）"
 SQL_TABLE_TITLE = "待处理的脚本表（双击表名或表注释编辑，双击其他列看元数据）"
 RUN_TABLE_TITLE = "待执行脚本（按清单顺序执行）"
 COLUMN_TABLE_TITLE = "字段清单"
@@ -1570,7 +1570,6 @@ class ImportWorker(QThread):
     log = Signal(str)
     log_error = Signal(str)             # 失败日志，接收端整条标红
     progress = Signal(int, int, str)    # done, total, 当前项：驱动模态进度框
-    table_progress = Signal(int, int)   # current, total
     table_done = Signal(dict)           # 单表结果
     finished_all = Signal(list)         # 所有表结果
 
@@ -1639,7 +1638,6 @@ class ImportWorker(QThread):
                     loaded[0] = cur
                     if delta:
                         rep.advance(delta, f"导入 `{name}`：{cur}/{tot} 行")
-                    self.table_progress.emit(cur, tot)
 
                 try:
                     rows = insert_data(conn, name, t["columns"], t["df"],
@@ -1691,9 +1689,11 @@ class DropArea(QWidget):
 
     # 两个图形页共用这一种拖拽区，只有文案不同：Excel 页收 xlsx/xls/zip，
     # SQL 页只收 .sql。默认值保持第一页原来那句，第二页构造时传自己那两句。
+    # 第三行是粘贴入口的提示：Ctrl+V 在窗口层级监听，等同把文件拖进这块虚线区。
+    PASTE_HINT = "快捷键：复制文件后按 Ctrl+V 直接添加"
     EXCEL_HINT = "将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n" \
-                 "（支持 .xlsx / .xls / .zip，可多选）"
-    SQL_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）"
+                 "（支持 .xlsx / .xls / .zip，可多选）\n" + PASTE_HINT
+    SQL_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）\n" + PASTE_HINT
     RUN_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选；按列表顺序执行）"
 
     # 淡蓝底 + 悬停加深：底色本身就要让人看出"这块是可以放东西的地方"，
@@ -1819,6 +1819,12 @@ class MainWindow(QWidget):
         self._conn_expanded = False
 
         self._build_ui()
+        # Ctrl+V 挂在窗口层级：三页里任何一处按粘贴都是同一件事（等同拖进虚线区）。
+        # 用 WindowShortcut 而不是窗口的 keyPressEvent：焦点在输入框/日志框时
+        # 控件自己的粘贴优先，这条只在没人要这个按键时才轮到
+        self.paste_shortcut = QShortcut(QKeySequence.Paste, self)
+        self.paste_shortcut.setContext(Qt.WindowShortcut)
+        self.paste_shortcut.activated.connect(self.on_paste_files)
         self._load_default_conn()
 
     # -------------------- UI --------------------
@@ -1961,9 +1967,8 @@ class MainWindow(QWidget):
         self.file_table.setColumnWidth(5, 90)
         self.file_table.setColumnWidth(6, 160)
         self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        # 单击「表名」直接进编辑器改这一张表的名字；双击其余列看这一行的结构。
-        # 触发器关掉仍能 editItem，和 SQL 页同一个做法，避免单击别的列也弹编辑框。
-        self.file_table.cellClicked.connect(self.on_file_table_clicked)
+        # 与「SQL 脚本改名」那页同一交互：双击「表名」「表注释」进编辑器，双击其余列看结构。
+        # 触发器关掉仍能 editItem，避免单击别的列也弹编辑框（第二页同一个做法）
         self.file_table.cellDoubleClicked.connect(self.on_edit_structure_row)
         self.file_table.itemChanged.connect(self.on_file_table_item_changed)
         self.file_table.del_pressed.connect(self.on_delete_selected_files)
@@ -2038,21 +2043,17 @@ class MainWindow(QWidget):
         excel_lay.addWidget(self.excel_split, 1)
 
         # 6. 执行与输出（贴在窗口底部的动作条）
-        # 左列是执行选项与页内进度，右侧才是动作按钮：进度跟着执行走，放在同一层；
+        # 左列是执行选项，右侧才是动作按钮。页内进度条已经拿掉：导入本身弹的是
+        # 那个非模态进度框（每张表 + 每行数据都计项），同一条进度不该在窗口里再摆一份，
+        # 而解析 / 前缀 / 生成 / SQL 页那些任务期间这条恒为 0 的杠只会让人以为界面坏了。
         # 主按钮用强调色，停止与两颗生成按钮保持普通样式，一屏里只留一个视觉重点。
         excel_lay.addWidget(hline())
         self.excel_action_bar = ActionBar()
         op = QHBoxLayout(self.excel_action_bar)
         op.setContentsMargins(10, 6, 10, 6)
-        op_left = QVBoxLayout()
-        op_left.setSpacing(2)
         self.chk_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
-        op_left.addWidget(self.chk_drop)
-        self.progress = QProgressBar()
-        self.progress.setValue(0)
-        self.progress.setMinimumWidth(160)
-        op_left.addWidget(self.progress)
-        op.addLayout(op_left, 1)
+        op.addWidget(self.chk_drop)
+        op.addStretch(1)
         op.addSpacing(12)
         self.btn_import = QPushButton("开始导入")
         self.btn_import.setEnabled(False)
@@ -3511,7 +3512,40 @@ class MainWindow(QWidget):
         if accepted:
             self._add_files(accepted)
         else:
-            append_log(self.log, "[提示] 拖入的不是 Excel 或 ZIP 文件，已忽略。")
+            append_log(self.log, "[提示] 拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略。")
+
+    def on_paste_files(self):
+        """窗口级 Ctrl+V：剪贴板里是 Excel / ZIP 就等同拖进虚线区，走同一条解析路。
+
+        焦点在文本框里时先交回它自己粘文本——输入框里的 Ctrl+V 是粘内容，
+        不该被"添加文件"抢走；剪贴板不是文件或类型不对，一律走拖拽那条已有的口径。
+        """
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QPlainTextEdit)):
+            focus.paste()
+            return
+        paths = [u.toLocalFile() for u in QApplication.clipboard().mimeData().urls()
+                 if QFileInfo(u.toLocalFile()).isFile()]
+        self.paste_paths(paths)
+
+    def paste_paths(self, paths):
+        """粘贴进来的那批路径走这一条：对撞器与用例不碰系统剪贴板也能验到计数。"""
+        accepted = [f for f in paths if f.lower().endswith(IMPORT_EXTS)]
+        if not accepted:
+            self.on_files_dropped(paths)
+            return
+        other = self._conflict((self.RES_EXCEL,))
+        if other is not None:
+            # 这一句要拦在"已通过粘贴添加"之前说：任务位被占时那条回执就成了假话
+            self._warn(self._busy_text(other))
+            return
+        append_log(self.log, "[粘贴] 已通过粘贴添加 %d 个文件，其中 %d个 zip文件，"
+                             "%d个 xlsx文件，%d个 xls文件"
+                   % (len(accepted),
+                      sum(1 for f in accepted if f.lower().endswith(".zip")),
+                      sum(1 for f in accepted if f.lower().endswith(".xlsx")),
+                      sum(1 for f in accepted if f.lower().endswith(".xls"))))
+        self._add_files(accepted)
 
     def _add_files(self, files):
         """添加文件：展开压缩包 + 解析表结构全在子线程，主线程只弹模态进度框。"""
@@ -3596,9 +3630,14 @@ class MainWindow(QWidget):
 
             def read_only(text):
                 # QTableWidgetItem 默认带可编辑标志，只靠视图触发器挡不住"标志上可改"；
-                # 其余列连标志一起收掉，让"只有表名可改"在数据和界面两处都成立
+                # 其余列连标志一起收掉，让"只有表名与表注释可改"在数据和界面两处都成立
                 it = QTableWidgetItem(text)
                 it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                return it
+
+            def editable(text):
+                it = QTableWidgetItem(text)
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
                 return it
 
             for i, t in enumerate(self.tables):
@@ -3607,10 +3646,11 @@ class MainWindow(QWidget):
                 # ZIP 展开出来的文件要能看出来自哪个包的哪个内部路径
                 item.setToolTip(self._zip_origin.get(t["filepath"]) or t["filepath"])
                 self.file_table.setItem(i, 1, item)
-                name_item = QTableWidgetItem(t["table_name"])
-                name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
-                self.file_table.setItem(i, 2, name_item)
-                self.file_table.setItem(i, 3, read_only(t["table_comment"]))
+                self.file_table.setItem(i, 2, editable(t["table_name"]))
+                comment_item = editable(t["table_comment"])
+                # 注释整格可能比列宽长：悬停要看全（与第二页的表注释同一做法）
+                comment_item.setToolTip(t["table_comment"])
+                self.file_table.setItem(i, 3, comment_item)
                 self.file_table.setItem(i, 4, read_only(str(len(t["columns"]))))
                 self.file_table.setItem(i, 5, read_only(str(len(t["df"]))))
                 pk = ", ".join(c["field"] for c in t["columns"] if c.get("primary_key")) or "无"
@@ -3623,7 +3663,6 @@ class MainWindow(QWidget):
         self.file_table.setRowCount(0)
         self.btn_import.setEnabled(False)
         self._sync_gen_buttons()
-        self.progress.setValue(0)      # 清空待上传文件后不留上一次的进度残留
 
     def on_delete_selected_files(self):
         """Del 键：把选中的行从待上传列表里去掉，多选就是一次批量删。
@@ -3720,20 +3759,17 @@ class MainWindow(QWidget):
             self._refresh_file_table()
             append_log(self.log, "[结构] 已按弹窗确认 %d 张表的字段定义" % len(self.tables))
 
-    def on_file_table_clicked(self, row: int, col: int) -> None:
-        """单击「表名」直接进编辑器；其他列保持只读（双击才去看结构）。"""
-        if col != 2 or self.task_busy((self.RES_EXCEL,)):
-            return
-        if not 0 <= row < self.file_table.rowCount():
-            return
-        item = self.file_table.item(row, 2)
-        if item is not None:
-            self.file_table.editItem(item)
-
     def on_file_table_item_changed(self, item) -> None:
-        """手动改单张表的表名：校验不过就恢复原名，改成了就以新名为基础名。"""
-        if self._refreshing_file_table or item is None or item.column() != 2:
+        """清单里就地改的两格：表名要过校验，表注释直接写回这张表的定义。"""
+        if self._refreshing_file_table or item is None:
             return
+        if item.column() == 2:
+            self._apply_file_table_name(item)
+        elif item.column() == 3:
+            self._apply_file_table_comment(item)
+
+    def _apply_file_table_name(self, item) -> None:
+        """手动改单张表的表名：校验不过就恢复原名，改成了就以新名为基础名。"""
         row = item.row()
         if not 0 <= row < len(self.tables):
             return
@@ -3756,18 +3792,41 @@ class MainWindow(QWidget):
         self._refresh_file_table()
         append_log(self.log, "[表名] %s → %s（手动修改，后续批量前缀基于新名计算）" % (old, new))
 
+    def _apply_file_table_comment(self, item) -> None:
+        """表注释改了就写回这张表：建表那句 COMMENT 与两份生成件都读它。"""
+        row = item.row()
+        if not 0 <= row < len(self.tables):
+            return
+        t = self.tables[row]
+        old = t.get("table_comment") or ""
+        new = str(item.text() or "").strip()
+        if new == old:
+            # 只多打了空白时 Qt 照样发 itemChanged：去空白后其实没改，
+            # 但这句回执必须有，刷回清单也不能留着多打的空白（静默 no-op 等于界面在骗人）
+            append_log(self.log, "[表注释] %s 未发生变化，建表语句不改写" % t["table_name"])
+            self._refresh_file_table()
+            return
+        t["table_comment"] = new
+        self._refresh_file_table()
+        append_log(self.log, "[表注释] %s → %s（建表语句按新注释生成）"
+                   % (t["table_name"], new or "（空）"))
+
     def on_edit_structure_row(self, row: int, col: int = 0) -> None:
-        """双击文件列表某一行：只弹那一张表的结构窗口。
+        """双击文件列表某一行：「表名」「表注释」就地改，其余列只弹那一张表的结构窗口。
 
         整列表一起弹会让人分不清改的是哪张表，Swing 那条线一直是按行弹的。
-        「表名」列例外——单击/双击都只进改名编辑器，不叠一个结构窗。
         """
-        if col == 2:
+        if not 0 <= row < len(self.tables):
+            return
+        if col in (2, 3):
+            if self.task_busy((self.RES_EXCEL,)):
+                return
+            item = self.file_table.item(row, col)
+            if item is not None:
+                self.file_table.editItem(item)
             return
         if not self.tables:
             popup_box(self, "提示", NO_FILE_HINT)
-            return
-        if not 0 <= row < len(self.tables):
             return
         t = self.tables[row]
         dlg = StructureDialog([t], self)
@@ -3826,11 +3885,9 @@ class MainWindow(QWidget):
             return
         self.btn_import.setEnabled(False)
         self.btn_stop.setEnabled(True)
-        self.progress.setValue(0)
         self.worker = ImportWorker(self._conn_cfg(), self.tables, self.chk_drop.isChecked())
         self.worker.log.connect(self._on_worker_log)
         self.worker.log_error.connect(self._on_worker_error)
-        self.worker.table_progress.connect(self._on_table_progress)
         self.worker.table_done.connect(self._on_table_done)
         self.worker.finished_all.connect(self._on_finished_all)
         if not MODAL_PROGRESS:
@@ -3866,10 +3923,6 @@ class MainWindow(QWidget):
 
     def _on_worker_error(self, msg):
         append_log(self.log, msg, error=True)
-
-    def _on_table_progress(self, cur, tot):
-        if tot > 0:
-            self.progress.setValue(int(cur / tot * 100))
 
     def _on_table_done(self, result):
         pass
@@ -3911,9 +3964,6 @@ class MainWindow(QWidget):
         if fail:
             msg += "\n失败文件保留在列表中，可调整后重试。"
         popup_box(self, "导入完成", msg + "\n详见日志。")
-        # 结果已经由弹窗和日志交代清楚，进度条回到初始的 0%：
-        # 停在 100% 会让人分不清"这是上一批的尾巴，还是这一批的当前进度"
-        self.progress.setValue(0)
 
 
 # ---------------------------------------------------------------------------
@@ -3933,7 +3983,6 @@ class StructureDialog(QDialog):
         tip.setStyleSheet("color: #666;")
         lay.addWidget(tip)
         self.tabs = QTabWidget()
-        self.comment_edits = []      # 与 editors 同序：每张表的表注释输入框
         for t in tables:
             tw = QTableWidget(len(t["columns"]), 5)
             style_table_font(tw)
@@ -3954,23 +4003,24 @@ class StructureDialog(QDialog):
                 # 建表仍按原类型"的错觉，所以只给看不给改（与 Java 侧同口径）
                 size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
                 tw.setItem(i, 4, size_item)
-            tw.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-            tw.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-            tw.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-            # 末列按内容宽度走：表头 10 个字，默认 100px 会把它截成省略号
-            tw.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-            # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方
+            # 主键列按内容收窄，其余列按设计宽度摆：关掉"末列填满视口"才有"放不下"
+            # 这件事——字段名或注释长到超出视口时出横向滚动条，而不是挤成一串省略号
+            # （Swing 侧同一组宽度：AUTO_RESIZE_OFF + 46/230/280/160/按表头量）
+            th = tw.horizontalHeader()
+            th.setSectionResizeMode(QHeaderView.Interactive)
+            th.setStretchLastSection(False)
+            th.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            th.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+            tw.setColumnWidth(1, 230)
+            tw.setColumnWidth(2, 280)
+            tw.setColumnWidth(3, 160)
+            # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方。
+            # 表注释的输入行也拿掉了——清单里双击那一格就能改，两处都能改同一件事
+            # 就会有两处"到底以谁为准"的口径（用户 2026-10-28 点名）
             page = QWidget()
             page_lay = QVBoxLayout(page)
             page_lay.setContentsMargins(0, 0, 0, 0)
-            comment_row = QHBoxLayout()
-            comment_row.addWidget(QLabel("表注释："))
-            edit = QLineEdit(str(t.get("table_comment") or ""))
-            edit.setClearButtonEnabled(True)
-            comment_row.addWidget(edit, 1)
-            page_lay.addLayout(comment_row)
             page_lay.addWidget(tw)
-            self.comment_edits.append(edit)
             self.tabs.addTab(page, t["table_name"])
             self.editors.append((t, tw))
         lay.addWidget(self.tabs)
@@ -3983,7 +4033,7 @@ class StructureDialog(QDialog):
     def _on_accept(self):
         # 先把全部编辑收集到副本，主键校验通过后再写回，避免无效主键污染数据
         staged = []
-        for (t, tw), edit in zip(self.editors, self.comment_edits):
+        for (t, tw) in self.editors:
             cols = []
             for i, c in enumerate(t["columns"]):
                 nc = dict(c)
@@ -3999,10 +4049,10 @@ class StructureDialog(QDialog):
                 cb = tw.cellWidget(i, 0)
                 nc["primary_key"] = bool(cb and cb.isChecked())
                 cols.append(nc)
-            staged.append((t, cols, edit.text().strip()))
+            staged.append((t, cols))
 
         problems = []
-        for t, cols, _comment in staged:
+        for t, cols in staged:
             good, msg = validate_primary_key(t["df"], cols)
             if not good:
                 problems.append(f"表「{t['table_name']}」：{msg}")
@@ -4012,9 +4062,8 @@ class StructureDialog(QDialog):
                       "warning")
             return    # 校验不过不放行，保持弹窗打开让用户调整
 
-        for t, cols, comment in staged:
+        for t, cols in staged:
             t["columns"] = cols
-            t["table_comment"] = comment
         self.accept()
 
     def get_tables(self):
@@ -4078,7 +4127,8 @@ class SqlMetadataDialog(QDialog):
         self._loading = False
         tw.setSelectionBehavior(QAbstractItemView.SelectRows)
         tw.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        tw.horizontalHeader().setStretchLastSection(True)
+        # 末列不铺满视口：字段名/注释放不下时要出横向滚动条（Swing 侧 AUTO_RESIZE_OFF）
+        tw.horizontalHeader().setStretchLastSection(False)
         tw.setColumnWidth(0, 230)
         tw.setColumnWidth(1, 280)
         tw.setColumnWidth(2, 160)

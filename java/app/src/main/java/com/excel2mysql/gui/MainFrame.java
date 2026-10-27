@@ -162,7 +162,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JButton sqlRunCopyBtn;
     private javax.swing.JButton sqlRunInsertBtn;
     private DropArea drop;
-    private javax.swing.JProgressBar pageProgress;
     private HintTextField prefixField;
     private javax.swing.JCheckBox initialsBox;
     private javax.swing.JCheckBox upperBox;
@@ -187,6 +186,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 标题带版本号：不点开「关于」也能看见现场跑的是哪一版
         super(AppInfo.load().titleText());
         fileModel.setRenameHandler((item, requested) -> renameFileTable(item, requested));
+        fileModel.setCommentHandler((item, requested) -> commentFileTable(item, requested));
+        bindPasteShortcut();
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         applyWindowIcon();
         setLocationByPlatform(true);
@@ -468,17 +469,20 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         table.getTableHeader().setReorderingAllowed(false);
         table.setFillsViewportHeight(true);
         Tables.style(table);
-        // 表名单击就进编辑器改这一张表；双击其余列进结构弹窗改字段与主键
-        javax.swing.DefaultCellEditor nameEditor =
+        // 与第二页同一交互：双击「表名」「表注释」就地改，双击其余列才进结构弹窗。
+        // 编辑器显式设成双击起（点一次只选中），免得两页各按各的默认值走
+        javax.swing.DefaultCellEditor cellEditor =
                 new javax.swing.DefaultCellEditor(new javax.swing.JTextField());
-        nameEditor.setClickCountToStart(1);
-        table.getColumnModel().getColumn(2).setCellEditor(nameEditor);
+        cellEditor.setClickCountToStart(2);
+        table.getColumnModel().getColumn(2).setCellEditor(cellEditor);
+        table.getColumnModel().getColumn(3).setCellEditor(cellEditor);
         table.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() == 2) {
-                    // 「表名」列只改名，不叠一个结构窗
-                    if (table.columnAtPoint(e.getPoint()) != 2) {
+                    int column = table.columnAtPoint(e.getPoint());
+                    // 可改的那两列只进编辑器，不叠一个结构窗
+                    if (column != 2 && column != 3) {
                         editStructure();
                     }
                 }
@@ -651,26 +655,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         opRight.add(genStd);
         opRight.add(genSimple);
 
-        pageProgress = new javax.swing.JProgressBar();
-        // Qt 的 QProgressBar 默认就在条上印百分比，Swing 默认什么都不画：
-        // 不开这个，页内进度条在两条线上看起来是两种东西
-        pageProgress.setStringPainted(true);
-        pageProgress.setPreferredSize(new Dimension(UiScale.px(200), UiScale.px(18)));
-        pageProgress.setMaximumSize(new Dimension(Integer.MAX_VALUE, UiScale.px(18)));
-        pageProgress.setAlignmentX(0f);
+        // 页内进度条已经拿掉：导入弹的是那个非模态进度框（每张表 + 每行数据都计项），
+        // 同一条进度不在窗口里再摆一份；而解析 / 前缀 / 生成 / SQL 页任务期间
+        // 这条恒为 0 的杠只会让人以为界面坏了，第二、三页本来也没有它。
         dropExisting.setAlignmentX(0f);
         dropExisting.setMaximumSize(new Dimension(
                 Integer.MAX_VALUE, dropExisting.getPreferredSize().height));
-        JPanel opLeft = new JPanel();
-        opLeft.setOpaque(false);
-        opLeft.setLayout(new javax.swing.BoxLayout(opLeft, javax.swing.BoxLayout.Y_AXIS));
-        opLeft.add(dropExisting);
-        opLeft.add(javax.swing.Box.createVerticalStrut(UiScale.px(2)));
-        opLeft.add(pageProgress);
         opRight.setOpaque(false);
         excelActionBar = new ActionBar(new BorderLayout());
         JPanel op = excelActionBar;
-        op.add(opLeft, BorderLayout.CENTER);
+        op.add(dropExisting, BorderLayout.CENTER);
         op.add(opRight, BorderLayout.EAST);
         JPanel south = new JPanel(new BorderLayout(0, UiScale.px(2)));
         // 执行层与上方表格区之间的细分隔线：底部动作条不再和表格内容糊成一片
@@ -997,7 +991,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             byTable.remove(t);
         }
         fileModel.removeItems(removed);
-        setPageProgress(0);
         importBtn.setEnabled(!tables.isEmpty());
         syncGenButtons();
         refreshPreview();
@@ -1061,17 +1054,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         lastTask = progress;
         task.dialog = progress;
         final ImportParse.Sink sink = sinkFor(task);
-        setPageProgress(0);
         Thread worker = new Thread(() -> {
             try {
-                final List<ImportRun.Row> rows = ImportRun.run(cfg, work, drop, sink,
-                        new ImportRun.RowProgress() {
-                            @Override
-                            public void onTableProgress(final int done, final int total) {
-                                final int percent = total <= 0 ? 0 : (int) (done * 100L / total);
-                                SwingUtilities.invokeLater(() -> setPageProgress(percent));
-                            }
-                        });
+                final List<ImportRun.Row> rows = ImportRun.run(cfg, work, drop, sink);
                 final List<ImportOutcome> outcomes = new ArrayList<ImportOutcome>();
                 for (ImportRun.Row r : rows) {
                     outcomes.add(new ImportOutcome(r.filepath, r.ok));
@@ -1845,7 +1830,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             }
         }
         if (accepted.isEmpty()) {
-            log("[提示] 拖入的不是 Excel 或 ZIP 文件，已忽略。");
+            log("[提示] 拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略。");
         }
         return accepted;
     }
@@ -1990,6 +1975,112 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         log("[表名] " + old + " → " + name + "（手动修改，后续批量前缀基于新名计算）");
     }
 
+    /**
+     * Ctrl+V 绑在窗口层级（WHEN_IN_FOCUSED_WINDOW）：三页里任何一处按粘贴都是同一件事。
+     * 焦点在文本框时那条按键归文本框自己的 WHEN_FOCUSED 绑定先吃，
+     * 这里再兜一层，保证"往输入框里粘文本"不会被"添加文件"抢走。
+     */
+    private void bindPasteShortcut() {
+        javax.swing.KeyStroke key = javax.swing.KeyStroke.getKeyStroke(
+                java.awt.event.KeyEvent.VK_V, java.awt.event.InputEvent.CTRL_DOWN_MASK);
+        getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(key, "pasteFiles");
+        getRootPane().getActionMap().put("pasteFiles", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                pasteFiles();
+            }
+        });
+    }
+
+    /** 剪贴板里的文件路径：不是文件、或系统这会儿不给读，一律按"没有文件"处理。 */
+    public static List<String> clipboardFilePaths() {
+        List<String> out = new ArrayList<String>();
+        try {
+            java.awt.datatransfer.Transferable tr = java.awt.Toolkit.getDefaultToolkit()
+                    .getSystemClipboard().getContents(null);
+            if (tr == null || !tr.isDataFlavorSupported(
+                    java.awt.datatransfer.DataFlavor.javaFileListFlavor)) {
+                return out;
+            }
+            Object raw = tr.getTransferData(
+                    java.awt.datatransfer.DataFlavor.javaFileListFlavor);
+            if (raw instanceof java.util.List) {
+                for (Object o : (java.util.List<?>) raw) {
+                    if (o instanceof java.io.File && ((java.io.File) o).isFile()) {
+                        out.add(((java.io.File) o).getAbsolutePath());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            return out;
+        }
+        return out;
+    }
+
+    /**
+     * 粘贴添加：剪贴板里是 Excel / ZIP 就等同拖进虚线区，走同一条解析路。
+     * 类型不对或压根不是文件，交给 acceptedDrops 那句已有的"已忽略"回执；
+     * 任务位被占时先拦下来——那句"已通过粘贴添加"不能在没加成的情况下说出口。
+     */
+    public void pasteFiles() {
+        java.awt.Component focus = java.awt.KeyboardFocusManager
+                .getCurrentKeyboardFocusManager().getFocusOwner();
+        if (focus instanceof javax.swing.text.JTextComponent) {
+            ((javax.swing.text.JTextComponent) focus).paste();
+            return;
+        }
+        pastePaths(clipboardFilePaths());
+    }
+
+    /** 粘贴的那批路径走这一条：自检不碰系统剪贴板，也能验到计数与留痕。 */
+    public void pastePaths(List<String> paths) {
+        List<String> accepted = acceptedDrops(paths);
+        if (accepted.isEmpty()) {
+            return;
+        }
+        Task other = conflict(RES_EXCEL);
+        if (other != null) {
+            warn(busyText(other));
+            return;
+        }
+        int zips = 0;
+        int xlsx = 0;
+        int xls = 0;
+        for (String f : accepted) {
+            String low = f.toLowerCase();
+            if (low.endsWith(".zip")) {
+                zips++;
+            } else if (low.endsWith(".xlsx")) {
+                xlsx++;
+            } else {
+                xls++;
+            }
+        }
+        log("[粘贴] 已通过粘贴添加 " + accepted.size() + " 个文件，其中 " + zips
+                + "个 zip文件，" + xlsx + "个 xlsx文件，" + xls + "个 xls文件");
+        addFilesAsync(accepted);
+    }
+
+    /**
+     * 文件表双击「表注释」改这张表的注释：建表那句 COMMENT 与两份生成件都读它。
+     * 只多打了空格那种"看着改了其实没改"也要给回执，并把格子刷回规范值。
+     */
+    private void commentFileTable(FileRowModel.Item item, String typed) {
+        String old = item.table.tableComment == null ? "" : item.table.tableComment;
+        String next = Names.pyStrip(typed == null ? "" : typed);
+        if (next.equals(old)) {
+            log("[表注释] " + item.table.tableName + " 未发生变化，建表语句不改写");
+            fileModel.refresh();
+            return;
+        }
+        item.table.tableComment = next;
+        fileModel.refresh();
+        refreshPreview();
+        log("[表注释] " + item.table.tableName + " → "
+                + (next.isEmpty() ? "（空）" : next) + "（建表语句按新注释生成）");
+    }
+
     /** 双击选中行打开结构弹窗，确认后重算 DDL 预览。 */
     public boolean editStructure() {
         int row = table.getSelectedRow();
@@ -2018,7 +2109,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         fileModel.clear();
         zipOrigin.clear();
         ddlText = "";
-        setPageProgress(0);
         // 清空后「开始导入」要跟着变灰：Python 的 on_clear 就是这么做的，
         // 留着亮按钮等于允许点一次只会弹"请先添加文件"的空操作
         importBtn.setEnabled(!tables.isEmpty());
@@ -2357,17 +2447,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return text;
     }
 
-    /** 页内进度条：导入按"当前表完成数 / 总表数"报百分比，跑完归零。 */
-    public void setPageProgress(int percent) {
-        if (pageProgress != null) {
-            pageProgress.setValue(Math.max(0, Math.min(100, percent)));
-        }
-    }
-
-    public int pageProgressValue() {
-        return pageProgress == null ? -1 : pageProgress.getValue();
-    }
-
     /** 自检与命令行入口读得到这几个控件，才谈得上验它们的配置。 */
     public javax.swing.JTable fileTable() {
         return table;
@@ -2396,10 +2475,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JComboBox<String> dbCombo() {
         return dbCombo;
-    }
-
-    public javax.swing.JProgressBar pageProgressBar() {
-        return pageProgress;
     }
 
     /** 双端界面枚举对撞器要按页归属分按钮（两页有重名按钮）。 */

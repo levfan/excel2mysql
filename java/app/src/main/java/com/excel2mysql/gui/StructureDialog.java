@@ -41,8 +41,6 @@ public final class StructureDialog extends JDialog {
         final TableOps.Table table;
         final List<List<Object>> rows;
         final DefaultTableModel model;
-        /** 这张表上方的表注释输入框：确定后才写回表定义。 */
-        final JTextField commentField;
         /** 这张表的滚动容器；自检要顺着它往上读"有没有再套一层标识"。 */
         JScrollPane scroll;
 
@@ -65,8 +63,6 @@ public final class StructureDialog extends JDialog {
                 this.model.addRow(new Object[]{Boolean.valueOf(c.primaryKey), c.field, c.comment,
                         c.type, String.valueOf(c.maxLen)});
             }
-            this.commentField = new JTextField(table.tableComment == null
-                    ? "" : table.tableComment);
         }
 
         /** 只收集到副本，不碰 table.columns——校验没过就不能让改动落到表定义上。 */
@@ -107,10 +103,14 @@ public final class StructureDialog extends JDialog {
             JTable table = new JTable(ed.model);
             table.setFillsViewportHeight(true);
             Tables.style(table);
-            // 主键列窄、其余列分摊剩余宽度：对应 Qt 的 ResizeToContents(0) + Stretch(1,2)，
-            // Swing 没有"按内容自适应"这一档，用固定窄列 + 后续列均分来贴
-            table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS);
+            // 主键列窄、其余列按设计宽度摆：关掉自适应才有"放不下"这件事，
+            // 字段名或注释长到超出视口时出横向滚动条，而不是被挤成一串省略号
+            // （Qt 侧对应 setStretchLastSection(false) + Interactive，两栈同一组宽度）
+            table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
             table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(46));
+            table.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(230));
+            table.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(280));
+            table.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(160));
             // 末列表头有 10 个汉字，写死 96px 会被截断；按表头实际字宽量出来
             java.awt.FontMetrics headerMetrics = table.getTableHeader()
                     .getFontMetrics(table.getTableHeader().getFont());
@@ -119,13 +119,10 @@ public final class StructureDialog extends JDialog {
             JScrollPane scroll = new JScrollPane(table);
             ed.scroll = scroll;
             scroll.setPreferredSize(new Dimension(UiScale.px(900), UiScale.px(420)));
-            // 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方；
-            // 表格上面那一行是这张表的表注释输入框（与 Python 侧同一形状）
+            // 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方。
+            // 表注释那一行输入框也拿掉了：清单里双击那一格就能改，
+            // 两处都能改同一件事就会有两处"到底以谁为准"的口径
             JPanel page = new JPanel(new BorderLayout(0, UiScale.px(4)));
-            JPanel commentRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
-            commentRow.add(new JLabel("表注释："), BorderLayout.WEST);
-            commentRow.add(ed.commentField, BorderLayout.CENTER);
-            page.add(commentRow, BorderLayout.NORTH);
             page.add(scroll, BorderLayout.CENTER);
             tabs.addTab(r.table.tableName, page);
         }
@@ -201,7 +198,6 @@ public final class StructureDialog extends JDialog {
             TableOps.Table t = ed.table;
             t.columns.clear();
             t.columns.addAll(staged.get(i));
-            t.tableComment = ed.commentField.getText().trim();
         }
         confirmed = true;
         dispose();
@@ -253,19 +249,37 @@ public final class StructureDialog extends JDialog {
         return editors.get(tabIndex).model.getRowCount();
     }
 
+    /** 自检用：弹窗里到底还有没有表注释输入框（入口已挪回清单，留着就是回归）。 */
+    public boolean hasCommentField() {
+        return !collect(getContentPane(), javax.swing.JTextField.class).isEmpty();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> java.util.List<T> collect(java.awt.Container root, Class<T> kind) {
+        java.util.List<T> out = new ArrayList<T>();
+        for (java.awt.Component c : root.getComponents()) {
+            if (kind.isInstance(c)) {
+                out.add((T) c);
+            }
+            if (c instanceof java.awt.Container) {
+                out.addAll(collect((java.awt.Container) c, kind));
+            }
+        }
+        return out;
+    }
+
+    /** 自检用：那张字段表是不是"装不下就横向滚动"（与第二页元数据弹窗同一档）。 */
+    public boolean scrollsHorizontally(int tabIndex) {
+        java.awt.Component view =
+                editors.get(tabIndex).scroll.getViewport().getView();
+        return view instanceof javax.swing.JTable
+                && ((javax.swing.JTable) view)
+                        .getAutoResizeMode() == javax.swing.JTable.AUTO_RESIZE_OFF;
+    }
+
     /** 自检用：某个 tab 里那张表的容器，用来读它外面有没有再套一层标识。 */
     public javax.swing.JComponent tabTable(int tabIndex) {
         return editors.get(tabIndex).scroll;
-    }
-
-    /** 自检用：那张表的表注释输入框当前内容（确定之前它只是编辑中的值）。 */
-    public String commentText(int tabIndex) {
-        return editors.get(tabIndex).commentField.getText();
-    }
-
-    /** 自检用：填表注释，等价于用户在输入框里改完。 */
-    public void setCommentText(int tabIndex, String text) {
-        editors.get(tabIndex).commentField.setText(text == null ? "" : text);
     }
 
     /** 走同一条 applyEdits，只是不弹模态框——自检在 EDT 上，弹窗会把自己卡死。 */

@@ -33,12 +33,14 @@ public final class DropArea extends javax.swing.JPanel {
         void onFiles(List<String> paths);
     }
 
+    /** 第三行：粘贴入口。Ctrl+V 绑在窗口层级，与拖进这块虚线区走同一条解析路。 */
+    public static final String PASTE_HINT = "快捷键：复制文件后按 Ctrl+V 直接添加";
     /** 第一页（Excel 导入）那句；第二页构造时传自己的两句，样式与行为共用这一份。 */
     public static final String EXCEL_HINT =
             "将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n"
-            + "（支持 .xlsx / .xls / .zip，可多选）";
+            + "（支持 .xlsx / .xls / .zip，可多选）\n" + PASTE_HINT;
     public static final String SQL_HINT =
-            "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）";
+            "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）\n" + PASTE_HINT;
     /** 第三页（SQL 执行器）的脚本队列：同一块拖拽区，多一句"按列表顺序执行"。 */
     public static final String RUN_HINT =
             "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选；按列表顺序执行）";

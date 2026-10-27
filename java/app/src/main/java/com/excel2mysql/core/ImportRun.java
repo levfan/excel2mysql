@@ -80,17 +80,12 @@ public final class ImportRun {
                 + LogText.indentDetail(detail);
     }
 
-    /** 当前这张表的行进度：页面底部那条进度百分比只跟着它走，不是全局计数。 */
-    public interface RowProgress {
-        void onTableProgress(int done, int total);
-    }
-
     /**
      * 逐表导入。取消时提前收尾并返回已完成的部分；连不上库时返回空列表
      * （调用方照样走汇总，与 Python 侧一致：那一句"成功 0 张表"是有效信息）。
      */
     public static List<Row> run(Config cfg, List<TableBuilder.Result> work, boolean dropIfExists,
-                               ImportParse.Sink sink, RowProgress page) {
+                               ImportParse.Sink sink) {
         List<Row> results = new ArrayList<Row>();
         sink.setTotal(unitsOf(work));
         String target = targetOf(cfg);
@@ -142,9 +137,6 @@ public final class ImportRun {
                                     loaded[0] = done;
                                     if (delta > 0) {
                                         sink.advance(delta, "导入 `" + label + "`：" + done + "/" + tot + " 行");
-                                    }
-                                    if (page != null) {
-                                        page.onTableProgress(done, tot);
                                     }
                                 }
                             });

@@ -127,6 +127,9 @@ public final class SqlMetadataDialog extends JDialog {
         Tables.style(fieldTable);
         fieldTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         fieldTable.getTableHeader().setReorderingAllowed(false);
+        // 关掉列自适应：字段名或注释长到放不下时出横向滚动条，而不是被挤成省略号
+        // （Qt 侧同一个做法：Interactive + setStretchLastSection(false)）
+        fieldTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
         fieldTable.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(230));
         fieldTable.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(280));
         fieldTable.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(160));
@@ -156,6 +159,14 @@ public final class SqlMetadataDialog extends JDialog {
     }
 
     /** 字段表左上角那句标识（含列数），从真控件的标题边框上读。 */
+    /**
+     * 自检用：那张字段表是不是"装不下就横向滚动"。列自适应一关，视口放不下时
+     * 滚动容器自己会出横向条（JScrollPane 默认按需），不会被挤成一片省略号。
+     */
+    public boolean scrollsHorizontally() {
+        return fieldTable.getAutoResizeMode() == javax.swing.JTable.AUTO_RESIZE_OFF;
+    }
+
     public String columnTitle() {
         return Tables.titledOf(columnsBox);
     }
