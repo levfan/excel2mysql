@@ -4174,3 +4174,37 @@ USE \`casic_archives\`;"
 - 本轮基线：`pack_test.py` 819/0/5（G 组 18 条真库全跑）；3.8 线 261/0/1、3.12 线 252/0/4；
   十步闸门 RC 0（类型 1462 列、SQL 509 项、元数据 5480 格零不一致）；对撞 320 键 RC 0；
   `check_generated.py` RC 0。
+
+## 89. 待上传文件表支持 Del 删除选中行（2.5.0）
+
+用户原话：「tab1 中的文件列表中的数据，需要点击选中当前行数据后，按下键盘【del】键，
+可以删除当前选中的文件。并且可以支持批量删除。」
+
+- 两栈同一入口两条路：Python 新增 `FileListTable(EmptyHintTable)`，`keyPressEvent` 收到
+  Key_Delete 只发 `del_pressed` 信号，删哪几张表、怎么留痕、忙时拦不拦都归
+  `MainWindow.on_delete_selected_files()` 一处；Java 绑在表自己的 `WHEN_FOCUSED` InputMap 上
+  → `MainFrame.deleteSelectedFiles()`，复用 `FileRowModel.removeItems` 并同步
+  `tables / byTable / zipOrigin` 三份状态。**按键入口不做第二套规则**。
+- **顺带补的一处真差距**：Python 的 `file_table` 从来没设 `selectionBehavior`，走 Qt 默认
+  的**按格选中**，而 Swing 的 JTable 天生按行选——"选中这一行"在两栈含义不同，
+  删行的语义就立不住。已给 Python 补 `SelectRows`（与 `sql_table`、`sql_run_table` 同一档）。
+- 忙时口径与「清空待上传文件」刻意不同：Del 先查 `excel` 资源位，被占就 `warn(busyText)`
+  日志与弹窗双写——半途抽走正在被解析的那一行，任务回报的项数会对不上剩余清单。
+  那句拦下话从 `startTask` 里提成 `busyText(Task)`，按钮与快捷键两条入口共用一份文案。
+- 留痕两句：成功 `[删除] 已移除 N 个待上传文件，列表剩 M 个`；一行都没选中
+  `[删除] 没有选中文件，先在列表里点一行再按 Del`（静默 no-op 即 bug）。
+- 用例各栈一条路数不同，都是走真的：Python `Q54`~`Q54f` 6 条直接调表格的
+  `keyPressEvent`（冻结态没有 QtTest）；Java 自检取的是**表自己绑的那个 Action**——
+  键绑定由 KeyboardFocusManager 在事件入队时才解析，自检里 `dispatchEvent` 派发 KeyEvent
+  走不到那条路，拿 Action 驱动才既验得到绑定也验得到行为。
+- 对撞加两把键：`file.rowselect`（点第 2 行第 4 列后"锚点行/选中行数"）、
+  `file.del.empty`（空选按 Del 的那句留痕原文）。**320 → 322 键** RC 0。
+- 变异抽查三处，各咬不同的账：摘掉 Python 的 Del 分支 → `Q54b`~`Q54f` 5 条红
+  （803/5/6）；删掉 `SelectRows` → `Q54` 红（807/1/6）；只改 Python 侧空选措辞 →
+  对撞 RC 1、`file.del.empty` 值不等（同一句话也在 `loaded.log`、`export.std.log` 的
+  日志正文里，三处一起露出来）。Java 侧删绑定的红，在实现前那次 RED 跑里已经拿到
+  （`Del 键没绑在待上传文件表上`、退出码 1）。
+- 本轮基线：`pack_test.py` **826/0/5**（G 组真库全跑）；3.8 线 261/0/1、3.12 线 252/0/4；
+  十步闸门 RC 0；对撞 **322 键** RC 0；`check_generated.py` RC 0。
+  版本 **2.5.0**（Del 删除是"以前做不到、现在能做"，按 minor 定档），15 处写死串同步、T15 核过。
+  交付包仍是今天早些时候那份 **2.4.0**，要 2.5.0 得重打。
