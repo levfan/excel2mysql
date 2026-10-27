@@ -38,6 +38,25 @@ public final class SqlExecute {
         boolean requested();
     }
 
+    /** 一条语句返回的结果集：图形界面拿它填表格控件。格子已按 {@link #cell} 格式化。 */
+    public static final class ResultSetData {
+        public int seq;
+        public String sql = "";
+        public java.util.List<String> columns = new java.util.ArrayList<String>();
+        public java.util.List<List<String>> rows = new java.util.ArrayList<List<String>>();
+        public int total;
+        public int printed;
+    }
+
+    /**
+     * 结果集交给谁：只有图形界面传。传了就不再往文本里画 ASCII 表格——
+     * 文本框里中英文混排时字宽不是整数倍关系必错行，而且结果一长就被自动滚到底，
+     * 用户只看得见"共 N 行"那句尾巴。不传就是命令行原来那份逐字输出。
+     */
+    public interface Results {
+        void accept(ResultSetData data);
+    }
+
     public static final class Report {
         public int statements;
         public int executed;
@@ -61,9 +80,19 @@ public final class SqlExecute {
         return run(db.connection(), text, out, progress, cancelled);
     }
 
+    public static Report run(DbClient db, String text, Out out, Progress progress,
+                             Cancel cancelled, Results results) {
+        return run(db.connection(), text, out, progress, cancelled, results);
+    }
+
     /** 真正的一层：收 Connection 而不是 DbClient，没有库也能拿假连接验到这段线上代码。 */
     public static Report run(Connection conn, String text, Out out, Progress progress,
                              Cancel cancelled) {
+        return run(conn, text, out, progress, cancelled, null);
+    }
+
+    public static Report run(Connection conn, String text, Out out, Progress progress,
+                             Cancel cancelled, Results results) {
         Report rep = new Report();
         List<String> statements = SqlScript.executableStatements(text);
         rep.statements = statements.size();
@@ -102,7 +131,7 @@ public final class SqlExecute {
                     boolean hasRs = st.execute(sql);
                     rep.executed = i + 1;
                     if (hasRs) {
-                        printResultSet(st.getResultSet(), out);
+                        printResultSet(st.getResultSet(), out, results, i + 1, oneLine(sql));
                     } else {
                         int n = st.getUpdateCount();
                         out.line("+ [OK] 影响 " + (n < 0 ? 0 : n) + " 行");
@@ -144,7 +173,8 @@ public final class SqlExecute {
         return rep;
     }
 
-    private static void printResultSet(ResultSet rs, Out out) throws SQLException {
+    private static void printResultSet(ResultSet rs, Out out, Results results,
+                                       int seq, String sql) throws SQLException {
         ResultSetMetaData md = rs.getMetaData();
         int cols = md.getColumnCount();
         java.util.List<String> head = new java.util.ArrayList<String>();
@@ -165,6 +195,25 @@ public final class SqlExecute {
             }
             rows.add(r);
             printed++;
+        }
+        if (results != null) {
+            ResultSetData data = new ResultSetData();
+            data.seq = seq;
+            data.sql = sql;
+            data.total = total;
+            data.printed = printed;
+            for (String c : head) {
+                data.columns.add(cell(c));
+            }
+            for (List<String> r : rows) {
+                java.util.List<String> cells = new java.util.ArrayList<String>(r.size());
+                for (String v : r) {
+                    cells.add(cell(v));
+                }
+                data.rows.add(cells);
+            }
+            results.accept(data);
+            return;
         }
         for (String line : renderTable(head, rows)) {
             out.line(TABLE_INDENT + line);

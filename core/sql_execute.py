@@ -74,7 +74,7 @@ def render_table(columns, rows):
     return out
 
 
-def _print_result(cur, emit):
+def _print_result(cur, emit, result_cb=None, seq=0, sql=""):
     cols = [d[0] for d in (cur.description or [])]
     printed = total = 0
     rows = []
@@ -86,6 +86,15 @@ def _print_result(cur, emit):
         if printed < PREVIEW_ROWS:
             rows.append(list(row))
             printed += 1
+    if result_cb is not None:
+        # 图形界面把这一批交给表格控件去画。文本框里画表格有两处治不了：
+        # 一是中英文混排时字宽不是整数倍关系，格子必错行；二是结果一长就被自动滚到底，
+        # 用户只看得见"共 N 行"那句尾巴，看不见数据本身。行数由表格上方的说明行交代。
+        result_cb({"seq": seq, "sql": sql,
+                   "columns": [_cell(c) for c in cols],
+                   "rows": [[_cell(v) for v in r] for r in rows],
+                   "total": total, "printed": printed})
+        return
     for line in render_table(cols, rows):
         emit(TABLE_INDENT + line)
     emit("      共 %d 行%s" % (total,
@@ -93,12 +102,14 @@ def _print_result(cur, emit):
                                if total > printed else ""))
 
 
-def run(conn, text, emit, progress=None, cancelled=None):
+def run(conn, text, emit, progress=None, cancelled=None, result_cb=None):
     """逐条执行。返回已执行条数；出错时最后一条日志就是原因。
 
     progress(done, total) 与 cancelled() 是给图形界面用的：一屏 1242 条语句的批次
     如果只在结束时报一次，进度条全程停在 0%，用户既看不出在动、也停不下来。
     命令行那条线不传这两个参数，行为与原来逐字一致。
+    result_cb(结果集) 同样只有图形界面传：给了就把结果成交给表格控件，
+    文本里不再画 ASCII 表格；不给就是命令行原来那份逐字输出。
     """
     stmts = executable_statements(text)
     if not stmts:
@@ -123,7 +134,7 @@ def run(conn, text, emit, progress=None, cancelled=None):
             n = cur.execute(sql)
             done = i
             if cur.description:
-                _print_result(cur, emit)
+                _print_result(cur, emit, result_cb, i, _one_line(sql))
             else:
                 # 不在这里 commit：本批的契约是"全部成功才提交，中途出错整批回滚"，
                 # 每句一提交会让前面已写进去的数据撤不回来，而界面上的 tooltip 说的是整批语义
