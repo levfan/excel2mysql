@@ -2555,6 +2555,54 @@ public final class GuiMain {
                 problems.add("SQL 页大小写开关生成物读不回来：" + e);
             }
         }
+        // 用户 2026-10-28 报的现场形状：两个 Sheet、元数据里字段名是小写英文。
+        // 「表名与字段名转大写」原先只管表名，勾了字段名一动不动，看着就是开关失效
+        try {
+            java.io.File mtdCase = new java.io.File(dir, "采购品目分类目录表（t_mtd_case）.xlsx");
+            org.apache.poi.xssf.usermodel.XSSFWorkbook mwb =
+                    new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+            org.apache.poi.ss.usermodel.Sheet ms = mwb.createSheet("元数据");
+            String[] mh = {"序号", "字段名", "字段注释", "数据类型", "长度", "是否主键", "是否可为空"};
+            org.apache.poi.ss.usermodel.Row mhr = ms.createRow(0);
+            for (int i = 0; i < mh.length; i++) {
+                mhr.createCell(i).setCellValue(mh[i]);
+            }
+            String[] mrow = {"1", "item_code", "品目编码", "VARCHAR", "20", "是", "否"};
+            org.apache.poi.ss.usermodel.Row mr = ms.createRow(1);
+            for (int i = 0; i < mrow.length; i++) {
+                mr.createCell(i).setCellValue(mrow[i]);
+            }
+            org.apache.poi.ss.usermodel.Sheet ds = mwb.createSheet("数据");
+            ds.createRow(0).createCell(0).setCellValue("item_code");
+            ds.createRow(1).createCell(0).setCellValue("PM-000001");
+            writeWorkbook(mwb, mtdCase);
+            com.excel2mysql.core.Names mUp =
+                    new com.excel2mysql.core.Names(com.excel2mysql.core.PinyinLoader.get());
+            mUp.setUpperOnly(true);
+            com.excel2mysql.core.TableBuilder.Result upR =
+                    new com.excel2mysql.core.TableBuilder(
+                            new com.excel2mysql.core.Infer(mUp), mUp).build(mtdCase.getPath());
+            com.excel2mysql.core.Names mOff =
+                    new com.excel2mysql.core.Names(com.excel2mysql.core.PinyinLoader.get());
+            mOff.setUpperOnly(false);
+            com.excel2mysql.core.TableBuilder.Result offR =
+                    new com.excel2mysql.core.TableBuilder(
+                            new com.excel2mysql.core.Infer(mOff), mOff).build(mtdCase.getPath());
+            String upField = upR.table.columns.get(0).field;
+            String offField = offR.table.columns.get(0).field;
+            if (!"ITEM_CODE".equals(upField)) {
+                problems.add("结构定义模式勾上「转大写」，元数据里手写的字段名没跟着转：" + upField);
+            }
+            if (!"item_code".equals(offField)) {
+                problems.add("结构定义模式不勾开关也该保持手写原样，不该改成：" + offField);
+            }
+            if (upR.rows.isEmpty() || !"PM-000001".equals(
+                    String.valueOf(((java.util.List<Object>) upR.rows.get(0)).get(0)))) {
+                problems.add("字段名转成大写后，数据 Sheet 的小写表头对不上列了：" + upR.rows.size());
+            }
+        } catch (Exception e) {
+            problems.add("结构定义模式的大小写用例跑不起来：" + e);
+        }
         String onDisk = null;
         try {
             onDisk = new String(java.nio.file.Files.readAllBytes(

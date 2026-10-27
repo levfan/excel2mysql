@@ -113,6 +113,13 @@ public final class GuiDump {
                 dumpWidget("drop_existing", frame.dropExistingBox());
                 dumpWidget("initials", frame.initialsBox());
                 dumpWidget("upper", frame.upperBox());
+                // 切换日志那句同样跨线比（工具提示比不到日志正文）：点一下取尾行、
+                // 再点回去，开关状态与后面那些键都不受影响
+                frame.upperBox().doClick();
+                String utl = frame.logPanel().text();
+                int uta = utl.lastIndexOf("[提示] 表名与字段名大小写切换为");
+                put("upper.toggle.log", uta < 0 ? "(没留痕)" : utl.substring(uta).split("\n")[0]);
+                frame.upperBox().doClick();
                 dumpWidget("sql_upper", frame.sqlPage().upperBox());
                 dumpWidget("sql_drop_existing", frame.sqlPage().dropExistingBox());
                 dumpWidget("progress", frame.pageProgressBar());

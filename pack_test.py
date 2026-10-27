@@ -3049,10 +3049,56 @@ check("M22e 端到端：大小写开关传到表名、字段名与空列的按�
       (_up["table_name"], [(c["field"], c["type"]) for c in _up["columns"]]))
 _te_up = build_table_def(
     make_xlsx("空定义（t_meta_up）.xlsx", {"字段定义": _meta_empty}), upper=True)
-check("M22f 结构定义模式：人工写的字段名原样，表名跟开关转大写",
+check("M22f 结构定义模式：勾上「转大写」时元数据里手写的字段名一起转大写",
       _te_up["table_name"] == "T_META_UP"
-      and [c["field"] for c in _te_up["columns"]] == ["publish_date"],
+      and [c["field"] for c in _te_up["columns"]] == ["PUBLISH_DATE"],
       (_te_up["table_name"], [c["field"] for c in _te_up["columns"]]))
+# 不勾只是"不做大写转换"，不等于替使用者把手写的名字改成小写：
+# 现场那份元数据本来写大写的表，关掉开关应当一个字母都不动
+_te_keep = build_table_def(make_xlsx(
+    "人工大写（t_meta_keep）.xlsx",
+    {"字段定义": pd.DataFrame({
+        "序号": [1, 2],
+        "字段名(英文)": ["ITEM_CODE", "ITEM_NAME"],
+        "字段注释(中文)": ["品目编码", "品目名称"],
+        "数据类型": ["VARCHAR", "VARCHAR"],
+        "长度": ["20", "60"],
+        "是否主键": ["是", ""],
+        "是否可为空": ["否", "是"]})}), upper=False)
+check("M22g 结构定义模式不勾开关时手写名原样保留，不强行小写",
+      [c["field"] for c in _te_keep["columns"]] == ["ITEM_CODE", "ITEM_NAME"]
+      and _te_keep["primary_key"] == "ITEM_CODE",
+      [c["field"] for c in _te_keep["columns"]])
+# 用户 2026-10-28 报的现场形状：两个 Sheet，元数据里字段名是小写英文，
+# 图形版「转大写」默认勾着 → 表名转了、字段名没转，看着就是开关失效
+_mtd_meta = pd.DataFrame({
+    "序号": [1, 2, 3],
+    "字段名(英文)": ["item_code", "item_name", "cat_level1"],
+    "字段注释(中文)": ["品目编码", "品目名称", "一级分类"],
+    "数据类型": ["VARCHAR", "VARCHAR", "VARCHAR"],
+    "长度": ["20", "60", "8"],
+    "是否主键": ["是", "", ""],
+    "是否可为空": ["否", "是", "是"]})
+_mtd_data = pd.DataFrame({"item_code": ["PM-000001", "PM-000002"],
+                          "item_name": ["服务器", "交换机"],
+                          "cat_level1": ["信息类", "信息类"]})
+_mtd = build_table_def(make_xlsx("采购品目分类目录表（t_mtd_catalog_item）.xlsx",
+                                 {"元数据": _mtd_meta, "数据": _mtd_data}), upper=True)
+_mtd_off = build_table_def(make_xlsx("采购品目分类目录表（t_mtd_catalog_item）.xlsx",
+                                     {"元数据": _mtd_meta, "数据": _mtd_data}), upper=False)
+check("M22h 端到端（用户附件形状）：元数据小写字段配勾上的开关，表名字段名一起大写且数据照旧对齐",
+      _mtd["table_name"] == "T_MTD_CATALOG_ITEM"
+      and [c["field"] for c in _mtd["columns"]] == ["ITEM_CODE", "ITEM_NAME", "CAT_LEVEL1"]
+      and _mtd["primary_key"] == "ITEM_CODE"
+      and list(_mtd["df"]["ITEM_CODE"]) == ["PM-000001", "PM-000002"]
+      and list(_mtd["df"]["ITEM_NAME"]) == ["服务器", "交换机"],
+      (_mtd["table_name"], [(c["field"], c["type"]) for c in _mtd["columns"]],
+       _mtd["primary_key"]))
+check("M22i 同一份文件不勾开关：表名与字段名都退回元数据里写的小写样子",
+      _mtd_off["table_name"] == "t_mtd_catalog_item"
+      and [c["field"] for c in _mtd_off["columns"]] == ["item_code", "item_name",
+                                                        "cat_level1"],
+      (_mtd_off["table_name"], [c["field"] for c in _mtd_off["columns"]]))
 
 # 图形版默认口径（用户 2026-10-21）：两颗开关启动即勾上，新加文件直接首字母 + 大写
 _dw = app_main.MainWindow()

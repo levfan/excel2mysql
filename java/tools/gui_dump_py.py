@@ -356,6 +356,15 @@ def main():
     dump_widget("sql_drop_existing", win.chk_sql_drop)
     dump_widget("initials", win.chk_initials)
     dump_widget("upper", win.chk_upper)
+    # 切换日志那句也要跨线比：工具提示比得到、日志正文比不到，两栈各写各的最容易漂。
+    # 点一下取尾行、马上点回去，开关状态与后面那些键都不受影响。
+    win.chk_upper.toggle()
+    app.processEvents()
+    _utl = win.log.toPlainText()
+    _uta = _utl.rfind(u"[提示] 表名与字段名大小写切换为")
+    put("upper.toggle.log", _utl[_uta:].splitlines()[0] if _uta >= 0 else u"(没留痕)")
+    win.chk_upper.toggle()
+    app.processEvents()
     dump_widget("sql_upper", win.chk_sql_upper)
     dump_widget("progress", win.progress)
     dump_buttons(win)
