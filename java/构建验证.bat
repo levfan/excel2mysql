@@ -53,7 +53,7 @@ echo.
 echo === 3/10 class 主版本闸门 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "verify\target\classes" ^
   com.excel2mysql.verify.ClassVersionAudit ^
-  app\target\classes verify\target\classes verify\target\lib app\target\excel2mysql-2.4.0.jar || exit /b 1
+  app\target\classes verify\target\classes verify\target\lib app\target\excel2mysql-2.5.0.jar || exit /b 1
 
 echo.
 echo === 4/10 拼音金标准差分 ===
@@ -108,7 +108,7 @@ call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\targ
 
 echo.
 echo === 10/10 Swing 界面自检 ===
-call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -jar "app\target\excel2mysql-2.4.0.jar" ^
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -jar "app\target\excel2mysql-2.5.0.jar" ^
   --gui --selftest verify\fixtures || exit /b 1
 
 echo.
