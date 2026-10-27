@@ -568,6 +568,21 @@ def main():
         ",".join(win.file_table.item(i, 0).text()
                  for i in range(win.file_table.rowCount()))))
     dump_table("file", win.file_table)
+    # 两把与 Del 键有关的跨线事实：按整行选中（不这样，"删这一行"在两边语义就不同）；
+    # 以及空选时按下 Del 的那句留痕文案。都只动选中态、不改清单，取完复原。
+    from PySide6.QtCore import QEvent as _Ev
+    from PySide6.QtGui import QKeyEvent as _Kv
+    win.file_table.setCurrentCell(1, 3)
+    app.processEvents()
+    _sel_rows = [i.row() for i in win.file_table.selectionModel().selectedRows()]
+    put("file.rowselect", "%d/%d" % ((_sel_rows or [-1])[0], len(_sel_rows)))
+    win.file_table.clearSelection()
+    win.file_table.keyPressEvent(_Kv(_Ev.KeyPress, Qt.Key_Delete, Qt.NoModifier))
+    app.processEvents()
+    _log_tail = win.log.toPlainText()
+    _at = _log_tail.rfind(u"[删除]")
+    put("file.del.empty", _log_tail[_at:].splitlines()[0] if _at >= 0 else u"(没留痕)")
+    win.file_table.clearSelection()
     for t in ("开始导入", "生成标准excel文件", "生成简易excel文件"):
         put("loaded.on.%s" % t, btn_on(win, t))
     put("loaded.log", win.log.toPlainText())

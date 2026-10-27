@@ -338,6 +338,28 @@ public final class GuiDump {
                 }
                 put("file.serial", frame.fileModel().getColumnName(0) + "=" + serial);
                 dumpTable("file", frame.fileTable());
+                // 两把与 Del 键有关的跨线事实，键名与取值格式跟 Python 侧一致：
+                // 按整行选中，以及空选时按下 Del 的那句留痕（只动选中态，不改清单）
+                frame.fileTable().changeSelection(1, 3, false, false);
+                int[] selRows = frame.fileTable().getSelectedRows();
+                put("file.rowselect", (selRows.length > 0 ? selRows[0] : -1)
+                        + "/" + selRows.length);
+                frame.fileTable().clearSelection();
+                Object delKey = frame.fileTable().getInputMap(
+                        javax.swing.JComponent.WHEN_FOCUSED).get(
+                        javax.swing.KeyStroke.getKeyStroke(
+                                java.awt.event.KeyEvent.VK_DELETE, 0));
+                javax.swing.Action delAct = delKey == null
+                        ? null : frame.fileTable().getActionMap().get(delKey);
+                if (delAct != null) {
+                    delAct.actionPerformed(
+                            new java.awt.event.ActionEvent(frame.fileTable(), 0, "del"));
+                }
+                String logTail = frame.logPanel().text();
+                int at = logTail.lastIndexOf("[删除]");
+                put("file.del.empty", delAct == null ? "(没绑 Del)"
+                        : (at < 0 ? "(没留痕)" : logTail.substring(at).split("\n")[0]));
+                frame.fileTable().clearSelection();
                 for (String t : new String[]{"开始导入", "生成标准excel文件", "生成简易excel文件"}) {
                     put("loaded.on." + t, btnOn(t));
                 }

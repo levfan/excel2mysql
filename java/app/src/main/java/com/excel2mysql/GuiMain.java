@@ -1427,6 +1427,60 @@ public final class GuiMain {
             problems.add("「清空待上传文件」没把进度条归零或没清空表");
         }
 
+        // Del 键删掉选中的行（多选就是批量删）。取的是文件表自己绑的那个动作：
+        // 键绑定由 KeyboardFocusManager 在事件进队列时解析，自检里直接派发 KeyEvent 不会走这条路。
+        List<String> del3 = new ArrayList<String>();
+        del3.add(files.get(0));
+        del3.add(files.get(1));
+        del3.add(files.get(2));
+        frame.addFiles(del3);
+        final javax.swing.JTable ftable = frame.fileTable();
+        ftable.changeSelection(1, 3, false, false);
+        if (ftable.getSelectedRowCount() != 1 || ftable.getSelectedRow() != 1) {
+            problems.add("文件表不是按整行选中（点一格选中了 " + ftable.getSelectedRowCount()
+                    + " 行），Del 删行的语义立不住");
+        }
+        Object delKey = ftable.getInputMap(javax.swing.JComponent.WHEN_FOCUSED)
+                .get(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0));
+        final javax.swing.Action delAct = delKey == null ? null : ftable.getActionMap().get(delKey);
+        if (delAct == null) {
+            problems.add("Del 键没绑在待上传文件表上");
+        } else {
+            delAct.actionPerformed(new java.awt.event.ActionEvent(ftable, 0, "del"));
+            if (frame.tables().size() != 2 || ftable.getRowCount() != 2) {
+                problems.add("选中一行按 Del 没删掉这个文件：剩 " + frame.tables().size());
+            }
+            if (!frame.logPanel().contains("[删除] 已移除 1 个待上传文件，列表剩 2 个")) {
+                problems.add("Del 删除没说清删了几个、还剩几个："
+                        + lastLine(frame.logPanel().text()));
+            }
+            ftable.setRowSelectionInterval(0, 1);
+            delAct.actionPerformed(new java.awt.event.ActionEvent(ftable, 0, "del"));
+            if (!frame.tables().isEmpty() || ftable.getRowCount() != 0
+                    || frame.importButton().isEnabled()) {
+                problems.add("多选两行按 Del 应一次删空并把导入按钮置灰："
+                        + frame.tables().size() + "/" + ftable.getRowCount());
+            }
+            if (!frame.logPanel().contains("[删除] 已移除 2 个待上传文件，列表剩 0 个")) {
+                problems.add("批量删除的留痕没写清数量");
+            }
+            ftable.clearSelection();
+            delAct.actionPerformed(new java.awt.event.ActionEvent(ftable, 0, "del"));
+            if (!frame.logPanel().contains("没有选中文件")) {
+                problems.add("一行都没选中时按 Del 没有任何留痕，成了静默 no-op");
+            }
+            frame.addFiles(one);
+            frame.startTask(MainFrame.RES_EXCEL);
+            ftable.setRowSelectionInterval(0, 0);
+            int keep = frame.tables().size();
+            delAct.actionPerformed(new java.awt.event.ActionEvent(ftable, 0, "del"));
+            if (frame.tables().size() != keep || !frame.lastDialogText().contains("已有任务在跑")) {
+                problems.add("解析任务在跑时按 Del 应拦下并说清在等谁");
+            }
+            frame.endTask();
+            frame.clearAll();     // 后面的用例仍按空清单起步
+        }
+
         // 占位提示必须是空态就能看见的灰字，不是只有悬停才出的 tooltip
         String excelHint = frame.prefixField().hintText();
         if (!excelHint.contains("可选，如 dim_") || !excelHint.contains("替换首个前缀")) {

@@ -4322,6 +4322,73 @@ check("Q21 SQL 页清日志不影响另一页",
       cw.sql_log.toPlainText() == "" and "Excel 页保留" in cw.log.toPlainText(),
       cw.log.toPlainText())
 
+# ---- 待上传文件列表按 Del 删除选中行（多选就是批量删）----
+from PySide6.QtCore import QItemSelection, QItemSelectionModel as _QSM
+
+
+def _press_del(win):
+    """走表格自己的 keyPressEvent，与 F1/Esc 那两条同一个做法（冻结态没有 QtTest）。"""
+    win.file_table.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Delete,
+                                           Qt.NoModifier))
+    _app.processEvents()
+
+
+def _files_of(win):
+    return [os.path.basename(t["filepath"]) for t in win.tables]
+
+
+_dw = app_main.MainWindow()
+_dw._add_files([jx1,
+                make_xlsx("删甲.xlsx", {"S": pd.DataFrame({"编号": ["B1"]})}),
+                make_xlsx("删乙.xlsx", {"S": pd.DataFrame({"编号": ["C1"]})})])
+_dw_base = _files_of(_dw)
+_dw.file_table.setCurrentCell(1, 3)
+check("Q54 文件表按整行选中：点任意一格选中整行（与 Java 侧 JTable 同语义，Del 才谈得上删行）",
+      _dw.file_table.selectionBehavior() == app_main.QAbstractItemView.SelectRows
+      and [i.row() for i in _dw.file_table.selectionModel().selectedRows()] == [1],
+      (str(_dw.file_table.selectionBehavior()),
+       [i.row() for i in _dw.file_table.selectionModel().selectedRows()]))
+_dw.file_table.selectRow(1)
+_press_del(_dw)
+check("Q54b 选中一行按 Del 删掉这个文件：内部列表与表格同步、序号重排",
+      _files_of(_dw) == [_dw_base[0], _dw_base[2]]
+      and _dw.file_table.rowCount() == 2
+      and [_dw.file_table.item(i, 0).text() for i in range(2)] == ["1", "2"],
+      (_files_of(_dw), [_dw.file_table.item(i, 1).text() for i in range(2)]))
+check("Q54c Del 删掉一个文件要说清删了几个、还剩几个",
+      "[删除] 已移除 1 个待上传文件，列表剩 2 个" in _dw.log.toPlainText(),
+      log_lines(_dw.log.toPlainText(), "[删除]")[-1:])
+_dw.file_table.selectionModel().select(
+    QItemSelection(_dw.file_table.model().index(0, 0),
+                   _dw.file_table.model().index(1, 6)),
+    _QSM.ClearAndSelect | _QSM.Rows)
+_press_del(_dw)
+check("Q54d 多选两行按 Del 一次删空，导入按钮随之置灰",
+      _dw.tables == [] and _dw.file_table.rowCount() == 0
+      and _dw.btn_import.isEnabled() is False
+      and "[删除] 已移除 2 个待上传文件，列表剩 0 个" in _dw.log.toPlainText(),
+      (len(_dw.tables), _dw.file_table.rowCount(), _dw.btn_import.isEnabled(),
+       log_lines(_dw.log.toPlainText(), "[删除]")[-1:]))
+_dw.log.appendPlainText("哨兵")
+_dw.file_table.clearSelection()
+_press_del(_dw)
+check("Q54e 一行都没选中时按 Del，清单不动但要说一句，不许静默 no-op",
+      "哨兵" in _dw.log.toPlainText() and _dw.tables == []
+      and "没有选中文件" in _dw.log.toPlainText(),
+      _dw.log.toPlainText().splitlines()[-2:])
+POPUPS.clear()
+_dw._add_files([jx1])
+_dw._tasks.append(app_main.TaskInfo(
+    _dw, (app_main.MainWindow.RES_EXCEL,), "正在解析文件…", _dw.log, None))
+_dw.file_table.selectRow(0)
+_press_del(_dw)
+check("Q54f 解析任务在跑时按 Del 被拦下，弹窗与日志都说得出在等谁",
+      len(_dw.tables) == 1
+      and any("待导入列表" in x for _t, x in POPUPS)
+      and "已有任务在跑" in _dw.log.toPlainText(),
+      (len(_dw.tables), [x.replace("\n", " ")[:70] for _t, x in POPUPS]))
+_dw._tasks.pop()
+
 # ---- 拖拽入口 ----
 dw = app_main.MainWindow()
 dw.on_files_dropped(["C:\\某处\\说明.txt", "D:\\图片.png"])
