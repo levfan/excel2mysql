@@ -139,6 +139,21 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 第三个页签「SQL 执行器」：编辑区、结果区与那三颗按钮，示例对话框不算常驻控件。 */
     private javax.swing.JTextArea sqlRunInput;
     private LogPanel sqlRunLog;
+    /** 结果集用真表格画：文本框里中英文混排必错行，且一长就被自动滚到底看不见数据。 */
+    private javax.swing.JTable sqlRunResultTable;
+    /** 换结果集只换数据不换表格：换 model 会把字体、行高与斑马纹一起冲掉，得重挂一遍。 */
+    private final javax.swing.table.DefaultTableModel sqlRunModel =
+            new javax.swing.table.DefaultTableModel(new Object[0][0], new Object[0]) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+    private javax.swing.JComboBox<String> sqlRunSets;
+    private javax.swing.JLabel sqlRunCaption;
+    private javax.swing.JSplitPane sqlRunResultSplit;
+    private java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> sqlRunSetList =
+            new java.util.ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
     private javax.swing.JButton sqlRunBtn;
     private javax.swing.JButton sqlRunClearInputBtn;
     private javax.swing.JButton sqlRunClearLogBtn;
@@ -2603,16 +2618,46 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 sqlRunInput.getMinimumSize().height + UiScale.px(34)));
 
         sqlRunLog = new LogPanel(SQL_RUN_FONT_SIZE);
+        sqlRunResultTable = new javax.swing.JTable(sqlRunModel);
+        Tables.style(sqlRunResultTable);
+        Tables.zebra(sqlRunResultTable);
+        sqlRunResultTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
+        sqlRunResultTable.getTableHeader().setReorderingAllowed(false);
+        // 没有结果集（一批全是写语句）时不摆空表：这一页初开的三段高度是钉住的契约
+        sqlRunResultTable.setVisible(false);
+        sqlRunCaption = new javax.swing.JLabel("还没有执行结果");
+        sqlRunSets = new javax.swing.JComboBox<String>();
+        sqlRunSets.setVisible(false);
+        sqlRunSets.addActionListener(e -> showSqlRunSet(sqlRunSets.getSelectedIndex()));
         sqlRunClearLogBtn = new javax.swing.JButton("清空结果区");
         sqlRunClearLogBtn.setToolTipText("只清掉右边的执行结果，左边编辑区不动");
-        sqlRunClearLogBtn.addActionListener(e -> sqlRunLog.clearLog());
+        sqlRunClearLogBtn.addActionListener(e -> clearSqlRunResult());
+        javax.swing.JPanel runHead = new javax.swing.JPanel(new java.awt.BorderLayout());
+        javax.swing.JPanel runHeadWest = new javax.swing.JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
+        runHeadWest.add(new javax.swing.JLabel("执行结果"));
+        runHeadWest.add(sqlRunCaption);
+        javax.swing.JPanel runHeadEast = new javax.swing.JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
+        runHeadEast.add(sqlRunClearLogBtn);
+        runHeadEast.add(sqlRunSets);
+        runHead.add(runHeadWest, java.awt.BorderLayout.WEST);
+        runHead.add(runHeadEast, java.awt.BorderLayout.EAST);
         javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(
                 0, UiScale.px(2)));
         // 结果区也要顶得住：缩成两行的结果区等于没有
         right.setMinimumSize(new java.awt.Dimension(UiScale.px(300),
                 sqlRunLog.getMinimumSize().height + UiScale.px(34)));
-        right.add(paneHeader("执行结果", sqlRunClearLogBtn), java.awt.BorderLayout.NORTH);
-        right.add(new javax.swing.JScrollPane(sqlRunLog), java.awt.BorderLayout.CENTER);
+        right.add(runHead, java.awt.BorderLayout.NORTH);
+        // 表格与逐条回执之间也给一条可拖的分隔条：看数据还是看报错正文由人自己拖
+        sqlRunResultSplit = new javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT,
+                new javax.swing.JScrollPane(sqlRunResultTable),
+                new javax.swing.JScrollPane(sqlRunLog));
+        sqlRunResultSplit.setDividerSize(UiScale.px(6));
+        sqlRunResultSplit.setResizeWeight(0.6D);
+        sqlRunResultSplit.setMinimumSize(new Dimension(0,
+                sqlRunLog.getMinimumSize().height + UiScale.px(34)));
+        right.add(sqlRunResultSplit, java.awt.BorderLayout.CENTER);
 
         javax.swing.JSplitPane split = new javax.swing.JSplitPane(
                 javax.swing.JSplitPane.HORIZONTAL_SPLIT, left, right);
@@ -2712,6 +2757,207 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return sqlRunLog;
     }
 
+    /**
+     * 收一个结果集，超过上限就丢掉最早那一个并记账。
+     *
+     * 单独抽出来是为了让"丢的是最前面那条"这件事能被机器判到：工作线程里那段匿名
+     * 回调要跑满 51 个结果集才会触发，没有库的机器上等不到那一刻。
+     */
+    public static void keepLatestSet(
+            java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> sets,
+            int[] dropped, com.excel2mysql.core.SqlExecute.ResultSetData data) {
+        if (sets.size() >= MAX_RESULT_SETS) {
+            sets.remove(0);
+            dropped[0]++;
+        }
+        sets.add(data);
+    }
+
+    /** 一批里最多留多少个结果集给表格回看（与 Python 侧 MAX_RESULT_SETS 同值）。 */
+    public static final int MAX_RESULT_SETS = 50;
+
+    /** 结果表格：自检与对撞器按这个口取证。 */
+    public javax.swing.JTable sqlRunResultTable() {
+        return sqlRunResultTable;
+    }
+
+    public String sqlRunCaptionText() {
+        return sqlRunCaption.getText();
+    }
+
+    public int sqlRunSetCount() {
+        return sqlRunSetList.size();
+    }
+
+    public boolean sqlRunChooserVisible() {
+        return sqlRunSets.isVisible();
+    }
+
+    public int sqlRunChooserItemCount() {
+        return sqlRunSets.getModel().getSize();
+    }
+
+    public String sqlRunChooserItemText(int index) {
+        return sqlRunSets.getModel().getElementAt(index);
+    }
+
+    /** 结果区那一段分栏（表格／逐条回执）：自检量"跑出了数据有没有给表格腾地方"。 */
+    public javax.swing.JSplitPane sqlRunResultSplit() {
+        return sqlRunResultSplit;
+    }
+
+    /** 表格的可视宽度：装不装得下内容要拿它跟列宽之和比，而不是只看开关。 */
+    public boolean sqlRunColumnFitsContent(int col) {
+        return Tables.columnFitsContent(sqlRunResultTable, col);
+    }
+
+    /** 列宽是否关掉了自适应：开着自适应时长列会被挤成省略号，横向条永远出不来。 */
+    public boolean sqlRunScrollsHorizontally() {
+        return sqlRunResultTable.getAutoResizeMode() == javax.swing.JTable.AUTO_RESIZE_OFF;
+    }
+
+    /**
+     * 结果表格让不让编辑：问的是模型，不是 JTable。
+     *
+     * JTable.isCellEditable 会先把列号换成 model 列，空表（还没跑出结果集）时
+     * 那一步直接抛 ArrayIndexOutOfBounds——取证这一侧不该依赖"已经查过一条"。
+     */
+    public boolean sqlRunCellsEditable() {
+        return sqlRunModel.isCellEditable(0, 0);
+    }
+
+    /**
+     * 自检与双端对撞用：不连库，直接把一批结果集铺进表格。
+     *
+     * 走的就是执行收尾时那个回调，只是数据由调用方给——这样在没有 MySQL 的机器上
+     * 也能验到"表格真被填了、下拉真跟着条数变"，而不是一句编译通过。
+     */
+    public void feedSqlRunSets(
+            java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> sets, int dropped) {
+        showSqlRunSets(sets, dropped);
+    }
+
+    /** 自检与双端对撞用：造一条结果集，字段与取值都由调用方给。 */
+    public static com.excel2mysql.core.SqlExecute.ResultSetData newResultSet(
+            int seq, String sql, String[] columns, String[][] rows) {
+        com.excel2mysql.core.SqlExecute.ResultSetData data =
+                new com.excel2mysql.core.SqlExecute.ResultSetData();
+        data.seq = seq;
+        data.sql = sql;
+        for (String c : columns) {
+            data.columns.add(c);
+        }
+        for (String[] r : rows) {
+            data.rows.add(java.util.Arrays.asList(r));
+        }
+        data.total = rows.length;
+        data.printed = rows.length;
+        return data;
+    }
+
+    /** 自检用：切到第几个结果集，与用户点下拉走的是同一个方法。 */
+    public void selectSqlRunSet(int index) {
+        sqlRunSets.setSelectedIndex(index);
+    }
+
+    /** 清空结果区：回执文本、表格与结果集下拉一起清，留半个就是假清完。 */
+    private void clearSqlRunResult() {
+        sqlRunLog.clearLog();
+        sqlRunSetList = new java.util.ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        sqlRunSets.removeAllItems();
+        sqlRunSets.setVisible(false);
+        sqlRunModel.setDataVector(new Object[0][0], new Object[0]);
+        sqlRunResultTable.setVisible(false);
+        sqlRunCaption.setText("还没有执行结果");
+    }
+
+    /**
+     * 一批跑完：结果集交给表格。回执文本已经由 sink 逐条写好，这里只管数据。
+     * 只有一条时不摆下拉——多一个永远只有一个选项的控件是占地方，不是给功能。
+     */
+    void showSqlRunSets(
+            java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> sets, int dropped) {
+        if (sets == null || sets.isEmpty()) {
+            clearSqlRunTable("这一批没有返回结果集的语句（都是写入或建表）");
+            return;
+        }
+        sqlRunSetList = sets;
+        sqlRunSets.removeAllItems();
+        for (com.excel2mysql.core.SqlExecute.ResultSetData s : sets) {
+            String one = s.sql.length() > 60 ? s.sql.substring(0, 60) + "…" : s.sql;
+            sqlRunSets.addItem("第 " + s.seq + " 条 · " + one);
+        }
+        sqlRunSets.setVisible(sets.size() > 1);
+        sqlRunResultTable.setVisible(true);
+        showSqlRunSet(sets.size() - 1);
+        giveResultRoom();
+        if (dropped > 0) {
+            sqlRunLog.log("[提示] 这一批的结果集多于 " + MAX_RESULT_SETS + " 个，"
+                    + "只保留最近 " + MAX_RESULT_SETS + " 个回看，更早的 " + dropped
+                    + " 个已丢弃");
+        }
+    }
+
+    /** 只收表格与说明，不动回执文本：清文本和清表格是两件事，别互相牵连。 */
+    private void clearSqlRunTable(String caption) {
+        sqlRunSetList = new java.util.ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        sqlRunSets.removeAllItems();
+        sqlRunSets.setVisible(false);
+        sqlRunModel.setDataVector(new Object[0][0], new Object[0]);
+        sqlRunResultTable.setVisible(false);
+        sqlRunCaption.setText(caption);
+    }
+
+    /** 把选中的那一个结果集铺进表格。 */
+    void showSqlRunSet(int index) {
+        if (sqlRunSetList.isEmpty()) {
+            return;
+        }
+        if (index < 0 || index >= sqlRunSetList.size()) {
+            index = sqlRunSetList.size() - 1;
+        }
+        com.excel2mysql.core.SqlExecute.ResultSetData data = sqlRunSetList.get(index);
+        Object[] head = data.columns.toArray(new Object[0]);
+        Object[][] body = new Object[data.rows.size()][];
+        for (int r = 0; r < body.length; r++) {
+            body[r] = data.rows.get(r).toArray(new Object[0]);
+        }
+        sqlRunModel.setDataVector(body, head);
+        // 列宽随内容：与两个字段弹窗同一算法（下限 70，长的撑宽后由横向条带出来）
+        sqlRunResultTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
+        int[] floors = new int[head.length];
+        java.util.Arrays.fill(floors, UiScale.px(70));
+        if (floors.length > 0) {
+            Tables.fitColumns(sqlRunResultTable, floors);
+        }
+        String caption = "第 " + data.seq + " 条 · 共 " + data.total + " 行";
+        if (data.printed < data.total) {
+            caption += "（表格只装前 " + data.printed + " 行，其余没取回来）";
+        }
+        sqlRunCaption.setText(caption);
+    }
+
+    /**
+     * 跑出了结果集就把底部那一段撑开。
+     *
+     * 初开时这一段压在自己的最小高度、把高度让给脚本清单——那是空页面的分配，
+     * 不是有数据时的分配：点「执行」的人要看的是那几行数据，两行高的表格等于没有。
+     * 已经够高就不动，用户自己拖过的比例也不覆盖。
+     */
+    private void giveResultRoom() {
+        int total = sqlRunSplitLower.getHeight();
+        if (total <= 0) {
+            return;
+        }
+        int now = total - sqlRunSplitLower.getDividerLocation();
+        if (now * 100 >= total * 40) {
+            return;
+        }
+        int bottom = (int) (total * 0.45D);
+        int rest = total - bottom;
+        sqlRunSplitLower.setDividerLocation(rest - (int) (rest * 0.31D));
+    }
+
     /** 执行编辑区里那段 SQL。事务与回滚语义走 SqlExecute，与「SQL 脚本改名」页同一套。 */
     private void runSqlStatements() {
         final String text = sqlRunInput.getText();
@@ -2720,6 +2966,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return;
         }
         final com.excel2mysql.core.Config cfg = currentConfig();
+        // 结果集先收到一个列表里（工作线程只碰数据、不碰控件），收尾时再由 EDT 铺进表格
+        final java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> sets =
+                new java.util.ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+        final int[] dropped = {0};
+        com.excel2mysql.core.SqlExecute.Results collect =
+                new com.excel2mysql.core.SqlExecute.Results() {
+                    @Override
+                    public void accept(com.excel2mysql.core.SqlExecute.ResultSetData data) {
+                        synchronized (sets) {
+                            keepLatestSet(sets, dropped, data);
+                        }
+                    }
+                };
         runTask("正在执行 SQL…", sink -> {
             com.excel2mysql.core.DbClient db = null;
             try {
@@ -2733,7 +2992,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                             sink.setTotal(total);
                             sink.advance(done - reported[0], "第 " + done + "/" + total + " 条");
                             reported[0] = done;
-                        }, () -> sink.cancelled());
+                        }, () -> sink.cancelled(), collect);
             } catch (java.sql.SQLException e) {
                 sink.logError("x [ERROR] 连不上库 | "
                         + com.excel2mysql.core.LogText.describe(e));
@@ -2746,6 +3005,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }, res -> {
             // 结果与失败原因都已经写在右侧结果区里，这里不再弹窗打断：
             // 这一页是给人来回试语句的，每试一次弹一次模态框会点不完
+            synchronized (sets) {
+                showSqlRunSets(new java.util.ArrayList<
+                        com.excel2mysql.core.SqlExecute.ResultSetData>(sets), dropped[0]);
+            }
         }, sqlRunLog);
     }
 

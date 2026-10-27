@@ -130,6 +130,9 @@ LOG_FONT_SIZE = 10
 # 第三页 SQL 编辑区与结果区的等宽字号：与第一页日志同一档（用户口径：两页正文一样大）。
 # 直接同源到 LOG_FONT_SIZE，改日志档时这两处跟着走，不会一页大、一页小。
 SQL_RUN_FONT_SIZE = LOG_FONT_SIZE
+# 一批里最多留多少个结果集给表格回看：一条一句地跑上千句 select 时，
+# 全留着就是几百兆的格子；丢的是最早那一个，用户回看的一般是刚跑出来的那条。
+MAX_RESULT_SETS = 50
 # 表格内容与表头的字号：与 Excel 数据网格同级（11 号），并保持比日志大一档。
 # 18 号是上一轮"内容要比日志大"的过头做法，一屏装不下几行；两栈同一组数（11 / 10）。
 TABLE_FONT_SIZE = 11
@@ -1486,10 +1489,23 @@ def sql_run_task(text, cfg, sink):
         sink.advance(done - state["done"], "第 %d/%d 条" % (done, total))
         state["done"] = done
 
+    sets = []
+    dropped = [0]
+
+    def collect(data):
+        # 一批里可能有几十上百条 select：只留最近这些，够人回看，也不会把内存吃穿。
+        # 丢的是最早那一个——用户回看的一般是刚跑出来的那条。
+        if len(sets) >= MAX_RESULT_SETS:
+            sets.pop(0)
+            dropped[0] += 1
+        sets.append(data)
+
     try:
         return {"executed": run_sql_statements(conn, text, sink.log,
                                                progress=progress,
-                                               cancelled=lambda: sink.cancelled)}
+                                               cancelled=lambda: sink.cancelled,
+                                               result_cb=collect),
+                "sets": sets, "sets_dropped": dropped[0]}
     finally:
         try:
             conn.close()
@@ -3124,22 +3140,56 @@ class MainWindow(QWidget):
 
         self.sql_run_log = QPlainTextEdit()
         self.sql_run_log.setReadOnly(True)
-        # 结果集是按显示宽度排出来的表格，字体不是等宽就会错行：与编辑区同一支字体
+        # 这里只放逐条回执（第几条、影响几行、错在哪）。结果集不再画进来：
+        # 文本框里中英文混排时字宽不是整数倍关系必错行，而且结果一长就被自动滚到底，
+        # 用户只看得见"共 N 行"那句尾巴，看不见数据本身——结果集交给下面的表格。
         self.sql_run_log.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
         self.sql_run_log.setMinimumHeight(log_min_height(self.sql_run_log))
         self.sql_run_log.setMaximumBlockCount(2000)
+
+        self.sql_run_result_table = QTableWidget()
+        self.sql_run_result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # 按格选：整行选的话一屏几百列，复制出来是一整行黏在一起的长串，没法贴进表格里
+        self.sql_run_result_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.sql_run_result_table.setAlternatingRowColors(True)
+        self.sql_run_result_table.setWordWrap(False)
+        self.sql_run_result_table.verticalHeader().setVisible(False)
+        self.sql_run_result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.sql_run_result_table.horizontalHeader().setStretchLastSection(False)
+        style_table_font(self.sql_run_result_table)
+        # 没有结果集（一批全是写语句）时不摆空表：这一页初开的三段高度是钉住的契约
+        self.sql_run_result_table.setVisible(False)
+        self.sql_run_sets = []
+
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
         rh = QHBoxLayout()
         rh.addWidget(QLabel("执行结果"))
+        self.lbl_sql_run_caption = QLabel("还没有执行结果")
+        rh.addWidget(self.lbl_sql_run_caption)
         rh.addStretch(1)
+        # 一批里多条 select 时用来切换看哪一批结果；只有一批就不占这块地方
+        self.cb_sql_run_set = QComboBox()
+        self.cb_sql_run_set.setVisible(False)
+        self.cb_sql_run_set.currentIndexChanged.connect(self._show_sql_run_set)
+        rh.addWidget(self.cb_sql_run_set)
         self.btn_sql_run_clear_log = QPushButton("清空结果区")
         self.btn_sql_run_clear_log.setToolTip("只清掉右边的执行结果，左边编辑区不动")
         self.btn_sql_run_clear_log.clicked.connect(self.on_sql_run_clear_result)
         rh.addWidget(self.btn_sql_run_clear_log)
         rl.addLayout(rh)
-        rl.addWidget(self.sql_run_log, 1)
+        # 表格与逐条回执之间也给一条可拖的分隔条：查的人有时要看数据、有时要看报错正文，
+        # 谁占多数由他自己拖，不替他定死
+        self.sql_run_result_split = QSplitter(Qt.Vertical)
+        self.sql_run_result_split.setChildrenCollapsible(False)
+        self.sql_run_result_split.setHandleWidth(6)
+        self.sql_run_result_split.addWidget(self.sql_run_result_table)
+        self.sql_run_result_split.addWidget(self.sql_run_log)
+        self.sql_run_result_split.setStretchFactor(0, 3)
+        self.sql_run_result_split.setStretchFactor(1, 2)
+        self.sql_run_result_split.setSizes([260, 120])
+        rl.addWidget(self.sql_run_result_split, 1)
 
         self.sql_run_split = QSplitter(Qt.Horizontal)
         self.sql_run_split.setChildrenCollapsible(False)     # 不允许把任一边拖到 0 宽
@@ -3207,6 +3257,99 @@ class MainWindow(QWidget):
     def on_sql_run_clear_result(self):
         """只清结果区：编辑区里可能正敲到一半，不该被一次"看腻了结果"带走。"""
         self.sql_run_log.clear()
+        self.sql_run_sets = []
+        self._reset_sql_run_result_table("还没有执行结果")
+
+    def _reset_sql_run_result_table(self, caption):
+        combo = self.cb_sql_run_set
+        combo.blockSignals(True)
+        combo.clear()
+        combo.blockSignals(False)
+        combo.setVisible(False)
+        self.sql_run_result_table.clear()
+        self.sql_run_result_table.setRowCount(0)
+        self.sql_run_result_table.setColumnCount(0)
+        self.sql_run_result_table.setVisible(False)
+        self.lbl_sql_run_caption.setText(caption)
+
+    def _show_sql_run_result(self, res):
+        """一批跑完：结果集交给表格。回执文本由 sink 逐条写好了，这里只管数据。"""
+        sets = res.get("sets") or []
+        if not sets:
+            self._reset_sql_run_result_table("这一批没有返回结果集的语句（都是写入或建表）")
+            return
+        self.sql_run_sets = sets
+        combo = self.cb_sql_run_set
+        combo.blockSignals(True)
+        combo.clear()
+        for s in sets:
+            combo.addItem("第 %d 条 · %s" % (s["seq"], s["sql"][:60]))
+        combo.blockSignals(False)
+        # 只有一条时不摆下拉：多一个永远只有一个选项的控件，是占地方不是给功能
+        combo.setVisible(len(sets) > 1)
+        self.sql_run_result_table.setVisible(True)
+        combo.setCurrentIndex(len(sets) - 1)
+        self._show_sql_run_set()
+        self._give_result_room()
+        dropped = res.get("sets_dropped") or 0
+        if dropped:
+            append_log(self.sql_run_log,
+                       "[提示] 这一批的结果集多于 %d 个，只保留最近 %d 个回看，"
+                       "更早的 %d 个已丢弃" % (MAX_RESULT_SETS, MAX_RESULT_SETS, dropped))
+
+    def _give_result_room(self):
+        """跑出了结果集就把底部那一段撑开。
+
+        初开时这一段压在自己的最小高度、把高度让给脚本清单——那是空页面的分配，
+        不是有数据时的分配：点「执行」的人要看的是那几行数据，两行高的表格等于没有。
+        已经够高就不动，用户自己拖过的比例也不覆盖（只在不足四成时抬到四成半）。
+        """
+        sizes = self.sql_run_split_v.sizes()
+        total = sum(sizes)
+        if total <= 0 or len(sizes) < 3:
+            return
+        if sizes[2] * 100 >= total * 40:
+            return
+        bottom = int(total * 0.45)
+        rest = total - bottom
+        self.sql_run_split_v.setSizes([int(rest * 0.31), rest - int(rest * 0.31), bottom])
+
+    def _show_sql_run_set(self, _idx=None):
+        """把选中的那一个结果集铺进表格。"""
+        if not self.sql_run_sets:
+            return
+        idx = self.cb_sql_run_set.currentIndex()
+        if idx < 0 or idx >= len(self.sql_run_sets):
+            idx = len(self.sql_run_sets) - 1
+        data = self.sql_run_sets[idx]
+        table = self.sql_run_result_table
+        cols = data["columns"]
+        rows = data["rows"]
+        table.setUpdatesEnabled(False)
+        table.clear()
+        table.setColumnCount(len(cols))
+        table.setHorizontalHeaderLabels(cols)
+        table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, value in enumerate(row):
+                item = QTableWidgetItem(value)
+                # 格子被列宽裁短时，悬停要看全（与清单里表注释那一格同一做法）
+                item.setToolTip(value)
+                table.setItem(r, c, item)
+        # 列宽随内容：与两个字段弹窗同一算法，短的用下限托住，长的把表格撑宽出横向条。
+        # 表头也要量进去——列名比数据长时，只按数据量会把表头截成半个词。
+        fm = table.fontMetrics()
+        for c in range(table.columnCount()):
+            need = max(table.sizeHintForColumn(c),
+                       fm.boundingRect(cols[c]).width() + 20)
+            # 再留 12px：sizeHint 不含格子自己的边距，贴着边算会把最后一个字裁掉半笔
+            table.setColumnWidth(c, max(70, need + 12))
+        table.setUpdatesEnabled(True)
+        total, printed = data["total"], data["printed"]
+        caption = "第 %d 条 · 共 %d 行" % (data["seq"], total)
+        if printed < total:
+            caption += "（表格只装前 %d 行，其余没取回来）" % printed
+        self.lbl_sql_run_caption.setText(caption)
 
     def on_sql_run(self):
         text = self.sql_run_input.toPlainText()
@@ -3217,6 +3360,7 @@ class MainWindow(QWidget):
         # 结果、失败原因、回滚说明都已经逐行写在右侧结果区里，这里不再弹窗打断：
         # 这一页是给人来回试语句的，每试一次弹一次模态框会点不完
         self._run_modal("正在执行 SQL…", sql_run_task, (text, cfg),
+                        on_done=self._show_sql_run_result,
                         log_view=self.sql_run_log)
 
     # -------------------- SQL 执行器页：脚本文件队列 --------------------
