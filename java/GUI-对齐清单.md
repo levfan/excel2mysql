@@ -4263,6 +4263,9 @@ USE \`casic_archives\`;"
   升 2.5.1 时漏了第三个 pom，闸门自己把自己该管的账抓出来了，补齐后转绿。
 - 摘掉 Java 的 `isUpperOnly()` 分支 → Swing 自检 RC 1，
   `结构定义模式勾上「转大写」，元数据里手写的字段名没跟着转：item_code`。
+- 只把 Python 那句切换日志的措辞改掉两个字（Java 侧不动）→ 对撞 RC 1，
+  `upper.toggle.log`、`loaded.log`、`export.std.log` 三处一起报"值不等"——
+  同一句话在这三个键里都出现，改口不漏项。复原后对撞 **323 键** 再跑一次 RC 0。
 - 四个金标准导出脚本（excel / xls / sql / meta）全量重放，去掉记录里的 `sha256` 字段后
   13 / 6 / 506 / 34 条与仓库里那份逐条一致——**语义零漂移**；夹具与金标准的字节差异只来自
   xlsx 的 docProps 时间戳，重放核对后 `git checkout` 复原、不进这一轮 commit。
