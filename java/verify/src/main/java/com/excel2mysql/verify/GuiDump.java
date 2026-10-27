@@ -122,7 +122,6 @@ public final class GuiDump {
                 frame.upperBox().doClick();
                 dumpWidget("sql_upper", frame.sqlPage().upperBox());
                 dumpWidget("sql_drop_existing", frame.sqlPage().dropExistingBox());
-                dumpWidget("progress", frame.pageProgressBar());
                 dumpButtons();
                 dumpTable("file", frame.fileTable());
                 dumpSqlTable();
@@ -345,6 +344,12 @@ public final class GuiDump {
                 }
                 put("file.serial", frame.fileModel().getColumnName(0) + "=" + serial);
                 dumpTable("file", frame.fileTable());
+                // 待导入文件表可就地编辑的是哪几列（与 Python 侧读 item flags 同一判据）
+                StringBuilder fileEditable = new StringBuilder();
+                for (int c = 0; c < frame.fileModel().getColumnCount(); c++) {
+                    fileEditable.append(frame.fileModel().isCellEditable(0, c) ? "1" : "0");
+                }
+                put("file.editable", fileEditable.toString());
                 // 两把与 Del 键有关的跨线事实，键名与取值格式跟 Python 侧一致：
                 // 按整行选中，以及空选时按下 Del 的那句留痕（只动选中态，不改清单）
                 frame.fileTable().changeSelection(1, 3, false, false);
@@ -457,6 +462,7 @@ public final class GuiDump {
             }
         });
         doubleClickProbe();
+        pasteProbe();
         zipRoundtrip(files);
     }
 
@@ -528,6 +534,52 @@ public final class GuiDump {
         } catch (Exception e) {
             put("dblclick.structure", "err|0|" + e);
         }
+    }
+
+    /**
+     * 粘贴添加：不碰系统剪贴板（那台机此刻装着什么不可控），走 pastePaths 这条缝。
+     *
+     * 挑的是清单里已有的 xlsx，全部命中去重；但这一批仍然会起一个解析线程，
+     * 而进度框是非模态的——「[添加结果]」那句是线程跑完才投递到 EDT 的。
+     * Python 侧那个框是模态的，主线程等它跑完才往下走，所以那句先落地。
+     * 两边要在同一个先后上比日志，这里就得把派发拆成两次：
+     * 第一次只粘贴，退回事件循环等任务位空出来（投递过的日志已经进了面板），
+     * 第二次再读回执、试非文件那一路。否则 export.std.log 会整段错开一位。
+     */
+    private static void pasteProbe() throws Exception {
+        final List<String> pasted = new ArrayList<String>();
+        for (int i = 0; i < frame.tables().size() && pasted.size() < 2; i++) {
+            String fp = frame.tables().get(i).filepath;
+            if (fp != null && fp.toLowerCase().endsWith(".xlsx")) {
+                pasted.add(fp);
+            }
+        }
+        pasted.add(new File("readme.txt").getPath());
+        ui(new Runnable() {
+            @Override
+            public void run() {
+                frame.pastePaths(pasted);
+            }
+        });
+        long deadline = System.currentTimeMillis() + 15000;
+        while (frame.taskBusy(MainFrame.RES_EXCEL)
+                && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        ui(new Runnable() {
+            @Override
+            public void run() {
+                String ptl = frame.logPanel().text();
+                int pa = ptl.lastIndexOf("[粘贴]");
+                put("paste.log", pa < 0 ? "(没留痕)" : ptl.substring(pa).split("\n")[0]);
+                frame.pastePaths(java.util.Collections.singletonList(
+                        new File("note.docx").getPath()));
+                String ptl2 = frame.logPanel().text();
+                int rej = ptl2.lastIndexOf("已忽略");
+                put("paste.reject", rej < 0 ? "(没留痕)"
+                        : ptl2.substring(ptl2.lastIndexOf("[提示]", rej)).split("\n")[0]);
+            }
+        });
     }
 
     private static String names() {
@@ -641,7 +693,9 @@ public final class GuiDump {
                         cols.append(sd.columnHeader(0, c));
                     }
                     put("dlg.structure.cols", cols.toString());
-                    put("dlg.structure.comment", norm(sd.commentText(0)));
+                    put("dlg.structure.comment", sd.hasCommentField() ? "有" : "没有");
+                    put("dlg.structure.hscroll",
+                            sd.scrollsHorizontally(0) ? "关自适应" : "自适应");
                     StringBuilder editable = new StringBuilder();
                     for (int c = 1; c < 5; c++) {
                         if (c > 1) {

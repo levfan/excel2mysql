@@ -1066,33 +1066,41 @@ check("F49 表内数据最大字节长度是实测值，只显示不给改（改
       and not bool(dlg.editors[0][1].item(0, 4).flags() & _QtFlags.ItemIsEditable),
       [bool(dlg.editors[0][1].item(0, c).flags() & _QtFlags.ItemIsEditable)
        for c in range(1, 5)])
-# 表注释输入框是这一轮新加的：还没有时让用例判红，而不是整轮崩在半路
-_ced = getattr(dlg, "comment_edits", None)
-check("F50 每个表标签页带一行可编辑的表注释，初值取这张表的表注释",
-      _ced is not None and len(_ced) == 1
-      and _ced[0].text() == (t1.get("table_comment") or ""),
-      (len(_ced) if _ced is not None else None, t1.get("table_comment")))
+# 表注释的入口挪回清单（双击那一格）之后，弹窗里那一行输入框整行去掉：
+# 两个地方都能改同一件事，就会有两个"到底以谁为准"的口径
+_page0 = dlg.tabs.widget(0)
+check("F51 结构弹窗里不再有表注释输入框（表注释只在清单里双击改）",
+      not hasattr(dlg, "comment_edits")
+      and not _page0.findChild(app_main.QLineEdit)
+      and "表注释：" not in [lb.text() for lb in _page0.findChildren(app_main.QLabel)],
+      (hasattr(dlg, "comment_edits"),
+       [lb.text() for lb in _page0.findChildren(app_main.QLabel)]))
 _t1bad = {"table_name": "t_bad", "base_table_name": "t_bad", "table_comment": "原注释",
           "df": pd.DataFrame({"a": [1, 2]}),
           "columns": [{"field": "a", "comment": "甲", "type": "TEXT",
                        "primary_key": True, "max_len": 1}]}
 _dlg2 = app_main.StructureDialog([_t1bad], w)
-_ced2 = getattr(_dlg2, "comment_edits", None)
 _popups_before = len(POPUPS)
-if _ced2 is not None:
-    _ced2[0].setText("不该落回")
-    _dlg2._on_accept()
-check("F50c 主键校验不过时表注释也不落回，弹窗保持打开并说明原因",
-      _ced2 is not None and len(POPUPS) > _popups_before
-      and _t1bad["table_comment"] == "原注释"
-      and "不能作为主键" in POPUPS[-1][1],
-      (_t1bad["table_comment"], POPUPS[-1] if POPUPS else None))
-if _ced is not None:
-    _ced[0].setText("订单主表")
-    dlg._on_accept()
-check("F50b 点确定把表注释写回这张表的定义",
-      _ced is not None and w.tables[0]["table_comment"] == "订单主表",
-      w.tables[0].get("table_comment"))
+_dlg2._on_accept()
+check("F50c 主键校验不过时弹窗保持打开并说明原因",
+      len(POPUPS) > _popups_before and "不能作为主键" in POPUPS[-1][1],
+      POPUPS[-1] if POPUPS else None)
+_popups_before = len(POPUPS)
+_dlg2b = app_main.StructureDialog([_t1bad], w)
+_dlg2b.editors[0][1].item(0, 1).setText("a_bad")
+_dlg2b._on_accept()
+check("F50d 主键校验不过时字段改动也不落回，定义仍是原字段名",
+      len(POPUPS) > _popups_before and _t1bad["columns"][0]["field"] == "a",
+      (_t1bad["columns"][0]["field"], POPUPS[-1] if POPUPS else None))
+_popups_before = len(POPUPS)
+_c_before = w.tables[0]["table_comment"]
+dlg.editors[0][1].item(0, 1).setText("order_no")
+dlg._on_accept()
+check("F51b 弹窗点确定只写字段与主键，表注释原样不动",
+      len(POPUPS) == _popups_before
+      and w.tables[0]["columns"][0]["field"] == "order_no"
+      and w.tables[0]["table_comment"] == _c_before,
+      (w.tables[0]["columns"][0]["field"], w.tables[0]["table_comment"]))
 ddl_dlg = app_main.DDLDialog(w.tables, True, w)
 check("F9 DDL 预览对话框可构造", ddl_dlg.tabs.count() == 1)
 check("F10 拖拽区已启用拖放", w.drop.acceptDrops())
@@ -1304,9 +1312,10 @@ check("F14 超长语句截断但标注原文长度",
       "已截断" in app_main.format_statement("INSERT INTO t VALUES (" + "1," * 3000 + ")"))
 wk = app_main.ImportWorker({"host": "h", "port": 3306, "user": "u", "password": "",
                             "database": "d"}, [], False)
-sigs = [n for n in ("log", "log_error", "table_progress", "table_done", "finished_all")
+sigs = [n for n in ("log", "log_error", "table_done", "finished_all")
         if hasattr(wk, n)]
-check("F15 ImportWorker 五路信号齐备", len(sigs) == 5, sigs)
+check("F15 ImportWorker 四路信号齐备（页内进度条那一路已随控件一起拿掉）",
+      len(sigs) == 4 and not hasattr(wk, "table_progress"), sigs)
 
 sqlfile = os.path.join(_tmpdir, "x.sql")
 open(sqlfile, "w", encoding="utf-8").write(sql_text)
@@ -2494,9 +2503,9 @@ check("K6 表格高度由分隔条控制后仍拿得到视口",
       w.file_table.viewport().height() > 0, w.file_table.viewport().height())
 check("K7 清除日志按钮随日志面板一起缩放，不会掉出可视区",
       sp.widget(2).findChild(app_main.QPushButton) is w.btn_clear_log)
-check("K8 固定件不在分隔条内（提示条/操作条/进度条不跟着被挤压）",
-      w.lbl_imp_db.parent() is not sp and w.progress.parent() is not sp
-      and w.btn_import.parent() is not sp)
+check("K8 固定件不在分隔条内（提示条与底部动作条不跟着被挤压）",
+      w.lbl_imp_db.parent() is not sp
+      and w.chk_drop.parent() is not sp and w.btn_import.parent() is not sp)
 check("K9 初始三段高度都大于 0", all(x > 0 for x in sp.sizes()), sp.sizes())
 # ---- SQL 脚本改名页：三段可拖拽（拖拽区 / 表格区 / 日志），与第一页同一形状 ----
 from PySide6.QtWidgets import QTableWidget
@@ -2616,11 +2625,10 @@ check("K25 两张主表格都有斑马纹，序号列收窄到 44px",
 _el = _excel_page.layout()
 _hline1 = _el.itemAt(_el.count() - 2).widget()
 _xop = w.excel_action_bar.layout()
-_xleft = _xop.itemAt(0).layout()
-check("K26 Excel 底部三层：分隔线 + 左列覆盖开关/进度条 + 右侧动作按钮",
+check("K26 Excel 底部三层：分隔线 + 左列只有覆盖开关（页内不再摆进度条）+ 右侧动作按钮",
       _hline1 is not None and _hline1.height() == 1
-      and _xleft.itemAt(0).widget() is w.chk_drop
-      and _xleft.itemAt(1).widget() is w.progress
+      and _xop.itemAt(0).widget() is w.chk_drop
+      and not hasattr(w, "progress")
       and _xop.itemAt(1).widget() is None
       and [_xop.itemAt(i).widget() for i in range(_xop.count() - 4, _xop.count())]
           == [w.btn_stop, w.btn_import, w.btn_gen_std, w.btn_gen_simple],
@@ -4295,8 +4303,8 @@ check("Q12 汇总同时写日志与弹窗",
       and any(t == "导入完成" for t, _ in POPUPS),
       [l for l in iw.log.toPlainText().splitlines() if "全部完成" in l])
 check("Q13 列表空后导入按钮自动禁用", iw.btn_import.isEnabled() is False)
-check("Q13b 导入结束后进度条回到初始 0%，不留 100% 残留",
-      iw.progress.value() == 0, iw.progress.value())
+check("Q13b 导入收尾后任务位已还，不挂着在跑的任务",
+      not iw._tasks, len(iw._tasks))
 
 
 # ---- 开始导入：建表失败要保留文件、逐条标红 ----
@@ -4316,8 +4324,8 @@ fw.on_start_import()
 _wait_worker(fw)
 app_main.connect = _orig_connect
 check("Q14 建表失败的文件留在列表里可重试", len(fw.tables) == 2, len(fw.tables))
-check("Q14b 导入失败同样把进度条归零（不停在半途也不停在 100%）",
-      fw.progress.value() == 0, fw.progress.value())
+check("Q14b 导入失败同样把任务位还掉（失败不等于「还在跑」）",
+      not fw._tasks, len(fw._tasks))
 check("Q15 失败逐条标红且汇总记为失败",
       "[建表失败]" in fw.log.toPlainText() and "失败 2 张表" in fw.log.toPlainText(),
       [l for l in fw.log.toPlainText().splitlines() if "建表失败" in l][:1])
@@ -4349,14 +4357,13 @@ cw._add_files([jx1])
 cw.log.appendPlainText("Excel 页占位")
 cw.sql_log.appendPlainText("SQL 页占位")
 cw.btn_clear.click()
-cw.progress.setValue(66)
 cw.btn_clear.click()
 check("Q19a 按钮文案已改为「清空待上传文件」",
       cw.btn_clear.text() == "清空待上传文件", cw.btn_clear.text())
 check("Q19 「清空待上传文件」清掉数据与界面并禁用导入按钮",
       cw.tables == [] and cw.file_table.rowCount() == 0 and cw.btn_import.isEnabled() is False)
-check("Q19b 清空待上传文件时进度条一起归零，不留上次跑到一半的痕迹",
-      cw.progress.value() == 0, cw.progress.value())
+check("Q19b 再点一次「清空待上传文件」不报错、清单仍空（幂等）",
+      cw.tables == [] and cw.file_table.rowCount() == 0, len(cw.tables))
 cw.btn_clear_log.click()
 check("Q20 「清除日志」只清本页，不影响另一页",
       cw.log.toPlainText() == "" and "SQL 页占位" in cw.sql_log.toPlainText(),
@@ -4982,9 +4989,10 @@ check("Y1j 被取消的那条在自己那一页写明只完成了部分",
       _wait_until(lambda: "已取消" in victim.log_view.toPlainText()
                   or any("已取消" in x for _t, x in POPUPS), 15),
       log_lines(victim.log_view.toPlainText(), "已取消")[:1])
-check("Y1k 收尾状态干净：没有任务残留、进度条不挂着",
-      not xwin._tasks and xwin.progress.value() == 0,
-      (len(xwin._tasks), xwin.progress.value()))
+check("Y1k 收尾状态干净：任务位与进度框都不挂着",
+      not xwin._tasks and not [t for t in xwin.findChildren(app_main.QDialog)
+                               if t.isVisible()],
+      (len(xwin._tasks), len(xwin.findChildren(app_main.QDialog))))
 _tick_timer.stop()
 app_main.ProgressDialog = _PD_BEFORE
 app_main.program_dir = _app_pdir
@@ -5776,13 +5784,31 @@ check("R49c 文件表首列是连续序号，行数就是当前待导入文件�
       and _file_serials == ["1", "2", "3"]
       and len(_file_serials) == len(rw6.tables), _file_serials)
 _file_flags = [bool(rw6.file_table.item(0, c).flags() & Qt.ItemIsEditable) for c in range(7)]
-check("R50 文件表只有「表名」列可编辑，其余列仍只读",
-      _file_flags == [False, False, True, False, False, False, False], _file_flags)
+check("R50 文件表可编辑的是「表名」与「表注释」两列，其余仍只读（与第二页同一口径）",
+      _file_flags == [False, False, True, True, False, False, False], _file_flags)
+
+
+def _dbl_click_cell(table, row, col):
+    """派发真实的双击事件：走 QAbstractItemView 那条路，才验得到"哪一列该进编辑器"。"""
+    table.show()
+    _app.processEvents()
+    _vp = table.viewport()
+    _r = table.visualItemRect(table.item(row, col))
+    if _r.width() <= 0 or _r.height() <= 0:
+        raise AssertionError("第 %d 行第 %d 列取不到格子矩形，双击事件落不到那一格" % (row, col))
+    # Qt 的 mouseDoubleClickEvent 先看"上一次按下的格子"还在不在，只发一条 DblClick
+    # 会被直接丢掉（离屏实测：信号根本不发）。按下-抬起-双击这一串才是用户真手势。
+    for _t in (_QEvent.MouseButtonPress, _QEvent.MouseButtonRelease,
+               _QEvent.MouseButtonDblClick):
+        _app.sendEvent(_vp, _QMouseEvent(_t, _r.center(), _Qt.LeftButton,
+                                         _Qt.LeftButton, _Qt.NoModifier))
+    _app.processEvents()
+
+
 _enter_old = rw6.tables[0]["table_name"]
-rw6.on_file_table_clicked(0, 2)
-_app.processEvents()
+_dbl_click_cell(rw6.file_table, 0, 2)
 _editors = rw6.file_table.findChildren(app_main.QLineEdit)
-check("R51 单击「表名」直接进入编辑器", bool(_editors),
+check("R51 双击「表名」直接进入编辑器", bool(_editors),
       len(_editors))
 # 真实编辑器里按回车提交：itemChanged 在编辑器收尾前触发整表刷新，别把编辑器留在半开状态
 if _editors:
@@ -5799,10 +5825,16 @@ check("R51c 编辑器里回车提交改名，编辑器随后关闭",
       (rw6.tables[0]["table_name"], rw6.file_table.item(0, 2).text(),
        len(rw6.file_table.findChildren(app_main.QLineEdit))))
 _ed_count = len(rw6.file_table.findChildren(app_main.QLineEdit))
-rw6.on_file_table_clicked(0, 3)
+# 与第二页统一：改东西只有双击这一条路，单击只选中、不进编辑器
+_vp2 = rw6.file_table.viewport()
+_rc2 = rw6.file_table.visualItemRect(rw6.file_table.item(0, 2))
+for _t in (_QEvent.MouseButtonPress, _QEvent.MouseButtonRelease):
+    _app.sendEvent(_vp2, _QMouseEvent(_t, _rc2.center(), _Qt.LeftButton,
+                                      _Qt.NoButton, _Qt.NoModifier))
 _app.processEvents()
-check("R51b 单击其他列不会弹编辑器",
-      len(rw6.file_table.findChildren(app_main.QLineEdit)) == _ed_count)
+check("R51b 单击「表名」不再弹编辑器（只有双击才改）",
+      len(rw6.file_table.findChildren(app_main.QLineEdit)) == _ed_count,
+      len(rw6.file_table.findChildren(app_main.QLineEdit)))
 rw6.file_table.item(0, 2).setText(_enter_old)
 _app.processEvents()
 rw6.file_table.item(1, 2).setText("manual_orders")
@@ -5864,16 +5896,168 @@ class _ProbeStructure(object):
         return 0
 
 
+def _close_cell_editor(table):
+    """编辑器还开着就把这一格收尾：按 Esc 放弃，不留半个编辑器到下一条用例。"""
+    for _ed in table.findChildren(app_main.QLineEdit):
+        for _etype in (QEvent.KeyPress, QEvent.KeyRelease):
+            _app.sendEvent(_ed, QKeyEvent(_etype, Qt.Key_Escape, Qt.NoModifier))
+    _app.processEvents()
+
+
 app_main.StructureDialog = _ProbeStructure
 try:
-    rw6.on_edit_structure_row(0, 2)
-    _name_col_only = not _opened_sd
-    rw6.on_edit_structure_row(0, 0)
+    _dbl_click_cell(rw6.file_table, 0, 2)
+    _close_cell_editor(rw6.file_table)
+    _dbl_click_cell(rw6.file_table, 0, 3)
+    _close_cell_editor(rw6.file_table)
+    _edit_cols_no_dialog = not _opened_sd
+    _dbl_click_cell(rw6.file_table, 0, 0)
     _other_col_opens = len(_opened_sd) == 1
+    _opened_sd[:] = []
 finally:
     app_main.StructureDialog = _real_sd
-check("R58 双击表名不叠结构窗，双击其他列仍打开这一行的结构",
-      _name_col_only and _other_col_opens, (_name_col_only, len(_opened_sd)))
+check("R58 双击表名/表注释只进编辑器不叠结构窗，双击其他列仍打开这一行的结构",
+      _edit_cols_no_dialog and _other_col_opens, (_edit_cols_no_dialog, len(_opened_sd)))
+
+# ---- 表注释：与表名同一处入口（双击那一格），改完写回这张表的定义 ----
+_cm_old = rw6.tables[0]["table_comment"]
+_dbl_click_cell(rw6.file_table, 0, 3)
+_cm_editors = rw6.file_table.findChildren(app_main.QLineEdit)
+check("R73 双击「表注释」进入编辑器改这一张表的注释，只动这一张",
+      bool(_cm_editors), len(_cm_editors))
+if _cm_editors:
+    _cm_editors[0].setText("订单主表")
+    for _etype in (QEvent.KeyPress, QEvent.KeyRelease):
+        _app.sendEvent(_cm_editors[0], QKeyEvent(_etype, Qt.Key_Return, Qt.NoModifier))
+    _app.processEvents()
+    _app.processEvents()
+check("R73b 表注释回车提交后写回定义并留日志，字段注释不受牵连",
+      rw6.tables[0]["table_comment"] == "订单主表"
+      and rw6.file_table.item(0, 3).text() == "订单主表"
+      and "[表注释] ods_t_order → 订单主表" in rw6.log.toPlainText(),
+      (rw6.tables[0]["table_comment"],
+       [ln for ln in log_lines(rw6.log.toPlainText(), "[表注释]")]))
+POPUPS.clear()
+_dbl_click_cell(rw6.file_table, 1, 3)
+_cm2 = rw6.file_table.findChildren(app_main.QLineEdit)
+if _cm2:
+    _cm2[-1].setText("")
+    for _etype in (QEvent.KeyPress, QEvent.KeyRelease):
+        _app.sendEvent(_cm2[-1], QKeyEvent(_etype, Qt.Key_Return, Qt.NoModifier))
+    _app.processEvents()
+    _app.processEvents()
+check("R73c 表注释清空是允许的（建表那句不带 COMMENT），日志说清改成了空",
+      rw6.tables[1]["table_comment"] == ""
+      and "[表注释] manual_orders → （空）" in rw6.log.toPlainText(),
+      (rw6.tables[1]["table_comment"],
+       [ln for ln in log_lines(rw6.log.toPlainText(), "[表注释]")]))
+# 只多打了空格：Qt 看得到文本变了会发 itemChanged，去空格后内容其实没变——
+# 这条路必须有回执，并把多打的空格刷掉（与第二页 R45n 同一口径）
+_cm_before = rw6.tables[0]["table_comment"]
+_dbl_click_cell(rw6.file_table, 0, 3)
+_cm3 = rw6.file_table.findChildren(app_main.QLineEdit)
+if _cm3:
+    _cm3[0].setText(_cm_before + "  ")
+    for _etype in (QEvent.KeyPress, QEvent.KeyRelease):
+        _app.sendEvent(_cm3[0], QKeyEvent(_etype, Qt.Key_Return, Qt.NoModifier))
+    _app.processEvents()
+    _app.processEvents()
+check("R73d 注释实际没变化也留一句回执并原样刷回清单（不静默 no-op）",
+      rw6.tables[0]["table_comment"] == _cm_before
+      and rw6.file_table.item(0, 3).text() == _cm_before
+      and "[表注释] ods_t_order 未发生变化" in rw6.log.toPlainText(),
+      (rw6.file_table.item(0, 3).text(),
+       [ln for ln in log_lines(rw6.log.toPlainText(), "[表注释]")]))
+rw6.tables[0]["table_comment"] = _cm_old
+rw6._refresh_file_table()
+
+# ---- 字段展示装不下时要能横向滚（用户 2026-10-28 点名）----
+_sd_scroll = app_main.StructureDialog(rw6.tables[:1], rw6)
+_sdt = _sd_scroll.tabs.widget(0).findChild(app_main.QTableWidget)
+_sdh = _sdt.horizontalHeader()
+check("R74 结构弹窗的字段表关掉「末列铺满视口」：装不下才轮得到横向滚动条",
+      _sdh.stretchLastSection() is False
+      and all(_sdh.sectionResizeMode(c) == app_main.QHeaderView.Interactive
+              for c in (1, 2, 3))
+      and _sdt.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded,
+      (_sdh.stretchLastSection(),
+       [_sdh.sectionResizeMode(c) for c in range(5)]))
+_sd_scroll.deleteLater()
+_md_win = app_main.MainWindow()
+_md_sql = os.path.join(_tmpdir, "滚动核对.sql")
+with io.open(_md_sql, "w", encoding="utf-8") as _mfh:
+    _mfh.write("CREATE TABLE `t_scroll` (`id` INT COMMENT '编号',"
+               " `很长的字段名用来验证这一列放不下时要能横向滚动` VARCHAR(64)"
+               " COMMENT '这一列的注释写得非常长， purpose 是要把列挤爆，"
+               "这样才看得出有没有横向滚动条可用');\n")
+_orig_gofn_s = app_main.QFileDialog.getOpenFileNames
+app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([_md_sql], "SQL (*.sql)"))
+try:
+    _md_win.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn_s)
+_mdlg = _md_win._build_sql_metadata_dialog(0)
+_mdt = _mdlg.findChild(app_main.QTableWidget)
+check("R74b 第二页元数据弹窗的字段表同一档：不铺满视口、装不下就出横向条",
+      _mdt is not None
+      and _mdt.horizontalHeader().stretchLastSection() is False
+      and _mdt.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded,
+      _mdt.horizontalHeader().stretchLastSection() if _mdt is not None else "没找到表")
+_mdlg.deleteLater()
+_md_win.close()
+
+# ---- 拖拽区第三行文案 + 窗口级 Ctrl+V 粘贴添加 ----
+check("R75 第一、二页拖拽区是三行，第三行写着 Ctrl+V 直接添加；第三页仍是两行",
+      rw6.drop.label.text().count("\n") == 2
+      and "快捷键：复制文件后按 Ctrl+V 直接添加" in rw6.drop.label.text()
+      and rw6.sql_drop.label.text().count("\n") == 2
+      and "快捷键：复制文件后按 Ctrl+V 直接添加" in rw6.sql_drop.label.text()
+      and rw6.sql_run_drop.label.text().count("\n") == 1,
+      (rw6.drop.label.text().count("\n"), rw6.sql_drop.label.text().count("\n"),
+       rw6.sql_run_drop.label.text().count("\n")))
+check("R75b 粘贴入口绑在窗口层级（不是某一页），按键就是 Ctrl+V",
+      rw6.paste_shortcut.key() == app_main.QKeySequence.Paste
+      and rw6.paste_shortcut.context() == _Qt.WindowShortcut
+      and rw6.paste_shortcut.parent() is rw6,
+      (str(rw6.paste_shortcut.key().toString()),
+       str(rw6.paste_shortcut.context())))
+_before_p = len(rw6.tables)
+POPUPS.clear()
+# 粘两份还没进过清单的 xlsx（f1/f2 已经在列表里，粘它们会被去重，量不出"加了几张表"），
+# 再混一个 txt：计数要说清，txt 不混进来
+_p1 = make_xlsx("粘贴一份（ods_t_paste1）.xlsx", {"S": pd.DataFrame({"编号": ["P1"]})})
+_p2 = make_xlsx("粘贴二份（ods_t_paste2）.xlsx", {"S": pd.DataFrame({"编号": ["P2"]})})
+rw6.paste_paths([_p1, _p2, os.path.join(_tmpdir, "说明.txt")])
+_app.processEvents()
+check("R75c 粘贴两份 xlsx 混一个 txt：清单加两个，日志按类型给计数回执",
+      len(rw6.tables) == _before_p + 2
+      and "[粘贴] 已通过粘贴添加 2 个文件，其中 0个 zip文件，2个 xlsx文件，0个 xls文件"
+          in rw6.log.toPlainText(),
+      (len(rw6.tables) - _before_p,
+       [ln for ln in log_lines(rw6.log.toPlainText(), "[粘贴]")]))
+POPUPS.clear()
+rw6.paste_paths([os.path.join(_tmpdir, "说明.docx")])
+_app.processEvents()
+check("R75d 粘进来的全是不支持的类型：走已有的那句「已忽略」，不另写一套",
+      "[提示] 拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略。" in rw6.log.toPlainText()
+      and len(rw6.tables) == _before_p + 2,
+      log_lines(rw6.log.toPlainText(), "[提示]")[-1:])
+POPUPS.clear()
+_busy_p = app_main.MainWindow()
+_busy_p._add_files([f1])
+_busy_p._tasks.append(app_main.TaskInfo(_busy_p, (_busy_p.RES_EXCEL,), "占位",
+                                        _busy_p.log, None))
+POPUPS.clear()
+_busy_p.paste_paths([f2])
+_app.processEvents()
+_busy_log = _busy_p.log.toPlainText()
+check("R75e 解析任务在跑时粘贴先被拦下，那句「已通过粘贴添加」不能说出口",
+      "已通过粘贴添加" not in _busy_log
+      and "已有任务在跑" in _busy_log
+      and len(_busy_p.tables) == 1,
+      (log_lines(_busy_log, "[粘贴]"), log_lines(_busy_log, "已有任务在跑")[:1]))
+_busy_p.close()
+rw6.close()
 
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 

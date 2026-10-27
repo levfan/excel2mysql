@@ -366,7 +366,6 @@ def main():
     win.chk_upper.toggle()
     app.processEvents()
     dump_widget("sql_upper", win.chk_sql_upper)
-    dump_widget("progress", win.progress)
     dump_buttons(win)
     dump_table("file", win.file_table)
     dump_table("sql", win.sql_table)
@@ -577,6 +576,11 @@ def main():
         ",".join(win.file_table.item(i, 0).text()
                  for i in range(win.file_table.rowCount()))))
     dump_table("file", win.file_table)
+    # 待导入文件表可就地编辑的是哪几列（与 Swing 侧 isCellEditable 同一判据）：
+    # 两页统一成"双击表名/表注释才改"之后，这一格就是那条规则的机器版
+    put("file.editable", "".join(
+        "1" if bool(win.file_table.item(0, c).flags() & Qt.ItemIsEditable) else "0"
+        for c in range(win.file_table.columnCount())))
     # 两把与 Del 键有关的跨线事实：按整行选中（不这样，"删这一行"在两边语义就不同）；
     # 以及空选时按下 Del 的那句留痕文案。都只动选中态、不改清单，取完复原。
     from PySide6.QtCore import QEvent as _Ev
@@ -687,6 +691,25 @@ def main():
     win.on_start_import()
     put("guard.nodb.import", popup_text())
 
+    # 粘贴添加：不碰系统剪贴板（那台机此刻装着什么不可控），走 paste_paths 这条缝。
+    # 挑的是清单里已有的 xlsx，全部命中去重；这一批仍会起解析线程，
+    # 那句「[添加结果]」要等模态框跑完才落进日志，所以整段放在"未选库就导入"之后——
+    # Java 侧同一步是非模态的，对撞器拆成两次派发等它落地，两边的行序才对得上。
+    _pf = sorted(os.path.join(FIX, f) for f in os.listdir(FIX)
+                 if f.lower().endswith(".xlsx"))[:2]
+    win.paste_paths(_pf + [os.path.join(FIX, "readme.txt")])
+    app.processEvents()
+    _pl = win.log.toPlainText()
+    _pa = _pl.rfind(u"[粘贴]")
+    put("paste.log", _pl[_pa:].splitlines()[0] if _pa >= 0 else u"(没留痕)")
+    win.paste_paths([os.path.join(FIX, "readme.txt")])
+    app.processEvents()
+    _pl2 = win.log.toPlainText()
+    _pa2 = _pl2.rfind(u"已忽略")
+    put("paste.reject", _pl2[_pl2.rfind(u"[提示]", 0, _pa2):].splitlines()[0]
+        if _pa2 >= 0 else u"(没留痕)")
+    POPUPS.clear()
+
     # ---- 结构弹窗改一格 → DDL 要跟着变（编辑真的落进表定义）----
     _t0 = win.tables[0]["columns"][0]
     _before_type, _before_ddl = _t0["type"], None
@@ -754,9 +777,12 @@ def main():
     first = sd.tabs.widget(0).findChild(QTableWidget)
     put("dlg.structure.cols", "|".join(norm(first.horizontalHeaderItem(c).text())
                                        for c in range(first.columnCount())))
-    # 第 4 列是实测字节数（只读）、页上方那颗输入框是表注释（可改）：
-    # 这两件事两边各写一份，能不能改必须逐列对，不看就只能靠肉眼
-    put("dlg.structure.comment", norm(sd.comment_edits[0].text()))
+    # 第 4 列是实测字节数（只读）；表注释的输入框已经整行去掉（入口在清单里双击）。
+    # 这两件事两边各写一份，能不能改、有没有多一个入口，必须逐列对，不看只能靠肉眼
+    put("dlg.structure.comment", "有" if sd.findChild(QLineEdit) else "没有")
+    _sh = first.horizontalHeader()
+    put("dlg.structure.hscroll",
+        "自适应" if _sh.stretchLastSection() else "关自适应")
     put("dlg.structure.editable", "|".join(
         "1" if (first.item(0, c) is not None and
                  bool(first.item(0, c).flags() & Qt.ItemIsEditable)) else "0"

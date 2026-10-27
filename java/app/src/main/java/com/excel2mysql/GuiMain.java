@@ -262,11 +262,14 @@ public final class GuiMain {
                 }
                 // 表数的可见痕迹是文件表行数与日志里那句汇总（Python 没有状态栏），
                 // 两者已分别在上面断过，这里不再断自造的状态文字
-                // 文件表只有「表名」列可就地编辑：单击改名，字段仍走双击结构弹窗
+                // 文件表可就地编辑的是「表名」与「表注释」两列（双击进编辑器，与第二页同一交互）；
+                // 字段级的改动仍走双击结构弹窗
                 if (!frame.fileModel().isCellEditable(0, 2)
+                        || !frame.fileModel().isCellEditable(0, 3)
                         || frame.fileModel().isCellEditable(0, 0)
-                        || frame.fileModel().isCellEditable(0, 3)) {
-                    problems.add("文件表应只有表名列可就地编辑");
+                        || frame.fileModel().isCellEditable(0, 1)
+                        || frame.fileModel().isCellEditable(0, 6)) {
+                    problems.add("文件表应只有表名与表注释两列可就地编辑");
                 }
                 int serialRows = frame.fileModel().getRowCount();
                 if (!"1".equals(frame.fileModel().getValueAt(0, 0))
@@ -275,6 +278,8 @@ public final class GuiMain {
                     problems.add("文件表序号列没按行号连续编号");
                 }
                 fileRename(frame, problems);
+                // 表注释也走就地编辑：双击那一格改，改完留回执
+                fileComment(frame, problems);
                 // 结构弹窗要能真的改到表定义：改字段类型后 DDL 必须跟着变
                 table_select_for_dialog(frame, problems);
                 // 多表标签页弹窗：校验不过不能先写回，否则表定义停在改了一半的状态
@@ -291,6 +296,8 @@ public final class GuiMain {
                 split_defaults(frame, problems);
                 // SQL 页签：读盘、改表名、落盘副本、整份清空，全离线可验
                 sql_page(frame, problems);
+                // 粘贴添加：起的是真解析任务，放在 Excel 页所有断言之后跑
+                paste_probe(frame, files, problems);
                 // 第三个页签「SQL 执行器」：编辑区、示例清单与空输入那道闸
                 sql_run_tab(frame, problems);
                 // 主日志区的字号：现场反馈 12 号基本看不清，这里钉住共同的那一档
@@ -469,7 +476,36 @@ public final class GuiMain {
         return result[0];
     }
 
-    /** 文件表单击表名改名：改到基础表名，四类非法输入都恢复原名。 */
+    /**
+     * 文件表双击「表注释」改注释：写回这张表的定义并留回执，
+     * 只多打空格那种"其实没改"也要说话（与第二页同一口径）。
+     */
+    private static void fileComment(MainFrame frame, List<String> problems) {
+        String before = frame.tables().get(0).tableComment == null
+                ? "" : frame.tables().get(0).tableComment;
+        frame.fileModel().setValueAt(before + "  ", 0, 3);
+        if (!frame.logPanel().contains("[表注释] " + frame.tables().get(0).tableName
+                + " 未发生变化")) {
+            problems.add("注释其实没改（只多打空格）时没有回执");
+        }
+        if (!before.equals(frame.tables().get(0).tableComment)) {
+            problems.add("没改内容的编辑不该动表定义：" + frame.tables().get(0).tableComment);
+        }
+        frame.fileModel().setValueAt("探针注释", 0, 3);
+        if (!"探针注释".equals(frame.tables().get(0).tableComment)
+                || !frame.logPanel().contains("[表注释] " + frame.tables().get(0).tableName
+                + " → 探针注释")) {
+            problems.add("双击改表注释没写回定义或没留痕：" + frame.tables().get(0).tableComment);
+        }
+        frame.fileModel().setValueAt("", 0, 3);
+        if (!"".equals(frame.tables().get(0).tableComment)
+                || !frame.logPanel().contains("→ （空）")) {
+            problems.add("清空表注释要允许，并写明改成了空");
+        }
+        frame.fileModel().setValueAt(before, 0, 3);
+    }
+
+    /** 文件表双击表名改名：改到基础表名，四类非法输入都恢复原名。 */
     private static void fileRename(MainFrame frame, List<String> problems) {
         String before = frame.tables().get(0).tableName;
         String renamed = before + "_probe";
@@ -538,6 +574,9 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.StructureDialog dlg =
                 new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
+        if (!dlg.scrollsHorizontally(0)) {
+            problems.add("结构弹窗的字段表还开着列自适应：字段名长一点就被挤成省略号，没得滚");
+        }
         if (dlg.tabTitles().size() != results.size()) {
             problems.add("结构弹窗标签页数不等于表数：" + dlg.tabTitles().size());
         }
@@ -566,16 +605,17 @@ public final class GuiMain {
         if (!dlg.cellEditable(0, 0, 1)) {
             problems.add("字段名列不可编辑，弹窗就白摆");
         }
-        // 表注释也在结构弹窗里改：初值取这张表的表注释，按确定才落回表定义
-        if (dlg.commentText(0) == null || dlg.commentText(0).isEmpty()) {
-            problems.add("结构弹窗的表注释输入框没带上这张表原来的注释");
+        // 表注释的入口回到清单里（双击那一格），弹窗不再摆一个输入框：
+        // 两处都能改同一件事，就会有两处"到底以谁为准"的口径
+        if (dlg.hasCommentField()) {
+            problems.add("结构弹窗里还留着表注释输入框");
         }
         String tableCommentBefore = frame.tables().get(0).tableComment;
-        dlg.setCommentText(0, "改了但没按确定");
-        if ("改了但没按确定".equals(frame.tables().get(0).tableComment)) {
-            problems.add("只填输入框没按确定，表注释却写回了表定义");
+        // 字段改动按确定才落回，表注释原样不动
+        dlg.setModelValue(0, 0, 2, "改了但没按确定");
+        if (!tableCommentBefore.equals(frame.tables().get(0).tableComment)) {
+            problems.add("弹窗没按确定却动了表注释");
         }
-        dlg.setCommentText(0, tableCommentBefore);
         // 点 X / 按 Esc 关掉要等同"取消"：没按确定就绝不能把编辑写回表定义
         com.excel2mysql.gui.StructureDialog dismissed =
                 new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
@@ -825,6 +865,85 @@ public final class GuiMain {
         }
         if (ink < 100) {
             problems.add(who + "的空态提示在视口里没画出来（非底色像素 " + ink + "）");
+        }
+    }
+
+    /** 整棵子树里找有没有进度条控件（页内进度条拿掉了，留着就是回归）。 */
+    private static boolean hasProgressBar(java.awt.Container root) {
+        if (root == null) {
+            return false;
+        }
+        for (java.awt.Component c : root.getComponents()) {
+            if (c instanceof javax.swing.JProgressBar) {
+                return true;
+            }
+            if (c instanceof java.awt.Container && hasProgressBar((java.awt.Container) c)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 数一句文案里有几行（按 \n 切），拖拽区文案的"第三行"就这么核。 */
+    private static int lines(String text) {
+        return text.split("\n").length;
+    }
+
+    /**
+     * 粘贴添加的探针：喂路径给 pastePaths（不碰系统剪贴板），核计数回执与「已忽略」那条。
+     * 放在自检最后跑——粘贴起的是真解析任务，任务位在 EDT 上排队收尾，
+     * 自检正站在 EDT 上，睡等只会把它饿死，所以之后所有用例都得等它跑完才能跑。
+     */
+    private static void paste_probe(MainFrame frame, List<String> files,
+                                    List<String> problems) throws Exception {
+        // 粘贴添加走 pastePaths 这条缝：自检不去碰系统剪贴板（那台机此刻装着什么不可控）。
+        // 两份真 xlsx 混一个 txt：计数要说清，txt 不混进清单
+        List<String> pasted = new ArrayList<String>();
+        pasted.add(files.get(0));
+        pasted.add(files.get(1));
+        pasted.add(new java.io.File("readme.txt").getPath());
+        frame.pastePaths(pasted);
+        if (!frame.logPanel().contains("已通过粘贴添加 2 个文件，其中 0个 zip文件，"
+                + "2个 xlsx文件，0个 xls文件")) {
+            problems.add("粘贴添加的计数留痕不对：" + tailOf(frame.logPanel().text()));
+        }
+        // 任务位还占着时再粘一次：那句"已通过粘贴添加"不能说出口，要说的是"已有任务在跑"。
+        // 与 Python 侧 R75e 同一条契约——拦不住的话回执就成了假话。
+        int receipts = countReceipts(frame.logPanel().text());
+        frame.pastePaths(java.util.Collections.singletonList(files.get(0)));
+        String busyLog = frame.logPanel().text();
+        if (countReceipts(busyLog) != receipts) {
+            problems.add("任务在跑时粘贴仍然先说了「已通过粘贴添加」：" + tailOf(busyLog));
+        }
+        if (!busyLog.contains("已有任务在跑")) {
+            problems.add("任务在跑时粘贴没拦下来说明原因：" + tailOf(busyLog));
+        }
+        // 粘贴起的是真解析任务，而自检自己就站在 EDT 上：睡等只会把它的收尾回调饿死，
+        // 所以断言完就把任务位手动还掉（与 import_guard 抓缺陷时同一招）
+        if (frame.taskBusy(MainFrame.RES_EXCEL)) {
+            frame.endTask();
+        }
+        frame.clearAll();
+        List<String> junkOnly = new ArrayList<String>();
+        junkOnly.add(new java.io.File("note.docx").getPath());
+        frame.pastePaths(junkOnly);
+        if (!frame.logPanel().contains("拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略")) {
+            problems.add("粘进来的全是不支持的类型时，没走那条已有的「已忽略」口径");
+        }
+        frame.clearAll();
+    }
+
+    /** 日志里「已通过粘贴添加」出现过几次：一句一次，用来判"拦没拦住"。 */
+    private static int countReceipts(String text) {
+        int n = 0;
+        int from = 0;
+        while (true) {
+            int at = text.indexOf("已通过粘贴添加", from);
+            if (at < 0) {
+                return n;
+            }
+            n++;
+            from = at + 1;
         }
     }
 
@@ -1300,7 +1419,7 @@ public final class GuiMain {
     }
 
     private static void drop_and_progress(MainFrame frame, List<String> files,
-                                          List<String> problems) {
+                                          List<String> problems) throws Exception {
         com.excel2mysql.gui.DropArea drop = frame.dropArea();
         if (drop == null) {
             problems.add("界面上没有拖拽接收区");
@@ -1414,19 +1533,18 @@ public final class GuiMain {
         if (!frame.acceptedDrops(junk).isEmpty()) {
             problems.add("txt 混进了拖拽接收列表");
         }
-        if (!frame.logPanel().contains("拖入的不是 Excel 或 ZIP 文件，已忽略")) {
-            problems.add("拖进非 Excel 文件时没有任何说明");
+        if (!frame.logPanel().contains("拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略")) {
+            problems.add("拖进或粘进非 Excel 文件时没有任何说明");
         }
 
-        frame.setPageProgress(37);
-        if (frame.pageProgressValue() != 37) {
-            problems.add("页内进度条没跟上：" + frame.pageProgressValue());
+        // 页内不再摆进度条：导入进度只在那个非模态进度框里说一次
+        if (frame.excelActionBar() != null && hasProgressBar(frame.excelActionBar())) {
+            problems.add("Excel 页底部还留着页内进度条");
         }
         frame.clearAll();
-        if (frame.pageProgressValue() != 0 || !frame.tables().isEmpty()) {
-            problems.add("「清空待上传文件」没把进度条归零或没清空表");
+        if (!frame.tables().isEmpty()) {
+            problems.add("「清空待上传文件」没清空表");
         }
-
         // Del 键删掉选中的行（多选就是批量删）。取的是文件表自己绑的那个动作：
         // 键绑定由 KeyboardFocusManager 在事件进队列时解析，自检里直接派发 KeyEvent 不会走这条路。
         List<String> del3 = new ArrayList<String>();
@@ -1681,9 +1799,6 @@ public final class GuiMain {
         }
         if (frame.fileModel().getRowCount() != 1) {
             problems.add("文件表没跟着移出，还剩 " + frame.fileModel().getRowCount() + " 行");
-        }
-        if (frame.pageProgressValue() != 0) {
-            problems.add("收尾后进度条没归零：" + frame.pageProgressValue());
         }
 
         frame.clearAll();
@@ -2904,6 +3019,9 @@ public final class GuiMain {
             problems.add("元数据弹窗没开出来，改字段的检查全部做不成");
             return;
         }
+        if (!dlg.scrollsHorizontally()) {
+            problems.add("元数据弹窗的字段表还开着列自适应：注释放不下时没得横向滚");
+        }
         if (dlg.columnTotal() != 5
                 || !"数据类型".equals(dlg.headerAt(2)) || !"主键".equals(dlg.headerAt(3))
                 || !"可空".equals(dlg.headerAt(4))) {
@@ -3135,6 +3253,15 @@ public final class GuiMain {
         }
         if (!com.excel2mysql.gui.DropArea.SQL_HINT.equals(sqlDrop.hintText())) {
             problems.add("SQL 页的拖拽区文案不是这一页那句：" + sqlDrop.hintText());
+        }
+        // 第一、二页的虚线区都要有第三行那句 Ctrl+V 提示（第三页按清单顺序执行，不加）
+        if (lines(com.excel2mysql.gui.DropArea.EXCEL_HINT) != 3
+                || lines(com.excel2mysql.gui.DropArea.SQL_HINT) != 3
+                || !com.excel2mysql.gui.DropArea.EXCEL_HINT.contains("Ctrl+V")
+                || !com.excel2mysql.gui.DropArea.SQL_HINT.contains("Ctrl+V")
+                || lines(com.excel2mysql.gui.DropArea.RUN_HINT) != 2) {
+            problems.add("拖拽区第三行「Ctrl+V 直接添加」文案不对："
+                    + com.excel2mysql.gui.DropArea.EXCEL_HINT);
         }
         if (buttonIn(frame, "添加 SQL 文件") != null) {
             problems.add("第二页还留着「添加 SQL 文件」那颗按钮，入口没统一");
@@ -4773,7 +4900,7 @@ public final class GuiMain {
         Recorder rec = new Recorder();
         List<com.excel2mysql.core.TableBuilder.Result> empty =
                 new ArrayList<com.excel2mysql.core.TableBuilder.Result>();
-        int units = com.excel2mysql.core.ImportRun.run(cfg, empty, false, rec, null).size();
+        int units = com.excel2mysql.core.ImportRun.run(cfg, empty, false, rec).size();
         if (units != 0) {
             problems.add("空列表不该有结果");
         }
@@ -4892,9 +5019,9 @@ public final class GuiMain {
                 || !nameHost.isAncestorOf(frame.fileTable())) {
             problems.add("Excel 页命名规则没贴在表格上沿");
         }
-        // 底部左列是覆盖开关 + 页内进度，两颗动作按钮不再分两层
-        if (frame.pageProgressBar().getParent() != frame.dropExistingBox().getParent()) {
-            problems.add("Excel 页进度条与覆盖开关不在同一列");
+        // 底部动作条里只剩覆盖开关与四颗按钮：页内进度条已经拿掉
+        if (hasProgressBar(frame.excelActionBar())) {
+            problems.add("Excel 页底部动作条里还摆着进度条");
         }
         if (!"primary".equals(com.excel2mysql.gui.Buttons.role(frame.importButton()))) {
             problems.add("Excel 页「开始导入」不是强调按钮");
