@@ -174,8 +174,9 @@ def build_parser():
                    help="表名与字段名的汉字取拼音首字母（订单金额 → ddje）；默认全拼（ding_dan_jin_e）。"
                         "文件名括号里显式写下的英文表名不受影响")
     p.add_argument("--upper", action="store_true",
-                   help="表名与字段名转大写（DING_DAN_JIN_E / T_IMPORT_DATA）；默认小写。"
-                        "只作用于由中文或文件名转写出来的名字，结构定义 Sheet 里人工写的字段名原样使用")
+                   help="表名与字段名转大写（DING_DAN_JIN_E / T_IMPORT_DATA）；"
+                        "由中文或文件名转写出来的名字、结构定义 Sheet 里手写的字段名一起转；"
+                        "不勾时转写出来的用小写，手写的按原样使用")
     p.add_argument("--drop-if-exists", action="store_true",
                    help="建表前先 DROP TABLE IF EXISTS（会删掉目标库里的同名表及其数据）")
     p.add_argument("--batch", type=int, default=500, metavar="N",

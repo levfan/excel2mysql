@@ -533,11 +533,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         upperBox.setToolTipText("由中文或文件名转写出来的表名与字段名全部大写"
                 + "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；"
                 + "默认已勾选，取消则用小写。文件名括号里写下的英文表名同样转大写；"
-                + "结构定义 Sheet 里人工写的字段名与手动改过的表名前缀原样保留；"
+                + "结构定义 Sheet 里人工写下的字段名也一起转大写，取消勾选则保持写下的原样；"
                 + "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。");
         upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："
                 + (upperBox.isSelected() ? "大写" : "小写")
-                + "（对之后添加的文件生效，结构定义 Sheet 里人工写的字段名不受影响）"));
+                + "（对之后添加的文件生效，结构定义 Sheet 里手写的字段名勾选时一起转大写、不勾时保持原样）"));
         JPanel nameBar = new JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
         nameBar.add(new JLabel("命名规则："));

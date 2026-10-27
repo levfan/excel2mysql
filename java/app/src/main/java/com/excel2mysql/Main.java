@@ -618,7 +618,7 @@ public final class Main {
         System.out.println("  --check            只测连接并列出数据库");
         System.out.println("  --prefix 文本      表名批量前缀");
         System.out.println("  --initials         表名与字段名取拼音首字母（订单金额 -> ddje）；默认全拼");
-        System.out.println("  --upper            表名与字段名转大写（订单金额 -> DING_DAN_JIN_E）；默认小写");
+        System.out.println("  --upper            表名与字段名转大写（订单金额 -> DING_DAN_JIN_E）；不勾时转写的用小写、元数据手写的按原样");
         System.out.println("  -c, --conn 文件    指定 conn.ini；不给时自动读程序同级、再读当前目录");
         System.out.println("  --debug            解析失败时打印完整异常栈");
         System.out.println("  --version / --help 版本与用法");

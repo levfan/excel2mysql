@@ -1087,7 +1087,8 @@ def _build_structured(filepath: str, sheets: dict, initials: bool = False,
     第 2 类 Excel：结构定义模式。字段名/类型/长度/主键/可空全部以元数据 Sheet 定义为准，
     不再从数据推断；数据 Sheet 按字段名对齐（大小写不敏感），
     多余列忽略并记录，缺失列补 NULL；只有定义没有数据时建空表。
-    大小写开关只管由文件名生成的表名；元数据里人工写下的字段名原样使用。
+    勾上大小写开关时元数据里手写的字段名一起转大写（数据 Sheet 按字段名对齐是大小写
+    不敏感的，转完照样对得上）；不勾时保持原样——不做大写转换不等于替使用者改名。
     """
     table_name, table_comment = parse_table_name_and_comment(
         filepath, initials=initials, upper=upper)
@@ -1103,6 +1104,10 @@ def _build_structured(filepath: str, sheets: dict, initials: bool = False,
     for _, row in meta.iterrows():
         field = str(cell(row, "field") or "").strip()
         field = re.sub(r"\s+", "_", field)
+        if upper:
+            # 开关写的是「表名与字段名转大写」，结构定义模式不能只转表名半句。
+            # 不勾时保持原样：不做大写转换 ≠ 替使用者把手写的名字改成小写。
+            field = field.upper()
         typ = _norm_meta_type(cell(row, "type"), cell(row, "length"))
         if not field or typ is None:
             continue                      # 缺字段名或类型定义的行跳过
@@ -1343,7 +1348,8 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         字段与类型以定义为准，另一个 Sheet 作为数据导入。
     返回 dict：filepath / table_name / base_table_name / table_comment / columns / df /
     primary_key / pk_reason / source("normal"|"structured") 等。
-    initials=True 取拼音首字母；upper=True 表名与字段名转大写（结构定义模式的字段名除外）。
+    initials=True 取拼音首字母（结构定义模式手写的字段名不受它影响）；
+    upper=True 表名与字段名转大写，结构定义模式里手写的字段名也一样转。
     """
     def _note(text):
         # 大文件读盘与推断要好几秒，逐阶段报一句，进度框上能看到"还在动"
