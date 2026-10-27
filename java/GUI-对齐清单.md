@@ -4463,3 +4463,134 @@ Java 删 `pageProgress` 字段 / 构造 / 访问器，`ImportRun.run(...)` 去�
   （2.5.1 → 2.6.0，patch 归零）。写死版本号那 15 处（`version.py`、三个 pom、
   `构建验证.bat` 两处 jar 名、`conn.ini`、`help_doc.py`、`README.md` 六处）一并同步，`T15` 核过。
   交付目录 `1.入库工具` 里那份仍是 **2.4.0**，要 2.6.0 得另跑一次三端打包。
+
+## 92. 第三页执行结果改成真表格（并入 2.6.0）
+
+用户 2026-10-28：「执行结果，这个样式不可阅读。简单一个场景：select * from table1，
+里面有中文和英文，就不能阅读，你要做成一个表格样式吧。」
+
+### 92.1 根因不是"没对齐"，是这一条通路本身错了
+
+§27 那次把结果画成等宽文本表格，判据是"列宽按显示宽度补齐（汉字占两列）"，
+`java/tools/result_corpus.py` 的十份形状（中英混排、NULL 与空串同列、带换行、全角、生僻字）
+两栈逐字符锁着——所以**对齐这一件事从来没错**，金标准一直是绿的。
+
+拿真库复现才看清两处治不了的东西（`C:/Users/acliu/AppData/Local/Temp/e2m-shots/result/`
+里 `现在_纯文本表格.png` 与 `改后_真表格.png` 是同一句 `select` 的前后对照）：
+
+- 结果区是 `QPlainTextEdit` / `JTextArea`，**自动滚到底**。表格有几高就滚几高，
+  用户最后看见的只有那句"共 N 行"的尾巴，数据本身在视口上方。
+- 文本一旦落进日志，就被日志的行规则管着：加时间戳、按行裁、上限 2000 行丢最早的。
+  表格行不是"一条记录"，是给它们逐个打时间戳会把整张表顶歪（`F26b` 为此专门放行缩进行）。
+
+补多少空格子都对不了这两处，所以改的是**呈现通道**，不是补齐算法。
+
+### 92.2 核心层：一条只有界面会走的回调，文本表格原样留着
+
+`core/sql_execute.py::_print_result` 与 `SqlExecute.printResultSet` 各加一个可选的结果集出口
+（Python `result_cb(dict)`、Java `Results.accept(ResultSetData)`），给了就把
+`seq / sql / columns / rows / total / printed` 交出去并**不再往文本里画表格**；不给就照旧。
+
+为什么不直接换掉：命令行那条线与 `verify/golden/sql.jsonl.gz` 逐字符锁着的正是那份文本表格
+（十步闸门第 8 步）。这一改成**加法式**——`SqlExecCli` / `run_sql_statements` 的调用点一个字没动，
+金标准重放不需要重生成。两侧出口的取值同样都过 `cell()` / `_cell()`：NULL、换行、制表符、
+40 列截断在进表格之前就已经折叠成可见文本，界面那条通路不必再各写一份。
+
+### 92.3 Qt 侧
+
+`sql_run_result_table`（`QTableWidget`）+ `lbl_sql_run_caption` + `cb_sql_run_set`，
+表格与逐条回执之间再夹一条 `QSplitter(Vertical)`（3:2 起，两边都可拖）：
+
+- `NoEditTriggers` + `SelectItems`（整行选的话一屏几百列，复制出来是黏在一起的长串）、
+  斑马纹、`setWordWrap(False)`、隐藏行号；列宽走 91.3 那一套（`Interactive` +
+  `setStretchLastSection(False)`，`max(70, sizeHint 与表头取大 + 12)`）。
+- 一批里多条 `select` 才有下拉，选项写 `第 N 条 · 语句前 60 字`，默认停在最近那条；
+  只有一条时不摆——多一个永远只有一个选项的控件是占地方，不是给功能。
+- 一批的结果集多于 `MAX_RESULT_SETS = 50` 个就丢最早的（回看的一般是刚跑出来那条），
+  并在结果区补一句 `只保留最近 50 个回看，更早的 N 个已丢弃`——静默丢等于骗人。
+- `_give_result_room()`：这一页初开把末段压在自己的最小高度（空页面的分配），
+  真跑出数据后两行高的表格等于没有，所以不足四成就抬到四成半；已经够高不动，
+  用户自己拖过的比例也不覆盖。
+- 「清空结果区」把表格、下拉、说明与逐条回执一起清，留半个就是假清完。
+
+### 92.4 Swing 侧
+
+`sqlRunResultTable` + `sqlRunModel`（`DefaultTableModel`，`isCellEditable` 恒 false）、
+`sqlRunCaption`、`sqlRunSets`（`JComboBox`）、`sqlRunResultSplit`，与 92.3 同构。
+换结果集只换数据不换表格对象——`setDataVector` 会重建列模型，列宽与 `AUTO_RESIZE_OFF`
+得在换完之后再钉一遍，否则字体、行高、斑马纹一起被冲掉。列宽复用 `Tables.fitColumns`
+（91.3 那条"设计下限与逐格实测取大者"），与两个字段弹窗同一支算法。
+
+工作线程只往 `List<ResultSetData>` 里收数据、不碰控件，收尾时由 EDT 一次铺进表格；
+`collect` 与渲染两处都按 `synchronized (sets)` 收口。
+
+### 92.5 用例与自检
+
+Python 新增 `F52`–`F63`（原拟的 `F29b`–`F29j` 与进度/取消那组 `F29b`–`F29e` 撞号，
+按 91.6 那条"加用例前先扫一遍该段已用到的最大编号"改成新号段）。
+`_RunCursor` 补 `results={语句: (description, 逐行取值)}` 与 `fetchone()`，
+假连接这才带回得了结果集——表格那条路没有 `description` 就根本走不到。
+
+Java 侧两条线各补一组：
+`sql_exec_result_sets`（动态代理假一个只回给定结果集的 `Connection`，
+同一个假连接跑**传回调**与**不传回调**两遍——前一边验 `ResultSetData` 的
+`seq/columns/rows/total/printed` 与"文本里不再有 `+---`"，后一边验命令行那份文本表格
+一个字都没丢，否则把命令行一起改掉也不会红）；
+`sql_run_result_table`（喂 `MainFrame.newResultSet(...)` 走 `feedSqlRunSets` 这条缝，
+量表头/逐格取值/说明行/下拉可见性与选项数/切回第一条/`只装前 N 行`那句/上限留痕/清空/
+全是写语句时不摆空表）。`keepLatestSet` 从匿名回调里抽成静态方法，
+"丢的是最早那一个"这才被机器判得住——不抽的话要跑满 51 个结果集才触发，
+没有库的机器上等不到那一刻。
+
+### 92.6 对撞键与三处取证坑
+
+新增 12 把键：`result.{visible,chooser,autofit,editable}`、
+`result.seeded.{visible,chooser,sets,caption}`、`table.result.{cols,width,zebra,rows}`，
+**逐值比**：两边同一份夹具（三列两行、`id/姓名/department`、`张三丰` 与
+`Logistics Division` 混排），`table.result.rows` 两边都是
+`1;张三丰;Logistics Division\n2;李四;卫勤处`。总量 325 → **331 键**（比 325，`env.*` 那 6 把不比）。
+
+三处坑都不是产品差异，是取证本身：
+
+- **空表上量不到列配置。** 第一版在空态读 `horizontalHeader().sectionResizeMode(0)`，
+  Qt 对越界的第 0 列回 `ResizeMode.Fixed`，于是 Python 永远报 `autofit=on`、Java 报 `off`。
+  离线探针复现后把 `autofit`/`editable` 两把键挪到喂完结果集之后再量——
+  那两条描述的是"这一列摆出来什么样"，没有列的时候量到的只是各自框架的默认值。
+- **`JTable.isCellEditable(0,0)` 在零列上抛异常。** 它先把列号换成 model 列
+  （`SwingUtilities2.convertColumnIndexToModel` → `DefaultTableColumnModel.getColumn`），
+  空表上直接 `ArrayIndexOutOfBoundsException: 0 >= 0`。改问模型：
+  `MainFrame.sqlRunCellsEditable()` 读 `sqlRunModel.isCellEditable(0, 0)`。
+  取证这一侧不该依赖"已经查出过一条"。
+- **对撞器把"崩了"演成"卡住"。** 上面那处异常从 `invokeAndWait` 抛回 main，
+  main 退出而 AWT 线程是非守护的——进程挂着不结束，`gui_parity.py` 的
+  `communicate()` 干等了十几分钟才被人发现。`GuiDump.main` 现在收住 `Throwable`、
+  打栈之后 `System.exit(1)`：闸门要么给结论，要么给退出码，不许给等待。
+
+### 92.7 变异抽查
+
+| 故意改坏 | 抓到它的断言 |
+| --- | --- |
+| 说明行文案换成 `第 1 条，合计 2 行` | `F54` `F58` `F63` 三条红（那一轮 850 通过 / 4 失败） |
+| `collect` 里去掉"满了就 pop 最早的" | `F62` 红：`55 个、index 54、没有那句丢弃提示` |
+| `printResultSet` 交出回调后仍画文本表格 | Java 自检红：`传了回调还在文本里画表格，同一份结果会有两处呈现` |
+| `showSqlRunSet` 里去掉 `Tables.fitColumns` | Java 自检红：`第 1 列宽 75 装不下内容 第 2 列宽 75 装不下内容` |
+| `keepLatestSet` 不丢最早的 | Java 自检两条红：`留 55 个、丢 5 个` 与 `选项数=55` |
+
+四处改坏都是**改完就跑、跑完逐字节还原**（md5 与备份一致才算还原）。
+第四条那一行"列宽 75 装不下内容"其实是这一轮**先跑出来的真红**：结果表格的列宽是
+`preferredWidth`，离屏没排版时 `getWidth()` 还停在默认 75——两个字段弹窗是 `dlg.pack()` 之后才量，
+这一页照同一口径补了一次 `frame.validate()`，量的仍是排完版的真宽度。
+
+### 92.8 本轮基线
+
+- `pack_test.py` **通过 854 / 失败 0 / 跳过 5**（带凭据跑，G 组真 MySQL 全跑，退出码 0；
+  5 条 SKIP 与凭据无关：`PT_XLS`、`N10`、`T14` 等）；
+  `pack_test38.py` 在 `.venv38` 与 `.venv` 上各一遍，退出码均 0；
+  `构建验证.bat` 十步全过（RC 0，含改后的 Swing 自检）；对撞 **331 键逐键一致**（RC 0）；
+  `check_generated.py` RC 0（`HelpDoc.java` 由 `help_doc.py` 重导）。
+- 实测列宽（`F56` 取证）：`id / 姓名 / department` 三列需要 22 / 52 / 277，
+  摆出来 70 / 70 / 289——最长的 `Logistics Division` 不再被裁，短列由 70 的下限托住。
+- 版本**不动**，仍写 **2.6.0**：2.6.0 从没交付过（交付目录里那份是 2.4.0），
+  这条改动与 §91 那四条同属"还没出手的一批"，按技能里"一次会话做了多件事按最重的一档定、
+  一次升到位"并进 minor，不给用户留两个同名不同内容的包。要出 2.6.0 仍需另跑一次三端打包。
+
