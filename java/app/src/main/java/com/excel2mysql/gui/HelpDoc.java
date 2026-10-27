@@ -99,7 +99,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.5.0.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.5.1.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -404,8 +404,9 @@ public final class HelpDoc {
                     "水库基础信息 → <code>skjcxx</code>）；「表名与字段名转大写」勾上后输出全大写" + NL +
                     "（<code>DING_DAN_JIN_E</code>、<code>T_IMPORT_DATA</code>）。图形版两颗默认都勾选" + NL +
                     "（首字母 + 大写），取消后回到全拼 / 小写；命令行不加参数时仍是全拼、小写。" + NL +
-                    "大小写开关也作用于文件名括号里显式写下的英文表名，但不改结构定义 Sheet 里" + NL +
-                    "人工写的字段名，也不改手动输入的表名前缀；两颗开关都对之后添加的文件生效，切换时日志留一行提示。" + NL +
+                    "大小写开关也作用于文件名括号里显式写下的英文表名，以及结构定义（元数据）Sheet 里" + NL +
+                    "手写的字段名：勾上时一起转大写，取消勾选时保持写下的原样、不替人改名。" + NL +
+                    "它不改手动输入的表名前缀；两颗开关都对之后添加的文件生效，切换时日志留一行提示。" + NL +
                     "「SQL 脚本改名」页只保留「表名与字段名转大写」一项，默认不勾选。勾选后，" + NL +
                     "当前表名清单、双击打开的表元数据和生成的 Excel 一起按大写显示；脚本正文不改。" + NL +
                     "手动编辑过的表名保留输入内容，双击当前表名单元格可以直接改这一行的表名</li>" + NL +
