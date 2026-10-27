@@ -45,7 +45,18 @@ public final class GuiDump {
     private static MainFrame frame;
     private static File tmp;
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        try {
+            dumpAll(args);
+        } catch (Throwable t) {
+            t.printStackTrace();
+            // 探针里抛出来的异常会让 main 直接退出，而 AWT 线程是非守护的：进程就此
+            // 挂在后台不结束，对撞器把"崩了"演成"卡住"，人只能干等（本轮就白等了十几分钟）
+            System.exit(1);
+        }
+    }
+
+    private static void dumpAll(String[] args) throws Exception {
         final String out = args.length > 0 ? args[0] : "verify/target/parity/java.json";
         final File fix = new File(args.length > 1 ? args[1] : "verify/fixtures");
         tmp = new File(args.length > 2 ? args[2]
@@ -232,6 +243,28 @@ public final class GuiDump {
                 put("sqlrun.labels", lbSb.toString());
                 put("sqlrun.default", frame.sqlRunInputText());
                 put("sqlrun.wrap", frame.sqlRunWrap());
+                // 执行结果那张真表格：先量空态，再喂一份两边同一夹具量填上的样子。
+                // 表头/逐格取值/说明行/下拉可见性都逐值比，两边必须是同一张表。
+                javax.swing.JTable rt = frame.sqlRunResultTable();
+                put("result.visible", rt.isVisible() ? "true" : "false");
+                put("result.chooser", frame.sqlRunChooserVisible() ? "true" : "false");
+                java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> seed =
+                        new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
+                seed.add(MainFrame.newResultSet(1, "select * from t_mixed",
+                        new String[]{"id", "姓名", "department"},
+                        new String[][]{{"1", "张三丰", "Logistics Division"},
+                                       {"2", "李四", "卫勤处"}}));
+                frame.feedSqlRunSets(seed, 0);
+                // 列模式与可编辑性在填了结果集之后量：那两条键描述的是"这一列摆出来什么样"，
+                // 空表上没有列，量到的只是各自框架的越界默认值
+                put("result.autofit", frame.sqlRunScrollsHorizontally() ? "off" : "on");
+                put("result.editable", frame.sqlRunCellsEditable() ? "true" : "false");
+                dumpTable("result", rt);
+                put("result.seeded.visible", rt.isVisible() ? "true" : "false");
+                put("result.seeded.chooser", frame.sqlRunChooserVisible() ? "true" : "false");
+                put("result.seeded.sets", String.valueOf(frame.sqlRunChooserItemCount()));
+                put("result.seeded.caption", norm(frame.sqlRunCaptionText()));
+                frame.sqlRunClearLogButton().doClick();
                 frame.setSqlRunInputText("");
                 frame.runSqlFromUi();
                 put("guard.sqlrun.empty", popup());

@@ -25,9 +25,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, REPO)
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout, QGroupBox,  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QAbstractItemView, QCheckBox, QComboBox,       # noqa: E402
+                               QGridLayout, QGroupBox,
                                QLabel, QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
-                               QPushButton, QScrollArea, QSpinBox, QTableWidget)
+                               QPushButton, QHeaderView, QScrollArea, QSpinBox,
+                               QTableWidget)                                                # noqa: E402
 import main as m  # noqa: E402
 
 app = QApplication(sys.argv)
@@ -494,6 +496,31 @@ def main():
     put("sqlrun.default", win.sql_run_input.toPlainText())
     put("sqlrun.wrap", "wrap" if win.sql_run_input.lineWrapMode()
         == QPlainTextEdit.WidgetWidth else "nowrap")
+    # ---- 执行结果那张真表格（用户 2026-10-28：中英文混排时文本表格读不出来）----
+    # 先量空态，再喂一份两边同一夹具量填上的样子：这一组键逐值比，
+    # 表头/逐格取值/说明行/下拉可见性都必须两边同形，不然只是两套界面各自像自己。
+    _rt = win.sql_run_result_table
+    put("result.visible", "true" if not _rt.isHidden() else "false")
+    put("result.chooser", "true" if not win.cb_sql_run_set.isHidden() else "false")
+    win._show_sql_run_result({"sets": [{
+        "seq": 1, "sql": "select * from t_mixed",
+        "columns": ["id", "姓名", "department"],
+        "rows": [["1", "张三丰", "Logistics Division"], ["2", "李四", "卫勤处"]],
+        "total": 2, "printed": 2}], "sets_dropped": 0})
+    app.processEvents()
+    # 列模式与可编辑性要拿到列之后量：Qt 在零列的表头上读第 0 列会回一个 Fixed，
+    # 那是越界的默认值不是这一页的配置（空态量出来的 autofit 永远是"on"）
+    put("result.autofit", "off"
+        if (_rt.horizontalHeader().sectionResizeMode(0) == QHeaderView.Interactive
+            and not _rt.horizontalHeader().stretchLastSection()) else "on")
+    put("result.editable", "false" if _rt.editTriggers()
+        == QAbstractItemView.NoEditTriggers else "true")
+    dump_table("result", _rt)
+    put("result.seeded.visible", "true" if not _rt.isHidden() else "false")
+    put("result.seeded.chooser", "true" if not win.cb_sql_run_set.isHidden() else "false")
+    put("result.seeded.sets", win.cb_sql_run_set.count())
+    put("result.seeded.caption", norm(win.lbl_sql_run_caption.text()))
+    win.btn_sql_run_clear_log.click()
     POPUPS.clear()
     win.sql_run_input.clear()
     win.on_sql_run()
