@@ -572,8 +572,28 @@ public final class GuiMain {
             problems.add("results() 与表数量不一致，结构弹窗拿不到数据行");
             return;
         }
+        // 故意把第一张表的第一个字段名与注释拉长，再建弹窗：列宽写死时超长那一格
+        // 是被切掉的那一个，而切掉的半截滚不到——这条量的就是"切没切"
+        com.excel2mysql.core.Infer.Column longCol = frame.tables().get(0).columns.get(0);
+        final String keepField = longCol.field;
+        final String keepComment = longCol.comment;
+        StringBuilder wide = new StringBuilder("zhe_shi_yi_ge_chao_ji_chang_de_zi_duan_ming");
+        while (wide.length() < 120) {
+            wide.append("_hai_you_geng_chang");
+        }
+        longCol.field = wide.toString();
+        longCol.comment = wide.toString();
         com.excel2mysql.gui.StructureDialog dlg =
                 new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
+        dlg.pack();
+        longCol.field = keepField;
+        longCol.comment = keepComment;
+        for (int c = 0; c < 3; c++) {
+            if (!dlg.columnFitsContent(0, c)) {
+                problems.add("结构弹窗第 " + c + " 列摆出来的宽度装不下内容："
+                        + "超长字段名被切进省略号，滚也滚不回来");
+            }
+        }
         if (!dlg.scrollsHorizontally(0)) {
             problems.add("结构弹窗的字段表还开着列自适应：字段名长一点就被挤成省略号，没得滚");
         }
@@ -2994,12 +3014,17 @@ public final class GuiMain {
             return;
         }
         String nl = String.valueOf((char) 10);
+        StringBuilder wide = new StringBuilder("zhe_shi_yi_ge_chao_ji_chang_de_zi_duan_ming");
+        while (wide.length() < 120) {
+            wide.append("_hai_you_geng_chang");
+        }
         java.io.File script = new java.io.File(dir, "改字段.sql");
         writeText(script.getPath(),
                 "CREATE TABLE `t_fe1` (" + nl
                         + "  `id` INT NOT NULL COMMENT '主键'," + nl
                         + "  `amount` DECIMAL(10,2) DEFAULT '0.00' COMMENT '金额'," + nl
                         + "  `name` VARCHAR(64) NOT NULL," + nl
+                        + "  `" + wide + "` VARCHAR(255) DEFAULT '' COMMENT '" + wide + "'," + nl
                         + "  PRIMARY KEY (`id`)," + nl
                         + "  KEY `idx_name` (`name`)" + nl
                         + ") ENGINE=InnoDB COMMENT='演示表';" + nl);
@@ -3021,6 +3046,14 @@ public final class GuiMain {
         }
         if (!dlg.scrollsHorizontally()) {
             problems.add("元数据弹窗的字段表还开着列自适应：注释放不下时没得横向滚");
+        }
+        // 脚本里塞了一个 120 字符的字段名与同样的注释：列宽写死时这一格必被切
+        dlg.pack();
+        for (int c = 0; c < 3; c++) {
+            if (!dlg.columnFitsContent(c)) {
+                problems.add("元数据弹窗第 " + c + " 列摆出来的宽度装不下内容："
+                        + "超长字段名被切进省略号，滚也滚不回来");
+            }
         }
         if (dlg.columnTotal() != 5
                 || !"数据类型".equals(dlg.headerAt(2)) || !"主键".equals(dlg.headerAt(3))
@@ -3060,7 +3093,8 @@ public final class GuiMain {
             problems.add("被主键引用的字段改名没被拦下，或那一格没填回原值");
         }
         closeMetadataDialogs();
-        if (page.metadataAtRow(0) == null || page.metadataAtRow(0).columns.size() != 3) {
+        // 脚本里有四列（最后一列是故意拉长的字段名，用来量列宽够不够装下内容）
+        if (page.metadataAtRow(0) == null || page.metadataAtRow(0).columns.size() != 4) {
             problems.add("改完字段后解析缓存不对");
         } else if (!"money".equals(page.metadataAtRow(0).columns.get(1).field)) {
             problems.add("解析缓存没跟着改动走："

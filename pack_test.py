@@ -5983,6 +5983,21 @@ check("R74 结构弹窗的字段表关掉「末列铺满视口」：装不下才
       (_sdh.stretchLastSection(),
        [_sdh.sectionResizeMode(c) for c in range(5)]))
 _sd_scroll.deleteLater()
+# 只关"末列铺满"还不够：列宽写死时超长那一格是被切掉的那一个，切掉的半截滚不到。
+# 把第一个字段名与注释都拉长，量的判据是"这一列摆出来的宽度装不装得下它需要的宽度"。
+_wf = rw6.tables[0]["columns"][0]
+_keep_field, _keep_comment = _wf["field"], _wf["comment"]
+_wf["field"] = "zhe_shi_yi_ge_chao_ji_chang_de_zi_duan_ming" + "_hai_you_geng_chang" * 4
+_wf["comment"] = "这一列的注释写得非常长，就是要看它会不会被切" * 8
+_wide_dlg = app_main.StructureDialog(rw6.tables[:1], rw6)
+_wide_t = _wide_dlg.tabs.widget(0).findChild(app_main.QTableWidget)
+_wide_need = [_wide_t.sizeHintForColumn(c) for c in (1, 2, 3)]
+_wide_have = [_wide_t.columnWidth(c) for c in (1, 2, 3)]
+check("R74c 结构弹窗列宽随内容长：超长字段名不被切进省略号",
+      all(_wide_have[i] >= _wide_need[i] for i in range(3)),
+      (list(_wide_have), list(_wide_need)))
+_wide_dlg.deleteLater()
+_wf["field"], _wf["comment"] = _keep_field, _keep_comment
 _md_win = app_main.MainWindow()
 _md_sql = os.path.join(_tmpdir, "滚动核对.sql")
 with io.open(_md_sql, "w", encoding="utf-8") as _mfh:
@@ -5998,11 +6013,15 @@ finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn_s)
 _mdlg = _md_win._build_sql_metadata_dialog(0)
 _mdt = _mdlg.findChild(app_main.QTableWidget)
+_m_need = [_mdt.sizeHintForColumn(c) for c in range(_mdt.columnCount())]
+_m_have = [_mdt.columnWidth(c) for c in range(_mdt.columnCount())]
 check("R74b 第二页元数据弹窗的字段表同一档：不铺满视口、装不下就出横向条",
       _mdt is not None
       and _mdt.horizontalHeader().stretchLastSection() is False
-      and _mdt.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded,
-      _mdt.horizontalHeader().stretchLastSection() if _mdt is not None else "没找到表")
+      and _mdt.horizontalScrollBarPolicy() == Qt.ScrollBarAsNeeded
+      and all(_m_have[i] >= _m_need[i] for i in range(len(_m_need))),
+      (_mdt.horizontalHeader().stretchLastSection() if _mdt is not None else "没找到表",
+       _m_have, _m_need))
 _mdlg.deleteLater()
 _md_win.close()
 
