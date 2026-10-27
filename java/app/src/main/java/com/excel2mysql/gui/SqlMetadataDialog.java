@@ -127,14 +127,12 @@ public final class SqlMetadataDialog extends JDialog {
         Tables.style(fieldTable);
         fieldTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         fieldTable.getTableHeader().setReorderingAllowed(false);
-        // 关掉列自适应：字段名或注释长到放不下时出横向滚动条，而不是被挤成省略号
-        // （Qt 侧同一个做法：Interactive + setStretchLastSection(false)）
+        // 关掉列自适应，且列宽随内容长：超长字段名不会被切进省略号，
+        // 表格比弹窗宽时横向滚动条能把尾巴带出来
+        // （Qt 侧同一个做法：Interactive + setStretchLastSection(false) + sizeHintForColumn）
         fieldTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
-        fieldTable.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(230));
-        fieldTable.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(280));
-        fieldTable.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(160));
-        fieldTable.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(70));
-        fieldTable.getColumnModel().getColumn(4).setPreferredWidth(UiScale.px(70));
+        Tables.fitColumns(fieldTable, new int[]{UiScale.px(230), UiScale.px(280),
+                UiScale.px(160), UiScale.px(70), UiScale.px(70)});
         JScrollPane scroll = new JScrollPane(fieldTable);
         // 表格左上角的标识（与第一页「待导入文件」同一做法）：标题里带列数，
         // 不必滚到表格末尾数这一张表解析出了多少列
@@ -165,6 +163,11 @@ public final class SqlMetadataDialog extends JDialog {
      */
     public boolean scrollsHorizontally() {
         return fieldTable.getAutoResizeMode() == javax.swing.JTable.AUTO_RESIZE_OFF;
+    }
+
+    /** 自检用：这一列摆出来的宽度够不够装下它真需要的宽度（与结构弹窗同一条判据）。 */
+    public boolean columnFitsContent(int col) {
+        return Tables.columnFitsContent(fieldTable, col);
     }
 
     public String columnTitle() {

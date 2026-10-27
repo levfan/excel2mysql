@@ -103,19 +103,12 @@ public final class StructureDialog extends JDialog {
             JTable table = new JTable(ed.model);
             table.setFillsViewportHeight(true);
             Tables.style(table);
-            // 主键列窄、其余列按设计宽度摆：关掉自适应才有"放不下"这件事，
-            // 字段名或注释长到超出视口时出横向滚动条，而不是被挤成一串省略号
-            // （Qt 侧对应 setStretchLastSection(false) + Interactive，两栈同一组宽度）
+            // 主键列窄、其余列"设计下限与内容需要取大者"：关掉自适应才有"放不下"这件事，
+            // 而列宽随内容长，超长字段名才不会是被切掉的那一个（切掉的截滚不到）
+            // （Qt 侧对应 setStretchLastSection(false) + sizeHintForColumn，两栈同一算法）
             table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
-            table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(46));
-            table.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(230));
-            table.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(280));
-            table.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(160));
-            // 末列表头有 10 个汉字，写死 96px 会被截断；按表头实际字宽量出来
-            java.awt.FontMetrics headerMetrics = table.getTableHeader()
-                    .getFontMetrics(table.getTableHeader().getFont());
-            table.getColumnModel().getColumn(4).setPreferredWidth(
-                    headerMetrics.stringWidth(COLUMNS[4]) + UiScale.px(20));
+            Tables.fitColumns(table, new int[]{UiScale.px(46), UiScale.px(230),
+                    UiScale.px(280), UiScale.px(160), UiScale.px(96)});
             JScrollPane scroll = new JScrollPane(table);
             ed.scroll = scroll;
             scroll.setPreferredSize(new Dimension(UiScale.px(900), UiScale.px(420)));
@@ -275,6 +268,13 @@ public final class StructureDialog extends JDialog {
         return view instanceof javax.swing.JTable
                 && ((javax.swing.JTable) view)
                         .getAutoResizeMode() == javax.swing.JTable.AUTO_RESIZE_OFF;
+    }
+
+    /** 自检用：这一列摆出来的宽度够不够装下它真需要的宽度（超长字段名不许被切进省略号）。 */
+    public boolean columnFitsContent(int tabIndex, int col) {
+        java.awt.Component view = editors.get(tabIndex).scroll.getViewport().getView();
+        return view instanceof javax.swing.JTable
+                && Tables.columnFitsContent((javax.swing.JTable) view, col);
     }
 
     /** 自检用：某个 tab 里那张表的容器，用来读它外面有没有再套一层标识。 */

@@ -4003,17 +4003,17 @@ class StructureDialog(QDialog):
                 # 建表仍按原类型"的错觉，所以只给看不给改（与 Java 侧同口径）
                 size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
                 tw.setItem(i, 4, size_item)
-            # 主键列按内容收窄，其余列按设计宽度摆：关掉"末列填满视口"才有"放不下"
-            # 这件事——字段名或注释长到超出视口时出横向滚动条，而不是挤成一串省略号
-            # （Swing 侧同一组宽度：AUTO_RESIZE_OFF + 46/230/280/160/按表头量）
+            # 主键列按内容收窄，其余列"设计下限与内容需要取大者"：关掉"末列填满视口"
+            # 才有"放不下"这件事——但只关它还不够，宽度写死时超长字段名是被切掉的那一个，
+            # 切掉的部分滚不到就等于没有滚动条。所以列宽随内容长，表格比弹窗宽时才出横向条。
+            # （Swing 侧同一算法：AUTO_RESIZE_OFF + 逐格按渲染器量宽取大者）
             th = tw.horizontalHeader()
             th.setSectionResizeMode(QHeaderView.Interactive)
             th.setStretchLastSection(False)
             th.setSectionResizeMode(0, QHeaderView.ResizeToContents)
             th.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-            tw.setColumnWidth(1, 230)
-            tw.setColumnWidth(2, 280)
-            tw.setColumnWidth(3, 160)
+            for _c, _floor in ((1, 230), (2, 280), (3, 160)):
+                tw.setColumnWidth(_c, max(_floor, tw.sizeHintForColumn(_c)))
             # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方。
             # 表注释的输入行也拿掉了——清单里双击那一格就能改，两处都能改同一件事
             # 就会有两处"到底以谁为准"的口径（用户 2026-10-28 点名）
@@ -4127,13 +4127,11 @@ class SqlMetadataDialog(QDialog):
         self._loading = False
         tw.setSelectionBehavior(QAbstractItemView.SelectRows)
         tw.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        # 末列不铺满视口：字段名/注释放不下时要出横向滚动条（Swing 侧 AUTO_RESIZE_OFF）
+        # 末列不铺满视口，且列宽随内容长：字段名/注释放不下时要出横向滚动条，
+        # 而不是把超长那一格切掉（Swing 侧 AUTO_RESIZE_OFF + 逐格量宽同一算法）
         tw.horizontalHeader().setStretchLastSection(False)
-        tw.setColumnWidth(0, 230)
-        tw.setColumnWidth(1, 280)
-        tw.setColumnWidth(2, 160)
-        tw.setColumnWidth(3, 70)
-        tw.setColumnWidth(4, 70)
+        for _c, _floor in ((0, 230), (1, 280), (2, 160), (3, 70), (4, 70)):
+            tw.setColumnWidth(_c, max(_floor, tw.sizeHintForColumn(_c)))
         # 表格左上的标识（与第一页「待导入文件」同一做法）：标题里带列数，
         # 不必滚到表格末尾数这一张表解析出了多少列
         col_box = QGroupBox("%s（共 %d 列）" % (COLUMN_TABLE_TITLE, len(cols)))

@@ -91,6 +91,54 @@ public final class Tables {
         return "";
     }
 
+    /**
+     * 列宽 = 设计下限与"这一列真需要多宽"取大者。
+     *
+     * 只把宽度写死不够：超长字段名会被切进省略号，而切掉的那一截滚不到——
+     * 要的是"宽度不够时能横向滚出来"，就得让列宽跟着内容长，表格比弹窗宽了，
+     * 横向条才真能把尾巴带出来。Qt 侧同一算法在 main.py（sizeHintForColumn 取大者）。
+     */
+    public static javax.swing.JTable fitColumns(javax.swing.JTable table, int[] floors) {
+        for (int c = 0; c < table.getColumnCount() && c < floors.length; c++) {
+            table.getColumnModel().getColumn(c).setPreferredWidth(
+                    Math.max(floors[c], contentWidth(table, c)));
+        }
+        return table;
+    }
+
+    /**
+     * 这一列需要多宽：逐格问过真渲染器，取最宽的一格（表头也算），左右各留一点边距。
+     *
+     * 用 getCellRenderer + prepareRenderer 量，不自己按字符数估——中文字宽、
+     * 加粗表头、不同 DPI 一估就偏。
+     */
+    public static int contentWidth(javax.swing.JTable table, int col) {
+        int w = 0;
+        javax.swing.table.TableColumn tc = table.getColumnModel().getColumn(col);
+        javax.swing.table.JTableHeader header = table.getTableHeader();
+        javax.swing.table.TableCellRenderer hr = tc.getHeaderRenderer() == null
+                ? header.getDefaultRenderer() : tc.getHeaderRenderer();
+        java.awt.Component hc = hr.getTableCellRendererComponent(
+                table, tc.getHeaderValue(), false, false, -1, col);
+        if (hc.getPreferredSize() != null) {
+            w = hc.getPreferredSize().width + UiScale.px(12);
+        }
+        for (int r = 0; r < table.getRowCount(); r++) {
+            java.awt.Component cell = table.prepareRenderer(
+                    table.getCellRenderer(r, col), r, col);
+            if (cell.getPreferredSize() != null) {
+                w = Math.max(w, cell.getPreferredSize().width + UiScale.px(12));
+            }
+        }
+        return w;
+    }
+
+    /** 这一列实际摆出来的宽度够不够装下内容（自检与取证读的是排完 layout 的真宽度）。 */
+    public static boolean columnFitsContent(javax.swing.JTable table, int col) {
+        return table.getColumnModel().getColumn(col).getWidth()
+                >= contentWidth(table, col);
+    }
+
     private Tables() {
     }
 
