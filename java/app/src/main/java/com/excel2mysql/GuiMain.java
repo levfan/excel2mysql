@@ -598,6 +598,14 @@ public final class GuiMain {
         if (!dlg.scrollsHorizontally(0)) {
             problems.add("结构弹窗的字段表还开着列自适应：字段名长一点就被挤成省略号，没得滚");
         }
+        // 同一档的另一半：内容装得下时必须铺满视口，不能把富余宽度空在表格右边
+        com.excel2mysql.gui.StructureDialog filled =
+                new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
+        filled.pack();
+        if (!filled.columnsFillViewport(0)) {
+            problems.add("结构弹窗内容装得下时没铺满视口：表格右侧留着一条白");
+        }
+        filled.dispose();
         if (dlg.tabTitles().size() != results.size()) {
             problems.add("结构弹窗标签页数不等于表数：" + dlg.tabTitles().size());
         }
@@ -814,9 +822,8 @@ public final class GuiMain {
             problems.add("第二/三页拖拽区底色与首页不一致");
         }
         if (!"#f4f7fc".equals(hex(frame.excelActionBar().fillColor()))
-                || !"#f4f7fc".equals(hex(frame.sqlPage().actionBar().fillColor()))
-                || !"#f4f7fc".equals(hex(frame.sqlRunActionBarWidget().fillColor()))) {
-            problems.add("三页动作条底板色不一致");
+                || !"#f4f7fc".equals(hex(frame.sqlPage().actionBar().fillColor()))) {
+            problems.add("前两页动作条底板色不一致");
         }
         if (!SwingUtilities.isDescendingFrom(frame.dropExistingBox(), frame.excelActionBar())
                 || !SwingUtilities.isDescendingFrom(frame.importButton(), frame.excelActionBar())) {
@@ -828,10 +835,28 @@ public final class GuiMain {
                 frame.sqlPage().actionBar())) {
             problems.add("第二页「覆盖已存在表」与「执行」不在同一块底板里");
         }
-        if (!SwingUtilities.isDescendingFrom(frame.sqlRunDropBox(), frame.sqlRunActionBarWidget())
+        // 第三页整条底部动作条按用户口径删了：覆盖开关不在，两颗按钮各归自己那一段，
+        // 「批量执行脚本文件」回到脚本清单下面那一排
+        if (countCoverSwitches(frame.tabs().getComponentAt(2)) != 0
+                || countCoverSwitches(frame.tabs().getComponentAt(0)) != 1
+                || countCoverSwitches(frame.tabs().getComponentAt(1)) != 1) {
+            problems.add("「覆盖已存在表」的落点不对：应当只在第一、二页各有颗");
+        }
+        if (!"批量执行脚本文件".equals(frame.sqlRunScriptsButton().getText())) {
+            problems.add("第三页那颗批量按钮没改名：" + frame.sqlRunScriptsButton().getText());
+        }
+        if (frame.sqlRunActionRow() == null
                 || !SwingUtilities.isDescendingFrom(frame.sqlRunScriptsButton(),
-                frame.sqlRunActionBarWidget())) {
-            problems.add("第三页「覆盖已存在表」与「执行脚本」不在同一块底板里");
+                frame.sqlRunActionRow())) {
+            problems.add("「批量执行脚本文件」不在脚本清单下面那一排");
+        }
+        if (!SwingUtilities.isDescendingFrom(frame.sqlRunButton(),
+                frame.sqlRunEditorHead())) {
+            problems.add("「执行编辑区 SQL」没挪到编辑区栏头的「清空编辑区」右侧");
+        }
+        if (frame.sqlRunRowExecButton() == null
+                || !"执行".equals(frame.sqlRunRowExecButton().getText())) {
+            problems.add("第三页清单的「操作」列没有那颗【执行】");
         }
         hint_painted((com.excel2mysql.gui.EmptyHintTable) frame.fileTable(),
                 "首页文件表", problems);
@@ -929,6 +954,23 @@ public final class GuiMain {
         if (frame.getRootPane().getActionMap().get("pasteFiles") == null) {
             problems.add("根面板 ActionMap 里没有 pasteFiles 这个动作");
         }
+        // 文本控件那条更要咬住：它们的 WHEN_FOCUSED 绑定排在窗口级之前，
+        // 不改挂到同一条分派上，焦点一进 SQL 编辑区或主机名框就粘不进文件（用户报的就是这个）
+        if (!frame.isTextPasteBound(frame.sqlRunInputComponent())) {
+            problems.add("SQL 编辑区的 Ctrl+V 没改挂到粘贴分派上：焦点在编辑区时粘不进文件");
+        }
+        if (!frame.isTextPasteBound(frame.hostField())
+                || !frame.isTextPasteBound(frame.prefixField())) {
+            problems.add("连接区或前缀框的 Ctrl+V 没改挂到粘贴分派上");
+        }
+        // 分派规则本身：没文件 + 焦点在文本控件 → 让回控件自己粘；
+        // 没文件 + 焦点不在文本控件 → 由当前页给一句回执
+        if (frame.routePaste(new ArrayList<String>(), frame.sqlRunInputComponent())) {
+            problems.add("剪贴板是纯文本时不该抢走输入框的 Ctrl+V");
+        }
+        if (!frame.routePaste(new ArrayList<String>(), frame.sqlRunFilesTable())) {
+            problems.add("焦点不在文本控件时，这一按键该由当前页接下并给回执");
+        }
         // 粘贴添加走 pastePaths 这条缝：自检不去碰系统剪贴板（那台机此刻装着什么不可控）。
         // 两份真 xlsx 混一个 txt：计数要说清，txt 不混进清单
         List<String> pasted = new ArrayList<String>();
@@ -1009,6 +1051,38 @@ public final class GuiMain {
             n++;
             from = at + 1;
         }
+    }
+
+    /** 这一棵子树里有几颗「覆盖已存在表」：开关挪页/删页只数得出来，不看像素。 */
+    private static int countCoverSwitches(java.awt.Component root) {
+        int n = 0;
+        if (root instanceof javax.swing.JCheckBox
+                && String.valueOf(((javax.swing.JCheckBox) root).getText())
+                        .contains("覆盖已存在表")) {
+            n++;
+        }
+        if (root instanceof java.awt.Container) {
+            for (java.awt.Component c : ((java.awt.Container) root).getComponents()) {
+                n += countCoverSwitches(c);
+            }
+        }
+        return n;
+    }
+
+    /** 页签内容里有几行写着「目标库：」——这三条按用户口径整行删掉了，应当数出 0。 */
+    private static int countDbPointers(java.awt.Component root) {
+        int n = 0;
+        if (root instanceof javax.swing.JLabel
+                && String.valueOf(((javax.swing.JLabel) root).getText())
+                        .contains("目标库：")) {
+            n++;
+        }
+        if (root instanceof java.awt.Container) {
+            for (java.awt.Component c : ((java.awt.Container) root).getComponents()) {
+                n += countDbPointers(c);
+            }
+        }
+        return n;
     }
 
     private static String hex(java.awt.Color c) {
@@ -1827,14 +1901,10 @@ public final class GuiMain {
         if (!frame.isConnExpanded() || frame.connEditVisible()) {
             problems.add("点「设置数据源信息」没能展开连接表单");
         }
-        // 用户口径：未选库的告警只留顶部状态栏一处，三页里不再重复
-        if (!frame.excelHintText().isEmpty() || frame.excelHint().isVisible()
-                || !frame.sqlPage().hintText().isEmpty()
-                || frame.sqlPage().hintField().isVisible()
-                || !frame.runDbHintText().isEmpty() || frame.runDbHint().isVisible()) {
-            problems.add("未选库时三页仍重复了告警（应当只在顶部状态栏说一次）："
-                    + frame.excelHintText() + " / " + frame.sqlPage().hintText()
-                    + " / " + frame.runDbHintText());
+        // 用户口径：当前库只在顶部状态栏说一次，三页里不再各写一条「目标库：xxx ——」
+        if (countDbPointers(frame.tabs()) != 0) {
+            problems.add("页签里还写着「目标库：」那一行，应当整行删掉："
+                    + countDbPointers(frame.tabs()) + " 处");
         }
         // 此刻连接表单是展开的（上面刚点开过），告警要指向这颗真在界面上的按钮
         if (!frame.connStateText().startsWith("⚠ 未选择目标库")
@@ -1850,19 +1920,12 @@ public final class GuiMain {
             problems.add("告警条显示文字仍是 ⚠ 原文或丢了正文：" + badShown);
         }
         frame.setSelectedDatabase("testdb");
-        if (!frame.excelHintText().contains("目标库：testdb —— ")
-                || !frame.excelHintText().contains("Excel 数据将导入到这个库")
-                || !frame.excelHintIsOk()) {
-            problems.add("选定库之后 Excel 页提示条不对：" + frame.excelHintText());
-        }
-        if (!frame.sqlPage().hintText().contains("解析并修改ddl脚本")
-                || !frame.sqlPage().hintIsOk()) {
-            problems.add("SQL 页提示条没说清这一页是解析并修改 DDL 脚本："
-                    + frame.sqlPage().hintText());
-        }
-        if (!frame.runDbHintText().contains("编辑区 SQL 与脚本文件都执行到这个库")
-                || !frame.runDbHintText().contains("testdb") || !frame.runDbHintIsOk()) {
-            problems.add("SQL 执行器页的当前库条不对：" + frame.runDbHintText());
+        // 选定库之后只有一条地方说"现在是哪个库"：顶部状态栏；三页里那条整行删掉了
+        if (!"● 目标库 testdb".equals(frame.connStateText())
+                || !frame.connState().isOk()
+                || countDbPointers(frame.tabs()) != 0) {
+            problems.add("选定库之后状态栏没报出当前库，或页签里又冒出「目标库：」那一行："
+                    + frame.connStateText());
         }
         // 三页各有一句介绍，而且必须是同一块底板：只有一页醒目等于没有这条规则
         if (!"中英表头建模，回写库".equals(frame.excelIntroText())) {
@@ -1891,9 +1954,8 @@ public final class GuiMain {
                 || intro3.getFont().getStyle() != java.awt.Font.BOLD) {
             problems.add("介绍条没加粗：这页是干什么的一眼看不出来");
         }
-        // 页内那条不再重复 host:port；主机端口与用户名收进状态栏的悬停提示
-        if (frame.excelHintText().contains("127.0.0.1")
-                || !"● 目标库 testdb".equals(frame.connStateText())
+        // host:port 与用户名只收进状态栏的悬停提示，页面上没有第二条地方复述它
+        if (!"● 目标库 testdb".equals(frame.connStateText())
                 || !frame.connTip().contains("127.0.0.1:3306")
                 || !frame.connTip().contains("root")) {
             problems.add("状态栏没把 host:port 收住：" + frame.connStateText()
@@ -1927,15 +1989,28 @@ public final class GuiMain {
         if (!frame.connTip().contains("10.0.0.9:3306")) {
             problems.add("改了主机但状态栏提示还是旧地址：" + frame.connTip());
         }
-        if (frame.excelHintText().contains("10.0.0.9")) {
-            problems.add("页内那条又把 host:port 拼回来了：" + frame.excelHintText());
+        if (countHostInTabs(frame.tabs(), "10.0.0.9") != 0) {
+            problems.add("页签里又把 host 拼回某条提示上了："
+                    + countHostInTabs(frame.tabs(), "10.0.0.9") + " 处");
         }
         frame.hostField().setText("127.0.0.1");
         // 提示条要能真的按住拖选再复制（Python 那边是开了 TextSelectableByMouse 的 QLabel）
         dragSelectable(frame.connState(), "连接状态栏", problems);
-        dragSelectable(frame.excelHint(), "Excel 页提示条", problems);
-        dragSelectable(frame.sqlPage().hintField(), "SQL 页提示条", problems);
-        dragSelectable(frame.runDbHint(), "SQL 执行器页提示条", problems);
+    }
+
+    /** 页签内容里有几处文字写着这个主机地址——三页的指向行删了，应当数出 0。 */
+    private static int countHostInTabs(java.awt.Component root, String host) {
+        int n = 0;
+        if (root instanceof javax.swing.JLabel
+                && String.valueOf(((javax.swing.JLabel) root).getText()).contains(host)) {
+            n++;
+        }
+        if (root instanceof java.awt.Container) {
+            for (java.awt.Component c : ((java.awt.Container) root).getComponents()) {
+                n += countHostInTabs(c, host);
+            }
+        }
+        return n;
     }
 
     /**
@@ -2257,14 +2332,15 @@ public final class GuiMain {
         // 执行结果用真表格画：中英文混排时文本表格没法读（用户 2026-10-28）
         sql_run_result_table(frame, problems, clearLogBtn);
 
-        // 脚本队列：清单表、覆盖开关与两颗按钮的初始态
+        // 脚本队列：清单表（含「操作」列那颗【执行】）与清空/批量执行那一排的初始态
         javax.swing.JTable runTable = frame.sqlRunFilesTable();
-        if (runTable == null || runTable.getColumnCount() != 4
+        if (runTable == null || runTable.getColumnCount() != 5
                 || !"序号".equals(runTable.getColumnName(0))
                 || !"文件".equals(runTable.getColumnName(1))
                 || !"大小".equals(runTable.getColumnName(2))
-                || !"状态".equals(runTable.getColumnName(3))) {
-            problems.add("脚本清单不是「序号/文件/大小/状态」四列");
+                || !"状态".equals(runTable.getColumnName(3))
+                || !"操作".equals(runTable.getColumnName(4))) {
+            problems.add("脚本清单不是「序号/文件/大小/状态/操作」五列");
         }
         if (runTable != null && (runTable.isCellEditable(0, 0)
                 || !com.excel2mysql.gui.Tables.isZebra(runTable))) {
@@ -2276,15 +2352,22 @@ public final class GuiMain {
                     + com.excel2mysql.gui.Tables.titledAncestor(runTable));
         }
         javax.swing.JButton runBtn = frame.sqlRunScriptsButton();
-        if (runBtn == null || !"执行脚本文件".equals(runBtn.getText()) || runBtn.isEnabled()) {
-            problems.add("空清单时「执行脚本文件」应灰着："
-                    + (runBtn == null ? "缺" : String.valueOf(runBtn.isEnabled())));
+        if (runBtn == null || !"批量执行脚本文件".equals(runBtn.getText())
+                || runBtn.isEnabled()) {
+            problems.add("空清单时「批量执行脚本文件」应灰着，名字也要带「批量」两字："
+                    + (runBtn == null ? "缺" : runBtn.getText()));
         }
-        javax.swing.JCheckBox runDrop = frame.sqlRunDropBox();
-        if (runDrop == null || runDrop.isSelected()
-                || !"覆盖已存在表（先 DROP 再建）".equals(runDrop.getText())
-                || !runDrop.getToolTipText().contains("不改磁盘上的脚本正文")) {
-            problems.add("第三页的覆盖开关初始态或文案不对");
+        if (countCoverSwitches(frame.tabs().getComponentAt(2)) != 0) {
+            problems.add("第三页不该再有「覆盖已存在表」，整行随底部动作条一起删了");
+        }
+        // 行内那颗【执行】：整列共用一个渲染件，画到哪一行就只管那一行
+        if (frame.sqlRunRowExecButton() == null
+                || !"执行".equals(frame.sqlRunRowExecButton().getText())) {
+            problems.add("清单「操作」列没有那颗【执行】");
+        }
+        if (frame.sqlRunRowExecButton() != null
+                && frame.isRowExecutable()) {
+            problems.add("空清单时行内【执行】的判据不该亮着");
         }
         if (frame.sqlRunDropArea() == null
                 || !com.excel2mysql.gui.DropArea.RUN_HINT.equals(
@@ -2315,7 +2398,7 @@ public final class GuiMain {
                     + frame.sqlRunFileCount() + " 个");
         }
         if (runBtn != null && !runBtn.isEnabled()) {
-            problems.add("清单里有脚本后「执行脚本文件」仍不可点");
+            problems.add("清单里有脚本后「批量执行脚本文件」仍不可点");
         }
         frame.sqlRunDropArea().fireDrop(java.util.Collections.singletonList(ra));
         if (frame.sqlRunFileCount() != 2
@@ -2343,7 +2426,7 @@ public final class GuiMain {
         // 空清单执行必须当场拦下：先验没选库那句，再临时选个库验"请先添加"
         frame.runScriptsFromUi();
         if (!com.excel2mysql.core.LogText.NO_DB_HINT.equals(frame.lastDialogText())) {
-            problems.add("没选库时点「执行脚本文件」没弹 NO_DB_HINT："
+            problems.add("没选库时点「批量执行脚本文件」没弹 NO_DB_HINT："
                     + frame.lastDialogText().replace((char) 10, ' '));
         }
         String keepDb = frame.selectedDatabase();
@@ -2352,6 +2435,36 @@ public final class GuiMain {
         if (!"请先添加 SQL 脚本文件。".equals(frame.lastDialogText())) {
             problems.add("有库但清单空着时没拦下：" + frame.lastDialogText());
         }
+        // 行内【执行】的入口：清单空着判据就该灰，越界的那一行要拦下来并说清，不去动数据库
+        if (frame.isRowExecutable()) {
+            problems.add("清单空着时行内【执行】的判据不该亮着");
+        }
+        frame.pressRowExecute(0);
+        if (!frame.lastDialogText().contains("这一行已经不在清单里了")) {
+            problems.add("点了不在清单里的行却没有拦下来说明：弹窗="
+                    + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        // Del 键：选中一行只出清单，磁盘上的脚本一个字不动，而且要留一句痕
+        frame.sqlRunDropArea().fireDrop(java.util.Arrays.asList(ra, rb));
+        runTable.setRowSelectionInterval(0, 0);
+        frame.deleteSelectedRunScripts();
+        if (frame.sqlRunFileCount() != 1
+                || !"b.sql".equals(runTable.getValueAt(0, 1))
+                || !frame.sqlRunLogPanel().contains("已移除 a.sql，清单剩 1 个待执行脚本")
+                || !new java.io.File(ra).exists()) {
+            problems.add("Del 没把选中那一行清出清单，或删了磁盘上的脚本，或没留痕："
+                    + frame.sqlRunFileCount() + " 个");
+        }
+        runTable.clearSelection();
+        frame.deleteSelectedRunScripts();
+        if (!frame.sqlRunLogPanel().contains("没有选中脚本")) {
+            problems.add("没选中行按 Del 静默了，应当给一句下一步");
+        }
+        frame.sqlRunDropArea().fireDrop(java.util.Collections.singletonList(ra));
+        if (!frame.isRowExecutable()) {
+            problems.add("清单里还有脚本，行内【执行】的判据却灰着");
+        }
+        frame.clearRunScriptsFromUi();
         frame.dbCombo().removeAllItems();
         if (!keepDb.isEmpty()) {
             frame.setSelectedDatabase(keepDb);
@@ -3471,6 +3584,62 @@ public final class GuiMain {
             problems.add("解析缓存没跟着改动走："
                     + page.metadataAtRow(0).columns.get(1).field);
         }
+        // 内容装得下时列宽必须铺满视口（与结构弹窗同一档）：上面那张表是故意撑爆的，
+        // 量的是"切没切"，铺满得另起一张小表才量得出来
+        java.io.File small = new java.io.File(dir, "小表.sql");
+        writeText(small.getPath(), "CREATE TABLE `t_small` (" + nl
+                + "  `id` INT NOT NULL COMMENT '主键'," + nl
+                + "  `name` VARCHAR(32) COMMENT '名称'," + nl
+                + "  PRIMARY KEY (`id`)" + nl
+                + ") ENGINE=InnoDB;" + nl);
+        java.util.List<java.awt.Window> beforeSmall = metadataWindows();
+        List<String> smallPaths = new ArrayList<String>();
+        smallPaths.add(small.getPath());
+        page.addFiles(smallPaths);
+        page.openMetadata(1);
+        com.excel2mysql.gui.SqlMetadataDialog smallDlg = null;
+        for (java.awt.Window w : metadataWindows()) {
+            if (!beforeSmall.contains(w)) {
+                smallDlg = (com.excel2mysql.gui.SqlMetadataDialog) w;
+            }
+        }
+        if (smallDlg == null) {
+            problems.add("小表元数据弹窗没开出来，铺满视口那条检查做不成");
+        } else {
+            smallDlg.pack();
+            if (!smallDlg.columnsFillViewport()) {
+                problems.add("元数据弹窗内容装得下时没铺满视口：表格右侧留着一条白");
+            }
+            smallDlg.dispose();
+        }
+        // 表格下方那三颗（清空 / 生成表结构预览 / 预览DDL）：预览按表分页，
+        // 且预览只是算一份副本，不许把还没落地的改动定死
+        java.util.List<String[]> previewPages = page.ddlPages();
+        boolean shaped = !previewPages.isEmpty();
+        for (String[] pg : previewPages) {
+            shaped = shaped && pg[1].contains("CREATE TABLE") && pg[1].trim().endsWith(";");
+        }
+        if (!shaped) {
+            problems.add("「预览 DDL」按表分页的正文形状不对：" + previewPages.size() + " 页");
+        }
+        int beforeRows = page.sqlRowCount();
+        String beforeText = page.entryTextAt(0);
+        com.excel2mysql.gui.SqlScriptDdlDialog ddlDlg =
+                new com.excel2mysql.gui.SqlScriptDdlDialog(null, previewPages);
+        ddlDlg.pack();
+        if (ddlDlg.tabCount() != previewPages.size()
+                || !ddlDlg.tabText(0).equals(previewPages.get(0)[1])
+                || !ddlDlg.tabTitleAt(0).equals(previewPages.get(0)[0])) {
+            problems.add("预览DDL 弹窗的页数、标题或正文与数据对不上："
+                    + ddlDlg.tabCount() + " 页 / 应有 " + previewPages.size() + " 页");
+        }
+        ddlDlg.dispose();
+        page.previewDdl();
+        page.previewStructure();
+        closeMetadataDialogs();
+        if (page.sqlRowCount() != beforeRows || !beforeText.equals(page.entryTextAt(0))) {
+            problems.add("两颗预览按钮把清单或脚本正文改了：预览应当只读不算");
+        }
     }
 
     /** 关掉自检期间弹出的元数据框：不关掉会攒出一堆隐藏窗口，后面的截图就不是现场。 */
@@ -4168,7 +4337,8 @@ public final class GuiMain {
                     "预览 DDL", "开始导入", "清空待上传文件", "保存修改后ddl脚本",
                     "执行修改后ddl脚本到当前库", "连接并加载库",
                     "生成标准excel文件", "生成简易excel文件", "示例 (?)",
-                    "清空编辑区", "清空结果区", "设置数据源信息", "收起"};
+                    "清空编辑区", "清空结果区", "设置数据源信息", "收起",
+                    "清空待执行脚本", "批量执行脚本文件"};
             for (String n : named) {
                 if (!onUi.contains(n)) {
                     problems.add("说明里点名的按钮界面上不存在：" + n);

@@ -980,15 +980,23 @@ w.cb_db.blockSignals(True); w.cb_db.clear()
 w.cb_db.addItem("testdb", "testdb")
 w.cb_db.blockSignals(False)
 w._refresh_db_labels()
-check("F3 目标库提示条：Excel 页显示导入措辞",
-      "testdb" in w.lbl_imp_db.text() and "Excel 数据将导入到这个库" in w.lbl_imp_db.text(),
-      w.lbl_imp_db.text())
-check("F4 目标库提示条：SQL 页说的是解析并修改 DDL 脚本",
-      "解析并修改ddl脚本" in w.lbl_sql_db.text(), w.lbl_sql_db.text())
-check("F4b 目标库提示条：SQL 执行器页说的是编辑区与脚本文件两段",
-      "编辑区 SQL 与脚本文件都执行到这个库" in w.lbl_run_db.text()
-      and "testdb" in w.lbl_run_db.text(), w.lbl_run_db.text())
-check("F4c 页内介绍条：Excel 页说自己按中英表头建模回写库",
+
+
+def _db_pointers(win):
+    """三页页签里还有几行写着「目标库：」——连接区那行标签不算（它管的是输入表单）。"""
+    out = []
+    for i in range(win.main_tabs.count()):
+        out += [q for q in win.main_tabs.widget(i).findChildren(app_main.QLabel)
+                if "目标库：" in q.text()]
+    return out
+
+
+check("F3 三页不再各写一条「目标库：xxx ——」，当前库只在顶部状态栏说一次",
+      not any(hasattr(w, n) for n in ("lbl_imp_db", "lbl_sql_db", "lbl_run_db"))
+      and not _db_pointers(w)
+      and "● 目标库 testdb" in w.lbl_conn_state.text(),
+      (w.lbl_conn_state.text(), [q.text() for q in _db_pointers(w)]))
+check("F4 页内介绍条：Excel 页说自己按中英表头建模回写库",
       w.imp_intro.text() == "中英表头建模，回写库", w.imp_intro.text())
 check("F4d 页内介绍条：SQL 页说自己解析建表语句回写库",
       w.sql_intro.text() == "解析建表语句，回写库", w.sql_intro.text())
@@ -1003,15 +1011,11 @@ check("F4f 三页介绍条用的是同一块醒目底板（样式必须逐字符
 w.ed_port.setValue(3307)
 check("F5 改端口后状态栏的悬停提示实时联动（host:port 收在这条里）",
       "3307" in w.lbl_conn_state.toolTip(), w.lbl_conn_state.toolTip())
-check("F5b 页内三条指向不再重复 host:port（只说这一页要写到哪个库）",
-      "3307" not in w.lbl_imp_db.text() and "127.0.0.1" not in w.lbl_imp_db.text()
-      and "3307" not in w.lbl_run_db.text(), (w.lbl_imp_db.text(), w.lbl_run_db.text()))
 w.cb_db.setCurrentIndex(-1)
-check("F6 未选库时三页提示条清空并隐藏，不再重复顶部状态栏那条告警",
-      w.lbl_imp_db.text() == w.lbl_sql_db.text() == w.lbl_run_db.text() == ""
-      and w.lbl_imp_db.isHidden() and w.lbl_sql_db.isHidden() and w.lbl_run_db.isHidden(),
-      (w.lbl_imp_db.text(), w.lbl_sql_db.text(), w.lbl_run_db.text(),
-       w.lbl_imp_db.isHidden(), w.lbl_sql_db.isHidden(), w.lbl_run_db.isHidden()))
+check("F6 未选库时也只有顶部状态栏一处告警，页内不留空行",
+      w.lbl_conn_state.text().startswith("⚠ 未选择目标库")
+      and not _db_pointers(w),
+      (w.lbl_conn_state.text(), [q.text() for q in _db_pointers(w)]))
 check("F6b 唯一的告警在顶部状态栏，指向此刻真能点到的按钮，话术只有一套",
       w.lbl_conn_state.text().startswith("⚠ 未选择目标库")
       and "设置数据源信息" in w.lbl_conn_state.text()
@@ -1023,11 +1027,8 @@ check("F6c 提示不再把公共连接区说成某个页签",
       and "Excel 导入」页" not in w.lbl_conn_state.toolTip()
       and "SQL 脚本」页" not in w.lbl_conn_state.toolTip(),
       w.lbl_conn_state.toolTip())
-check("F6e 告警只染顶部状态栏，页内三条不残留红色样式",
-      "#c62828" in w.lbl_conn_state.styleSheet()
-      and all("#c62828" not in lbl.styleSheet()
-              for lbl in (w.lbl_imp_db, w.lbl_sql_db, w.lbl_run_db)),
-      (w.lbl_conn_state.styleSheet(), w.lbl_imp_db.styleSheet()))
+check("F6e 告警只染顶部状态栏",
+      "#c62828" in w.lbl_conn_state.styleSheet(), w.lbl_conn_state.styleSheet())
 
 # 连接区折叠：跑业务时只留一条"当前是哪个库"，要改连接再展开（用户口径）
 _wc = app_main.MainWindow()
@@ -1048,12 +1049,11 @@ check("F6f2 点「设置数据源信息」展开五行表单，那颗按钮让�
        _wc.btn_conn_collapse.isVisible()))
 _wc.cb_db.addItem("testdb", "testdb")      # 走真信号：选定库应当自动收起
 _app.processEvents()
-check("F6g 选定目标库后自动收起，状态栏只报库名，三页提示条恢复显示",
+check("F6g 选定目标库后自动收起，状态栏只报库名",
       not _wc.conn_form.isVisible() and _wc.btn_conn_edit.isVisible()
-      and _wc.lbl_conn_state.text() == "● 目标库 testdb"
-      and not _wc.lbl_imp_db.isHidden() and "testdb" in _wc.lbl_imp_db.text(),
-      (_wc.conn_form.isVisible(), _wc.lbl_conn_state.text(),
-       _wc.lbl_imp_db.isHidden(), _wc.lbl_imp_db.text()))
+      and _wc.lbl_conn_state.text() == "● 目标库 testdb",
+      (_wc.conn_form.isVisible(), _wc.btn_conn_edit.isVisible(),
+       _wc.lbl_conn_state.text()))
 check("F6h 收起后 host:port 与用户名退到悬停提示里，信息没丢",
       "127.0.0.1" in _wc.lbl_conn_state.toolTip()
       and "3306" in _wc.lbl_conn_state.toolTip() and "root" in _wc.lbl_conn_state.toolTip(),
@@ -1230,18 +1230,22 @@ _app.processEvents()
 check("F10f 空表真的把图标和提示画在视口里（抓屏数非底色像素，不是只比字符串）",
       _ink > 60, f"ink={_ink} viewport={_img.width()}x{_img.height()}")
 
-check("F10g 三页底部动作条都包住了「覆盖已存在表」和执行按钮（真控件的父子关系）",
+check("F10g 前两页底部动作条都包住了「覆盖已存在表」和执行按钮（真控件的父子关系）",
       w.excel_action_bar.isAncestorOf(w.chk_drop)
       and w.excel_action_bar.isAncestorOf(w.btn_import)
       and w.sql_action_bar.isAncestorOf(w.chk_sql_drop)
-      and w.sql_action_bar.isAncestorOf(w.btn_sql_run)
-      and w.run_action_bar.isAncestorOf(w.chk_run_drop)
-      and w.run_action_bar.isAncestorOf(w.btn_run_scripts))
-check("F10h 三块底板用同一个浅色，且与页面底色不同（有底色块才看得出归组）",
-      {w.excel_action_bar.fill_color, w.sql_action_bar.fill_color,
-       w.run_action_bar.fill_color} == {"#f4f7fc"},
-      (w.excel_action_bar.fill_color, w.sql_action_bar.fill_color,
-       w.run_action_bar.fill_color))
+      and w.sql_action_bar.isAncestorOf(w.btn_sql_run))
+check("F10g2 第三页没有底部动作条：覆盖开关整行删掉，两颗按钮各归自己那一段",
+      not hasattr(w, "run_action_bar") and not hasattr(w, "chk_run_drop")
+      and w.btn_run_scripts.parentWidget() is w.sql_run_table.parentWidget()
+      and w.btn_sql_run_exec.parentWidget() is w.sql_run_input.parentWidget()
+      and not [c for c in w.findChildren(app_main.QCheckBox)
+               if "覆盖已存在表" in c.text()
+               and c is not w.chk_drop and c is not w.chk_sql_drop],
+      (str(w.btn_run_scripts.parentWidget()), str(w.btn_sql_run_exec.parentWidget())))
+check("F10h 两块底板用同一个浅色，且与页面底色不同（有底色块才看得出归组）",
+      {w.excel_action_bar.fill_color, w.sql_action_bar.fill_color} == {"#f4f7fc"},
+      (w.excel_action_bar.fill_color, w.sql_action_bar.fill_color))
 
 
 
@@ -1420,35 +1424,37 @@ _run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
              w.btn_sql_run_clear_log.text(): w.btn_sql_run_clear_log,
              w.btn_run_clear.text(): w.btn_run_clear,
              w.btn_run_scripts.text(): w.btn_run_scripts}
-check("F21 六颗按钮齐备：示例、执行编辑区、两个清空、清单区的清空与执行",
+check("F21 六颗按钮齐备：示例、执行编辑区、两个清空、清单区的清空与批量执行",
       len(_run_btns) == 6
       and set(_run_btns) == {u"示例 (?)", u"执行编辑区 SQL", u"清空编辑区",
-                             u"清空结果区", u"清空待执行脚本", u"执行脚本文件"}
-      and all(b.isEnabled() for n, b in _run_btns.items() if n != u"执行脚本文件")
-      and not _run_btns[u"执行脚本文件"].isEnabled(), sorted(_run_btns))
-check("F22 两个执行按钮的 tooltip 各说清自己的事务语义与互斥",
+                             u"清空结果区", u"清空待执行脚本", u"批量执行脚本文件"}
+      and all(b.isEnabled() for n, b in _run_btns.items()
+              if n != u"批量执行脚本文件")
+      and not _run_btns[u"批量执行脚本文件"].isEnabled(), sorted(_run_btns))
+check("F22 两个执行按钮的 tooltip 各说清自己的范围与事务语义",
       "全部成功才提交，中途出错整批回滚" in w.btn_sql_run_exec.toolTip()
       and "互不影响" in w.btn_sql_run_exec.toolTip()
-      and "每个文件一个事务" in w.btn_run_scripts.toolTip(),
+      and "每个文件一个事务" in w.btn_run_scripts.toolTip()
+      and "只想跑其中一个" in w.btn_run_scripts.toolTip(),
       (w.btn_sql_run_exec.toolTip(), w.btn_run_scripts.toolTip()))
 from PySide6.QtWidgets import QGroupBox
 _run_group = w.sql_run_table.parentWidget()
 while _run_group is not None and not isinstance(_run_group, QGroupBox):
     _run_group = _run_group.parentWidget()
-check("F22b 脚本清单有自己的组框标题、四列、斑马纹与只读选择行",
+check("F22b 脚本清单有自己的组框标题、五列（含操作栏）、斑马纹与只读选择行",
       _run_group is not None and _run_group.title() == app_main.RUN_TABLE_TITLE
-      and [w.sql_run_table.horizontalHeaderItem(i).text() for i in range(4)]
-      == ["序号", "文件", "大小", "状态"]
+      and [w.sql_run_table.horizontalHeaderItem(i).text() for i in range(5)]
+      == ["序号", "文件", "大小", "状态", "操作"]
+      and w.sql_run_table.columnCount() == 5
       and w.sql_run_table.alternatingRowColors()
       and w.sql_run_table.editTriggers() == app_main.QAbstractItemView.NoEditTriggers,
       (_run_group.title() if _run_group else None,
-       [w.sql_run_table.horizontalHeaderItem(i).text() for i in range(4)],
+       [w.sql_run_table.horizontalHeaderItem(i).text() for i in range(5)],
        w.sql_run_table.alternatingRowColors()))
-check("F22c 底部覆盖开关只作用于脚本文件，默认不勾选",
-      not w.chk_run_drop.isChecked()
-      and "执行脚本文件" in w.chk_run_drop.toolTip()
-      and "不改磁盘上的脚本正文" in w.chk_run_drop.toolTip(),
-      (w.chk_run_drop.isChecked(), w.chk_run_drop.toolTip()))
+check("F22c 清单为空时操作栏没有按钮，行内那颗是随行走才出现的",
+      w.sql_run_table.rowCount() == 0
+      and all(w.sql_run_table.cellWidget(r, 4) is None for r in range(5)),
+      w.sql_run_table.rowCount())
 
 
 class _RunCursor:
@@ -1953,13 +1959,12 @@ app_main.connect = _real_connect
 w.sql_run_files = []
 w.add_run_script_paths([_run_a, _run_b])
 w._conn_cfg = lambda: dict(_CFG_D)
-w.chk_run_drop.setChecked(False)
 _ui_conns = [_FConn(), _FConn()]
 app_main.connect = lambda cfg: _ui_conns.pop(0)
 POPUPS.clear()
 w.sql_run_log.clear()
 w.on_run_scripts_execute()
-check("F43 界面执行脚本文件：按清单顺序跑完，表格状态写回成功",
+check("F43 界面批量执行脚本文件：按清单顺序跑完，表格状态写回成功",
       [w.sql_run_files[i]["status"] for i in range(2)] == ["成功", "成功"]
       and [w.sql_run_table.item(i, 3).text() for i in range(2)] == ["成功", "成功"]
       and any(t == "执行完成" and "成功 2 个文件，失败 0 个文件" in x
@@ -1970,10 +1975,46 @@ check("F43b 执行前先写一条带目标库与文件数的开工日志",
       "整库 dump 逐条提交）" in w.sql_run_log.toPlainText(),
       w.sql_run_log.toPlainText()[:300])
 app_main.connect = _real_connect
+# 行内那颗【执行】：一次只跑这一行，另一个文件不碰
+w.sql_run_files = []
+w.add_run_script_paths([_run_a, _run_b])
+w._conn_cfg = lambda: dict(_CFG_D)
+_row_conns = [_FConn()]
+app_main.connect = lambda cfg: _row_conns.pop(0)
+POPUPS.clear()
+w.sql_run_log.clear()
+w.on_run_script_row(1)
+check("F43c 行内【执行】只跑选中那一行：只开一个连接，另一行状态不动",
+      _row_conns == []
+      and [w.sql_run_files[i]["status"] for i in range(2)] == ["待执行", "成功"]
+      and "开始执行脚本文件（目标库 d，1 个文件" in w.sql_run_log.toPlainText(),
+      ([s["status"] for s in w.sql_run_files], w.sql_run_log.toPlainText()[:200]))
+app_main.connect = _real_connect
+_row_cell = w.sql_run_table.cellWidget(1, 4)
+_row_btn = _row_cell.findChild(app_main.QPushButton) if _row_cell is not None else None
+check("F43d 操作列那一格真是一颗【执行】按钮，与批量那颗同判据",
+      _row_btn is not None and _row_btn.text() == "执行"
+      and _row_btn.isEnabled() == w.btn_run_scripts.isEnabled(),
+      (_row_btn.text() if _row_btn else None, _row_btn.isEnabled() if _row_btn else None))
+# Del 键：选中一行出清单，磁盘上的脚本不动
+w.sql_run_table.selectRow(0)
+from PySide6.QtGui import QKeyEvent as _QKE
+w.sql_run_table.keyPressEvent(_QKE(_QEvent.KeyPress, _QtFlags.Key_Delete,
+                                   _QtFlags.NoModifier))
+check("F43e 选中一行按 Del 出清单：另一行还在，磁盘上的脚本没被删",
+      [s["path"] for s in w.sql_run_files] == [_run_b]
+      and w.sql_run_table.rowCount() == 1 and os.path.exists(_run_a)
+      and "已移除 run_a.sql，清单剩 1 个待执行脚本" in w.sql_run_log.toPlainText(),
+      ([s["path"] for s in w.sql_run_files], w.sql_run_log.toPlainText()[-120:]))
+w.sql_run_log.clear()
+w.sql_run_table.clearSelection()
+w.on_run_scripts_delete_selected()
+check("F43f 没选中行按 Del 也给一句下一步，不静默",
+      len(w.sql_run_files) == 1 and "没有选中脚本" in w.sql_run_log.toPlainText(),
+      w.sql_run_log.toPlainText())
 w._conn_cfg = _old_cfg
 w.sql_run_files = []
 w._refresh_run_table()
-w.chk_run_drop.setChecked(False)
 
 # ---- 整库 dump：识别、切句与"逐条提交、出错继续"的执行语义 ----
 # 现场那份 MariaDB dump 的形状：sandbox 标记、版本注释、带前行注释的建库与切库、
@@ -2701,8 +2742,8 @@ check("K6 表格高度由分隔条控制后仍拿得到视口",
       w.file_table.viewport().height() > 0, w.file_table.viewport().height())
 check("K7 清除日志按钮随日志面板一起缩放，不会掉出可视区",
       sp.widget(2).findChild(app_main.QPushButton) is w.btn_clear_log)
-check("K8 固定件不在分隔条内（提示条与底部动作条不跟着被挤压）",
-      w.lbl_imp_db.parent() is not sp
+check("K8 固定件不在分隔条内（介绍条与底部动作条不跟着被挤压）",
+      w.imp_intro.parent() is not sp
       and w.chk_drop.parent() is not sp and w.btn_import.parent() is not sp)
 check("K9 初始三段高度都大于 0", all(x > 0 for x in sp.sizes()), sp.sizes())
 # ---- SQL 脚本改名页：三段可拖拽（拖拽区 / 表格区 / 日志），与第一页同一形状 ----
@@ -2747,11 +2788,15 @@ check("K14 前缀行与大写开关留在表格区；保存/执行/生成与覆�
       and not sp2.widget(1).isAncestorOf(w.btn_sql_run)
       and not sp2.isAncestorOf(w.btn_sql_run)
       and not sp2.isAncestorOf(w.chk_sql_drop))
-check("K15 清空按钮排在表格区动作条最左（与第一页那颗同位置同文案），清除日志随日志段，拖拽区在分隔条里",
+check("K15 清空/结构预览/预览DDL 三颗排在表格区那一排（与第一页同位置、等宽铺满），清除日志随日志段，拖拽区在分隔条里",
       sp2.widget(1).isAncestorOf(w.btn_sql_clear)
+      and sp2.widget(1).isAncestorOf(w.btn_sql_preview)
+      and sp2.widget(1).isAncestorOf(w.btn_sql_ddl)
       and w.btn_sql_clear.text() == "清空待上传文件"
+      and w.btn_sql_preview.text() == "生成表结构预览"
+      and w.btn_sql_ddl.text() == "预览 DDL"
       and sp2.widget(2).findChild(app_main.QPushButton) is w.btn_sql_clear_log
-      and w.lbl_sql_db.parent() is not sp2 and sp2.isAncestorOf(w.sql_drop))
+      and w.sql_intro.parent() is not sp2 and sp2.isAncestorOf(w.sql_drop))
 check("K16 表格由分隔条控制高度后仍拿得到视口",
       w.sql_table.viewport().height() > 0, w.sql_table.viewport().height())
 w.sql_log.appendPlainText("分隔条缩放后日志仍可写入")
@@ -2796,9 +2841,10 @@ check("K22 覆盖开关默认不勾选，提示写清只影响执行、不改脚
       and "只影响执行" in w.chk_sql_drop.toolTip()
       and "CREATE TABLE" in w.chk_sql_drop.toolTip())
 _sql_btns = sorted(b.text() for b in _sql_page.findChildren(app_main.QPushButton) if b.text())
-check("K23 第二页按钮集合与改动前完全一致（只重排布局，没有新增按钮）",
+check("K23 第二页按钮集合：表格下方那两颗是新增的，其余与改动前一致",
       _sql_btns == sorted([
           "批量应用前缀", "替换首个前缀", "清空待上传文件", "清除日志",
+          "生成表结构预览", "预览 DDL",
           "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
           "生成标准excel文件", "生成简易excel文件"]), _sql_btns)
 # ---- 三页视觉层次：命名规则上移、斑马纹、序号收窄、底部三层 ----
@@ -3875,7 +3921,8 @@ d0 = _last_dialog()
 check("O11 任务跑在子线程，不是主线程",
       bool(res_box) and res_box[0]["thread"] != MAIN,
       [(r.get("thread"), MAIN) for r in res_box])
-check("O12 工作期间主线程事件循环一直在转（UI 不假死）", d0.ui_ticks >= 5, d0.ui_ticks)
+check("O12 工作期间主线程事件循环一直在转（UI 不假死）",
+      d0.ui_ticks >= 5, (d0.ui_ticks, len(d0.updates), d0.threads))
 check("O13 每一项都实时回报进度", len(d0.updates) == 7 and d0.updates[-1][0] == 6,
       d0.updates[:3])
 check("O14 任务结束后自动关框并把结果交给回调",
@@ -4195,7 +4242,8 @@ from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "开始导入", "清空待上传文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
-           "示例 (?)", "清空编辑区", "清空结果区", "设置数据源信息", "收起"]
+           "示例 (?)", "清空编辑区", "清空结果区", "设置数据源信息", "收起",
+           "清空待执行脚本", "批量执行脚本文件"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
 _absent = [t for t in _labels if t not in _btns]
 check("P15 说明里点名的按钮在界面上确实存在", not _absent, _absent)
@@ -4330,12 +4378,11 @@ app_main.connect = _fake_connect
 # ---- 连接并加载库：成功路径 ----
 qw = app_main.MainWindow()
 # 启动默认收起；先点开，才能验证"重新填列表不算选定、不该收起"
-check("Q0 未做任何操作时连接区是收起的，三页提示条也不出现",
+check("Q0 未做任何操作时连接区是收起的，页内也没有任何一条「目标库：」指向",
       qw.conn_form.isHidden() and not qw.btn_conn_edit.isHidden()
-      and qw.lbl_imp_db.isHidden() and qw.lbl_sql_db.isHidden()
-      and qw.lbl_run_db.isHidden(),
+      and not _db_pointers(qw),
       (qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden(),
-       qw.lbl_imp_db.isHidden(), qw.lbl_sql_db.isHidden(), qw.lbl_run_db.isHidden()))
+       [q.text() for q in _db_pointers(qw)]))
 qw.btn_conn_edit.click()
 qw.on_load_databases()
 _dbs = [qw.cb_db.itemText(i) for i in range(qw.cb_db.count())]
@@ -4343,12 +4390,12 @@ check("Q1 「连接并加载库」成功后下拉框填充并可用",
       qw.cb_db.isEnabled() and _dbs == ["alpha", "beta"], _dbs)
 check("Q2 加载结果写进日志", "[已加载] 可用数据库" in qw.log.toPlainText(),
       qw.log.toPlainText().splitlines()[-1:])
-check("Q3 加载完库提示条从隐藏恢复为正常态，但连接区先不收起（下一步就是在这下拉里挑库）",
-      "目标库：alpha ——" in qw.lbl_imp_db.text() and "⚠" not in qw.lbl_imp_db.text()
-      and not qw.lbl_imp_db.isHidden()
+check("Q3 加载完库顶部状态栏报出当前库，但连接区先不收起（下一步就是在这下拉里挑库）",
+      qw.lbl_conn_state.text() == "● 目标库 alpha"
+      and not _db_pointers(qw)
       # 这一组的窗口没 show 过，isVisible() 恒为假：只问"是不是被显式收起来了"
       and not qw.conn_form.isHidden() and qw.btn_conn_edit.isHidden(),
-      (qw.lbl_imp_db.text(), qw.lbl_imp_db.isHidden(),
+      (qw.lbl_conn_state.text(),
        qw.conn_form.isHidden(), qw.btn_conn_edit.isHidden()))
 qw.cb_db.setCurrentText("beta")
 check("Q3b 真在目标库里选了一个才自动收起",
@@ -5786,6 +5833,84 @@ try:
 finally:
     nw.show_sql_table_metadata = _orig_show_meta
 check("R45e 双击原表名与文件名仍然只打开这一行的元数据", _seen_meta == [0, 0], _seen_meta)
+# ---- 第二页表格下方那三颗：清空 / 生成表结构预览 / 预览DDL（与第一页同位置同形状） ----
+_psql_two = os.path.join(_tmpdir, "预览两表.sql")
+with io.open(_psql_two, "w", encoding="utf-8", newline="") as _tfh:
+    _tfh.write("CREATE TABLE `ods_t_a` (`id` INT NOT NULL COMMENT '编号',"
+               " `name` VARCHAR(10) COMMENT '名称');\n"
+               "CREATE TABLE `ods_t_b` (`id` INT COMMENT '编号');\n")
+pv = app_main.MainWindow()
+pv.on_sql_files_dropped([_psql_two])
+_app.processEvents()
+check("R45p 第二页表格下方三颗按钮与第一页同文案同顺序",
+      [pv.btn_sql_clear.text(), pv.btn_sql_preview.text(), pv.btn_sql_ddl.text()]
+      == ["清空待上传文件", "生成表结构预览", "预览 DDL"]
+      and [w.btn_clear.text(), w.btn_preview.text(), w.btn_ddl.text()]
+      == ["清空待上传文件", "生成表结构预览", "预览 DDL"],
+      (pv.btn_sql_clear.text(), pv.btn_sql_preview.text(), pv.btn_sql_ddl.text()))
+_seen_meta2 = []
+pv.show_sql_table_metadata = lambda r: _seen_meta2.append(r)
+pv.sql_table.setCurrentCell(1, 1)
+pv.on_sql_preview_structure()
+pv.sql_table.setCurrentCell(-1, -1)
+pv.on_sql_preview_structure()
+check("R45q 「生成表结构预览」开的是选中那一行，没选中就取第一行",
+      _seen_meta2 == [1, 0], _seen_meta2)
+_pages = pv._sql_ddl_pages()
+check("R45r 预览DDL 一张表一页，正文取自脚本自己的那句 CREATE TABLE",
+      [t for t, _ in _pages] == ["ods_t_a", "ods_t_b"]
+      and "ods_t_a" in _pages[0][1] and "ods_t_b" not in _pages[0][1]
+      and _pages[0][1].strip().endswith(";"),
+      ([t for t, _ in _pages], _pages[0][1]))
+pv.ed_sql_prefix.setText("change_")
+pv.on_sql_apply_prefix()
+_app.processEvents()
+_pages2 = pv._sql_ddl_pages()
+check("R45s 预览把还没落地的改名算进正文，但脚本正文与页面显示都不被预览改写",
+      [t for t, _ in _pages2] == ["change_ods_t_a", "change_ods_t_b"]
+      and "change_ods_t_a" in _pages2[0][1]
+      and "CREATE TABLE `ods_t_a`" in pv.sql_files[0]["text"]
+      and pv.sql_files[0]["display_map"],
+      ([t for t, _ in _pages2], pv.sql_files[0]["text"].splitlines()[0][:40]))
+_seen_ddl = []
+
+
+class _RecDdl:
+    def __init__(self, pages, parent=None):
+        _seen_ddl.append(pages)
+
+    def exec(self):
+        return 0
+
+
+_orig_ddl_cls = app_main.SqlScriptDdlDialog
+app_main.SqlScriptDdlDialog = _RecDdl
+POPUPS.clear()
+pv.chk_sql_drop.setChecked(True)
+pv.on_sql_preview_ddl()
+pv.chk_sql_drop.setChecked(False)
+app_main.SqlScriptDdlDialog = _orig_ddl_cls
+check("R45t 勾了「覆盖已存在表」，预览DDL 的每页开头补上执行前那句 DROP",
+      len(_seen_ddl) == 1 and len(_seen_ddl[0]) == 2
+      and _seen_ddl[0][0][1].startswith("DROP TABLE IF EXISTS `change_ods_t_a`;"),
+      (_seen_ddl[0][0][1][:60] if _seen_ddl and _seen_ddl[0] else None))
+_real_ddl = app_main.SqlScriptDdlDialog([("t_a", "CREATE TABLE t_a (id INT);"),
+                                         ("t_b", "CREATE TABLE t_b (id INT);")])
+check("R45u 预览DDL 弹窗与第一页那个同形状：一表一页、正文只读",
+      _real_ddl.tabs.count() == 2 and _real_ddl.tabs.tabText(0) == "t_a"
+      and _real_ddl.tabs.widget(0).toPlainText().startswith("CREATE TABLE")
+      and _real_ddl.tabs.widget(0).isReadOnly(),
+      (_real_ddl.tabs.tabText(0), _real_ddl.tabs.tabText(1)))
+_real_ddl.deleteLater()
+POPUPS.clear()
+pv.on_sql_clear_files()
+pv.on_sql_preview_structure()
+pv.on_sql_preview_ddl()
+check("R45v 清单空了这两颗都拦下并说清下一步，不摆一个空弹窗",
+      len(POPUPS) == 2 and any("清单里没有脚本表" in t for _, t in POPUPS)
+      and any("请先添加 SQL 脚本文件" in t for _, t in POPUPS), POPUPS)
+pv.close()
+
 # 表注释这一列在没有 COMMENT 的脚本上必须是空的：sw2 那份表名被前面的用例改过，另起一份
 cw9 = app_main.MainWindow()
 app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([qsql], "SQL (*.sql)"))
@@ -6006,9 +6131,12 @@ check("R65 撞名后两张同名表并成一行，注释与字段都取先出现
       (bw.sql_table.rowCount(), bw.sql_table.item(0, 4).text()))
 _t0 = _t_busy.monotonic()
 _bdlg3 = bw._build_sql_metadata_dialog(0)
+_r66_ms = (_t_busy.monotonic() - _t0) * 1000.0
 check("R66 撞名后点开仍是毫秒级，字段取的是先出现那一张",
-      (_t_busy.monotonic() - _t0) * 1000.0 < 100.0 and _bdlg3 is not None
-      and _bdlg3.tableWidget().rowCount() == 20, _brec.get("parsed"))
+      _r66_ms < 100.0 and _bdlg3 is not None
+      and _bdlg3.tableWidget().rowCount() == 20,
+      (_r66_ms, _bdlg3 is None,
+       _bdlg3.tableWidget().rowCount() if _bdlg3 is not None else None))
 # 前缀「生效」一次改多张表：整份改名走同一套重挂规则
 _rk = app_main.rekey_parsed({"a": {"table_name": "a"}, "b": {"table_name": "b"}},
                             {"a": "x", "b": "y"})
@@ -6231,6 +6359,29 @@ check("R74 结构弹窗的字段表关掉「末列铺满视口」：装不下才
       (_sdh.stretchLastSection(),
        [_sdh.sectionResizeMode(c) for c in range(5)]))
 _sd_scroll.deleteLater()
+# 另一半：内容装得下时列宽要铺满视口，别把富余宽度空在表格右侧（用户 2026-10-29 点名）。
+# offscreen 的屏只有 800 宽，弹窗会被 fit_client 缩到 768——那个宽度上底宽本来就超过视口，
+# 量不出"铺满"，所以显式拉宽到 1400 再量，也正是用户看到白条的那种尺寸。
+_sd_fill_tbl = [{"table_name": "t_fill", "table_comment": "",
+                 "columns": [
+                     {"field": "id", "comment": "编号", "type": "INT",
+                      "primary_key": True, "nullable": False, "max_len": 4},
+                     {"field": "name", "comment": "名称", "type": "VARCHAR(32)",
+                      "primary_key": False, "nullable": True, "max_len": 12}]}]
+_sd_fill = app_main.StructureDialog(_sd_fill_tbl)
+_sd_fill.resize(1400, 700)
+_sd_fill.show()
+_app.processEvents()
+_app.processEvents()
+_ft = _sd_fill.tabs.widget(0).findChild(app_main.FillWidthTable)
+_f_ws = [_ft.columnWidth(c) for c in range(_ft.columnCount())]
+check("R74d 结构弹窗内容装得下时列宽铺满视口（右侧不留白条）",
+      sum(_f_ws) == _ft.viewport().width()
+      and not _ft.horizontalScrollBar().isVisible()
+      and all(_f_ws[c] >= _ft.sizeHintForColumn(c) for c in range(len(_f_ws))),
+      (_f_ws, _ft.viewport().width(), _ft.horizontalScrollBar().isVisible()))
+_sd_fill.close()
+_sd_fill.deleteLater()
 # 只关"末列铺满"还不够：列宽写死时超长那一格是被切掉的那一个，切掉的半截滚不到。
 # 把第一个字段名与注释都拉长，量的判据是"这一列摆出来的宽度装不装得下它需要的宽度"。
 _wf = rw6.tables[0]["columns"][0]
@@ -6271,6 +6422,26 @@ check("R74b 第二页元数据弹窗的字段表同一档：不铺满视口、�
       (_mdt.horizontalHeader().stretchLastSection() if _mdt is not None else "没找到表",
        _m_have, _m_need))
 _mdlg.deleteLater()
+# 元数据弹窗同一档：上面那张是故意撑爆的，铺满得用一张小表量（同样拉宽到 1400）
+_md_fill_tbl = {"table_comment": "小表", "columns": [
+    {"field": "id", "comment": "编号", "type": "INT",
+     "primary_key": True, "nullable": False},
+    {"field": "name", "comment": "名称", "type": "VARCHAR(32)",
+     "primary_key": False, "nullable": True}]}
+_md_fill = app_main.SqlMetadataDialog(_md_fill_tbl, "t_small", False)
+_md_fill.resize(1400, 700)
+_md_fill.show()
+_app.processEvents()
+_app.processEvents()
+_mft = _md_fill.field_table
+_mf_ws = [_mft.columnWidth(c) for c in range(_mft.columnCount())]
+check("R74e 元数据弹窗内容装得下时也铺满视口（与结构弹窗同一档）",
+      sum(_mf_ws) == _mft.viewport().width()
+      and not _mft.horizontalScrollBar().isVisible()
+      and all(_mf_ws[c] >= _mft.sizeHintForColumn(c) for c in range(len(_mf_ws))),
+      (_mf_ws, _mft.viewport().width(), _mft.horizontalScrollBar().isVisible()))
+_md_fill.close()
+_md_fill.deleteLater()
 _md_win.close()
 
 # ---- 拖拽区第三行文案 + 窗口级 Ctrl+V 粘贴添加 ----
@@ -6283,12 +6454,18 @@ check("R75 三页拖拽区都是三行，第三行写着 Ctrl+V 直接添加",
       and "快捷键：复制文件后按 Ctrl+V 直接添加" in rw6.sql_run_drop.label.text(),
       (rw6.drop.label.text().count("\n"), rw6.sql_drop.label.text().count("\n"),
        rw6.sql_run_drop.label.text().count("\n")))
-check("R75b 粘贴入口绑在窗口层级（不是某一页），按键就是 Ctrl+V",
-      rw6.paste_shortcut.key() == app_main.QKeySequence.Paste
-      and rw6.paste_shortcut.context() == _Qt.WindowShortcut
-      and rw6.paste_shortcut.parent() is rw6,
-      (str(rw6.paste_shortcut.key().toString()),
-       str(rw6.paste_shortcut.context())))
+check("R75b 粘贴入口绑在应用级按键过滤上（焦点在哪都轮得到），且全进程只装一份",
+      isinstance(rw6.paste_filter, app_main.PasteFilesFilter)
+      and rw6.paste_filter.parent() is _app
+      and app_main.install_paste_filter(_app) is rw6.paste_filter
+      and not hasattr(rw6, "paste_shortcut")
+      and app_main.PasteFilesFilter.is_paste_key(
+          QKeyEvent(_QEvent.KeyPress, _Qt.Key_V, _Qt.ControlModifier))
+      and not app_main.PasteFilesFilter.is_paste_key(
+          QKeyEvent(_QEvent.KeyPress, _Qt.Key_V, _Qt.ControlModifier | _Qt.ShiftModifier))
+      and not app_main.PasteFilesFilter.is_paste_key(
+          QKeyEvent(_QEvent.KeyPress, _Qt.Key_C, _Qt.ControlModifier)),
+      (str(rw6.paste_filter), rw6.paste_filter.parent() is _app))
 _before_p = len(rw6.tables)
 POPUPS.clear()
 # 粘两份还没进过清单的 xlsx（f1/f2 已经在列表里，粘它们会被去重，量不出"加了几张表"），
@@ -6365,6 +6542,41 @@ check("R75i 第三页粘的不是脚本：回执写在执行器这一页的日�
       and "[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。"
           in rw6.sql_run_log.toPlainText(),
       log_lines(rw6.sql_run_log.toPlainText(), "[提示]")[-1:])
+# ---- Ctrl+V 的真实分派：按键先到焦点控件，由应用级过滤按剪贴板内容定优先级 ----
+_psql3 = os.path.join(_tmpdir, "按键粘贴.sql")
+open(_psql3, "w", encoding="utf-8").write("SELECT 3;\n")
+rw6.main_tabs.setCurrentIndex(2)
+_app.processEvents()
+_rw_before = len(rw6.sql_run_files)
+_rw_clip = rw6.clipboard_file_paths
+rw6.sql_run_input.setFocus(_Qt.OtherFocusReason)
+_app.processEvents()
+rw6.clipboard_file_paths = lambda: [_psql3]
+_handled = _app.sendEvent(rw6.sql_run_input,
+                          QKeyEvent(_QEvent.KeyPress, _Qt.Key_V, _Qt.ControlModifier))
+check("R75j 焦点在 SQL 编辑区、剪贴板是文件：走「添加文件」，脚本进眼前这一页的清单",
+      _handled and len(rw6.sql_run_files) == _rw_before + 1
+      and rw6.sql_run_files[-1]["path"] == _psql3,
+      (_handled, len(rw6.sql_run_files)))
+_psql4 = os.path.join(_tmpdir, "分派粘贴.sql")
+open(_psql4, "w", encoding="utf-8").write("SELECT 4;\n")
+_rk_took = rw6.route_paste([_psql4], rw6.ed_host)
+check("R75k 同一条件下分派自己说「这一按键我用掉了」",
+      _rk_took is True and len(rw6.sql_run_files) == _rw_before + 2
+      and rw6.sql_run_files[-1]["path"] == _psql4, _rk_took)
+rw6.clipboard_file_paths = lambda: []
+_rl_editor = rw6.route_paste([], rw6.sql_run_input)
+_rl_host = rw6.route_paste([], rw6.ed_host)
+check("R75l 剪贴板是纯文本时不抢按键：焦点在输入框就交回控件自己粘",
+      _rl_editor is False and _rl_host is False
+      and len(rw6.sql_run_files) == _rw_before + 2, (_rl_editor, _rl_host))
+rw6.sql_run_log.clear()
+_rm_took = rw6.route_paste([], rw6.btn_run_clear)
+check("R75m 焦点不在输入框、剪贴板又没文件：当前页给一句「粘的不是文件」的回执",
+      _rm_took is True
+      and "拖入或粘贴的不是 SQL 脚本文件，已忽略。" in rw6.sql_run_log.toPlainText(),
+      (_rm_took, log_lines(rw6.sql_run_log.toPlainText(), "[提示]")[-1:]))
+rw6.clipboard_file_paths = _rw_clip
 rw6.main_tabs.setCurrentIndex(0)
 rw6.close()
 

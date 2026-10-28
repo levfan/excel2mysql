@@ -28,7 +28,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QAbstractItemView, QCheckBox, QComboBox,       # noqa: E402
                                QGridLayout, QGroupBox,
                                QLabel, QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
-                               QPushButton, QHeaderView, QScrollArea, QSpinBox,
+                               QPushButton, QHeaderView, QScrollArea, QSpinBox, QSplitter,
                                QTableWidget)                                                # noqa: E402
 import main as m  # noqa: E402
 
@@ -266,25 +266,48 @@ def find_layout(root, target):
 
     Qt 的嵌套 layout 不会把控件改父级，parentWidget().layout() 拿到的往往是整页的
     QVBoxLayout；而页与页之间是 widget 项而不是 layout 项，所以两样都要往下递归。
+    QSplitter 还得单独穿：它管子控件不走公开 layout（layout() 是 None），
+    第三页那两颗按钮一段在清单组框里、一段在分栏里，不穿分隔条就读成"这排不存在"。
     """
-    stack = [root.layout()] if root.layout() is not None else []
-    while stack:
-        lay = stack.pop()
+
+    def walk_layout(lay):
         for i in range(lay.count()):
             item = lay.itemAt(i)
             if item.widget() is target:
                 return lay
             if item.layout() is not None:
-                stack.append(item.layout())
+                hit = walk_layout(item.layout())
+                if hit is not None:
+                    return hit
             w = item.widget()
-            if w is not None and w.layout() is not None:
-                stack.append(w.layout())
-            # 横向滚动区里的内容挂在自己的滚动视口里，不是它的直接 layout；
-            # 底部动作条就套了这一层，不穿过去会读成"这排按钮不存在"
-            if isinstance(w, QScrollArea) and w.widget() is not None \
-                    and w.widget().layout() is not None:
-                stack.append(w.widget().layout())
-    return None
+            if w is not None:
+                hit = walk_widget(w)
+                if hit is not None:
+                    return hit
+        return None
+
+    def walk_widget(w):
+        # 横向滚动区里的内容挂在自己的滚动视口里，不是它的直接 layout；
+        # 底部动作条就套了这一层，不穿过去会读成"这排按钮不存在"
+        if isinstance(w, QScrollArea) and w.widget() is not None:
+            inner = w.widget()
+            hit = walk_widget(inner)
+            if hit is not None:
+                return hit
+        if isinstance(w, QSplitter):
+            for i in range(w.count()):
+                child = w.widget(i)
+                if child is None:
+                    continue
+                hit = walk_widget(child)
+                if hit is not None:
+                    return hit
+        if w.layout() is not None:
+            return walk_layout(w.layout())
+        return None
+
+    lay = root.layout()
+    return walk_layout(lay) if lay is not None else None
 
 
 def popup_body(text):
@@ -317,6 +340,26 @@ def _db_tone(w):
     if "#c62828" in s:
         return "bad"
     return "none"
+
+
+def _page_db_lines(win):
+    """三页各自写着几行「目标库：」——按用户口径整行删掉了，两边都该数出 0|0|0。"""
+    out = []
+    for i in range(3):
+        page = win.main_tabs.widget(i)
+        out.append(str(len([q for q in page.findChildren(QLabel)
+                            if u"目标库：" in norm(q.text())])))
+    return "|".join(out)
+
+
+def _cover_switches(win):
+    """三页各有几颗「覆盖已存在表」：第一、二页各一颗，第三页整行删掉。"""
+    out = []
+    for i in range(3):
+        page = win.main_tabs.widget(i)
+        out.append(str(len([c for c in page.findChildren(QCheckBox)
+                            if u"覆盖已存在表" in norm(c.text())])))
+    return "|".join(out)
 
 
 def btn_on(win, text):
@@ -379,10 +422,11 @@ def main():
     put("font.log.pt", str(win.log.font().pointSize()))
     # 连接区：跑业务时收起成一条状态栏，只报当前是哪个库（用户口径）
     put("conn.state", win.lbl_conn_state.text())
+    put("conn.tone", _db_tone(win.lbl_conn_state))
+    put("hint.page.db", _page_db_lines(win))
+    put("cover.switches", _cover_switches(win))
     put("conn.expanded", "展开" if win.conn_form.isVisible() else "收起")
     put("conn.edit", "显示" if win.btn_conn_edit.isVisible() else "隐藏")
-    put("hint.excel", win.lbl_imp_db.text())
-    put("hint.sql", win.lbl_sql_db.text())
     put("intro.excel", norm(win.imp_intro.text()))
     put("intro.sql", norm(win.sql_intro.text()))
     put("drop.hint", win.drop.label.text())
@@ -414,10 +458,19 @@ def main():
     put("action.sql.enabled", "%d|%d|%d|%d" % (
         int(win.btn_sql_save.isEnabled()), int(win.btn_sql_run.isEnabled()),
         int(win.btn_sql_gen_std.isEnabled()), int(win.btn_sql_gen_simple.isEnabled())))
-    put("action.run.bg", win.run_action_bar.fill_color)
-    put("action.run.group", "%d|%d" % (
-        int(win.run_action_bar.isAncestorOf(win.chk_run_drop)),
-        int(win.run_action_bar.isAncestorOf(win.btn_run_scripts))))
+    # 第三页没有底部动作条了：两颗按钮各归一段，按真容器取证
+    put("run.batch.title", title_of_table(win.btn_run_scripts))
+    _exec_row = find_layout(win.main_tabs.widget(2), win.btn_sql_run_exec)
+    _exec_names = []
+    if _exec_row is not None:
+        for i in range(_exec_row.count()):
+            wd = _exec_row.itemAt(i).widget()
+            if isinstance(wd, QPushButton) and norm(wd.text()):
+                _exec_names.append(norm(wd.text()))
+    put("run.exec.head", "|".join(_exec_names))
+    put("run.row.exec", "%d|%s" % (
+        win.sql_run_table.columnCount(),
+        norm(win.sql_run_table.horizontalHeaderItem(4).text())))
 
     def _sql_segment(w):
         if w is win.sql_drop:
@@ -470,11 +523,11 @@ def main():
 
     # ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
     put("hint.sqlrun", norm(win.sql_run_hint.text()))
-    put("hint.sqlrun.db", win.lbl_run_db.text())
-    # 第三页的脚本队列：拖拽区、清单表、覆盖开关与底部那一排按钮
+    # 第三页的脚本队列：拖拽区、清单表与「清空 / 批量执行」那一排
     put("sqlrun.drop.hint", win.sql_run_drop.label.text())
     put("sqlrun.drop.accepts", "true" if win.sql_run_drop.acceptDrops() else "false")
-    dump_widget("run_drop_existing", win.chk_run_drop)
+    # 第三页的覆盖开关整行删了：两栈都按"这件控件不在"取证，谁偷偷加回来会红
+    dump_widget("run_drop_existing", None)
     dump_table("sqlrun", win.sql_run_table)
     put("table.sqlrun.title", title_of_table(win.sql_run_table))
     put("sqlrun.noedit", "1" if win.sql_run_table.editTriggers()
@@ -631,7 +684,7 @@ def main():
     put("log.excel.minh", str(m.LOG_MIN_LINES))
     put("log.sql.minh", str(m.LOG_MIN_LINES))
     put("log.run.minh", str(m.LOG_MIN_LINES))
-    put("loaded.hint.excel", win.lbl_imp_db.text())
+    put("loaded.conn.state", win.lbl_conn_state.text())
     put("add.popup", popup_text())
     # 两侧都量"程序自己画的那块地方"：Qt 顶层窗口的 width/height 就是客户区。
     # 跨线比的是配置值 want（两边必须写同一个数）；实测值受现场屏幕与夹取影响，只记不比。
@@ -910,7 +963,6 @@ def main():
     app.processEvents()
     dump_table("sql", win.sql_table)
     put("sql.prefixed.log", win.sql_log.toPlainText())
-    put("sql.hint", win.lbl_sql_db.text())
     POPUPS.clear()
     win.ed_sql_prefix.setText("")
     win.on_sql_apply_prefix()
@@ -991,16 +1043,15 @@ def main():
     for t in ("开始导入", "生成标准excel文件", "生成简易excel文件"):
         put("cleared.on.%s" % t, btn_on(win, t))
 
-    # ---- 三页顶部的目标库信息条必须同源：塞一个库进去，三句话和三种颜色要一起变 ----
-    # 各页各写一份刷新的话，迟早会在某个页签看到"上一个库"；host:port 只在有库时才进文案，
-    # 所以这里必须真选一个库，不能拿空态糊过去。放在最后一步做，免得把前面那些
-    # "没选库当场拦下"的探针带偏（它们断的就是空态那句话）。
+    # ---- 当前库只有顶部状态栏一处会说它：选一个库，看这句话和它的颜色一起变 ----
+    # 页签里那三条"目标库：xxx —— …"按用户口径整行删掉了，所以这里只比状态栏一条，
+    # 顺带数一遍页签里还有没有残留的指向行（应当是 0|0|0）。
+    # 放在最后一步做，免得把前面那些"没选库当场拦下"的探针带偏（它们断的就是空态那句话）。
     win.cb_db.addItem(u"alpha", u"alpha")
     app.processEvents()
-    put("hint.db.linked", u"|".join([win.lbl_imp_db.text(), win.lbl_sql_db.text(),
-                                     win.lbl_run_db.text()]))
-    put("hint.db.tone", u"|".join(_db_tone(w) for w in
-                                  (win.lbl_imp_db, win.lbl_sql_db, win.lbl_run_db)))
+    put("db.hint.linked", win.lbl_conn_state.text())
+    put("db.hint.tone", _db_tone(win.lbl_conn_state))
+    put("db.page.lines", _page_db_lines(win))
 
     out_dir = os.path.dirname(os.path.abspath(OUT))
     if not os.path.isdir(out_dir):

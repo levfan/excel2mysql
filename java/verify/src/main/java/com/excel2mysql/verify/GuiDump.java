@@ -148,8 +148,9 @@ public final class GuiDump {
                 put("conn.state", frame.connStateText());
                 put("conn.expanded", frame.isConnExpanded() ? "展开" : "收起");
                 put("conn.edit", frame.connEditVisible() ? "显示" : "隐藏");
-                put("hint.excel", frame.excelHintText());
-                put("hint.sql", frame.sqlPage().hintText());
+                put("conn.tone", connTone());
+                put("hint.page.db", pageDbLines());
+                put("cover.switches", coverSwitchesPer());
                 put("intro.excel", norm(frame.excelIntroText()));
                 put("intro.sql", norm(frame.sqlPage().introText()));
                 put("drop.hint", frame.dropArea().hintText());
@@ -179,9 +180,13 @@ public final class GuiDump {
                         + onOff(frame.sqlPage().runButton()) + "|"
                         + onOff(frame.sqlPage().genStdButton()) + "|"
                         + onOff(frame.sqlPage().genSimpleButton()));
-                put("action.run.bg", hex(frame.sqlRunActionBarWidget().fillColor()));
-                put("action.run.group", grouped(frame.sqlRunActionBarWidget(),
-                        frame.sqlRunDropBox(), frame.sqlRunScriptsButton()));
+                // 第三页没有底部动作条了：两颗按钮各归一段，按真容器取证
+                put("run.batch.title", Tables.titledAncestor(frame.sqlRunScriptsButton()));
+                java.util.List<String> execHead = new ArrayList<String>();
+                collectRowButtons(frame.sqlRunEditorHead(), execHead);
+                put("run.exec.head", join(execHead, "|"));
+                put("run.row.exec", frame.sqlRunFilesTable().getColumnCount() + "|"
+                        + norm(frame.sqlRunFilesTable().getColumnName(4)));
                 put("split.sql.order", frame.sqlPage().segmentOrder());
                 // 日志默认高度 = 它自己的最小高度（用户口径：默认压到最低，仍可拖）。
                 // 比的是真控件量出来的高度，不是各栈抄一份配置值。
@@ -213,12 +218,11 @@ public final class GuiDump {
 
                 // ---- 第三个页签「SQL 执行器」：常驻可见量 + 示例对话框的一来一回 ----
                 put("hint.sqlrun", norm(frame.sqlRunHintText()));
-                put("hint.sqlrun.db", frame.runDbHintText());
-                // 第三页的脚本队列：拖拽区、清单表、覆盖开关与底部那一排按钮
+                // 第三页的脚本队列：拖拽区与清单表（覆盖开关整行删了，按"不在"取证）
                 put("sqlrun.drop.hint", frame.sqlRunDropArea().hintText());
                 put("sqlrun.drop.accepts",
                         frame.sqlRunDropArea().acceptsDrops() ? "true" : "false");
-                dumpWidget("run_drop_existing", frame.sqlRunDropBox());
+                dumpWidget("run_drop_existing", null);
                 dumpTable("sqlrun", frame.sqlRunFilesTable());
                 put("table.sqlrun.title", Tables.titledAncestor(frame.sqlRunFilesTable()));
                 put("sqlrun.noedit",
@@ -343,22 +347,19 @@ public final class GuiDump {
     }
 
     /**
-     * 三页顶部的目标库信息条必须同源：塞一个库进去，三句话和三种颜色要一起变。
-     * 各页各写一份刷新的话，迟早会在某个页签看到"上一个库"；host:port 只在有库时才进文案，
-     * 所以这里必须真选一个库，不能拿空态糊过去。放在最后一步做，免得把前面那些
-     * "没选库当场拦下"的探针带偏（它们断的就是空态那句话）。
+     * 当前库只有顶部状态栏一处会说它：塞一个库进去，看这句话和它的颜色一起变。
+     * 页签里那三条"目标库：xxx —— …"按用户口径整行删掉了，所以这里只比状态栏一条，
+     * 顺带数一遍页签里还有没有残留的指向行（应当是 0|0|0）。放在最后一步做，免得把前面
+     * 那些"没选库当场拦下"的探针带偏（它们断的就是空态那句话）。
      */
     private static void dbHintSteps() throws Exception {
         ui(new Runnable() {
             @Override
             public void run() {
                 frame.setSelectedDatabase("alpha");
-                put("hint.db.linked", join(java.util.Arrays.asList(
-                        frame.excelHintText(), frame.sqlPage().hintText(),
-                        frame.runDbHintText()), "|"));
-                put("hint.db.tone", join(java.util.Arrays.asList(
-                        dbTone(frame.excelHint()), dbTone(frame.sqlPage().hintField()),
-                        dbTone(frame.runDbHint())), "|"));
+                put("db.hint.linked", frame.connStateText());
+                put("db.hint.tone", dbTone(frame.connState()));
+                put("db.page.lines", pageDbLines());
             }
         });
     }
@@ -414,7 +415,7 @@ public final class GuiDump {
                 put("log.excel.minh", String.valueOf(com.excel2mysql.gui.LogPanel.LOG_MIN_LINES));
                 put("log.sql.minh", String.valueOf(com.excel2mysql.gui.LogPanel.LOG_MIN_LINES));
                 put("log.run.minh", String.valueOf(com.excel2mysql.gui.LogPanel.LOG_MIN_LINES));
-                put("loaded.hint.excel", frame.excelHintText());
+                put("loaded.conn.state", frame.connStateText());
                 put("add.popup", popup());
                 // 跨线比配置值（两边写死的客户区尺寸必须同一个数）；
                 // 实测尺寸受现场屏幕与夹取影响，记成 env.* 只留档不比。
@@ -841,6 +842,63 @@ public final class GuiDump {
         return rgb == 0xffc62828 ? "bad" : "none";
     }
 
+    /** 顶部状态栏那一档颜色（Qt 侧读的是样式表里的同一组色值）。 */
+    private static String connTone() {
+        return dbTone(frame.connState());
+    }
+
+    /** 三页各自写着几行「目标库：」——整行删掉了，两边都该数出 0|0|0。 */
+    private static String pageDbLines() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < frame.tabs().getTabCount(); i++) {
+            if (i > 0) {
+                sb.append('|');
+            }
+            sb.append(countLabels(frame.tabs().getComponentAt(i), "目标库："));
+        }
+        return sb.toString();
+    }
+
+    /** 三页各有几颗「覆盖已存在表」：第一、二页各一颗，第三页整行删掉。 */
+    private static String coverSwitchesPer() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < frame.tabs().getTabCount(); i++) {
+            if (i > 0) {
+                sb.append('|');
+            }
+            sb.append(countChecks(frame.tabs().getComponentAt(i), "覆盖已存在表"));
+        }
+        return sb.toString();
+    }
+
+    private static int countLabels(java.awt.Component root, String needle) {
+        int n = 0;
+        if (root instanceof javax.swing.JLabel
+                && String.valueOf(((javax.swing.JLabel) root).getText()).contains(needle)) {
+            n++;
+        }
+        if (root instanceof java.awt.Container) {
+            for (java.awt.Component c : ((java.awt.Container) root).getComponents()) {
+                n += countLabels(c, needle);
+            }
+        }
+        return n;
+    }
+
+    private static int countChecks(java.awt.Component root, String needle) {
+        int n = 0;
+        if (root instanceof javax.swing.JCheckBox
+                && String.valueOf(((javax.swing.JCheckBox) root).getText()).contains(needle)) {
+            n++;
+        }
+        if (root instanceof java.awt.Container) {
+            for (java.awt.Component c : ((java.awt.Container) root).getComponents()) {
+                n += countChecks(c, needle);
+            }
+        }
+        return n;
+    }
+
     /** 配置值：Windows.clientSize 把"客户区本应多大"记在内容面板上，两条线必须写同一个数。 */
     private static String want(java.awt.Window w) {
         javax.swing.JComponent c = content(w);
@@ -946,7 +1004,6 @@ public final class GuiDump {
                 frame.sqlPage().applyPrefix();
                 dumpSqlTable();
                 put("sql.prefixed.log", frame.sqlPage().logPanel().text());
-                put("sql.hint", frame.sqlPage().hintText());
                 frame.sqlPage().setPrefixText("");
                 // 走按钮监听器同一条路：拿提示再交给 host.warn，不自己拼弹窗文案
                 String beforeDialog = frame.lastDialogTitle() + "|" + frame.lastDialogText();
