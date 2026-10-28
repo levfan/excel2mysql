@@ -3219,20 +3219,32 @@ check("M22i 同一份文件不勾开关：表名与字段名都退回元数据�
                                                         "cat_level1"],
       (_mtd_off["table_name"], [c["field"] for c in _mtd_off["columns"]]))
 
-# 图形版默认口径（用户 2026-10-21）：两颗开关启动即勾上，新加文件直接首字母 + 大写
+# 图形版默认口径（用户 2026-10-28）：只勾首字母、转大写不勾，新加文件按首字母 + 小写起名
 _dw = app_main.MainWindow()
-check("M23 图形版两颗命名开关默认勾选",
-      _dw.chk_initials.isChecked() and _dw.chk_upper.isChecked(),
+check("M23 图形版默认只勾首字母，转大写不勾选",
+      _dw.chk_initials.isChecked() and not _dw.chk_upper.isChecked(),
       (_dw.chk_initials.isChecked(), _dw.chk_upper.isChecked()))
+check("M23a 默认状态在连信号前设好，启动时不会凭空打一行切换日志",
+      "[提示] 命名规则切换为" not in _dw.log.toPlainText()
+      and "[提示] 表名与字段名大小写切换为" not in _dw.log.toPlainText(),
+      _dw.log.toPlainText().splitlines()[-2:])
 POPUPS.clear()
 _dw._add_files([make_xlsx("水库信息表.xlsx",
                           {"S": pd.DataFrame({"订单金额": [12.5]})})])
-check("M23b 默认口径端到端：表名 SKXXB、字段名 DDJE",
-      len(_dw.tables) == 1 and _dw.tables[0]["table_name"] == "SKXXB"
-      and [c["field"] for c in _dw.tables[0]["columns"]] == ["DDJE"],
+check("M23b 默认口径端到端：表名 skxxb、字段名 ddje",
+      len(_dw.tables) == 1 and _dw.tables[0]["table_name"] == "skxxb"
+      and [c["field"] for c in _dw.tables[0]["columns"]] == ["ddje"],
       [(t["table_name"], [c["field"] for c in t["columns"]]) for t in _dw.tables])
-_dw.chk_initials.setChecked(False)
+_dw.chk_upper.setChecked(True)
+POPUPS.clear()
+_dw._add_files([make_xlsx("水库信息表（n_uppercheck）.xlsx",
+                          {"S": pd.DataFrame({"订单金额": [12.5]})})])
+check("M23b2 默认不勾后手动勾上转大写：新加文件的表名字段名一起大写",
+      len(_dw.tables) == 2 and _dw.tables[-1]["table_name"] == "N_UPPERCHECK"
+      and _dw.tables[-1]["columns"][0]["field"] == "DDJE",
+      [(t["table_name"], [c["field"] for c in t["columns"]]) for t in _dw.tables])
 _dw.chk_upper.setChecked(False)
+_dw.chk_initials.setChecked(False)
 check("M23c 取消勾选各留一行切换日志",
       "[提示] 命名规则切换为：全拼" in _dw.log.toPlainText()
       and "[提示] 表名与字段名大小写切换为：小写" in _dw.log.toPlainText())
@@ -3240,7 +3252,7 @@ POPUPS.clear()
 _dw._add_files([make_xlsx("水库信息表（n_lowercheck）.xlsx",
                           {"S": pd.DataFrame({"订单金额": [12.5]})})])
 check("M23d 取消后回到全拼、小写",
-      len(_dw.tables) == 2 and _dw.tables[-1]["table_name"] == "n_lowercheck"
+      len(_dw.tables) == 3 and _dw.tables[-1]["table_name"] == "n_lowercheck"
       and _dw.tables[-1]["columns"][0]["field"] == "ding_dan_jin_e",
       (_dw.tables[-1]["table_name"], _dw.tables[-1]["columns"][0]["field"]))
 
@@ -5546,8 +5558,8 @@ with open(nsql, "w", encoding="utf-8") as _nfh:
                "  PRIMARY KEY (`id`)\n"
                ") ENGINE=InnoDB COMMENT='大小写检查表';\n")
 nw = app_main.MainWindow()
-check("R43 第一页两颗命名开关默认勾选，第二页只留大小写开关且默认不勾选",
-      nw.chk_initials.isChecked() and nw.chk_upper.isChecked()
+check("R43 第一页只勾首字母、大小写默认不勾；第二页只留大小写开关且默认不勾选",
+      nw.chk_initials.isChecked() and not nw.chk_upper.isChecked()
       and not nw.chk_sql_upper.isChecked() and not hasattr(nw, "chk_sql_initials"))
 _orig_gofn5 = app_main.QFileDialog.getOpenFileNames
 app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([nsql], "SQL (*.sql)"))
