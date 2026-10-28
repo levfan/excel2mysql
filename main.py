@@ -133,6 +133,13 @@ SQL_RUN_FONT_SIZE = LOG_FONT_SIZE
 # 一批里最多留多少个结果集给表格回看：一条一句地跑上千句 select 时，
 # 全留着就是几百兆的格子；丢的是最早那一个，用户回看的一般是刚跑出来的那条。
 MAX_RESULT_SETS = 50
+# 结果表表头 title 的前缀：Java 侧同一句（MainFrame.HEADER_COMMENT_PREFIX），
+# 两栈鼠标停在同一列上看到的话不一样，用户会以为是两个不同的东西。
+HEADER_COMMENT_PREFIX = "字段注释："
+# 没有结果集时挂在整条表头上的引导（装出结果后换成逐列的字段注释）：
+# 与 Java 侧 MainFrame.RESULT_HEADER_HINT 同一句，两栈停在同一处看到的话不能不一样。
+RESULT_HEADER_HINT = ("「SQL 执行器」的结果表：列名来自查询本身，字段注释按列挂在各自表头的"
+                      " title 上，鼠标停在列名上即见")
 # 表格内容与表头的字号：与 Excel 数据网格同级（11 号），并保持比日志大一档。
 # 18 号是上一轮"内容要比日志大"的过头做法，一屏装不下几行；两栈同一组数（11 / 10）。
 TABLE_FONT_SIZE = 11
@@ -3156,6 +3163,8 @@ class MainWindow(QWidget):
         self.sql_run_result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.sql_run_result_table.horizontalHeader().setStretchLastSection(False)
         style_table_font(self.sql_run_result_table)
+        # 表头一开就带一句引导：注释是逐列挂上去的，还没结果时先说清该去哪儿看
+        self.sql_run_result_table.horizontalHeader().setToolTip(RESULT_HEADER_HINT)
         # 没有结果集（一批全是写语句）时不摆空表：这一页初开的三段高度是钉住的契约
         self.sql_run_result_table.setVisible(False)
         self.sql_run_sets = []
@@ -3269,6 +3278,9 @@ class MainWindow(QWidget):
         self.sql_run_result_table.setRowCount(0)
         self.sql_run_result_table.setColumnCount(0)
         self.sql_run_result_table.setVisible(False)
+        # 表头整条给一句引导：字段注释是逐列挂在表头上的，可这里还没列可挂，
+        # 停在空表头上至少让人知道结果列的注释要等表头有内容才有得看
+        self.sql_run_result_table.horizontalHeader().setToolTip(RESULT_HEADER_HINT)
         self.lbl_sql_run_caption.setText(caption)
 
     def _show_sql_run_result(self, res):
@@ -3328,6 +3340,16 @@ class MainWindow(QWidget):
         table.clear()
         table.setColumnCount(len(cols))
         table.setHorizontalHeaderLabels(cols)
+        # 表头挂字段注释当 title：这一页查的表多是拼音首字母列名（DDJE 这种），
+        # 光看列名读不出含义，注释只有服务端知道（core 已按列顺序取回，取不到就是空串）
+        comments = data.get("comments") or []
+        for c in range(len(cols)):
+            head = table.horizontalHeaderItem(c)
+            if head is not None:
+                head.setToolTip(HEADER_COMMENT_PREFIX + comments[c]
+                                if c < len(comments) and comments[c] else "")
+        # 结果都摆在眼前了，空表头那句引导得撤掉：留着就是说谎
+        table.horizontalHeader().setToolTip("")
         table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, value in enumerate(row):

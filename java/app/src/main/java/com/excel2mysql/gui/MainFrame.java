@@ -141,6 +141,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private LogPanel sqlRunLog;
     /** 结果集用真表格画：文本框里中英文混排必错行，且一长就被自动滚到底看不见数据。 */
     private javax.swing.JTable sqlRunResultTable;
+    /** 结果表表头逐列的 title（字段注释），与当前显示的列一一对应；下标按模型列。 */
+    private String[] sqlRunHeaderTips = new String[0];
     /** 换结果集只换数据不换表格：换 model 会把字体、行高与斑马纹一起冲掉，得重挂一遍。 */
     private final javax.swing.table.DefaultTableModel sqlRunModel =
             new javax.swing.table.DefaultTableModel(new Object[0][0], new Object[0]) {
@@ -2623,6 +2625,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         Tables.zebra(sqlRunResultTable);
         sqlRunResultTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
         sqlRunResultTable.getTableHeader().setReorderingAllowed(false);
+        // 字段注释按列挂表头 title：Swing 的表头 tooltip 是整条一个，只能自己按鼠标落在
+        // 哪一列来换——用户鼠标停在 DDJE 上就该看到"这列是订单金额"
+        sqlRunResultTable.getTableHeader().addMouseMotionListener(
+                new javax.swing.event.MouseInputAdapter() {
+                    @Override
+                    public void mouseMoved(java.awt.event.MouseEvent e) {
+                        updateSqlRunHeaderTip(e.getPoint());
+                    }
+                });
+        // 表头一开就带一句引导：注释是逐列挂上去的，还没结果时先说清该去哪儿看
+        sqlRunResultTable.getTableHeader().setToolTipText(RESULT_HEADER_HINT);
         // 没有结果集（一批全是写语句）时不摆空表：这一页初开的三段高度是钉住的契约
         sqlRunResultTable.setVisible(false);
         sqlRunCaption = new javax.swing.JLabel("还没有执行结果");
@@ -2776,6 +2789,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 一批里最多留多少个结果集给表格回看（与 Python 侧 MAX_RESULT_SETS 同值）。 */
     public static final int MAX_RESULT_SETS = 50;
 
+    /** 结果表表头 title 的前缀（与 Python 侧 HEADER_COMMENT_PREFIX 同一句）。 */
+    public static final String HEADER_COMMENT_PREFIX = "字段注释：";
+
+    /** 没有结果集时挂在整条表头上的引导（有结果后换成逐列的字段注释）。 */
+    public static final String RESULT_HEADER_HINT =
+            "「SQL 执行器」的结果表：列名来自查询本身，字段注释按列挂在各自表头的 title 上，"
+                    + "鼠标停在列名上即见";
+
     /** 结果表格：自检与对撞器按这个口取证。 */
     public javax.swing.JTable sqlRunResultTable() {
         return sqlRunResultTable;
@@ -2840,12 +2861,23 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 自检与双端对撞用：造一条结果集，字段与取值都由调用方给。 */
     public static com.excel2mysql.core.SqlExecute.ResultSetData newResultSet(
             int seq, String sql, String[] columns, String[][] rows) {
+        return newResultSet(seq, sql, columns, null, rows);
+    }
+
+    /** 同上，多给一串列注释（与 columns 等长，空位表示这一列没有注释）。 */
+    public static com.excel2mysql.core.SqlExecute.ResultSetData newResultSet(
+            int seq, String sql, String[] columns, String[] comments, String[][] rows) {
         com.excel2mysql.core.SqlExecute.ResultSetData data =
                 new com.excel2mysql.core.SqlExecute.ResultSetData();
         data.seq = seq;
         data.sql = sql;
         for (String c : columns) {
             data.columns.add(c);
+        }
+        if (comments != null) {
+            for (String c : comments) {
+                data.comments.add(c);
+            }
         }
         for (String[] r : rows) {
             data.rows.add(java.util.Arrays.asList(r));
@@ -2863,12 +2895,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 清空结果区：回执文本、表格与结果集下拉一起清，留半个就是假清完。 */
     private void clearSqlRunResult() {
         sqlRunLog.clearLog();
-        sqlRunSetList = new java.util.ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
-        sqlRunSets.removeAllItems();
-        sqlRunSets.setVisible(false);
-        sqlRunModel.setDataVector(new Object[0][0], new Object[0]);
-        sqlRunResultTable.setVisible(false);
-        sqlRunCaption.setText("还没有执行结果");
+        // 表格那一半走同一个收口：两条路各写一遍，清完的状态就会不一样（比如表头那句引导）
+        clearSqlRunTable("还没有执行结果");
     }
 
     /**
@@ -2905,6 +2933,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunSets.setVisible(false);
         sqlRunModel.setDataVector(new Object[0][0], new Object[0]);
         sqlRunResultTable.setVisible(false);
+        setSqlRunHeaderTips(null, 0);
+        // 整条表头给一句引导：字段注释是逐列挂的，可这里一列都没有，空表头上至少说清去哪儿看
+        sqlRunResultTable.getTableHeader().setToolTipText(RESULT_HEADER_HINT);
         sqlRunCaption.setText(caption);
     }
 
@@ -2923,6 +2954,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             body[r] = data.rows.get(r).toArray(new Object[0]);
         }
         sqlRunModel.setDataVector(body, head);
+        setSqlRunHeaderTips(data.comments, head.length);
+        // 表头换成逐列挂注释，整条那句"还没有结果"的引导就撤掉
+        sqlRunResultTable.getTableHeader().setToolTipText(null);
         // 列宽随内容：与两个字段弹窗同一算法（下限 70，长的撑宽后由横向条带出来）
         sqlRunResultTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
         int[] floors = new int[head.length];
@@ -2935,6 +2969,34 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             caption += "（表格只装前 " + data.printed + " 行，其余没取回来）";
         }
         sqlRunCaption.setText(caption);
+    }
+
+    /**
+     * 结果表表头的逐列 title：第 i 格是第 i 列的字段注释（没有就是空串）。
+     *
+     * 这一页查出来的多是拼音首字母列名（DDJE 这种），光看列名读不出含义，
+     * 注释只有服务端知道，由 core 随结果集一起取回来。与 Python 侧
+     * main.py 的 _show_sql_run_set 同一句前缀。
+     */
+    void setSqlRunHeaderTips(java.util.List<String> comments, int cols) {
+        sqlRunHeaderTips = new String[cols];
+        for (int i = 0; i < cols; i++) {
+            String c = comments != null && i < comments.size() ? comments.get(i) : null;
+            sqlRunHeaderTips[i] = c == null || c.isEmpty() ? "" : HEADER_COMMENT_PREFIX + c;
+        }
+    }
+
+    /** 自检用：第 col 列表头该挂的那句 title。 */
+    public String sqlRunHeaderTipAt(int col) {
+        return col >= 0 && col < sqlRunHeaderTips.length ? sqlRunHeaderTips[col] : "";
+    }
+
+    /** 鼠标停在表头哪一列，就把那一列的字段注释挂上去；没有注释的列不留提示。 */
+    private void updateSqlRunHeaderTip(java.awt.Point p) {
+        int view = sqlRunResultTable.columnAtPoint(p);
+        int model = view < 0 ? -1 : sqlRunResultTable.convertColumnIndexToModel(view);
+        String tip = sqlRunHeaderTipAt(model);
+        sqlRunResultTable.getTableHeader().setToolTipText(tip.isEmpty() ? null : tip);
     }
 
     /**
