@@ -4678,7 +4678,7 @@ _dw_before = len(dw.sql_files)
 dw.on_sql_files_dropped([qtxt])
 check("Q26c 一个 .sql 都没拖进来时给一句已忽略，不静默不动",
       len(dw.sql_files) == _dw_before
-      and "[提示] 拖入的不是 SQL 脚本文件，已忽略。" in dw.sql_log.toPlainText(),
+      and "[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。" in dw.sql_log.toPlainText(),
       dw.sql_log.toPlainText().splitlines()[-1:])
 check("Q26d 第二页已经没有「添加 SQL 文件」那颗按钮，入口只剩拖拽区与点击",
       not any(b.text() == "添加 SQL 文件"
@@ -6180,12 +6180,13 @@ _mdlg.deleteLater()
 _md_win.close()
 
 # ---- 拖拽区第三行文案 + 窗口级 Ctrl+V 粘贴添加 ----
-check("R75 第一、二页拖拽区是三行，第三行写着 Ctrl+V 直接添加；第三页仍是两行",
+check("R75 三页拖拽区都是三行，第三行写着 Ctrl+V 直接添加",
       rw6.drop.label.text().count("\n") == 2
       and "快捷键：复制文件后按 Ctrl+V 直接添加" in rw6.drop.label.text()
       and rw6.sql_drop.label.text().count("\n") == 2
       and "快捷键：复制文件后按 Ctrl+V 直接添加" in rw6.sql_drop.label.text()
-      and rw6.sql_run_drop.label.text().count("\n") == 1,
+      and rw6.sql_run_drop.label.text().count("\n") == 2
+      and "快捷键：复制文件后按 Ctrl+V 直接添加" in rw6.sql_run_drop.label.text(),
       (rw6.drop.label.text().count("\n"), rw6.sql_drop.label.text().count("\n"),
        rw6.sql_run_drop.label.text().count("\n")))
 check("R75b 粘贴入口绑在窗口层级（不是某一页），按键就是 Ctrl+V",
@@ -6230,6 +6231,47 @@ check("R75e 解析任务在跑时粘贴先被拦下，那句「已通过粘贴�
       and len(_busy_p.tables) == 1,
       (log_lines(_busy_log, "[粘贴]"), log_lines(_busy_log, "已有任务在跑")[:1]))
 _busy_p.close()
+# ---- 粘贴落在眼前这一页：三页虚线区都写着那句，就得在当前页兑现 ----
+_psql1 = os.path.join(_tmpdir, "粘贴脚本一.sql")
+open(_psql1, "w", encoding="utf-8").write("CREATE TABLE `t_paste_a` (`id` INT);\n")
+_psql2 = os.path.join(_tmpdir, "粘贴脚本二.sql")
+open(_psql2, "w", encoding="utf-8").write("CREATE TABLE `t_paste_b` (`id` INT);\n")
+_excel_before = len(rw6.tables)
+_sql_before = len(rw6.sql_files)
+_run_before = len(rw6.sql_run_files)
+rw6.main_tabs.setCurrentIndex(1)
+POPUPS.clear()
+rw6.paste_paths([_psql1, os.path.join(_tmpdir, "说明.txt")])
+_app.processEvents()
+check("R75f 停在第二页粘贴：.sql 进第二页清单、别的文件点名跳过，第一页清单纹丝不动",
+      len(rw6.sql_files) == _sql_before + 1
+      and "[跳过] 不是 SQL 脚本，未读入：说明.txt" in rw6.sql_log.toPlainText()
+      and len(rw6.tables) == _excel_before,
+      (len(rw6.sql_files) - _sql_before, len(rw6.tables) - _excel_before,
+       log_lines(rw6.sql_log.toPlainText(), "[跳过]")[-1:]))
+POPUPS.clear()
+rw6.paste_paths([os.path.join(_tmpdir, "说明.docx")])
+check("R75g 第二页粘进来的一个 .sql 都没有：给本页那句「拖入或粘贴的…已忽略」",
+      len(rw6.sql_files) == _sql_before + 1
+      and "[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。" in rw6.sql_log.toPlainText(),
+      log_lines(rw6.sql_log.toPlainText(), "[提示]")[-1:])
+rw6.main_tabs.setCurrentIndex(2)
+POPUPS.clear()
+rw6.paste_paths([_psql2])
+_app.processEvents()
+check("R75h 停在第三页粘贴：脚本进执行队列，前两页的清单都不动",
+      len(rw6.sql_run_files) == _run_before + 1
+      and len(rw6.sql_files) == _sql_before + 1
+      and len(rw6.tables) == _excel_before,
+      (len(rw6.sql_run_files), len(rw6.sql_files), len(rw6.tables)))
+POPUPS.clear()
+rw6.paste_paths([os.path.join(_tmpdir, "说明.txt")])
+check("R75i 第三页粘的不是脚本：回执写在执行器这一页的日志里",
+      len(rw6.sql_run_files) == _run_before + 1
+      and "[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。"
+          in rw6.sql_run_log.toPlainText(),
+      log_lines(rw6.sql_run_log.toPlainText(), "[提示]")[-1:])
+rw6.main_tabs.setCurrentIndex(0)
 rw6.close()
 
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")

@@ -963,6 +963,37 @@ public final class GuiMain {
         if (!frame.logPanel().contains("拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略")) {
             problems.add("粘进来的全是不支持的类型时，没走那条已有的「已忽略」口径");
         }
+        // 粘贴要落在眼前这一页：三页虚线区都写着那句快捷键提示，只往第一页加就是假话。
+        // 第二页用那句「已忽略」定位回执落在哪一页；第三页真加一条，再点「清空待上传文件」
+        // 还原成空清单，不污染后面那几个用例。
+        frame.selectTab(1);
+        int sqlBefore = frame.sqlPage().entryCount();
+        List<String> junkSql = new ArrayList<String>();
+        junkSql.add(new java.io.File("说明.txt").getPath());
+        frame.pastePaths(junkSql);
+        if (frame.sqlPage().entryCount() != sqlBefore
+                || !frame.sqlPage().logPanel().contains(
+                        "[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。")) {
+            problems.add("停在第二页粘贴，回执没落在第二页的日志里："
+                    + tailOf(frame.sqlPage().logPanel().text()));
+        }
+        frame.selectTab(2);
+        int runBefore = frame.sqlRunFileCount();
+        String runSql = new java.io.File(
+                java.nio.file.Files.createTempDirectory("e2m-paste-run").toFile(),
+                "粘贴进来的.sql").getPath();
+        writeText(runSql, "CREATE TABLE t_paste (id INT);");
+        frame.pastePaths(java.util.Collections.singletonList(runSql));
+        if (frame.sqlRunFileCount() != runBefore + 1) {
+            problems.add("停在第三页粘贴，脚本没进执行队列：现有 "
+                    + frame.sqlRunFileCount() + " 个");
+        }
+        frame.sqlRunFilesClearButton().doClick();
+        if (frame.sqlRunFileCount() != runBefore) {
+            problems.add("第三页粘进来的脚本清不掉，会污染后面的用例：还剩 "
+                    + frame.sqlRunFileCount() + " 个");
+        }
+        frame.selectTab(0);
         frame.clearAll();
     }
 
@@ -3628,12 +3659,13 @@ public final class GuiMain {
         if (!com.excel2mysql.gui.DropArea.SQL_HINT.equals(sqlDrop.hintText())) {
             problems.add("SQL 页的拖拽区文案不是这一页那句：" + sqlDrop.hintText());
         }
-        // 第一、二页的虚线区都要有第三行那句 Ctrl+V 提示（第三页按清单顺序执行，不加）
+        // 三页的虚线区都要有第三行那句 Ctrl+V 提示
         if (lines(com.excel2mysql.gui.DropArea.EXCEL_HINT) != 3
                 || lines(com.excel2mysql.gui.DropArea.SQL_HINT) != 3
+                || lines(com.excel2mysql.gui.DropArea.RUN_HINT) != 3
                 || !com.excel2mysql.gui.DropArea.EXCEL_HINT.contains("Ctrl+V")
                 || !com.excel2mysql.gui.DropArea.SQL_HINT.contains("Ctrl+V")
-                || lines(com.excel2mysql.gui.DropArea.RUN_HINT) != 2) {
+                || !com.excel2mysql.gui.DropArea.RUN_HINT.contains("Ctrl+V")) {
             problems.add("拖拽区第三行「Ctrl+V 直接添加」文案不对："
                     + com.excel2mysql.gui.DropArea.EXCEL_HINT);
         }
@@ -3669,7 +3701,7 @@ public final class GuiMain {
                 || dropLog.equals(dpage.logPanel().text())) {
             problems.add("一个 .sql 都没拖进来时没有任何回执");
         }
-        if (!dpage.logPanel().contains("[提示] 拖入的不是 SQL 脚本文件，已忽略。")) {
+        if (!dpage.logPanel().contains("[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。")) {
             problems.add("全是非脚本时的说法与第一页不同：" + dpage.logPanel().text());
         }
         java.io.File dir;
