@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -43,6 +44,8 @@ public final class SqlExecute {
         public int seq;
         public String sql = "";
         public java.util.List<String> columns = new java.util.ArrayList<String>();
+        /** 与 columns 等长的字段注释，取不到就是空串——表头靠它当 title。 */
+        public java.util.List<String> comments = new java.util.ArrayList<String>();
         public java.util.List<List<String>> rows = new java.util.ArrayList<List<String>>();
         public int total;
         public int printed;
@@ -205,6 +208,11 @@ public final class SqlExecute {
             for (String c : head) {
                 data.columns.add(cell(c));
             }
+            // 表头 title 用的字段注释：只有界面这条通道才去反查，命令行的文本一个字节不变。
+            // 连接要从结果集自己回溯，假连接/包装结果集给不出连接时就当没查到，不影响数据展示。
+            for (String c : columnComments(ownerConn(rs), md, cols)) {
+                data.comments.add(c);
+            }
             for (List<String> r : rows) {
                 java.util.List<String> cells = new java.util.ArrayList<String>(r.size());
                 for (String v : r) {
@@ -220,6 +228,125 @@ public final class SqlExecute {
         }
         out.line("      共 " + total + " 行"
                 + (total > printed ? "（只打印前 " + printed + " 行，其余没显示）" : ""));
+    }
+
+    /**
+     * 结果集每列的字段注释：与列等长，取不到就是空串。
+     *
+     * MySQL 的列定义里根本不带注释，注释只能拿"哪张表的哪个列"回 information_schema 查——
+     * 与 Python 侧 column_comments 同一套口径（键的构成、大小写规则、分组方式都对齐着写）。
+     * 表名与列名要取 Connector/J 的**原始名**：`FROM 表 t` 里标准 getTableName 给的是别名 t，
+     * 拿去查一定查不到，getOriginalTableName 才是真表名；驱动不是 Connector/J 时退回标准名，
+     * 那时带别名的列只是少一句提示，不影响数据。
+     * 整段兜异常退化成"没有注释"：这一步失败不该让用户看不到查询结果，
+     * 也不能往文本里多打一行——两栈的执行器文本是逐行对撞的。
+     */
+    static List<String> columnComments(Connection conn, ResultSetMetaData md, int cols) {
+        List<String> blank = new ArrayList<String>();
+        for (int i = 0; i < cols; i++) {
+            blank.add("");
+        }
+        String[] db = new String[cols];
+        String[] tb = new String[cols];
+        String[] col = new String[cols];
+        try {
+            com.mysql.cj.result.Field[] fs = cjFields(md);
+            String connDb = nz(conn.getCatalog());
+            for (int i = 0; i < cols; i++) {
+                if (fs != null) {
+                    db[i] = nz(fs[i].getDatabaseName());
+                    tb[i] = nz(fs[i].getOriginalTableName());
+                    col[i] = nz(fs[i].getOriginalName());
+                } else {
+                    db[i] = nz(md.getCatalogName(i + 1));
+                    tb[i] = nz(md.getTableName(i + 1));
+                    col[i] = nz(md.getColumnName(i + 1));
+                }
+                if (db[i].isEmpty()) {
+                    db[i] = connDb;
+                }
+            }
+            java.util.Map<String, java.util.Set<String>> want =
+                    new java.util.LinkedHashMap<String, java.util.Set<String>>();
+            for (int i = 0; i < cols; i++) {
+                if (!tb[i].isEmpty() && !col[i].isEmpty()) {
+                    java.util.Set<String> tables = want.get(db[i]);
+                    if (tables == null) {
+                        tables = new java.util.TreeSet<String>();
+                        want.put(db[i], tables);
+                    }
+                    tables.add(tb[i]);
+                }
+            }
+            if (want.isEmpty()) {
+                return blank;
+            }
+            java.util.Map<String, String> found = new java.util.HashMap<String, String>();
+            for (java.util.Map.Entry<String, java.util.Set<String>> e : want.entrySet()) {
+                List<String> names = new ArrayList<String>(e.getValue());
+                StringBuilder sql = new StringBuilder(
+                        "SELECT TABLE_NAME, COLUMN_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS"
+                                + " WHERE TABLE_SCHEMA=? AND TABLE_NAME IN (");
+                for (int i = 0; i < names.size(); i++) {
+                    sql.append(i == 0 ? "?" : ",?");
+                }
+                sql.append(")");
+                java.sql.PreparedStatement ps = conn.prepareStatement(sql.toString());
+                try {
+                    ps.setString(1, e.getKey());
+                    for (int i = 0; i < names.size(); i++) {
+                        ps.setString(i + 2, names.get(i));
+                    }
+                    ResultSet mrs = ps.executeQuery();
+                    try {
+                        while (mrs.next()) {
+                            found.put(commentKey(e.getKey(), nz(mrs.getString(1)),
+                                    nz(mrs.getString(2)).toLowerCase()), nz(mrs.getString(3)));
+                        }
+                    } finally {
+                        mrs.close();
+                    }
+                } finally {
+                    ps.close();
+                }
+            }
+            List<String> out = new ArrayList<String>();
+            for (int i = 0; i < cols; i++) {
+                String v = tb[i].isEmpty() || col[i].isEmpty() ? ""
+                        : found.get(commentKey(db[i], tb[i], col[i].toLowerCase()));
+                out.add(v == null ? "" : v);
+            }
+            return out;
+        } catch (Exception ignore) {
+            return blank;
+        }
+    }
+
+    /** 结果集是谁查出来的：拿不到连接（假结果集、包装层不给）就当没有，不抛。 */
+    private static Connection ownerConn(ResultSet rs) {
+        try {
+            Statement st = rs.getStatement();
+            return st == null ? null : st.getConnection();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 键的三条按位拼：库名不分大小写，表名按服务端原样，列名由调用方转小写。 */
+    private static String commentKey(String db, String table, String lowerColumn) {
+        return db.toLowerCase() + "\u0000" + table + "\u0000" + lowerColumn;
+    }
+
+    /** 驱动给的是 null 而不是空串（表达式列就是这样），统一成空串再拼键。 */
+    private static String nz(String s) {
+        return s == null ? "" : s;
+    }
+
+    private static com.mysql.cj.result.Field[] cjFields(ResultSetMetaData md) {
+        if (md instanceof com.mysql.cj.jdbc.result.ResultSetMetaData) {
+            return ((com.mysql.cj.jdbc.result.ResultSetMetaData) md).getFields();
+        }
+        return null;
     }
 
     /**

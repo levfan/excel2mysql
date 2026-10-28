@@ -74,6 +74,82 @@ def render_table(columns, rows):
     return out
 
 
+def _as_text(v):
+    """协议里回来的库名是 bytes，information_schema 里的是 str——两边拼一个键之前先归一。"""
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    return v if isinstance(v, str) else str(v)
+
+
+def _column_origin(cur):
+    """结果集每列的来源 (库名, 原表名, 原列名)；驱动没给这些就返回 None。
+
+    MySQL 的列定义里根本不带注释，注释只能拿"哪张表的哪个列"去 information_schema 反查。
+    PyMySQL 把协议原文挂在 cursor._result.fields 上，取 org_* 而不是 *name：
+    `FROM 表 t` 这种带别名的写法里，table_name 是别名 t（拿去查必然查不到），
+    org_table 才是真表名；`sj AS 时间` 同理要取 org_name。表达式列（1 AS lit、amt+0）
+    两项都是空串，本来就对不上任何列，留空即可。
+    """
+    fields = getattr(getattr(cur, "_result", None), "fields", None)
+    if not fields:
+        return None
+    conn = getattr(cur, "connection", None)
+    fallback_db = _as_text(getattr(conn, "db", ""))
+    out = []
+    for f in fields:
+        out.append((_as_text(getattr(f, "db", "")) or fallback_db,
+                    _as_text(getattr(f, "org_table", "")),
+                    _as_text(getattr(f, "org_name", ""))))
+    return out
+
+
+def column_comments(cur, ncols):
+    """这一批结果集的字段注释，与列等长；查得到才给，查不到一律空串。
+
+    只有图形界面这条通道会调它（命令行那条维持逐字原样，多一行日志都会破两栈文本对撞）。
+    一次结果集最多一条 information_schema 查询：把所有列的表按库分组，一次 IN 查完。
+    库名/表名按原样比（Linux 上 MySQL 的表名区分大小写，两边都出自同一个服务端），
+    列名不分大小写比（MySQL 的列名本就不区分）。
+    这一步失败不该影响用户看数据：整段兜异常退化成"没有注释"，不打日志也不报错
+    ——执行器的文本行是两栈逐行对撞的，这里多打一行就红一片。
+    驱动没给字段来源（假连接、非 PyMySQL）同样退化成空串，不报错。
+    """
+    blank = [""] * ncols
+    try:
+        conn = getattr(cur, "connection", None)
+        origin = _column_origin(cur)
+        if not origin or len(origin) != ncols:
+            return blank
+        want = {}
+        for db, table, column in origin:
+            if table and column:
+                want.setdefault(db, set()).add(table)
+        if not want:
+            return blank
+        found = {}
+        meta = conn.cursor()
+        try:
+            for db, tables in want.items():
+                names = sorted(tables)
+                sql = ("SELECT TABLE_NAME, COLUMN_NAME, COLUMN_COMMENT"
+                       " FROM information_schema.COLUMNS"
+                       " WHERE TABLE_SCHEMA=%s AND TABLE_NAME IN ("
+                       + ",".join(["%s"] * len(names)) + ")")
+                meta.execute(sql, [db] + names)
+                for row in meta.fetchall():
+                    tb = _as_text(row[0])
+                    col = _as_text(row[1]).lower()
+                    found[(db.lower(), tb, col)] = _as_text(row[2])
+        finally:
+            meta.close()
+        return [found.get((db.lower(), table, column.lower()), "")
+                for db, table, column in origin]
+    except Exception:
+        return blank
+
+
 def _print_result(cur, emit, result_cb=None, seq=0, sql=""):
     cols = [d[0] for d in (cur.description or [])]
     printed = total = 0
@@ -90,8 +166,10 @@ def _print_result(cur, emit, result_cb=None, seq=0, sql=""):
         # 图形界面把这一批交给表格控件去画。文本框里画表格有两处治不了：
         # 一是中英文混排时字宽不是整数倍关系，格子必错行；二是结果一长就被自动滚到底，
         # 用户只看得见"共 N 行"那句尾巴，看不见数据本身。行数由表格上方的说明行交代。
+        # comments 是给表头当 title 用的字段注释：pinyin 列名（DDJE 这种）只有注释能读懂。
         result_cb({"seq": seq, "sql": sql,
                    "columns": [_cell(c) for c in cols],
+                   "comments": column_comments(cur, len(cols)),
                    "rows": [[_cell(v) for v in r] for r in rows],
                    "total": total, "printed": printed})
         return
