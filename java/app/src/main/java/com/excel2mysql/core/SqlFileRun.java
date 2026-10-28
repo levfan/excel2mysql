@@ -73,7 +73,7 @@ public final class SqlFileRun {
                 SqlScript.DropPrep prep = SqlScript.prependDropTables(text);
                 text = prep.text;
                 sink.log("[覆盖] " + fname + "：" + (prep.tables.isEmpty()
-                        ? "脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除"
+                        ? LogText.COVER_NOTHING_BODY
                         : "执行前先 DROP " + join(prep.tables, "、")));
             }
             boolean dump = SqlScript.isDumpScript(text);

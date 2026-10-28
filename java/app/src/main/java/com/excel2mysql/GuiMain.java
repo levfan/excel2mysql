@@ -3782,6 +3782,37 @@ public final class GuiMain {
                         + "DROP TABLE IF EXISTS `db`.`t9`;" + nl + nl)) {
             problems.add("覆盖执行的判据不对（注释/重名/schema 限定）：" + dropEdge.tables);
         }
+        // 脚本自己已经写了 DROP 的表不再补第二句。补出来的那一句排在执行副本最前面，
+        // 跑在 dump 自带的 /*!40014 SET ... FOREIGN_KEY_CHECKS=0 */; 之前——被外键引用的
+        // 父表删不掉，现场看到的就是 MySQL 3730。与 pack_test 的 E23 逐格同一份夹具。
+        String selfDrop = "DROP TABLE IF EXISTS `p`;" + nl
+                + "CREATE TABLE `p` (id INT);" + nl
+                + "DROP TABLE IF EXISTS c;" + nl
+                + "CREATE TABLE `c` (id INT);" + nl
+                + "DROP TABLE IF EXISTS `s`;" + nl
+                + "CREATE TABLE `S` (id INT);" + nl
+                + "CREATE TABLE r (id INT);" + nl
+                + "INSERT INTO t VALUES ('DROP TABLE IF EXISTS sneaky');" + nl
+                + "CREATE TABLE sneaky (id INT);" + nl
+                + "-- DROP TABLE IF EXISTS commented" + nl
+                + "CREATE TABLE commented (id INT);" + nl
+                + "/* DROP TABLE IF EXISTS blocked */" + nl
+                + "CREATE TABLE blocked (id INT);" + nl
+                + "DROP TABLE IF EXISTS a, b;" + nl
+                + "CREATE TABLE a (id INT);" + nl
+                + "CREATE TABLE b (id INT);";
+        com.excel2mysql.core.SqlScript.DropPrep dedup =
+                com.excel2mysql.core.SqlScript.prependDropTables(selfDrop);
+        if (!dedup.tables.equals(java.util.Arrays.asList(
+                "`S`", "r", "sneaky", "commented", "blocked"))
+                || !dedup.text.startsWith("DROP TABLE IF EXISTS blocked;" + nl
+                        + "DROP TABLE IF EXISTS commented;" + nl
+                        + "DROP TABLE IF EXISTS sneaky;" + nl
+                        + "DROP TABLE IF EXISTS r;" + nl
+                        + "DROP TABLE IF EXISTS `S`;" + nl + nl + selfDrop)) {
+            problems.add("脚本自己已经删过的表又被补了一遍（大小写、注释与字符串里的写法"
+                    + "不算已删）：" + dedup.tables);
+        }
         // 任务日志按页分家：SQL 页读盘的那几行不该串到 Excel 页面板去
         if (frame.logPanel().contains("[已加载] a.sql")) {
             problems.add("SQL 页读取任务的日志漏到了 Excel 页");
@@ -3942,6 +3973,54 @@ public final class GuiMain {
         String hint = page.execute();
         if (hint == null || !hint.contains("未选择目标库")) {
             problems.add("没选库时执行应当拦下并说明：" + hint);
+        }
+        // 整库 dump 拖到第二页：这一页按每个文件一个事务跑，日志要点明这一页的跑法、
+        // 并指向第三个页签；勾选覆盖时脚本自己已经删过的表也不再补第二句 DROP。
+        // 走的是真入口 execute()，宿主给的是连不上的库（127.0.0.1:1）：任务体秒失败就返回，
+        // 一个字节都不碰真库——只测文案生成函数的话，"这一句真写进界面日志"就没验到。
+        try {
+            java.io.File dumpFile = new java.io.File(dir, "第二页dump.sql");
+            java.nio.file.Files.write(dumpFile.toPath(), (
+                    "-- MariaDB dump 10.19  Distrib 10.11.16-MariaDB" + nl
+                            + "/*!40101 SET NAMES utf8mb4 */;" + nl
+                            + "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                            + " FOREIGN_KEY_CHECKS=0 */;" + nl
+                            + "DROP TABLE IF EXISTS `p`;" + nl
+                            + "CREATE TABLE `p` (id INT);" + nl
+                            + "-- Dump completed on 2026-10-25 12:00:00" + nl)
+                    .getBytes("UTF-8"));
+            ProbeHost probe = new ProbeHost(dir, frame);
+            com.excel2mysql.gui.SqlPage dumpPage = new com.excel2mysql.gui.SqlPage(probe);
+            dumpPage.addFiles(java.util.Collections.singletonList(dumpFile.getPath()));
+            dumpPage.dropExistingBox().setSelected(true);
+            dumpPage.execute();
+            String wantHint = "[提示] 第二页dump.sql：这份看着像整库 dump，"
+                    + "但这一页仍按每个文件一个事务执行。整库导入请用第三个页签「SQL 执行器」"
+                    + "的脚本文件队列，那边对 dump 不开启事务、逐条提交、出错继续并在最后汇总。";
+            String wantCover = "[覆盖] 没有表需要先补 DROP：脚本里没有以 CREATE TABLE 开头的语句，"
+                    + "或要建的表脚本自己已经写了 DROP";
+            String dlog = dumpPage.logPanel().text();
+            if (!dlog.contains(wantHint)) {
+                problems.add("第二页没把整库 dump 的跑法区别说清（或这句没真写进日志）："
+                        + tailOf(dlog));
+            }
+            if (!dlog.contains(wantCover) || dlog.contains("执行前先 DROP")) {
+                problems.add("dump 自带的 DROP 已覆盖每张表，勾选覆盖却还是补了第二句或没说原因："
+                        + tailOf(dlog));
+            }
+            if (probe.lastSink == null
+                    || !probe.lastSink.saw("[连接失败] 无法连接到 testdb@127.0.0.1:1", true)) {
+                problems.add("任务体没被真跑起来，或连不上库的原因没按错误级报出："
+                        + (probe.lastSink == null ? "任务体一次都没起" : probe.lastSink.errors));
+            }
+            for (String pop : probe.pops) {
+                if (pop.contains("执行完成")) {
+                    problems.add("连不上库时不该再弹一遍执行汇总：" + tailOf(pop));
+                }
+            }
+            dumpFile.delete();
+        } catch (java.io.IOException e) {
+            problems.add("写第二页的整库 dump 夹具失败：" + e);
         }
         List<com.excel2mysql.gui.SqlPage.RunFile> runFiles =
                 new ArrayList<com.excel2mysql.gui.SqlPage.RunFile>();
@@ -4902,6 +4981,16 @@ public final class GuiMain {
                 {"SELECT 'a''b' -- 尾注释", "1"},
                 {"INSERT INTO t VALUES ('/* 不是块注释 */')", "1"},
                 {"/* 注释; 里有分号 */ ", "0"},
+                // 版本注释 /*!NNNNN ...*/ 的正文服务端真会执行：现场那份 MariaDB dump 的
+                // SET FOREIGN_KEY_CHECKS=0 就写在这类语句里，判成注释等于外键检查一直开着，
+                // 第一句删父表就撞 MySQL 3730。与 pack_test 的 _EXEC_TABLE 同一批格子。
+                {"/*!40101 SET NAMES utf8mb4 */", "1"},
+                {"/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                        + " FOREIGN_KEY_CHECKS=0 */", "1"},
+                {"-- 抬头注释" + (char) 10 + "/*!40103 SET TIME_ZONE='+00:00' */", "1"},
+                // 只在客户端生效的两种写法发给服务端等于空查询，两条通道都不算一句
+                {"/*M!999999\\- enable the sandbox mode */", "0"},
+                {"/*!999999\\- enable the sandbox mode */", "0"},
         };
         for (int i = 0; i < table.length; i++) {
             boolean got = com.excel2mysql.core.SqlScript.hasExecutableContent(table[i][0]);
@@ -4915,6 +5004,22 @@ public final class GuiMain {
                 "-- a" + (char) 10 + "; /* b */ ; SELECT 1;");
         if (kept.size() != 1 || !"SELECT 1".equals(kept.get(0))) {
             problems.add("执行器的切句没把纯注释片段剔掉：" + kept);
+        }
+        // 普通通道（第二页与命令行）以前只认得到引号和行注释，把 /*!NNNNN ...*/ 当纯注释丢了：
+        // 同一份脚本走 dump 通道 1382 条、走普通通道只剩 679 条，丢掉的正是导出工具写的那几十句
+        // SET NAMES / SET FOREIGN_KEY_CHECKS=0 / SET TIME_ZONE。两条通道必须用同一份内容判据。
+        List<String> ver = com.excel2mysql.core.SqlScript.executableStatements(
+                "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                        + " FOREIGN_KEY_CHECKS=0 */;" + (char) 10
+                        + "/*!40101 SET NAMES utf8mb4 */;" + (char) 10
+                        + "/*M!999999\\- enable the sandbox mode */;" + (char) 10
+                        + "DROP TABLE IF EXISTS `p`;" + (char) 10);
+        if (!ver.equals(java.util.Arrays.asList(
+                "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                        + " FOREIGN_KEY_CHECKS=0 */",
+                "/*!40101 SET NAMES utf8mb4 */",
+                "DROP TABLE IF EXISTS `p`"))) {
+            problems.add("普通通道没留着版本注释（dump 自带的 SET 要真发给服务端）：" + ver);
         }
     }
 
@@ -4995,12 +5100,32 @@ public final class GuiMain {
                         "/*!40000 DROP DATABASE IF EXISTS `db1`*/"))) {
             problems.add("dump 的切库语句没取出库名，或者把建库与删库当成了切库");
         }
-        if (!com.excel2mysql.core.SqlScript.hasExecutableContentDump(
+        if (!com.excel2mysql.core.SqlScript.hasExecutableContent(
                 "/*!40101 SET NAMES utf8 */")
-                || com.excel2mysql.core.SqlScript.hasExecutableContentDump(
+                || com.excel2mysql.core.SqlScript.hasExecutableContent(
                         "/*M!999999\\- enable the sandbox mode */")
-                || com.excel2mysql.core.SqlScript.hasExecutableContentDump("-- 注释")) {
-            problems.add("dump 模式的内容判据不对：版本注释要算，沙箱标记与行注释不算");
+                || com.excel2mysql.core.SqlScript.hasExecutableContent("-- 注释")) {
+            problems.add("两条通道共用的内容判据不对：版本注释要算，沙箱标记与行注释不算");
+        }
+        // 两条通道现在只该有一份判据：普通通道再单独写一套就会像这次一样把
+        // dump 自带的 SET FOREIGN_KEY_CHECKS=0 当注释丢掉（现场那条 MySQL 3730）。
+        // 这里挑一段没有 DELIMITER 的 dump——两条通道的差别就只剩"什么算一句"了。
+        String noDelim = "-- MySQL dump 10.13  Distrib 8.0.36" + nl
+                + "/*!40101 SET NAMES utf8mb4 */;" + nl
+                + "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                + " FOREIGN_KEY_CHECKS=0 */;" + nl
+                + "/*M!999999\\- enable the sandbox mode */;" + nl
+                + "DROP TABLE IF EXISTS `t1`;" + nl
+                + "-- Dump completed" + nl;
+        List<String> regular = com.excel2mysql.core.SqlScript.executableStatements(noDelim);
+        List<String> byDump = com.excel2mysql.core.SqlScript.dumpStatements(noDelim);
+        if (!regular.equals(byDump)) {
+            problems.add("同一段没有 DELIMITER 的 dump，两条通道数出的句子不一样："
+                    + regular + " / " + byDump);
+        }
+        if (regular.size() != 3) {
+            problems.add("两条通道应都留着两句版本注释加一句 DROP，实际 " + regular.size()
+                    + " 句：" + regular);
         }
     }
 
@@ -5260,6 +5385,84 @@ public final class GuiMain {
                 }
             }
             return false;
+        }
+    }
+
+    /**
+     * 自检里驱动第二页真入口用的宿主。
+     *
+     * 库给的是 127.0.0.1:1（必然被拒），任务体原地跑完就带着 connFailed 返回：
+     * execute() 里的日志行、覆盖清单、收尾回调都真跑一遍，但不碰任何真库、也不弹模态框。
+     * 弹窗一律记进 pops——弹了就该在问题里露出来，而不是静默吃掉。
+     */
+    private static final class ProbeHost implements com.excel2mysql.gui.SqlPage.Host {
+        final com.excel2mysql.core.Config cfg = new com.excel2mysql.core.Config();
+        final List<String> pops = new ArrayList<String>();
+        /** 任务体最后一次跑的时候经手的回报口：界面日志走不到这里，落库那几行要从这儿查。 */
+        Recorder lastSink;
+        private final java.io.File root;
+        private final java.awt.Frame owner;
+
+        ProbeHost(java.io.File root, java.awt.Frame owner) {
+            this.root = root;
+            this.owner = owner;
+            cfg.host = "127.0.0.1";
+            cfg.port = 1;
+            cfg.user = "probe";
+            cfg.database = "testdb";
+        }
+
+        @Override
+        public com.excel2mysql.core.Config config() {
+            return cfg;
+        }
+
+        @Override
+        public boolean connected() {
+            return false;
+        }
+
+        @Override
+        public java.awt.Frame owner() {
+            return owner;
+        }
+
+        @Override
+        public void inform(String text) {
+            pops.add(text);
+        }
+
+        @Override
+        public void inform2(String title, String text) {
+            pops.add(title + " | " + text);
+        }
+
+        @Override
+        public void informError(String title, String text) {
+            pops.add(title + " | " + text);
+        }
+
+        @Override
+        public void runSqlTask(String title,
+                               java.util.function.Function<com.excel2mysql.core.ImportParse.Sink,
+                                       Object> work,
+                               java.util.function.Consumer<Object> onUi) {
+            Recorder rec = new Recorder();
+            lastSink = rec;
+            Object out = work.apply(rec);
+            if (onUi != null) {
+                onUi.accept(out);
+            }
+        }
+
+        @Override
+        public String exportRoot() {
+            return root.getPath();
+        }
+
+        @Override
+        public void warn(String text) {
+            pops.add(text);
         }
     }
 

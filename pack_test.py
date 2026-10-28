@@ -711,6 +711,16 @@ _EXEC_TABLE = [
     ("SELECT 'a''b' -- 尾注释", True),
     ("INSERT INTO t VALUES ('/* 不是块注释 */')", True),
     ("/* 注释; 里有分号 */ ", False),
+    # 版本注释 /*!NNNNN ...*/ 的正文服务端真会执行，两句都该算真要执行的一句：
+    # 现场那份 MariaDB dump 的 SET FOREIGN_KEY_CHECKS=0 就写在这类语句里，
+    # 判成注释等于把外键检查留在开着的状态，第一句删父表就撞 MySQL 3730
+    ("/*!40101 SET NAMES utf8mb4 */", True),
+    ("/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+     " FOREIGN_KEY_CHECKS=0 */", True),
+    ("-- 抬头注释\n/*!40103 SET TIME_ZONE='+00:00' */", True),
+    # 只在客户端生效的两种写法发给服务端等于空查询，两条通道都不算一句
+    ("/*M!999999\\- enable the sandbox mode */", False),
+    ("/*!999999\\- enable the sandbox mode */", False),
 ]
 check("E10 整句只剩注释的片段判为无可执行内容（字符串里的 -- 不算注释）",
       [(s, has_exec(s)) for s, _ in _EXEC_TABLE] == [(s, want) for s, want in _EXEC_TABLE],
@@ -718,6 +728,21 @@ check("E10 整句只剩注释的片段判为无可执行内容（字符串里的
 check("E11 执行器把纯注释整批剔掉：一句都不执行，也不报「已提交 1 条」",
       executable_statements("-- a\n; /* b */ ; SELECT 1;") == ["SELECT 1"],
       executable_statements("-- a\n; /* b */ ; SELECT 1;"))
+# 普通通道（第二页与命令行）以前只认得到引号和行注释，把 /*!NNNNN ...*/ 当纯注释丢了：
+# 同一份脚本走 dump 通道是 1382 条、走普通通道只剩 679 条，丢掉的正是导出工具写的那几十句
+# SET NAMES / SET FOREIGN_KEY_CHECKS=0 / SET TIME_ZONE。两条通道必须用同一份内容判据。
+_ver_kept = executable_statements(
+    "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+    " FOREIGN_KEY_CHECKS=0 */;\n"
+    "/*!40101 SET NAMES utf8mb4 */;\n"
+    "/*M!999999\\- enable the sandbox mode */;\n"
+    "DROP TABLE IF EXISTS `p`;\n")
+check("E22 普通通道留着版本注释：dump 自带的 SET 要真发给服务端",
+      _ver_kept == ["/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                    " FOREIGN_KEY_CHECKS=0 */",
+                    "/*!40101 SET NAMES utf8mb4 */",
+                    "DROP TABLE IF EXISTS `p`"],
+      _ver_kept)
 
 # 覆盖执行：只认整句 CREATE TABLE，注释/字符串里的建表不触发删除；
 # schema 限定名整段保留，同名去重，DROP 按出现顺序倒序排在执行副本最前
@@ -737,6 +762,37 @@ check("E13 没有建表语句时执行副本原样返回（不凭空多出 DROP�
       prepend_drop_tables("-- only comment\nSELECT 1;\n") == ("-- only comment\nSELECT 1;\n", []))
 check("E14 注释里的建表不会被当成删除目标",
       prepend_drop_tables("/* CREATE TABLE ghost (id INT); */ SELECT 1;")[1] == [])
+# 脚本自己已经写了 DROP 的表不再补第二句。补出来的那一句排在执行副本最前面，
+# 跑在 dump 自带的 SET FOREIGN_KEY_CHECKS=0 之前——被外键引用的父表删不掉，
+# 现场看到的就是 MySQL 3730（Cannot drop table ... referenced by a foreign key constraint）。
+_dup_src = (
+    "DROP TABLE IF EXISTS `p`;\n"
+    "CREATE TABLE `p` (id INT);\n"
+    "DROP TABLE IF EXISTS c;\n"
+    "CREATE TABLE `c` (id INT);\n"
+    "DROP TABLE IF EXISTS `s`;\n"
+    "CREATE TABLE `S` (id INT);\n"
+    "CREATE TABLE r (id INT);\n"
+    "INSERT INTO t VALUES ('DROP TABLE IF EXISTS sneaky');\n"
+    "CREATE TABLE sneaky (id INT);\n"
+    "-- DROP TABLE IF EXISTS commented\n"
+    "CREATE TABLE commented (id INT);\n"
+    "/* DROP TABLE IF EXISTS blocked */\n"
+    "CREATE TABLE blocked (id INT);\n"
+    "DROP TABLE IF EXISTS a, b;\n"
+    "CREATE TABLE a (id INT);\n"
+    "CREATE TABLE b (id INT);\n")
+_dup_text, _dup_names = prepend_drop_tables(_dup_src)
+check("E23 脚本自己已经写了 DROP 的表不再重复补（大小写、注释与字符串里的写法不算已删）",
+      _dup_names == ["`S`", "r", "sneaky", "commented", "blocked"]
+      and _dup_text.startswith(
+          "DROP TABLE IF EXISTS blocked;\n"
+          "DROP TABLE IF EXISTS commented;\n"
+          "DROP TABLE IF EXISTS sneaky;\n"
+          "DROP TABLE IF EXISTS r;\n"
+          "DROP TABLE IF EXISTS `S`;\n\n"
+          + _dup_src),
+      (_dup_names, _dup_text.splitlines()[:6]))
 
 # ---- 表元数据弹窗改字段：只动那一行的那一段，别的地方一个字节都不改 ----
 # edit_column 是这一轮新增的口径，还没实现时让用例判红而不是整轮崩在半路
@@ -2894,6 +2950,44 @@ check("V4 不勾选时执行副本与脚本正文完全一致，开始执行那�
       _vitem2 and _vitem2[0][1] == _vsrc
       and "覆盖已存在表" not in _last_header,
       (_vitem2[0][1][:20] if _vitem2 else None, _last_header))
+
+# 整库 dump 拖到第二页：这一页按每文件一个事务跑，不认 DELIMITER、也不会逐条提交，
+# 用户在这儿等的就是第三页那条 dump 通道。日志要把两页的跑法说清，但不能偷偷改事务语义。
+_dsql = os.path.join(_vdir, "d.sql")
+open(_dsql, "w", encoding="utf-8", newline="").write(
+    "-- MariaDB dump 10.19  Distrib 10.11.16-MariaDB\n"
+    "/*!40101 SET NAMES utf8mb4 */;\n"
+    "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+    " FOREIGN_KEY_CHECKS=0 */;\n"
+    "DROP TABLE IF EXISTS `p`;\n"
+    "CREATE TABLE `p` (id INT);\n"
+    "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n"
+    "-- Dump completed on 2026-10-25 12:00:00\n")
+dw = app_main.MainWindow()
+dw.on_sql_files_dropped([_dsql])
+dw.cb_db.addItem("fakedb", "fakedb")
+dw.cb_db.setCurrentIndex(dw.cb_db.count() - 1)
+dw._run_modal = _cap_modal           # 只截执行副本与日志，不起线程去连库
+_cap.clear()
+dw.chk_sql_drop.setChecked(True)
+dw.on_sql_execute()
+_dlog = dw.sql_log.toPlainText()
+_ditem = (_cap.get("items") or [("", "")])[0][1]
+# 这句要逐字钉住：Java 侧 GuiMain 断的是同一串字面量，两条线说的必须是一句话
+_V5_HINT = ("[提示] d.sql：这份看着像整库 dump，但这一页仍按每个文件一个事务执行。"
+            "整库导入请用第三个页签「SQL 执行器」的脚本文件队列，"
+            "那边对 dump 不开启事务、逐条提交、出错继续并在最后汇总。")
+check("V5 第二页认出整库 dump：点明这一页的跑法并指向第三个页签「SQL 执行器」",
+      _V5_HINT in _dlog, [l for l in _dlog.splitlines() if "[提示] d.sql" in l])
+check("V6 dump 自带的 DROP 已覆盖每张表：勾选覆盖也不再补第二句，日志如实说明原因",
+      not _ditem.startswith("DROP TABLE")
+      and "执行前先 DROP" not in _dlog
+      and ("[覆盖] 没有表需要先补 DROP：脚本里没有以 CREATE TABLE 开头的语句，"
+           "或要建的表脚本自己已经写了 DROP") in _dlog
+      and "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS" in _ditem,
+      (_ditem.splitlines()[:3],
+       [l for l in _dlog.splitlines() if "[覆盖]" in l]))
+dw.close()
 vw._run_modal = _orig_run_modal
 vw.close()
 
@@ -6900,6 +6994,66 @@ else:
         with connect(_cfg).cursor() as _c:
             _c.execute("SHOW TABLES LIKE '%s'" % _g12tbl)
             check("G12c 注释探针表已清理", _c.fetchone() is None)
+
+        # G13 现场那条 MySQL 3730 的复现：第二页勾选「覆盖已存在表」跑一份带外键的整库 dump。
+        # 两个成因各占一半——版本注释 /*!40014 SET ... FOREIGN_KEY_CHECKS=0 */; 被普通通道
+        # 当纯注释丢掉（外键检查一直开着），补出来的那批 DROP 又排在最前面、跑在这句 SET 之前。
+        # 只修一个都还是删不掉父表，所以按用户走的那条路整段跑真库，断的是父表真被重建过。
+        _g13p = "packtest_probe_fkp"
+        _g13c = "packtest_probe_fkc"
+        _g13conn = connect(_cfg)
+        try:
+            with _g13conn.cursor() as c:
+                c.execute("SET FOREIGN_KEY_CHECKS=0")
+                c.execute("DROP TABLE IF EXISTS `%s`" % _g13c)
+                c.execute("DROP TABLE IF EXISTS `%s`" % _g13p)
+                c.execute("CREATE TABLE `%s` (id INT PRIMARY KEY)" % _g13p)
+                c.execute("CREATE TABLE `%s` (id INT, pid INT,"
+                          " CONSTRAINT `g13_ibfk_1` FOREIGN KEY (pid)"
+                          " REFERENCES `%s` (id))" % (_g13c, _g13p))
+                c.execute("INSERT INTO `%s` VALUES (7)" % _g13p)
+                c.execute("INSERT INTO `%s` VALUES (1, NULL)" % _g13c)
+                c.execute("SET FOREIGN_KEY_CHECKS=1")
+            _g13conn.commit()
+            _g13path = os.path.join(_tmpdir, "G13外键dump.sql")
+            open(_g13path, "w", encoding="utf-8", newline="").write(
+                "-- MariaDB dump 10.19  Distrib 10.11.16-MariaDB\n"
+                "/*!40101 SET NAMES utf8mb4 */;\n"
+                "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                " FOREIGN_KEY_CHECKS=0 */;\n"
+                "DROP TABLE IF EXISTS `%s`;\n"
+                "CREATE TABLE `%s` (id INT PRIMARY KEY);\n"
+                "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n"
+                "-- Dump completed on 2026-10-25 12:00:00\n" % (_g13p, _g13p))
+            # 勾了「覆盖已存在表」的执行副本：dump 自己已经删过这张表，这里不该再补一句
+            _g13text = app_main.prepend_drop_tables(
+                open(_g13path, encoding="utf-8").read())[0]
+            _sink_g13 = _FileSink()
+            _res_g13 = app_main.sql_execute_task([(_g13path, _g13text)],
+                                                 dict(_cfg), _sink_g13)
+            with connect(_cfg).cursor() as c:
+                c.execute("SELECT COUNT(*) FROM `%s`" % _g13p)
+                _g13_rows = c.fetchone()[0]
+                c.execute("SELECT COUNT(*) FROM `%s`" % _g13c)
+                _g13_child = c.fetchone()[0]
+            check("G13 第二页勾选覆盖跑带外键的整库 dump：父表删得掉，重建后是空表",
+                  _res_g13["ok"] == 1 and _res_g13["fail"] == 0
+                  and _g13_rows == 0 and _g13_child == 1,
+                  (_res_g13["files"], _g13_rows, _g13_child,
+                   [t for t in _sink_g13.errors][:1]))
+        finally:
+            with _g13conn.cursor() as c:
+                c.execute("SET FOREIGN_KEY_CHECKS=0")
+                c.execute("DROP TABLE IF EXISTS `%s`" % _g13c)
+                c.execute("DROP TABLE IF EXISTS `%s`" % _g13p)
+            _g13conn.commit()
+            _g13conn.close()
+        with connect(_cfg).cursor() as _c:
+            _c.execute("SHOW TABLES LIKE '%s'" % _g13p)
+            _g13_left = _c.fetchone() is not None
+            _c.execute("SHOW TABLES LIKE '%s'" % _g13c)
+            check("G13b 外键探针表已清理", not _g13_left and _c.fetchone() is None,
+                  (_g13_left, _c.fetchone()))
 
     except Exception as e:
         check("G0 连接 MySQL 失败", False, f"{type(e).__name__}: {e}")

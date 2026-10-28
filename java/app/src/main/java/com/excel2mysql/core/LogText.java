@@ -28,6 +28,26 @@ public final class LogText {
     public static final String NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。";
     public static final String NO_SQL_HINT = "请先添加 SQL 脚本文件。";
 
+    /**
+     * 勾了「覆盖已存在表」却一张都不用补：两种原因都得说出来。
+     * 只写"脚本里没有 CREATE TABLE"会对着一份有 137 张建表的整库 dump 撒谎——
+     * 那些表脚本自己已经删过一遍了。这是 [覆盖] 标签之后的正文：第二页整句不带文件名，
+     * 第三页逐文件那行在前面拼文件名。与 core/log_text.py 同一句。
+     */
+    public static final String COVER_NOTHING_BODY =
+            "没有表需要先补 DROP：脚本里没有以 CREATE TABLE 开头的语句，"
+                    + "或要建的表脚本自己已经写了 DROP";
+
+    /**
+     * 第二页（SQL 脚本改名）认出了整库 dump：这一页按每文件一个事务跑，第三个页签的
+     * 脚本文件队列对 dump 是另一套跑法。差别要先讲清楚，而不是悄悄把这一页的事务语义换掉。
+     * %s 是脚本文件名（与 Python 侧 SQL_PAGE_DUMP_HINT 同一个 % 格式）。
+     */
+    public static final String SQL_PAGE_DUMP_HINT =
+            "[提示] %s：这份看着像整库 dump，但这一页仍按每个文件一个事务执行。"
+                    + "整库导入请用第三个页签「SQL 执行器」的脚本文件队列，"
+                    + "那边对 dump 不开启事务、逐条提交、出错继续并在最后汇总。";
+
     public static final String ROLLBACK_NOTE =
             "注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
             + "回滚仅对其后的数据操作生效。";

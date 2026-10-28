@@ -35,15 +35,55 @@ _CREATE_TARGET_RE = re.compile(
 )
 
 
+_DROP_HEAD_RE = re.compile(r"(?is)^DROP\s+TABLE\b(.*)$")
+_DROP_IF_EXISTS_RE = re.compile(r"(?is)^\s*IF\s+EXISTS\b")
+_DROP_TARGET_ITEM_RE = re.compile(
+    r"^`?[A-Za-z0-9_$]+`?(?:\s*\.\s*`?[A-Za-z0-9_$]+`?)?$")
+
+
+def _drop_key(target: str) -> str:
+    """`db`.`t` / db.t / `t` 归成同一个比对键：只去反引号与空白，大小写留着。
+
+    反引号不影响 MySQL 认哪张表；大小写在 Linux 上是两张表，所以不敢不分。
+    比对只用来判断"脚本自己删过没有"，键取不上就是多补一句 DROP（原有行为），
+    不会因为归一过头而少删。
+    """
+    return re.sub(r"[`\s]", "", target)
+
+
+def _dropped_targets(stmt: str) -> list:
+    """这一句是整句 DROP TABLE 的话，返回它删掉的表名键；掺了认不出的写法就整句不算。"""
+    masked = _mask_comments(stmt).strip()
+    m = _DROP_HEAD_RE.match(masked)
+    if not m:
+        return []
+    rest = _DROP_IF_EXISTS_RE.sub("", m.group(1), count=1).strip().rstrip(";").strip()
+    keys = []
+    for part in rest.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not _DROP_TARGET_ITEM_RE.match(part):
+            return []
+        keys.append(_drop_key(part))
+    return keys
+
+
 def prepend_drop_tables(text: str) -> tuple:
     """给执行副本开头的每个建表目标补一句 DROP TABLE IF EXISTS。
 
     只在「覆盖已存在表」勾选后由执行动作调用，不写回脚本正文。
-    返回 (新文本, 表名列表)；没有 CREATE TABLE 时原样返回。
+    返回 (新文本, 表名列表)；没有要先删的表时原样返回。
     只认整句以 CREATE TABLE 开头的语句：注释里的建表、字符串里的建表都不该被删，
     这是删除动作，判据必须比"清单里显示哪些表"更严。
+    脚本自己已经写了 DROP TABLE 的表不再补第二句：补出来的那一批排在副本最前面，
+    会跑在整库 dump 自带的 /*!40014 SET ... FOREIGN_KEY_CHECKS=0 */; 之前，
+    被外键引用的父表在那之前删不掉，现场看到的就是 MySQL 3730。
     顺序按出现顺序倒过来，近似"先删子表再删父表"。
     """
+    dropped = set()
+    for stmt in split_sql_statements(text):
+        dropped.update(_dropped_targets(stmt))
     seen, names = set(), []
     for stmt in split_sql_statements(text):
         masked = _mask_comments(stmt).strip()
@@ -54,9 +94,11 @@ def prepend_drop_tables(text: str) -> tuple:
         if not m2:
             continue
         target = re.sub(r"\s+", "", m2.group(1))
-        if target not in seen:
-            seen.add(target)
-            names.append(target)
+        key = _drop_key(target)
+        if key in dropped or key in seen:
+            continue
+        seen.add(key)
+        names.append(target)
     if not names:
         return text, []
     block = "".join("DROP TABLE IF EXISTS %s;\n" % n for n in reversed(names))
@@ -467,13 +509,20 @@ def _split_sql(text: str, with_delimiter: bool) -> list:
 
 
 def has_executable_content(stmt: str) -> bool:
-    """这一句里除了注释和空白还剩东西吗。
+    """这一句里除了注释和空白还剩东西吗（两条执行通道共用这一份判据）。
 
     `split_sql_statements` 会把 `-- 只有注释` 这种整段是注释的片段也切成一条（它只按分号切，
     不管内容），而「SQL 执行器」要对用户说"只写注释也不算"——判据就得在这儿补上，
     否则会出现"切出来一条、执行时又说没得执行"，或者把空注释当成正经一句报"已提交 1 条"。
     走的是与切句同一套词法（引号 / 反引号 / -- 与 # 行注释 / 块注释）：
     字符串里的 `--` 不算注释，所以 `SELECT '-- x'` 仍然是一句真要执行的语句。
+
+    版本注释 `/*!NNNNN ...*/` 要算：正文是服务端真会执行的语句，不是给人看的注释。
+    导出工具把 SET NAMES、SET TIME_ZONE、SET FOREIGN_KEY_CHECKS=0 全写在这类语句里，
+    判成注释就等于把这些设置悄悄丢掉——现场那份 MariaDB 整库 dump 走普通通道时
+    1382 条只剩 679 条，外键检查因此一直开着，删被引用的父表就是 MySQL 3730。
+    `/*M!...*/`（MariaDB 客户端沙箱标记）与 `/*!999999\\- ...`（发给服务端是空查询）
+    只在客户端生效，仍按没有内容处理。
     """
     i, n = 0, len(stmt)
     while i < n:
@@ -503,6 +552,11 @@ def has_executable_content(stmt: str) -> bool:
             continue
         if ch == "/" and nxt == "*":
             j = stmt.find("*/", i + 2)
+            if stmt.startswith("/*!", i) and not stmt.startswith("/*M!", i):
+                inner = stmt[i + 3:j if j != -1 else n]
+                body = re.sub(r"^\d*", "", inner).strip()
+                if body and not body.startswith("\\"):
+                    return True
             i = n if j == -1 else j + 2
             continue
         return True                # 既不是空白也不是注释 → 有可执行内容
@@ -560,54 +614,14 @@ def is_dump_script(text: str) -> bool:
     return _DUMP_TAIL_MARKER in (text or "")[-_DUMP_TAIL_CHARS:].lower()
 
 
-def has_executable_content_dump(stmt: str) -> bool:
-    """dump 模式的内容判据：`/*!40101 SET ... */` 是服务端真会执行的语句。
-
-    普通块注释与 `/*M!...*/`（MariaDB 客户端沙箱标记）仍不算；`/*!999999\\- ...`
-    这种只在客户端生效、发给服务端会变成空查询的写法也按没有内容处理。
-    """
-    i, n = 0, len(stmt)
-    while i < n:
-        ch = stmt[i]
-        nxt = stmt[i + 1] if i + 1 < n else ""
-        if ch.isspace():
-            i += 1
-            continue
-        if ch in ("'", '"', "`"):
-            quote = ch
-            i += 1
-            while i < n:
-                if stmt[i] == "\\" and quote != "`":
-                    i += 2
-                    continue
-                if stmt[i] == quote:
-                    if i + 1 < n and stmt[i + 1] == quote:
-                        i += 2
-                        continue
-                    i += 1
-                    break
-                i += 1
-            return True
-        if (ch == "-" and nxt == "-") or ch == "#":
-            j = stmt.find("\n", i)
-            i = n if j == -1 else j
-            continue
-        if ch == "/" and nxt == "*":
-            j = stmt.find("*/", i + 2)
-            if stmt.startswith("/*!", i) and not stmt.startswith("/*M!", i):
-                inner = stmt[i + 3:j if j != -1 else n]
-                body = re.sub(r"^\d*", "", inner).strip()
-                if body and not body.startswith("\\"):
-                    return True
-            i = n if j == -1 else j + 2
-            continue
-        return True
-    return False
-
-
 def dump_statements(text: str) -> list:
-    """整库 dump 的可执行语句：认 DELIMITER，并保留 `/*!...*/` 版本注释语句。"""
-    return [s for s in split_dump_statements(text) if has_executable_content_dump(s)]
+    """整库 dump 的可执行语句：认 DELIMITER，并保留 `/*!...*/` 版本注释语句。
+
+    内容判据与普通通道共用 `has_executable_content`：两条通道只在"怎么切句"和
+    "库级语句跳不跳"上不同，什么算一句必须一样——分开写过一次就分叉过一次，
+    普通通道把版本注释当注释丢掉那回（MySQL 3730）就是这么来的。
+    """
+    return [s for s in split_dump_statements(text) if has_executable_content(s)]
 
 
 def dump_skip_reason(stmt: str) -> str:

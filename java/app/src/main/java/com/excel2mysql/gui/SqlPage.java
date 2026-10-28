@@ -1329,11 +1329,19 @@ public final class SqlPage extends JPanel {
         List<Src> items = prepareRunItems(overwrite, dropped);
         if (overwrite) {
             if (dropped.isEmpty()) {
-                log("[覆盖] 脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除");
+                log("[覆盖] " + LogText.COVER_NOTHING_BODY);
             } else {
                 for (String[] one : dropped) {
                     log("[覆盖] " + one[0] + "：执行前先 DROP " + one[1]);
                 }
+            }
+        }
+        // 整库 dump 落在这一页：跑法与第三个页签不一样，先把区别说清再动手。
+        // 不悄悄改成逐条提交——这一页的承诺就是"每个文件一个事务、失败整文件回滚"，
+        // 偷偷换成另一套语义比让用户自己找页面更糟。与 main.py 的 on_sql_execute 同一句。
+        for (Src s : items) {
+            if (SqlScript.isDumpScript(s.text)) {
+                log(String.format(LogText.SQL_PAGE_DUMP_HINT, baseName(s.path)));
             }
         }
         final List<Src> todo = items;

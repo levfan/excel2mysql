@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 from core import conn_config
 from core.log_text import (
     describe_db_error, format_log_entry, log_level, LOG_LEVEL_MARK, LOG_TIME_FORMAT,
+    COVER_NOTHING_BODY, SQL_PAGE_DUMP_HINT,
 )
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
@@ -1358,8 +1359,7 @@ def sql_run_files_task(paths, overwrite, cfg, sink):
         if overwrite:
             text, dropped = prepend_drop_tables(text)
             sink.log(f"[覆盖] {fname}：" + (
-                "执行前先 DROP " + "、".join(dropped) if dropped
-                else "脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除"))
+                "执行前先 DROP " + "、".join(dropped) if dropped else COVER_NOTHING_BODY))
         dump = is_dump_script(text)
         stmts = dump_statements(text) if dump else executable_statements(text)
         if dump:
@@ -3012,8 +3012,14 @@ class MainWindow(QWidget):
                     append_log(self.sql_log,
                         f"[覆盖] {fname}：执行前先 DROP " + "、".join(tables))
             else:
+                append_log(self.sql_log, "[覆盖] " + COVER_NOTHING_BODY)
+        # 整库 dump 落在这一页：跑法与第三个页签不一样，先说清楚再动手。
+        # 不悄悄改用逐条提交——这一页的承诺就是"每个文件一个事务、失败整文件回滚"，
+        # 偷偷换成另一套语义比让用户自己找页面更糟。
+        for path, body in items:
+            if is_dump_script(body):
                 append_log(self.sql_log,
-                    "[覆盖] 脚本里没有以 CREATE TABLE 开头的语句，没有表需要先删除")
+                           SQL_PAGE_DUMP_HINT % os.path.basename(path))
         self._run_modal("正在执行脚本到目标库…", sql_execute_task, (items, cfg),
                         on_done=self._finish_sql_execute, log_view=self.sql_log)
 

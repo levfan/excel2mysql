@@ -1,10 +1,12 @@
 package com.excel2mysql.core;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,17 +43,74 @@ public final class SqlScript {
         }
     }
 
+    /** 整句 DROP TABLE 的开头：脚本自己已经删过的表，「覆盖已存在表」不再补第二句。 */
+    private static final Pattern DROP_HEAD = Pattern.compile(
+            "^DROP\\s+TABLE\\b(.*)$", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+    private static final Pattern DROP_IF_EXISTS = Pattern.compile(
+            "^\\s*IF\\s+EXISTS\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern DROP_TARGET_ITEM = Pattern.compile(
+            "`?[A-Za-z0-9_$]+`?(?:\\s*\\.\\s*`?[A-Za-z0-9_$]+`?)?");
+
+    /**
+     * `db`.`t` / db.t / `t` 归成同一个比对键：只去反引号与空白，大小写留着。
+     *
+     * 反引号不影响 MySQL 认哪张表；大小写在 Linux 上是两张表，所以不敢不分。
+     * 比对只用来判断"脚本自己删过没有"，键取不上就是多补一句 DROP（原有行为），
+     * 不会因为归一过头而少删。
+     */
+    private static String dropKey(String target) {
+        return target.replace("`", "").replaceAll("\\s+", "");
+    }
+
+    /** 这一句是整句 DROP TABLE 的话，返回它删掉的表名键；掺了认不出的写法就整句不算。 */
+    private static List<String> droppedTargets(String stmt) {
+        String masked = maskComments(stmt).trim();
+        Matcher m = DROP_HEAD.matcher(masked);
+        if (!m.matches()) {
+            return new ArrayList<String>();
+        }
+        String rest = m.group(1);
+        Matcher ifExists = DROP_IF_EXISTS.matcher(rest);
+        if (ifExists.find()) {
+            rest = rest.substring(ifExists.end());
+        }
+        rest = rest.trim();
+        if (rest.endsWith(";")) {
+            rest = rest.substring(0, rest.length() - 1).trim();
+        }
+        List<String> keys = new ArrayList<String>();
+        for (String part : rest.split(",")) {
+            String one = part.trim();
+            if (one.isEmpty()) {
+                continue;
+            }
+            if (!DROP_TARGET_ITEM.matcher(one).matches()) {
+                return new ArrayList<String>();   // 认不出的写法：整句不算，宁可多补一句
+            }
+            keys.add(dropKey(one));
+        }
+        return keys;
+    }
+
     /**
      * 给执行副本开头的每个建表目标补一句 DROP TABLE IF EXISTS。
      *
      * 只在「覆盖已存在表」勾选后由执行动作调用，不写回脚本正文。
      * 只认整句以 CREATE TABLE 开头的语句：注释里的建表、字符串里的建表都不该被删，
      * 这是删除动作，判据必须比"清单里显示哪些表"更严。
+     * 脚本自己已经写了 DROP TABLE 的表不再补第二句：补出来的那一批排在副本最前面，
+     * 会跑在整库 dump 自带的 /*!40014 SET ... FOREIGN_KEY_CHECKS=0 *&#47; 之前，
+     * 被外键引用的父表在那之前删不掉，现场看到的就是 MySQL 3730。
      * 顺序按出现顺序倒过来，近似"先删子表再删父表"。与 core/sql_script.py 同语义。
      */
     public static DropPrep prependDropTables(String text) {
-        Map<String, Boolean> seen = new LinkedHashMap<String, Boolean>();
-        for (String stmt : splitStatements(text)) {
+        List<String> statements = splitStatements(text);
+        Set<String> droppedKeys = new HashSet<String>();
+        for (String stmt : statements) {
+            droppedKeys.addAll(droppedTargets(stmt));
+        }
+        Map<String, String> pending = new LinkedHashMap<String, String>();
+        for (String stmt : statements) {
             String masked = maskComments(stmt).trim();
             if (!Pattern.compile("^CREATE\\s+TABLE\\b", Pattern.CASE_INSENSITIVE)
                     .matcher(masked).find()) {
@@ -62,12 +121,17 @@ public final class SqlScript {
                 continue;
             }
             String target = m.group(1).replaceAll("\\s+", "");
-            seen.put(target, Boolean.TRUE);
+            String key = dropKey(target);
+            if (droppedKeys.contains(key) || pending.containsKey(key)) {
+                continue;
+            }
+            pending.put(key, target);
         }
-        if (seen.isEmpty()) {
-            return new DropPrep(text);
+        if (pending.isEmpty()) {
+            DropPrep none = new DropPrep(text);
+            return none;
         }
-        List<String> names = new ArrayList<String>(seen.keySet());
+        List<String> names = new ArrayList<String>(pending.values());
         StringBuilder block = new StringBuilder();
         for (int i = names.size() - 1; i >= 0; i--) {
             block.append("DROP TABLE IF EXISTS ").append(names.get(i)).append(";\n");
@@ -658,13 +722,20 @@ public final class SqlScript {
     }
 
     /**
-     * 这一句里除了注释和空白还剩东西吗。
+     * 这一句里除了注释和空白还剩东西吗（两条执行通道共用这一份判据）。
      *
      * `splitStatements` 会把 `-- 只有注释` 这种整段是注释的片段也切成一条（它只按分号切，
      * 不管内容），而「SQL 执行器」要对用户说"只写注释也不算"——判据就得在这儿补上，
      * 否则会出现"切出来一条、执行时又说没得执行"，或者把空注释当成正经一句报"已提交 1 条"。
      * 走的是与切句同一套词法（引号 / 反引号 / -- 与 # 行注释 / 块注释）：
      * 字符串里的 `--` 不算注释，所以 `SELECT '-- x'` 仍然是一句真要执行的语句。
+     *
+     * 版本注释 `/*!NNNNN ...*&#47;` 要算：正文是服务端真会执行的语句，不是给人看的注释。
+     * 导出工具把 SET NAMES、SET TIME_ZONE、SET FOREIGN_KEY_CHECKS=0 全写在这类语句里，
+     * 判成注释就等于把这些设置悄悄丢掉——现场那份 MariaDB 整库 dump 走普通通道时
+     * 1382 条只剩 679 条，外键检查因此一直开着，删被引用的父表就是 MySQL 3730。
+     * `/*M!...*&#47;`（MariaDB 客户端沙箱标记）与 `/*!999999\- ...`（发给服务端是空查询）
+     * 只在客户端生效，仍按没有内容处理。与 core/sql_script.py 同语义。
      */
     public static boolean hasExecutableContent(String stmt) {
         int i = 0;
@@ -704,6 +775,13 @@ public final class SqlScript {
             }
             if (ch == '/' && nxt == '*') {
                 int j = stmt.indexOf("*/", i + 2);
+                if (stmt.startsWith("/*!", i) && !stmt.startsWith("/*M!", i)) {
+                    String body = stmt.substring(i + 3, j < 0 ? n : j)
+                            .replaceFirst("^\\d*", "").trim();
+                    if (!body.isEmpty() && !body.startsWith("\\")) {
+                        return true;
+                    }
+                }
                 i = j < 0 ? n : j + 2;
                 continue;
             }
@@ -785,70 +863,16 @@ public final class SqlScript {
         return tail.contains(DUMP_TAIL_MARKER);
     }
 
-    /**
-     * dump 模式的内容判据：`/*!40101 SET ... *&#47;` 是服务端真会执行的语句。
-     *
-     * 普通块注释与 `/*M!...*&#47;`（MariaDB 客户端沙箱标记）仍不算；`/*!999999\- ...`
-     * 这种只在客户端生效、发给服务端会变成空查询的写法也按没有内容处理。
-     */
-    public static boolean hasExecutableContentDump(String stmt) {
-        int i = 0;
-        int n = stmt.length();
-        while (i < n) {
-            char ch = stmt.charAt(i);
-            char nxt = i + 1 < n ? stmt.charAt(i + 1) : 0;
-            if (Character.isWhitespace(ch)) {
-                i++;
-                continue;
-            }
-            if (ch == '\'' || ch == '"' || ch == '`') {
-                char quote = ch;
-                i++;
-                while (i < n) {
-                    char c = stmt.charAt(i);
-                    if (c == '\\' && quote != '`') {
-                        i += 2;
-                        continue;
-                    }
-                    if (c == quote) {
-                        if (i + 1 < n && stmt.charAt(i + 1) == quote) {
-                            i += 2;
-                            continue;
-                        }
-                        i++;
-                        break;
-                    }
-                    i++;
-                }
-                return true;
-            }
-            if ((ch == '-' && nxt == '-') || ch == '#') {
-                int j = stmt.indexOf('\n', i);
-                i = j < 0 ? n : j;
-                continue;
-            }
-            if (ch == '/' && nxt == '*') {
-                int j = stmt.indexOf("*/", i + 2);
-                if (stmt.startsWith("/*!", i) && !stmt.startsWith("/*M!", i)) {
-                    String inner = stmt.substring(i + 3, j < 0 ? n : j)
-                            .replaceFirst("^\\d*", "").trim();
-                    if (!inner.isEmpty() && !inner.startsWith("\\")) {
-                        return true;
-                    }
-                }
-                i = j < 0 ? n : j + 2;
-                continue;
-            }
-            return true;
-        }
-        return false;
-    }
-
     /** 整库 dump 的可执行语句：认 DELIMITER，并保留 `/*!...*&#47;` 版本注释语句。 */
+    /**
+     * 内容判据与普通通道共用 hasExecutableContent：两条通道只在"怎么切句"和"库级语句
+     * 跳不跳"上不同，什么算一句必须一样——分开写过一次就分叉过一次，普通通道把版本注释
+     * 当注释丢掉那回（MySQL 3730）就是这么来的。
+     */
     public static List<String> dumpStatements(String text) {
         List<String> out = new ArrayList<String>();
         for (String s : splitDumpStatements(text)) {
-            if (hasExecutableContentDump(s)) {
+            if (hasExecutableContent(s)) {
                 out.add(s);
             }
         }
