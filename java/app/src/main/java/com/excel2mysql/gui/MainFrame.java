@@ -540,7 +540,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 与表格内容同组，但不占下面前缀行——前缀行要留给输入框与两颗按钮。
         // 只把首字母勾上（setSelected 不触发 ActionListener，启动时不会凭空打一行"切换"日志），
         // 转大写保持未勾选，由用户按需勾上
-        initialsBox = new javax.swing.JCheckBox("表名与字段名取拼音首字母");
+        initialsBox = new javax.swing.JCheckBox("表名和字段名取中文拼音首字母");
         initialsBox.setSelected(true);
         initialsBox.setToolTipText("由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、"
                 + "水库基础信息 → skjcxx）；默认已勾选，取消则用全拼（ding_dan_jin_e）。"

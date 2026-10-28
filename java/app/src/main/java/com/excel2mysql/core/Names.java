@@ -58,7 +58,7 @@ public final class Names {
           + "|[\\s\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+$");
 
     private final PinyinConverter pinyin;
-    // 用户开关「表名与字段名取拼音首字母」：默认 false = 全拼（现有行为）。
+    // 用户开关「表名和字段名取中文拼音首字母」：默认 false = 全拼（现有行为）。
     // 放在实例上而不是方法参数上，GUI 复选框与 CLI 开关各设一次即可贯穿整轮解析
     private boolean initialsOnly;
     // 用户开关「表名与字段名转大写」：默认 false = 小写（现有行为）。

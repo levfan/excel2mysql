@@ -1943,7 +1943,7 @@ class MainWindow(QWidget):
         # 在连信号之前设好，免得启动时凭空打一行"切换"日志
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("命名规则："))
-        self.chk_initials = QCheckBox("表名与字段名取拼音首字母")
+        self.chk_initials = QCheckBox("表名和字段名取中文拼音首字母")
         self.chk_initials.setChecked(True)
         self.chk_initials.setToolTip(
             "由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、\n"
