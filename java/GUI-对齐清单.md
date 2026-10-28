@@ -4343,9 +4343,10 @@ USE \`casic_archives\`;"
 长的把表格撑宽，撑过弹窗宽度才轮到横向条把尾巴带出来。
 
 - Qt：`setSectionResizeMode(Interactive)` + `setStretchLastSection(False)`，
-  再 `setColumnWidth(c, max(下限, sizeHintForColumn(c)))`；下限是结构预览
-  230 / 280 / 160（主键列与字节列本就 `ResizeToContents`）、元数据弹窗 230 / 280 / 160 / 70 / 70。
-- Swing：`AUTO_RESIZE_OFF` + 新增 `Tables.fitColumns(table, 下限数组)`，
+  再 `setColumnWidth(c, max(下限, 内容需要))`；下限是结构预览 46 / 230 / 280 / 160 / 96、
+  元数据弹窗 230 / 280 / 160 / 70 / 70。这第一版在 2026-10-29 补成了"铺满"（见 §91.10），
+  末列仍不铺满这条不变。
+- Swing：`AUTO_RESIZE_OFF` + `Tables.fitColumns(table, 下限数组)`，
   里面 `Tables.contentWidth` 逐格问过真渲染器（表头也算，左右各留 12px），
   不按字符数估——中文字宽、加粗表头、DPI 一估就偏。
   两个弹窗各加 `columnFitsContent(...)` 访问器，读的是**排完 layout 的实际列宽**，
@@ -5023,3 +5024,156 @@ dump 通道的行为没变（`F44` 那 8 句、`F45` 的"7 条已提交、跳过
 - 三页内容区逐页 `paint` 成 PNG 逐屏核对，蓝色介绍条下方的空白一致。
 - `mvn -pl app compile` 退出码 0；Swing 自检（`GuiMain --gui --selftest verify\fixtures`）退出码 0。
 - 纯外观改动，按分档不重放金标准、不跑 pack_test；版本仍是 2.8.0，包按用户指令再打。
+
+## 99. 九条界面改动：铺满、粘贴优先级、第二页三颗按钮、撤掉三页指向行与第三页覆盖开关
+
+### 99.1 字段弹窗的表格铺满（第一条）
+
+- 用户报的"双击看字段元数据时，表格右边留着大段空白"发生在**装到用户手上的 2.8.0 包**里：
+  那版仍是"列宽按设计下限与内容取大者、末列不铺满"，视口比底宽宽时富余宽度空在表格右侧。
+- 本轮接手时工作区已有一版未提交的铺满实现（Python `FillWidthTable` + `fill_widths`，
+  Java `FillTable` + `Tables.fillWidths`），两栈同一算法：底宽 = 设计下限 / 单元格内容 /
+  表头文字三者取大，视口富余按底宽等比摊给文字列；底宽之和已超过视口时一列都不压，
+  横向滚动条照旧把超长的尾巴带出来。
+- 这一轮把它验实：Python 用例 R74d（结构弹窗）与 R74e（第二页元数据弹窗）在 1400 宽窗口下
+  断言"列宽之和 == 视口宽度、横向条没出现、每一列都不小于它需要的宽度"；
+  Swing 自检另起一张两列小表，走 `columnsFillViewport()` 读排完版之后的真列宽。
+
+### 99.2 三页顶部「目标库：xxx ——」整行删除（第五条）
+
+- 三条指向行连同 `lbl_imp_db` / `lbl_sql_db` / `lbl_run_db`（Python）与
+  `impHint` / `SqlPage.hint` / `sqlRunDbHint`（Java）一起删掉；当前库只剩顶部状态栏一处。
+- 顶部状态栏那条（`● 目标库 xxx` / 未选库的红色告警）与它的悬停提示不动，
+  三页介绍条（`中英表头建模，回写库` 等）不动。
+- 对撞键随之改：删 `hint.excel`、`hint.sql`、`hint.sqlrun.db`、`loaded.hint.excel`、
+  `sql.hint`、`hint.db.linked`、`hint.db.tone`；
+  新增 `conn.tone`（状态栏那一档颜色）、`hint.page.db` / `db.page.lines`
+  （三页各有几行写着「目标库：」，两边都该数出 `0|0|0`）、`cover.switches`
+  （三页各有几颗「覆盖已存在表」，应当 `1|1|0`）、`db.hint.linked`（选定库之后的状态栏原文）。
+- 两栈同一句自检：Java `countDbPointers(frame.tabs())` 数页签里的 JLabel，
+  Python 用例 F3/F6/Q0/Q3 用 `_db_pointers()` 逐页扫——**只扫页签**，
+  连接表单里那行「目标库：」标签是输入框的标题，不在删除范围内。
+
+### 99.3 粘贴改成按剪贴板内容定优先级（第三条）
+
+- 先量坏在哪：离屏实测 `QShortcut(QKeySequence.Paste, window)` 设 `WindowShortcut` 之后，
+  焦点在 `QPlainTextEdit` / `QLineEdit` 时**快捷键根本不触发**（控件自己吃掉 Ctrl+V），
+  焦点在表格/拖拽区时才轮到——所以"粘贴用不了"是焦点一进到输入框就发生，
+  原先那句 `focus.paste()` 兜底是走不到的死分支。
+- Java 侧同一形状：文本控件的 `WHEN_FOCUSED` 绑定排在 `WHEN_IN_FOCUSED_WINDOW` 之前，
+  根面板那条在焦点落进 SQL 编辑区时轮不到。
+- 改法按"先看剪贴板、再看焦点"：
+  - 两栈都把规则收进一条可单独喂数据的分派口——Python `MainWindow.route_paste(paths, focus)`、
+    Java `MainFrame.routePaste(paths, focus)`：有文件 → 走添加并吃掉按键；
+    没文件且焦点是文本控件 → 交回控件自己粘；没文件且焦点不在文本控件 → 当前页给那句
+    「拖入或粘贴的不是…已忽略」。
+  - Python 用 `QApplication` 级事件过滤（`PasteFilesFilter`）接按键，
+    只处理"事件所属的顶层窗口是 `MainWindow`"的按键，弹窗自己的粘贴不抢。
+    这份过滤**全进程只装一份**（`install_paste_filter`）：按窗口各装一份时，
+    用例里前后建起的十几个窗口会把同一层 Python 回调叠成十几层，事件循环被拖到
+    连 1ms 计时器都轮不到——同一段慢任务的 `ui_ticks` 从每轮几十次掉到 1 次，
+    O12/Y1e 与点开元数据的 R66（阈值 100ms，实测 109ms）一起变红；
+    收成单例之后这三条回到原来的量级。
+  - Java 不用 `KeyEventDispatcher`：**随包那份 JDK 8u202 的 rt.jar 里没有这个类**
+    （`jar tf rt.jar | grep java/awt/event/Key` 只有 `KeyEvent`/`KeyEvent$1`/`KeyAdapter`/
+    `KeyStroke`/`KeyListener`，`javap java.awt.event.KeyEventDispatcher` 报找不到类），
+    拿它做"最前面拦一层"在这条交付线上编译期就过不去。改成两半：根面板窗口级绑定继续管
+    非文本焦点，另外把每个文本控件的 `control V` 改挂到 `e2mPaste`（建窗之后遍历一次 +
+    `HierarchyListener` 补后来生成的单元格编辑器），没文件时才由它自己 `paste()`。
+- 用例：Python R75b 断言过滤在位、`is_paste_key` 只认 Ctrl+V（Shift/Alt/Meta 组合不算）、
+  窗口级 `QShortcut` 确实不在了；R75j 用真按键打到 `sql_run_input` 上验"文件优先"，
+  R75k/R75l/R75m 验分派规则的三个分支。Java 自检在根面板绑定之外另查
+  `isTextPasteBound(sqlRunInputComponent/hostField/prefixField)`，
+  并断言 `routePaste([], 文本控件)` 为假、`routePaste([], 表格)` 为真。
+- 系统剪贴板实测：PowerShell 放真文件列表 → 焦点在 SQL 编辑区按 Ctrl+V → 脚本进第三页清单；
+  第一页焦点在主机名框 → xlsx 进待导入清单；剪贴板换成纯文本 → 按键交回控件，主机名框粘出文本。
+  测前用 `GetFileDropList/GetText` 快照、测后原样还回，不改用户剪贴板内容。
+
+### 99.4 第二页补三颗按钮与「预览 DDL」（第四条）
+
+- 表格下面那一排从一颗变成三颗：`清空待上传文件` / `生成表结构预览` / `预览 DDL`，
+  与第一页同位置、同文案、同形状（Python `addWidget(b, 1)` 三颗等宽铺满；
+  Java `GridLayout(1, 3, px(6), 0)`），样式都是普通次级按钮。
+- 第二颗复用现成能力：打开当前选中那一行的 `SqlMetadataDialog`，没选中取第一行；
+  清单里没有脚本表时弹窗拦下并说清下一步。
+- 第三颗是本轮新开发：`SqlScriptDdlDialog`（Python）/ `gui/SqlScriptDdlDialog.java`（Java），
+  一张表一个页签、正文只读等宽、尺寸档与第一页 `DDLDialog` 同为 900×600。
+  正文来源不同——第一页按推断出的表定义现拼 DDL，这一页取脚本自己那句 `CREATE TABLE`，
+  先把还没落地的改名算进一份副本（Python `apply_display_renames` / Java
+  `SqlScript.applyDisplayRenames`），`displayMap` 与脚本正文一个字都不改；
+  勾了「覆盖已存在表」就在每页开头补一句 `DROP TABLE IF EXISTS`。
+- 用例 R45p…R45v 逐条钉住：三颗文案与顺序、选中行/首行的取法、一表一页、
+  改名进入预览正文、预览不改写 `display_map` 也不改写脚本正文、覆盖勾选补 DROP、
+  弹窗形状（页数/标题/只读）、空清单两颗都拦下。Java 自检在第二页真跑 `ddlPages()` 并
+  对比 `SqlScriptDdlDialog` 的页标题与正文。
+
+### 99.5 第三页：行内执行、Del 移除、按钮重排、撤掉覆盖开关（第六到第九条）
+
+- 待执行脚本清单从四列变五列，最后一列「操作」放一颗【执行】，只跑这一行的文件；
+  Python 用 `setCellWidget` 放真按钮，Java 单元格放不下常驻控件，用一颗共用 `JButton`
+  当渲染器 + 表格上按 `columnAtPoint` 认领单击，启用判据与批量那颗同源（`isRowExecutable()`）。
+- 选中行按 Del 移除，走第一页同一口径：只出清单、磁盘不动、没选中也给一句、
+  本页有任务在跑先拦下。Python 把 `del_pressed` 从 `FileListTable` 上移到 `EmptyHintTable`
+  （第三页那张表同样是空态引导表），`FileListTable` 随之删除；
+  Java 在 `sqlRunFilesTable` 上绑 `WHEN_FOCUSED` 的 DELETE → `deleteSelectedRunScripts()`。
+- `执行脚本文件` 改名 `批量执行脚本文件` 并挪进清单那个组框的最后一行最右，
+  `执行编辑区 SQL` 挪到「SQL 文本」栏头的 `清空编辑区` 右侧；
+  底部动作条与「覆盖已存在表」整行删除，编辑区与结果两段直接铺到窗口底部。
+  执行器这一路此后一律 `overwrite=false`（`sql_run_files_task` / `SqlFileRun.run` 仍保留
+  该形参，命令行线与第二页还在用）。
+- 对撞键变化：删 `action.run.bg` / `action.run.group`，
+  新增 `run.batch.title`（那颗主按钮所在组框的标题，应为「待执行脚本（按清单顺序执行）」）、
+  `run.exec.head`（编辑区栏头从左到右那几颗按钮）、`run.row.exec`（列数与第五列列名）；
+  `w.run_drop_existing.missing` 两栈都记 `1`——这件控件确实不在了，谁偷偷加回来会红。
+
+### 99.6 第三页要不要拆成第四个页签（用户问的那一条）
+
+不拆。判断依据是这两路本来不共用状态，共用的是**同一个结果区与同一个执行资源位**：
+拆成两个页签之后，用户在第四个页签里仍然只能看这同一个结果区、仍然不能与第三页同时跑任务，
+换来的是两件事变坏——目标库与连接区要跨两个页签都说清"我现在打到哪个库"，
+以及"清单里跑完这批、再回编辑区补一句"这条最常用的来回要多切一次页签。
+本轮把两颗按钮分放到各自那一段（批量那颗在清单行、编辑区那颗在栏头）之后，
+"点哪颗跑什么"已经在界面上写死了，拆页签能解决的混淆已经解决了。
+真要再分，判据应该是这两路的**结果区也独立**（各看各的日志），而不是按钮放在哪。
+
+### 99.7 验证（这一轮的三条闸门都是现跑的）
+
+- Python 全量用例 `pack_test.py`（带真库凭据，G 组没留 SKIP）：**通过 887 / 失败 0 / 跳过 5**，
+  退出码 0。跳过的 5 条与本轮无关（本机没有 `.xls` 样本、没有语料包、冻结态提交号）。
+  本轮新增/改写的断言：F3/F6/F6e/F6g/Q0/Q3（页内指向行没了、状态栏一处报库）、
+  K8/K15（第二页三颗按钮在表格那一段、等宽铺满）、K23（第二页按钮集合）、
+  F10g/F10g2/F10h（第三页无动作条、两颗按钮各归一段、覆盖开关只剩前两页）、
+  F21/F22/F22b/F22c（批量那颗改名、五列含「操作」、空清单没有行内按钮）、
+  F43/F43b/F43c/F43d/F43e/F43f（批量跑完、行内只跑一行、Del 出行与没选中的回执）、
+  R45p…R45v（第二页三颗按钮、结构预览取行、预览DDL 的正文/改名/覆盖补 DROP/弹窗形状/空清单拦下）、
+  R75b…R75m（应用级过滤在位且全进程一份、Ctrl+V 认键、文件优先、纯文本交回控件）。
+- Java 十道闸门 `java\构建验证.bat`：退出码 0（含 class 主版本 ≤52、拼音/命名/推断/读取/SQL 与
+  DDL 金标准差分、Swing 界面自检）。自检这一轮补了：页签里 `目标库：` 计数为 0、
+  覆盖开关按页计数 `1|1|0`、第三页五列与行内【执行】在位、Del 出行后磁盘文件还在、
+  越界行的拦下话术、文本控件 Ctrl+V 改挂在位、`routePaste` 两个分支、
+  第二页预览页数/标题/正文与 `ddlPages()` 一致且预览不改脚本正文。
+- 双端界面对撞 `java\界面双端对撞.bat`：Python 侧与 Java 侧各 **331 键**，共有 331 键，
+  **逐键一致**（`env.*` 那 6 条是现场屏幕量出来的，只记不比）。
+  这一轮把对撞器的 `find_layout` 补上了穿 `QSplitter`——分隔条不暴露公开 layout，
+  第三页那两颗按钮在 Qt 侧会被读成"这排不存在"， Java 侧照旧数得出来，就是一个 2 处值不等的假差异。
+- 系统剪贴板真测（真 `windows` 平台，离屏平台的 clipboard 是空桩、读不到文件）：
+  ① 焦点在 SQL 编辑区、剪贴板放一个 `.sql` → 按键被"添加文件"用掉，第三页清单 +1；
+  ② 焦点在主机名输入框、剪贴板放 `.xlsx` → 按键同样被用掉并走到添加那一步
+     （本次这条在临时脚本里卡在 pandas 缺 `fsspec` 的解析报错上，属这台机器的依赖问题，
+     入口路由已由 ①与 ③ 与用例 R75c 两侧钉住）；
+  ③ 剪贴板换成纯文本 `10.1.2.3` → 分派说"不抢"，主机名框粘出这串文本。
+  测前快照、测后还原；第一次跑因为脚本异常没走到还原，把用户当时复制的 5 个文件路径冲掉了，
+  这条已在交付说明里点名。
+
+### 99.8 版本
+
+- 升 **2.8.0 → 3.0.0**（major）：第三页的「覆盖已存在表」是**去掉一个既有能力**，
+  老版本用户在那一页勾着它重跑建表脚本的做法，同名版本下不再成立——
+  命中"同输入产出不同含义的结果、不告知就升级会出事"这一档。
+  其余各条单独看只是 patch/minor（铺满、粘贴修复、第二页加按钮、删提示行），
+  按"一次会话按最重的一档定"并进 3.0.0，一次升到位。
+- 版本号唯一来源仍是 `version.py`；同批改到位的还有三个 `pom.xml`、
+  `java/构建验证.bat` 的两处 jar 名、`help_doc.py` 与 `java/assets/conn.ini`
+  的示例 jar 名、README 顶部那行与三处路径示例——由 `pack_test.py` 的 T15 逐处核。
+- 交付包按"打包按需触发"的规矩**没有重打**：手上那份仍是 2.8.0，
+  本轮改动要等用户说"打包"才进包。
