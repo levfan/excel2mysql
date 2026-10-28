@@ -40,7 +40,7 @@ import re
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent
 from PySide6.QtGui import (
     QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat,
-    QPainter, QPen, QPainterPath, QKeySequence, QShortcut,
+    QPainter, QPen, QPainterPath,
 )
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -241,6 +241,73 @@ def style_table_font(view):
     return view
 
 
+def fill_widths(bases, avail, stretch):
+    """按"这一列需要多宽"打底，把视口富余的宽度摊给文字列。
+
+    底宽之和已经超过 avail 时原样返回——一列都不往小里压，这样"内容比视口宽"
+    才轮得到横向滚动条把超长的尾巴带出来。富余部分按各列底宽等比分，整除的
+    零头落在最后一个文字列上，总和正好等于 avail，表格右侧不留白条。
+    """
+    widths = list(bases)
+    spare = avail - sum(widths)
+    if spare <= 0 or not stretch:
+        return widths
+    total = sum(bases[c] for c in stretch)
+    given = 0
+    for c in stretch[:-1]:
+        add = spare * bases[c] // total
+        widths[c] += add
+        given += add
+    widths[stretch[-1]] += spare - given
+    return widths
+
+
+class FillWidthTable(QTableWidget):
+    """字段清单表：列宽铺满视口，但绝不把任何一列压到它需要的宽度以下。
+
+    每列先取"设计下限与内容需要"的大者当底，视口还有富余就摊给文字列；视口一变
+    （含滚动条出现、弹窗拉宽）就重算。末列仍不铺满（stretchLastSection 关着）：
+    铺满会把超长那一格压回视口宽度，切掉的那半截滚不到。这里铺的只是"视口比
+    底宽宽"的那部分，内容真超出时横向条照旧——两件事分开管。
+    """
+
+    def __init__(self, rows, cols, floors, stretch, parent=None):
+        super().__init__(rows, cols, parent)
+        self._floors = tuple(floors)
+        self._stretch = tuple(stretch)
+        self._fitting = False
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.horizontalHeader().setStretchLastSection(False)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.viewport().installEventFilter(self)
+
+    def base_widths(self):
+        """每列的底宽：设计下限、单元格内容、表头文字三者取大。"""
+        head = self.horizontalHeader()
+        return [max(floor, self.sizeHintForColumn(c), head.sectionSizeHint(c))
+                for c, floor in enumerate(self._floors)]
+
+    def fit_columns(self):
+        if self._fitting:
+            return
+        self._fitting = True
+        try:
+            widths = fill_widths(self.base_widths(), self.viewport().width(),
+                                  self._stretch)
+            for c, w in enumerate(widths):
+                if self.columnWidth(c) != w:
+                    self.setColumnWidth(c, w)
+        finally:
+            self._fitting = False
+
+    def eventFilter(self, obj, event):
+        # 只挂 viewport：拉弹窗、竖条出现这两件事都会让它收到 Resize，
+        # 表格自己那一层的事件与它同源，挂两处只会把底宽算两遍
+        if obj is self.viewport() and event.type() == QEvent.Resize:
+            self.fit_columns()
+        return super().eventFilter(obj, event)
+
+
 EMPTY_HINT_COLOR = "#8a97a8"
 EMPTY_ICON_COLOR = "#aebdd1"
 ACTION_BAR_BG = "#f4f7fc"
@@ -253,11 +320,22 @@ class EmptyHintTable(QTableWidget):
     用户口径：空表格要看得懂下一步做什么，并且和上方虚线区说同一句话。
     文字画在 viewport 上而不是塞一个覆盖控件：覆盖控件会吃掉滚轮与右键，
     表格一空就只剩这层装饰可点，反而更迷惑。
+
+    Del 键只发信号、不做业务——删哪几行、留痕怎么写、有任务在跑拦不拦，
+    都归主窗口一处说，避免快捷键和按钮两条入口各写一套规则。
     """
+
+    del_pressed = Signal()
 
     def __init__(self, rows, cols, hint="", parent=None):
         super().__init__(rows, cols, parent)
         self.empty_hint = hint
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Delete:
+            self.del_pressed.emit()
+            return
+        super().keyPressEvent(e)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -306,20 +384,48 @@ class EmptyHintTable(QTableWidget):
         painter.drawLine(cx + 7, arrow_tip - 7, cx, arrow_tip)
 
 
-class FileListTable(EmptyHintTable):
-    """待上传文件表：Del 键把"要删选中行"这件事交回主窗口。
+class PasteFilesFilter(QObject):
+    """接住主窗口里任何一处按下的 Ctrl+V：先看剪贴板，是文件就交给"添加文件"这条路。
 
-    按键这里只发信号、不做业务——删哪几张表、留痕怎么写、有任务在跑拦不拦，
-    都归主窗口一处说，避免快捷键和按钮两条入口各写一套规则。
+    装在 QApplication 上而不是某个控件上，因为按键先到谁手里由焦点决定——
+    鼠标停在拖拽区、SQL 编辑区还是主机名输入框，都不该改变"复制了文件按 Ctrl+V"的结果。
+    剪贴板是纯文本时返回 False，按键照旧交回焦点控件自己粘。
+    整条应用只装这一份（`install_paste_filter`）：每个窗口各装一份的话，
+    一份过滤就是事件流上一次 Python 回调，窗口攒到十几个会把事件循环拖到
+    计时器都轮不到——用例里量到过（同一段任务的事件 tick 从每轮几十次掉到 1 次）。
     """
 
-    del_pressed = Signal()
+    def __init__(self, app):
+        super().__init__(app)
 
-    def keyPressEvent(self, e):
-        if e.key() == Qt.Key_Delete:
-            self.del_pressed.emit()
-            return
-        super().keyPressEvent(e)
+    @staticmethod
+    def is_paste_key(event):
+        mods = event.modifiers()
+        return (event.key() == Qt.Key_V
+                and bool(mods & Qt.ControlModifier)
+                and not mods & (Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier))
+
+    def eventFilter(self, obj, event):
+        if event.type() != QEvent.KeyPress or not self.is_paste_key(event):
+            return False
+        win = obj.window() if isinstance(obj, QWidget) else None
+        if not isinstance(win, MainWindow):
+            return False      # 弹窗与其它顶层窗口：那一份粘贴按它自己的规矩走
+        if win.on_paste_files(obj):
+            return True
+        return super().eventFilter(obj, event)
+
+
+_PASTE_FILTER = None
+
+
+def install_paste_filter(app):
+    """给这个进程装唯一的一份 Ctrl+V 过滤器；重复调用只装一次。"""
+    global _PASTE_FILTER
+    if _PASTE_FILTER is None:
+        _PASTE_FILTER = PasteFilesFilter(app)
+        app.installEventFilter(_PASTE_FILTER)
+    return _PASTE_FILTER
 
 
 class ActionBar(QFrame):
@@ -1843,12 +1949,11 @@ class MainWindow(QWidget):
         self._conn_expanded = False
 
         self._build_ui()
-        # Ctrl+V 挂在窗口层级：三页里任何一处按粘贴都是同一件事（等同拖进虚线区）。
-        # 用 WindowShortcut 而不是窗口的 keyPressEvent：焦点在输入框/日志框时
-        # 控件自己的粘贴优先，这条只在没人要这个按键时才轮到
-        self.paste_shortcut = QShortcut(QKeySequence.Paste, self)
-        self.paste_shortcut.setContext(Qt.WindowShortcut)
-        self.paste_shortcut.activated.connect(self.on_paste_files)
+        # Ctrl+V 挂在应用级按键过滤上，不挂窗口级 QShortcut：焦点一旦落进输入框或
+        # SQL 编辑区，那条按键会被控件自己吃掉，QShortcut 实测轮不到，
+        # 三页虚线区那句"复制文件后按 Ctrl+V 直接添加"就成了空话。
+        # 过滤在最前面，先看剪贴板里是不是文件，是就一律归"添加文件"，不看焦点。
+        self.paste_filter = install_paste_filter(QApplication.instance())
         self._load_default_conn()
 
     # -------------------- UI --------------------
@@ -1927,12 +2032,8 @@ class MainWindow(QWidget):
         excel_page = QWidget()
         excel_lay = QVBoxLayout(excel_page)
 
-        # 2.0 当前目标库状态条：与「SQL 脚本改名」页顶部同源，随目标库选择联动刷新
-        self.lbl_imp_db = QLabel()
-        self.lbl_imp_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        excel_lay.addWidget(self.lbl_imp_db)
-
-        # 2.0b 一句话介绍：与「SQL 执行器」那页同一块强调底板
+        # 2.0 一句话介绍：与「SQL 执行器」那页同一块强调底板
+        #（页内不再各写一条"目标库：xxx —— …"，当前库只看顶部状态栏那一处）
         self.imp_intro = page_intro("中英表头建模，回写库")
         excel_lay.addWidget(self.imp_intro)
 
@@ -1971,7 +2072,7 @@ class MainWindow(QWidget):
         name_row.addStretch(1)
         fl.addLayout(name_row)
 
-        self.file_table = FileListTable(
+        self.file_table = EmptyHintTable(
             0, 7, "请把 Excel 文件或 ZIP 压缩包拖到上方虚线区")
         # 按整行选中：Del 删的是"这一行的文件"，按格选会让人以为删的是那一格
         self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -2120,13 +2221,13 @@ class MainWindow(QWidget):
         self.set_conn_expanded(False)
         self._refresh_db_labels()
 
-    # -------------------- 当前目标库状态条（一条总状态 + 三页各一条动作指向） --------------------
+    # -------------------- 当前目标库状态条（一条总状态，页内不再各写一条指向） --------------------
     def set_conn_expanded(self, expanded):
         """连接表单展开/收起：收起后整块环境信息只剩一条"当前是哪个库"的状态栏。"""
         self._conn_expanded = bool(expanded)
         self.conn_form.setVisible(expanded)
         self.btn_conn_edit.setVisible(not expanded)
-        # 状态栏那句告警要跟着换说法：展开时让人往下填，收起时才让人点「设置数据源信息」
+        # 状态栏那句告警要跟着换说法：让人去点的那颗按钮必须真的在界面上
         self._refresh_db_labels()
 
     def _on_tab_changed(self, index):
@@ -2145,31 +2246,14 @@ class MainWindow(QWidget):
             self.lbl_conn_state.setText("● 目标库 %s" % db)
             self.lbl_conn_state.setToolTip("%s@%s:%s（用户 %s）"
                                            % (db, cfg["host"], cfg["port"], cfg["user"]))
-            state_style = "color: #1a7f37; font-weight: bold;"
-            head = "目标库：%s —— " % db
-            tails = ["Excel 数据将导入到这个库", "解析并修改ddl脚本",
-                     "编辑区 SQL 与脚本文件都执行到这个库"]
+            self.lbl_conn_state.setStyleSheet("color: #1a7f37; font-weight: bold;")
+            return
+        if self._conn_expanded:
+            self.lbl_conn_state.setText("⚠ 未选择目标库——填好下面连接信息后点「连接并加载库」")
         else:
-            # 告警条的说法要看当前是展开还是收起：让人去点的那颗按钮必须真的在界面上
-            if self._conn_expanded:
-                self.lbl_conn_state.setText("⚠ 未选择目标库——填好下面连接信息后点「连接并加载库」")
-            else:
-                self.lbl_conn_state.setText("⚠ 未选择目标库——点右侧「设置数据源信息」展开后填写")
-            self.lbl_conn_state.setToolTip(NO_DB_HINT)
-            state_style = "color: #c62828; font-weight: bold;"
-            head = None
-            tails = [None, None, None]
-        self.lbl_conn_state.setStyleSheet(state_style)
-        for lbl, tail in zip((self.lbl_imp_db, self.lbl_sql_db, self.lbl_run_db), tails):
-            if tail is None:
-                # 用户口径：未选库的提示只留顶部状态栏一处，页内三条不再重复告警
-                lbl.setText("")
-                lbl.setStyleSheet("")
-                lbl.setVisible(False)
-                continue
-            lbl.setText(head + tail)
-            lbl.setStyleSheet(state_style)
-            lbl.setVisible(True)
+            self.lbl_conn_state.setText("⚠ 未选择目标库——点右侧「设置数据源信息」展开后填写")
+        self.lbl_conn_state.setToolTip(NO_DB_HINT)
+        self.lbl_conn_state.setStyleSheet("color: #c62828; font-weight: bold;")
 
     # -------------------- 使用说明 / 关于 --------------------
     def on_help(self):
@@ -2321,9 +2405,15 @@ class MainWindow(QWidget):
         sql_on = bool(self.sql_files) and not self.task_busy((self.RES_SQL,))
         self.btn_sql_gen_std.setEnabled(sql_on)
         self.btn_sql_gen_simple.setEnabled(sql_on)
-        # 第三页的「执行脚本文件」判据与这里同一口径：有脚本、且这一页没任务在跑
+        # 第三页的「批量执行脚本文件」判据与这里同一口径：有脚本、且这一页没任务在跑
         run_on = bool(self.sql_run_files) and not self.task_busy((self.RES_RUN,))
         self.btn_run_scripts.setEnabled(run_on)
+        # 行内那颗【执行】跟着同一判据灰：任务跑着的时候抽一行，回报的项数就对不上清单
+        for i in range(self.sql_run_table.rowCount()):
+            cell = self.sql_run_table.cellWidget(i, 4)
+            row_btn = cell.findChild(QPushButton) if cell is not None else None
+            if row_btn is not None:
+                row_btn.setEnabled(run_on)
 
     # -------------------- 槽函数 --------------------
     def on_clear_log(self):
@@ -2333,11 +2423,6 @@ class MainWindow(QWidget):
     def _build_sql_page(self):
         page = QWidget()
         lay = QVBoxLayout(page)
-
-        # 当前目标库状态条：跟随上方公共连接区的库选择联动刷新
-        self.lbl_sql_db = QLabel()
-        self.lbl_sql_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        lay.addWidget(self.lbl_sql_db)
 
         # 一句话介绍：与另两页同一块强调底板
         self.sql_intro = page_intro("解析建表语句，回写库")
@@ -2407,15 +2492,27 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.btn_sql_prefix)
         prefix_row.addWidget(self.btn_sql_replace)
 
-        # 清空按钮排在表格下面第一排的最左（前缀行的下一行），
-        # 与「Excel 导入」那页「清空待上传文件」同一位置同一语义：整份清出清单，不是只删选中行。
+        # 三颗操作按钮排在表格下面第一排（前缀行的下一行），与「Excel 导入」那页
+        # 同一位置、同一形状：等宽铺满整行。清空是整份清出清单，不是只删选中行。
         # 不塞进保存/执行那一排——那排的最小宽度已经贴着窗口宽度，再加一颗就顶出屏幕
         # （U7 那条"整窗落在可用区内"实测被顶到 848 > 可用 800）。
         name_row = QHBoxLayout()
         self.btn_sql_clear = QPushButton("清空待上传文件")
         self.btn_sql_clear.clicked.connect(self.on_sql_clear_files)
-        name_row.addWidget(self.btn_sql_clear)
-        name_row.addStretch(1)
+        self.btn_sql_preview = QPushButton("生成表结构预览")
+        self.btn_sql_preview.setToolTip(
+            "打开当前选中那一行的字段清单（与双击「文件」「原表名」那一列是同一个框）；"
+            "没选中行时取清单第一行。")
+        self.btn_sql_preview.clicked.connect(self.on_sql_preview_structure)
+        self.btn_sql_ddl = QPushButton("预览 DDL")
+        self.btn_sql_ddl.setToolTip(
+            "一张表一个页签，正文就是「保存修改后ddl脚本」「执行修改后ddl脚本到当前库」"
+            "将要写出的那句 CREATE TABLE（含还没落地的改名与字段编辑）；\n"
+            "勾选「覆盖已存在表」时，页签开头会补上执行前那句 DROP TABLE IF EXISTS。")
+        self.btn_sql_ddl.clicked.connect(self.on_sql_preview_ddl)
+        name_row.addWidget(self.btn_sql_clear, 1)
+        name_row.addWidget(self.btn_sql_preview, 1)
+        name_row.addWidget(self.btn_sql_ddl, 1)
 
         self.btn_sql_save = QPushButton("保存修改后ddl脚本")
         self.btn_sql_save.setEnabled(False)
@@ -2809,6 +2906,61 @@ class MainWindow(QWidget):
         else:
             append_log(self.sql_log, "[清空] 清单里没有脚本文件，无需清空")
 
+    def on_sql_preview_structure(self):
+        """「生成表结构预览」：打开当前那一行的字段清单，与双击只读列同一个框。
+
+        没选中行就取第一行——点按钮的人要的是"看一眼这张表"，不是被反问选哪一行。
+        """
+        if not self._sql_rows:
+            self._warn("清单里没有脚本表，先在上方虚区添加 SQL 脚本。")
+            return
+        row = self.sql_table.currentRow()
+        if row < 0 or row >= len(self._sql_rows):
+            row = 0
+        self.show_sql_table_metadata(row)
+
+    def _sql_ddl_pages(self):
+        """一张表一页 DDL：正文取脚本里属于这张表的 CREATE TABLE 语句。
+
+        还没落地的改名与字段编辑先算进正文（与保存/执行同一道 `_materialize` 的结果），
+        但只算在这份副本上，页面的 `display_map` 一个字不改——预览不该把改动定死。
+        """
+        pages = []
+        for s in self.sql_files:
+            text, plan = s["text"], dict(s.get("display_map") or {})
+            if plan:
+                text, renamed, _nohit = apply_display_renames(text, plan)
+                plan.update({r["old"]: r["new"] for r in renamed})
+            for t in extract_create_tables(text):
+                name = t["name"]
+                body = self._sql_create_body(text, name)
+                if body:
+                    pages.append((self._sql_display_name(name), body))
+        return pages
+
+    @staticmethod
+    def _sql_create_body(text, table_name):
+        """这份正文里写着这张表列定义的那几句 CREATE TABLE，逐句之间空一行。"""
+        stmts = [st.strip().rstrip(";") + ";"
+                 for st in split_sql_statements(text)
+                 if table_name in [t["name"] for t in extract_create_tables(st)]]
+        return "\n\n".join(stmts)
+
+    def on_sql_preview_ddl(self):
+        """「预览 DDL」：按表分页看将要写出的建表语句，勾了覆盖开关就补上 DROP 那句。"""
+        why = self._sql_prefix_blocker()
+        if why:
+            self._warn(why)
+            return
+        pages = self._sql_ddl_pages()
+        if not pages:
+            self._warn("这些脚本里没有解析出 CREATE TABLE 语句，没有可预览的 DDL。")
+            return
+        if self.chk_sql_drop.isChecked():
+            pages = [(name, "DROP TABLE IF EXISTS `%s`;\n\n%s" % (name, body))
+                     for name, body in pages]
+        SqlScriptDdlDialog(pages, self).exec()
+
     def _warn(self, text):
         """拦下一次点击：日志与弹窗双写同一句话。
 
@@ -3082,11 +3234,6 @@ class MainWindow(QWidget):
         page = QWidget()
         lay = QVBoxLayout(page)
 
-        # 当前目标库状态条：与前两页同源、同一次刷新（公共连接区改了库或改了主机端口都得跟着变）
-        self.lbl_run_db = QLabel()
-        self.lbl_run_db.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        lay.addWidget(self.lbl_run_db)
-
         # 提示单独占一行：QLabel 不折行，它的最小宽度就是整句的宽度，
         # 和按钮排在同一行会把整个窗口的最小宽度顶出小屏
         self.sql_run_hint = page_intro(
@@ -3101,9 +3248,11 @@ class MainWindow(QWidget):
         self.sql_run_drop.clicked.connect(self.on_run_scripts_add)
 
         self.sql_run_table = EmptyHintTable(
-            0, 4, "请把 SQL 文件拖到上方虚线区，按清单顺序执行")
+            0, 5, "请把 SQL 文件拖到上方虚线区，按清单顺序执行")
         style_table_font(self.sql_run_table)
-        self.sql_run_table.setHorizontalHeaderLabels(["序号", "文件", "大小", "状态"])
+        # 最后一列是行内【执行】：一次只跑这一行的那个脚本，与下面的「批量执行脚本文件」分开
+        self.sql_run_table.setHorizontalHeaderLabels(
+            ["序号", "文件", "大小", "状态", "操作"])
         header = self.sql_run_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
@@ -3111,19 +3260,33 @@ class MainWindow(QWidget):
         self.sql_run_table.setColumnWidth(1, 300)
         self.sql_run_table.setColumnWidth(2, 100)
         self.sql_run_table.setColumnWidth(3, 140)
+        self.sql_run_table.setColumnWidth(4, 90)
         self.sql_run_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sql_run_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # 与第一页同一交互：选中行按 Del 出清单（只出这一页的队列，磁盘上的脚本不动）
+        self.sql_run_table.del_pressed.connect(self.on_run_scripts_delete_selected)
 
         run_upper = QGroupBox(RUN_TABLE_TITLE)
         ru = QVBoxLayout(run_upper)
         ru.setContentsMargins(0, 0, 0, 0)
         ru.addWidget(self.sql_run_table, 1)
-        # 与第一页「清空待上传文件」同一位置同一语义：整份清出清单，磁盘上的脚本不动
+        # 这一排左边是「清空待执行脚本」（与第一页「清空待上传文件」同一语义：整份清出清单，
+        # 磁盘上的脚本不动），右边是这一页的主按钮「批量执行脚本文件」：
+        # 按清单顺序把队列里的脚本全跑一遍，与行内那颗【执行】（只跑一行）分在两头
         clear_row = QHBoxLayout()
         self.btn_run_clear = QPushButton("清空待执行脚本")
         self.btn_run_clear.clicked.connect(self.on_run_scripts_clear)
         clear_row.addWidget(self.btn_run_clear)
         clear_row.addStretch(1)
+        self.btn_run_scripts = QPushButton("批量执行脚本文件")
+        self.btn_run_scripts.setStyleSheet(PRIMARY_BUTTON_QSS)
+        self.btn_run_scripts.setToolTip(
+            "按清单顺序逐个执行全部待执行脚本：手写脚本每个文件一个事务，全部成功才提交；\n"
+            "整库 dump 自动识别，改为不开事务、逐条提交、出错继续并汇总。\n"
+            "只想跑其中一个就在它那行的【执行】上点。执行前请先选好目标库。")
+        self.btn_run_scripts.setEnabled(False)
+        self.btn_run_scripts.clicked.connect(self.on_run_scripts_execute)
+        clear_row.addWidget(self.btn_run_scripts)
         ru.addLayout(clear_row)
 
         self.sql_run_input = QPlainTextEdit(SQL_RUN_DEFAULT)
@@ -3148,6 +3311,14 @@ class MainWindow(QWidget):
         self.btn_sql_run_clear_input.setToolTip("只清掉左边这段 SQL，右侧结果区不动")
         self.btn_sql_run_clear_input.clicked.connect(self.on_sql_run_clear_input)
         lh.addWidget(self.btn_sql_run_clear_input)
+        # 编辑区这一路的动作按钮贴在它自己那一栏头上：只管编辑区里这段 SQL，
+        # 与脚本清单那一路的「批量执行脚本文件」分在两处，点哪颗跑什么一眼分得清
+        self.btn_sql_run_exec = QPushButton("执行编辑区 SQL")
+        self.btn_sql_run_exec.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.btn_sql_run_exec.setToolTip("执行左边编辑区里的 SQL：按分号切句逐条执行，"
+                                         "全部成功才提交，中途出错整批回滚；与脚本文件清单互不影响")
+        self.btn_sql_run_exec.clicked.connect(self.on_sql_run)
+        lh.addWidget(self.btn_sql_run_exec)
         ll.addLayout(lh)
         ll.addWidget(self.sql_run_input, 1)
 
@@ -3232,36 +3403,9 @@ class MainWindow(QWidget):
         self.sql_run_tail_placer = LogMinPlacer(self.sql_run_split_v, self.sql_run_split)
         lay.addWidget(self.sql_run_split_v, 1)
 
-        # 底部动作条与第二页同一形状：覆盖开关在左、动作按钮在右，且在分隔条之外
-        self.run_action_bar = ActionBar()
-        op = QHBoxLayout(self.run_action_bar)
-        op.setContentsMargins(10, 6, 10, 6)
-        self.chk_run_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
-        self.chk_run_drop.setToolTip(
-            "勾选后，执行脚本文件前先对脚本里每条 CREATE TABLE 的建表目标补一句\n"
-            "DROP TABLE IF EXISTS；只认整句以 CREATE TABLE 开头的语句，\n"
-            "注释或字符串里出现的建表不会触发删除。只影响「执行脚本文件」，\n"
-            "不改磁盘上的脚本正文；默认不勾选。")
-        op.addWidget(self.chk_run_drop)
-        op.addStretch(1)
-        self.btn_sql_run_exec = QPushButton("执行编辑区 SQL")
-        self.btn_sql_run_exec.setStyleSheet(SECONDARY_BUTTON_QSS)
-        self.btn_sql_run_exec.setToolTip("执行左侧编辑区里的 SQL：按分号切句逐条执行，"
-                                         "全部成功才提交，中途出错整批回滚；与脚本文件清单互不影响")
-        self.btn_sql_run_exec.clicked.connect(self.on_sql_run)
-        self.btn_run_scripts = QPushButton("执行脚本文件")
-        self.btn_run_scripts.setStyleSheet(PRIMARY_BUTTON_QSS)
-        self.btn_run_scripts.setToolTip(
-            "按清单顺序逐个执行：手写脚本每个文件一个事务，全部成功才提交；\n"
-            "整库 dump 自动识别，改为不开事务、逐条提交、出错继续并汇总。\n"
-            "执行前请先选好目标库。")
-        self.btn_run_scripts.setEnabled(False)
-        self.btn_run_scripts.clicked.connect(self.on_run_scripts_execute)
-        op.addWidget(self.btn_sql_run_exec)
-        op.addWidget(self.btn_run_scripts)
-        lay.addWidget(hline())
-        lay.addWidget(self.run_action_bar)
-
+        # 这一页不再有底部动作条：「批量执行脚本文件」回到脚本清单那一排、「执行编辑区
+        # SQL」贴到编辑区栏头，覆盖开关按用户口径整行删掉——剩下的空间全部让给
+        # SQL 文本与执行结果，两段一直铺到窗口底部。
         self.sql_run_samples = None                          # 示例对话框只在打开时才有
         return page
 
@@ -3456,7 +3600,70 @@ class MainWindow(QWidget):
             for j, it in enumerate(items):
                 it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 self.sql_run_table.setItem(i, j, it)
+            # 行内那颗【执行】只管这一行的脚本：清单每次重排都重新建，
+            # 绑定的行号就与这一行同生同死，不会指到别的脚本上去
+            self.sql_run_table.setCellWidget(i, 4, self._run_row_cell(i, s["path"]))
         self._sync_gen_buttons()
+
+    def _run_row_cell(self, row_index, path):
+        btn = QPushButton("执行")
+        btn.setToolTip("只执行这一行的脚本文件：\n%s" % path)
+        btn.clicked.connect(lambda _=False, r=row_index: self.on_run_script_row(r))
+        cell = QWidget()
+        cl = QHBoxLayout(cell)
+        cl.setContentsMargins(2, 0, 2, 0)
+        cl.addStretch(1)
+        cl.addWidget(btn)
+        cl.addStretch(1)
+        return cell
+
+    def on_run_script_row(self, row_index):
+        """行内【执行】：只跑这一行的脚本文件，跑法与「批量执行脚本文件」同一套。"""
+        if not 0 <= row_index < len(self.sql_run_files):
+            self._warn("这一行已经不在清单里了，请重新选中要执行的脚本。")
+            return
+        cfg = self._conn_cfg()
+        db = cfg["database"]
+        if not db:
+            self._warn(NO_DB_HINT)
+            return
+        other = self._conflict((self.RES_RUN,))
+        if other is not None:
+            self._warn(self._busy_text(other))
+            return
+        self.sql_run_files[row_index]["status"] = "待执行"
+        path = self.sql_run_files[row_index]["path"]
+        self._refresh_run_table()
+        append_log(self.sql_run_log,
+                   f"===== 开始执行脚本文件（目标库 {db}，1 个文件；"
+                   f"手写脚本每个文件一个事务，整库 dump 逐条提交）=====")
+        self._run_modal("正在执行脚本文件到目标库…", sql_run_files_task,
+                        ([path], False, cfg),
+                        on_done=self._finish_run_scripts, log_view=self.sql_run_log)
+
+    def on_run_scripts_delete_selected(self):
+        """Del 键：把选中的行从待执行清单里去掉，多选就是一次批量删。
+
+        与第一页同一口径：只出清单，磁盘上的脚本一个字不动；这一页有任务在跑时拦下来，
+        半途抽走正在执行的那一行会让任务回报的项数对不上剩余清单。
+        """
+        other = self._conflict((self.RES_RUN,))
+        if other is not None:
+            self._warn(self._busy_text(other))
+            return
+        rows = sorted({i.row() for i in self.sql_run_table.selectionModel().selectedRows()},
+                      reverse=True)
+        rows = [r for r in rows if 0 <= r < len(self.sql_run_files)]
+        if not rows:
+            append_log(self.sql_run_log, "[删除] 没有选中脚本，先在清单里点一行再按 Del")
+            return
+        names = [os.path.basename(self.sql_run_files[r]["path"]) for r in rows]
+        for r in rows:
+            self.sql_run_files.pop(r)
+        self._refresh_run_table()
+        append_log(self.sql_run_log,
+                   "[删除] 已移除 " + "、".join(names)
+                   + f"，清单剩 {len(self.sql_run_files)} 个待执行脚本")
 
     def on_run_scripts_clear(self):
         """与第一页「清空待上传文件」同一语义：整份清出清单，磁盘上的脚本不动。"""
@@ -3477,18 +3684,17 @@ class MainWindow(QWidget):
         if not self.sql_run_files:
             self._warn("请先添加 SQL 脚本文件。")
             return
-        overwrite = self.chk_run_drop.isChecked()
-        note = "；已勾选「覆盖已存在表」，每个脚本先 DROP 它要建的表" if overwrite else ""
         append_log(self.sql_run_log,
                    f"===== 开始执行脚本文件（目标库 {db}，"
                    f"{len(self.sql_run_files)} 个文件；手写脚本每个文件一个事务，"
-                   f"整库 dump 逐条提交{note}）=====")
+                   f"整库 dump 逐条提交）=====")
         paths = [s["path"] for s in self.sql_run_files]
         for s in self.sql_run_files:
             s["status"] = "待执行"
         self._refresh_run_table()
+        # 这一页不再补 DROP：覆盖开关按用户口径整行删掉了，脚本正文怎么写就怎么执行
         self._run_modal("正在执行脚本文件到目标库…", sql_run_files_task,
-                        (paths, overwrite, cfg),
+                        (paths, False, cfg),
                         on_done=self._finish_run_scripts, log_view=self.sql_run_log)
 
     def _finish_run_scripts(self, res):
@@ -3686,19 +3892,43 @@ class MainWindow(QWidget):
         else:
             append_log(self.log, "[提示] 拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略。")
 
-    def on_paste_files(self):
-        """窗口级 Ctrl+V：剪贴板里是文件就等同拖进眼前这一页的虚线区，走同一条解析路。
+    def on_paste_files(self, target=None):
+        """Ctrl+V 的分工：剪贴板里有文件就一律按「添加文件」处理，不看焦点在谁身上。
 
-        焦点在文本框里时先交回它自己粘文本——输入框里的 Ctrl+V 是粘内容，
-        不该被"添加文件"抢走；类型不对就走那一页已有的"已忽略"回执。
+        三页虚线区都写着"复制文件后按 Ctrl+V 直接添加"，这句就得鼠标停哪儿都兑现；
+        而窗口级 QShortcut 在焦点落进输入框、SQL 编辑区时根本抢不到按键（控件自己吃掉
+        Ctrl+V，实测），所以这条挂在应用级按键过滤上。剪贴板是纯文本时才把按键交回
+        焦点控件自己粘——粘主机名、粘 SQL 片段照旧。
+        返回 True 表示这一按键已经被"添加文件"用掉，过滤器就不再往下传。
+        `target` 是过滤器手里那个真正收到按键的控件，比"当前焦点控件"更准
+        （焦点在跨窗口切换时会慢半拍，按错一边就是悄悄改行为）。
         """
-        focus = QApplication.focusWidget()
+        return self.route_paste(self.clipboard_file_paths(),
+                                target if target is not None
+                                else QApplication.focusWidget())
+
+    def route_paste(self, paths, focus):
+        """分派规则单独成一条：用例喂假剪贴板也能验到"有文件就抢、没文件就让"。"""
+        if paths:
+            self.paste_paths(paths)
+            return True
         if isinstance(focus, (QLineEdit, QPlainTextEdit)):
-            focus.paste()
-            return
-        paths = [u.toLocalFile() for u in QApplication.clipboard().mimeData().urls()
-                 if QFileInfo(u.toLocalFile()).isFile()]
-        self.paste_paths(paths)
+            return False        # 没有文件可加，这一按键本来就归文本控件自己粘
+        # 焦点不在输入框里：让当前页给出那句"粘的不是文件"的回执，不静默
+        self.paste_paths([])
+        return True
+
+    def clipboard_file_paths(self):
+        """剪贴板里那些真的是文件的路径；目录与纯文本一律算"没有文件"。
+
+        `mimeData()` 这会儿可能整个给回 None（离屏平台的剪贴板就是个空桩，
+        真平台上也有拿不到数据的时候），这里不兜住就会把按键处理抛异常。
+        """
+        mime = QApplication.clipboard().mimeData()
+        if mime is None:
+            return []
+        return [u.toLocalFile() for u in mime.urls()
+                if QFileInfo(u.toLocalFile()).isFile()]
 
     def paste_paths(self, paths):
         """粘贴进来的那批路径走这一条：加到用户眼前这一页，不是永远加到第一页。
@@ -4153,6 +4383,14 @@ class MainWindow(QWidget):
 # ---------------------------------------------------------------------------
 # 表结构预览/编辑弹窗
 # ---------------------------------------------------------------------------
+# 两个字段弹窗的列宽口径：设计下限（46/230/280/160/96）与 Swing 侧同一组数，
+# 富余宽度只摊给文字列（主键勾选框、字节数那两列保持下限附近不动）
+STRUCTURE_COL_FLOORS = (46, 230, 280, 160, 96)
+STRUCTURE_COL_STRETCH = (1, 2, 3)
+METADATA_COL_FLOORS = (230, 280, 160, 70, 70)
+METADATA_COL_STRETCH = (0, 1, 2)
+
+
 class StructureDialog(QDialog):
     def __init__(self, tables, parent=None):
         super().__init__(parent)
@@ -4168,7 +4406,10 @@ class StructureDialog(QDialog):
         lay.addWidget(tip)
         self.tabs = QTabWidget()
         for t in tables:
-            tw = QTableWidget(len(t["columns"]), 5)
+            # 主键列 46、最大字节列 96 与 Swing 侧同一组设计下限；
+            # 富余宽度只摊给三列文字，主键勾选框与字节数那两列不动
+            tw = FillWidthTable(len(t["columns"]), 5,
+                                STRUCTURE_COL_FLOORS, STRUCTURE_COL_STRETCH)
             style_table_font(tw)
             # 第 4 列是这一列数据在表内的实测最大字节数，不是类型声明的容量；
             # 挨着「数据类型」放时只写"最大字节长度"会被读成 VARCHAR(n) 那一档
@@ -4187,17 +4428,10 @@ class StructureDialog(QDialog):
                 # 建表仍按原类型"的错觉，所以只给看不给改（与 Java 侧同口径）
                 size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
                 tw.setItem(i, 4, size_item)
-            # 主键列按内容收窄，其余列"设计下限与内容需要取大者"：关掉"末列填满视口"
-            # 才有"放不下"这件事——但只关它还不够，宽度写死时超长字段名是被切掉的那一个，
-            # 切掉的部分滚不到就等于没有滚动条。所以列宽随内容长，表格比弹窗宽时才出横向条。
-            # （Swing 侧同一算法：AUTO_RESIZE_OFF + 逐格按渲染器量宽取大者）
-            th = tw.horizontalHeader()
-            th.setSectionResizeMode(QHeaderView.Interactive)
-            th.setStretchLastSection(False)
-            th.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-            th.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-            for _c, _floor in ((1, 230), (2, 280), (3, 160)):
-                tw.setColumnWidth(_c, max(_floor, tw.sizeHintForColumn(_c)))
+            # 列宽由 FillWidthTable 管：底宽 = 设计下限与内容需要取大者，视口富余
+            # 摊给三列文字铺满弹窗；内容超出视口时一列都不压，横向条把尾巴带出来。
+            # （Swing 侧同一算法：AUTO_RESIZE_OFF + Tables.fillOnResize）
+            tw.fit_columns()
             # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方。
             # 表注释的输入行也拿掉了——清单里双击那一格就能改，两处都能改同一件事
             # 就会有两处"到底以谁为准"的口径（用户 2026-10-28 点名）
@@ -4285,7 +4519,7 @@ class SqlMetadataDialog(QDialog):
                   "「表名与字段名转大写」只切换显示，不回写脚本正文。"
         lay.addWidget(QLabel(tip))
         cols = table.get("columns") or []
-        tw = QTableWidget(len(cols), 5)
+        tw = FillWidthTable(len(cols), 5, METADATA_COL_FLOORS, METADATA_COL_STRETCH)
         style_table_font(tw)
         tw.setHorizontalHeaderLabels(["字段名", "字段注释", "数据类型", "主键", "可空"])
         self._on_edit = on_edit
@@ -4310,12 +4544,10 @@ class SqlMetadataDialog(QDialog):
                 tw.setItem(i, j, item)
         self._loading = False
         tw.setSelectionBehavior(QAbstractItemView.SelectRows)
-        tw.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        # 末列不铺满视口，且列宽随内容长：字段名/注释放不下时要出横向滚动条，
-        # 而不是把超长那一格切掉（Swing 侧 AUTO_RESIZE_OFF + 逐格量宽同一算法）
-        tw.horizontalHeader().setStretchLastSection(False)
-        for _c, _floor in ((0, 230), (1, 280), (2, 160), (3, 70), (4, 70)):
-            tw.setColumnWidth(_c, max(_floor, tw.sizeHintForColumn(_c)))
+        # 与结构弹窗同一档：底宽取"设计下限与内容需要"的大者，富余摊给字段名/注释/
+        # 数据类型三列铺满弹窗；装不下时出横向条，不把超长那一格切掉
+        # （Swing 侧 AUTO_RESIZE_OFF + Tables.fillOnResize 同一算法）
+        tw.fit_columns()
         # 表格左上的标识（与第一页「待导入文件」同一做法）：标题里带列数，
         # 不必滚到表格末尾数这一张表解析出了多少列
         col_box = QGroupBox("%s（共 %d 列）" % (COLUMN_TABLE_TITLE, len(cols)))
@@ -4387,6 +4619,33 @@ class DDLDialog(QDialog):
             te.setReadOnly(True)
             te.setFont(QFont("Menlo"))
             self.tabs.addTab(te, t["table_name"])
+        lay.addWidget(self.tabs)
+        btns = QDialogButtonBox(QDialogButtonBox.Close)
+        btns.rejected.connect(self.reject)
+        btns.accepted.connect(self.accept)
+        lay.addWidget(btns)
+
+
+# ---------------------------------------------------------------------------
+class SqlScriptDdlDialog(QDialog):
+    """「SQL 脚本改名」页的 DDL 预览：一张表一个页签，正文取自脚本自己的 CREATE TABLE。
+
+    与第一页那个弹窗同形状（同一档尺寸、同样只读、同样一颗关闭），差别只在正文来源：
+    第一页是从 Excel 推断出来的表定义现拼 DDL，这一页本来就是脚本正文，
+    预览不该改成"按工具的理解重抄一遍"。
+    """
+
+    def __init__(self, pages, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("DDL 预览")
+        fit_client(self, 900, 600)
+        lay = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        for name, ddl in pages:
+            te = QPlainTextEdit(ddl)
+            te.setReadOnly(True)
+            te.setFont(QFont("Menlo"))
+            self.tabs.addTab(te, name)
         lay.addWidget(self.tabs)
         btns = QDialogButtonBox(QDialogButtonBox.Close)
         btns.rejected.connect(self.reject)

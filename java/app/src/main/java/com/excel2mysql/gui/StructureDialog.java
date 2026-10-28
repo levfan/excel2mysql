@@ -35,6 +35,10 @@ public final class StructureDialog extends JDialog {
     private static final String TIP =
             "勾选一列或多列作为主键（多列即组合主键，主键约束至多一个）；"
             + "主键需全列非空且组合唯一，全部不勾选则不设主键";
+    /** 列宽设计下限；富余宽度只摊给三列文字（1/2/3），主键框与字节数那两列不动。 */
+    private static final int[] STRUCTURE_COL_FLOORS = {UiScale.px(46), UiScale.px(230),
+            UiScale.px(280), UiScale.px(160), UiScale.px(96)};
+    private static final int[] STRUCTURE_COL_STRETCH = {1, 2, 3};
 
     /** 一个标签页背后的一份编辑状态。 */
     private static final class Editor {
@@ -100,15 +104,16 @@ public final class StructureDialog extends JDialog {
         for (TableBuilder.Result r : results) {
             Editor ed = new Editor(r.table, r.rows);
             editors.add(ed);
-            JTable table = new JTable(ed.model);
+            // 主键列窄、其余列"设计下限与内容需要取大者"：关掉自适应才有"放不下"这件事，
+            // 而列宽随内容长，超长字段名才不会是被切掉的那一个（切掉的截滚不到）。
+            // 视口比底宽宽时把富余摊给三列文字铺满弹窗（FillTable），末列不靠自适应补白
+            // （Qt 侧对应 FillWidthTable + fill_widths，两栈同一算法）
+            FillTable table = new FillTable(ed.model, STRUCTURE_COL_FLOORS,
+                    STRUCTURE_COL_STRETCH);
             table.setFillsViewportHeight(true);
             Tables.style(table);
-            // 主键列窄、其余列"设计下限与内容需要取大者"：关掉自适应才有"放不下"这件事，
-            // 而列宽随内容长，超长字段名才不会是被切掉的那一个（切掉的截滚不到）
-            // （Qt 侧对应 setStretchLastSection(false) + sizeHintForColumn，两栈同一算法）
+            table.fitColumns();   // 字体定下来之后重算一遍底宽（构造那一刻量的是默认字体）
             table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
-            Tables.fitColumns(table, new int[]{UiScale.px(46), UiScale.px(230),
-                    UiScale.px(280), UiScale.px(160), UiScale.px(96)});
             JScrollPane scroll = new JScrollPane(table);
             ed.scroll = scroll;
             scroll.setPreferredSize(new Dimension(UiScale.px(900), UiScale.px(420)));
@@ -275,6 +280,13 @@ public final class StructureDialog extends JDialog {
         java.awt.Component view = editors.get(tabIndex).scroll.getViewport().getView();
         return view instanceof javax.swing.JTable
                 && Tables.columnFitsContent((javax.swing.JTable) view, col);
+    }
+
+    /** 自检用：内容装得下时列宽总和是不是正好铺满视口（右侧不留白条）。 */
+    public boolean columnsFillViewport(int tabIndex) {
+        java.awt.Component view = editors.get(tabIndex).scroll.getViewport().getView();
+        return view instanceof javax.swing.JTable
+                && Tables.fillsViewport((javax.swing.JTable) view);
     }
 
     /** 自检用：某个 tab 里那张表的容器，用来读它外面有没有再套一层标识。 */

@@ -139,6 +139,47 @@ public final class Tables {
                 >= contentWidth(table, col);
     }
 
+    /**
+     * 按"这一列需要多宽"打底，把视口富余的宽度摊给文字列。
+     *
+     * 底宽之和已经超过 avail 时原样返回——一列都不往小里压，"内容比视口宽"才轮得到
+     * 横向滚动条把超长的尾巴带出来。富余部分按各列底宽等比分，整除的零头落在最后一个
+     * 文字列上，总和正好等于 avail，表格右侧不留白条。
+     * Qt 侧同一算法在 main.py 的 fill_widths。
+     */
+    public static int[] fillWidths(int[] bases, int avail, int[] stretch) {
+        int[] widths = bases.clone();
+        int sum = 0;
+        for (int w : bases) {
+            sum += w;
+        }
+        int spare = avail - sum;
+        if (spare <= 0 || stretch.length == 0) {
+            return widths;
+        }
+        int total = 0;
+        for (int c : stretch) {
+            total += bases[c];
+        }
+        int given = 0;
+        for (int i = 0; i < stretch.length - 1; i++) {
+            int add = (int) ((long) spare * bases[stretch[i]] / total);
+            widths[stretch[i]] += add;
+            given += add;
+        }
+        widths[stretch[stretch.length - 1]] += spare - given;
+        return widths;
+    }
+
+    /** 列宽总和是不是正好等于视口宽度（装不下时表格本就该比视口宽）。 */
+    public static boolean fillsViewport(javax.swing.JTable table) {
+        int sum = 0;
+        for (int c = 0; c < table.getColumnCount(); c++) {
+            sum += table.getColumnModel().getColumn(c).getWidth();
+        }
+        return sum == table.getParent().getWidth();
+    }
+
     private Tables() {
     }
 

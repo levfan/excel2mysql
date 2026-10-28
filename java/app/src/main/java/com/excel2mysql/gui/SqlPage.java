@@ -237,7 +237,6 @@ public final class SqlPage extends JPanel {
     private java.awt.Container rowName;
     /** 底部动作条（覆盖开关 + 保存/执行/生成四颗），在分隔条之外。 */
     private java.awt.Container rowAct;
-    private final HintLabel hint = new HintLabel();
     /** 页签顶部那句介绍：与另两页同一块底板（Python 侧 win.sql_intro）。 */
     private final javax.swing.JLabel intro = PageIntro.of("解析建表语句，回写库");
 
@@ -309,9 +308,20 @@ public final class SqlPage extends JPanel {
         // 添加文件这一路与第一页统一：拖进来或点这块区域选文件，不再单独放一颗按钮
         sqlDrop = new DropArea(paths -> dropFiles(paths), () -> chooseFiles(),
                 DropArea.SQL_HINT, "点击选择 SQL 脚本；也可以直接拖到这里");
-        // 与「Excel 导入」那页「清空待上传文件」同一位置同一语义：整份清出清单，不是只删选中行
+        // 与「Excel 导入」那页同一位置、同一形状：三颗等宽铺满表格下面那一排。
+        // 清空是整份清出清单，不是只删选中行；结构预览开的是选中那一行的字段清单；
+        // 预览DDL 一张表一页，正文就是保存/执行将要写出的那句 CREATE TABLE
         JButton clearSql = new JButton("清空待上传文件");
         clearSql.addActionListener(e -> clearAllFiles());
+        JButton previewStructure = new JButton("生成表结构预览");
+        previewStructure.setToolTipText("打开当前选中那一行的字段清单（与双击「文件」「原表名」"
+                + "那一列是同一个框）；没选中行时取清单第一行。");
+        previewStructure.addActionListener(e -> previewStructure());
+        JButton previewDdl = new JButton("预览 DDL");
+        previewDdl.setToolTipText("<html>一张表一个页签，正文就是「保存修改后ddl脚本」「执行修改后ddl脚本到当前库」<br>"
+                + "将要写出的那句 CREATE TABLE（含还没落地的改名与字段编辑）；<br>"
+                + "勾选「覆盖已存在表」时，页签开头会补上执行前那句 DROP TABLE IF EXISTS。</html>");
+        previewDdl.addActionListener(e -> previewDdl());
         prefixField = new HintTextField(18, PREFIX_HINT);
         JButton apply = new JButton("批量应用前缀");
         apply.setToolTipText("只改「当前表名」列的显示（双击看的元数据表名同步），脚本正文不动；"
@@ -398,11 +408,13 @@ public final class SqlPage extends JPanel {
         nameBar.add(new JLabel("命名规则："));
         nameBar.add(upperBox);
 
-        // 清空按钮排在表格下方第一排（前缀行的下一行）的最左，
-        // 与「Excel 导入」那页「清空待上传文件」同一位置同一语义
-        JPanel nameRow = flow();
+        // 三颗按钮排在表格下方第一排（前缀行的下一行），与「Excel 导入」那页同一位置：
+        // Qt 的 QHBoxLayout 把三颗等宽铺满整行，Swing 这边用 GridLayout(1,3) 对齐同一形状
+        JPanel nameRow = new JPanel(new java.awt.GridLayout(1, 3, UiScale.px(6), 0));
         rowName = nameRow;
         nameRow.add(clearSql);
+        nameRow.add(previewStructure);
+        nameRow.add(previewDdl);
 
         JPanel actions = new JPanel(new BorderLayout());
         actions.add(prefixRow, BorderLayout.NORTH);
@@ -463,10 +475,8 @@ public final class SqlPage extends JPanel {
         watchDivider(outerSplit);
         watchDivider(split);
 
-        JPanel north = new JPanel(new BorderLayout());
-        north.add(hint, BorderLayout.NORTH);
-        north.add(intro, BorderLayout.CENTER);
-        add(north, BorderLayout.NORTH);
+        // 页签内容最上面只留那句介绍：当前库只在主窗口顶部状态栏说一次，页内不再各写一条
+        add(intro, BorderLayout.NORTH);
         add(outerSplit, BorderLayout.CENTER);
         // 执行层与上方表格区之间的细分隔线（与第一页同一处）
         JPanel bottom = new JPanel(new BorderLayout(0, UiScale.px(2)));
@@ -526,24 +536,6 @@ public final class SqlPage extends JPanel {
         return false;
     }
 
-    /** 目标库提示条由主窗口同源刷新，三页说的是同一个库。 */
-    public void setHint(boolean ok, String message) {
-        if (ok) {
-            hint.setOk(message);
-        } else {
-            hint.setBad(message);
-        }
-    }
-
-    /** 未选库时收起这条重复告警：唯一的提示留在主窗口顶部状态栏。 */
-    public void clearHint() {
-        hint.clearHint();
-    }
-
-    public String hintText() {
-        return hint.hintText();
-    }
-
     /** 那句介绍的原文：两栈逐字对撞用（Python 侧 win.sql_intro）。 */
     public String introText() {
         return intro.getText();
@@ -552,15 +544,6 @@ public final class SqlPage extends JPanel {
     /** 介绍条本体：自检查三页是不是同一块底板。 */
     public javax.swing.JLabel introField() {
         return intro;
-    }
-
-    /** 提示条本体：自检查它能不能真的拖选复制。 */
-    public HintLabel hintField() {
-        return hint;
-    }
-
-    public boolean hintIsOk() {
-        return hint.isOk();
     }
 
     public LogPanel logPanel() {
@@ -816,6 +799,11 @@ public final class SqlPage extends JPanel {
         return rowActual.size();
     }
 
+    /** 自检用：某份脚本此刻的正文（预览不许改动它）。 */
+    public String entryTextAt(int index) {
+        return index < 0 || index >= entries.size() ? null : entries.get(index).text;
+    }
+
     public String sqlRowActualName(int row) {
         return row < 0 || row >= rowActual.size() ? null : rowActual.get(row);
     }
@@ -1046,6 +1034,96 @@ public final class SqlPage extends JPanel {
         applyGenEnabled();
         log("[清空] 已清空 " + n + " 个脚本文件");
         return n;
+    }
+
+    /**
+     * 「生成表结构预览」：打开当前选中那一行的字段清单，与双击只读列同一个框。
+     *
+     * 没选中行就取第一行——点按钮的人要的是"看一眼这张表"，不是被反问选哪一行。
+     */
+    public void previewStructure() {
+        if (rowActual.isEmpty()) {
+            host.warn("清单里没有脚本表，先在上方虚区添加 SQL 脚本。");
+            return;
+        }
+        int row = table.getSelectedRow();
+        if (row < 0 || row >= rowActual.size()) {
+            row = 0;
+        }
+        showMetadataAtRow(row);
+    }
+
+    /**
+     * 「预览 DDL」：一张表一页，正文取脚本里属于这张表的 CREATE TABLE 语句。
+     *
+     * 还没落地的改名先算进正文（与保存/执行同一道 materialize 的结果），但只算在这份
+     * 副本上，页面里的 displayMap 一个字不改——预览不该把改动定死。
+     * 勾了「覆盖已存在表」就在每页开头补上执行前那句 DROP，看的就是真要落库的形状。
+     */
+    public void previewDdl() {
+        String why = prefixBlocker();
+        if (why != null) {
+            host.warn(why);
+            return;
+        }
+        List<String[]> pages = ddlPages();
+        if (pages.isEmpty()) {
+            host.warn("这些脚本里没有解析出 CREATE TABLE 语句，没有可预览的 DDL。");
+            return;
+        }
+        if (dropExisting.isSelected()) {
+            for (String[] page : pages) {
+                page[1] = "DROP TABLE IF EXISTS `" + page[0] + "`;\n\n" + page[1];
+            }
+        }
+        new SqlScriptDdlDialog(host.owner(), pages).setVisible(true);
+    }
+
+    /** 一页一项：{页签上的表名, 那句建表正文}。 */
+    public List<String[]> ddlPages() {
+        List<String[]> pages = new ArrayList<String[]>();
+        for (Entry e : entries) {
+            String text = e.text;
+            if (!e.displayMap.isEmpty()) {
+                // 只在这份副本上套用还没落地的改名；e.displayMap 与 e.text 都不动，
+                // 预览不该把改动定死（与 Python 侧 _sql_ddl_pages 同一口径）
+                text = SqlScript.applyDisplayRenames(e.text, e.displayMap).text;
+            }
+            for (Map<String, Object> t : SqlScript.extractCreateTables(text)) {
+                String name = String.valueOf(t.get("name"));
+                String body = createBodyOf(text, name);
+                if (!body.isEmpty()) {
+                    pages.add(new String[]{displayName(name), body});
+                }
+            }
+        }
+        return pages;
+    }
+
+    /** 这份正文里写着这张表列定义的那几句 CREATE TABLE，逐句之间空一行。 */
+    private static String createBodyOf(String text, String tableName) {
+        StringBuilder sb = new StringBuilder();
+        for (String stmt : SqlScript.splitStatements(text)) {
+            boolean hit = false;
+            for (Map<String, Object> t : SqlScript.extractCreateTables(stmt)) {
+                if (tableName.equals(String.valueOf(t.get("name")))) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) {
+                continue;
+            }
+            String one = stmt.trim();
+            while (one.endsWith(";")) {
+                one = one.substring(0, one.length() - 1).trim();
+            }
+            if (sb.length() > 0) {
+                sb.append("\n\n");
+            }
+            sb.append(one).append(";");
+        }
+        return sb.toString();
     }
 
     /** 两颗前缀按钮的共同前置检查：没有可处理的表就返回一句说明，让按钮走 warn 弹窗。 */

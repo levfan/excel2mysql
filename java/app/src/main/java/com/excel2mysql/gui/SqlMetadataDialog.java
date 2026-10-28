@@ -35,10 +35,14 @@ public final class SqlMetadataDialog extends JDialog {
     }
 
     private static final String[] HEADERS = {"字段名", "字段注释", "数据类型", "主键", "可空"};
+    /** 列宽设计下限；富余宽度只摊给字段名/注释/类型三列（0/1/2）。 */
+    private static final int[] METADATA_COL_FLOORS = {UiScale.px(230), UiScale.px(280),
+            UiScale.px(160), UiScale.px(70), UiScale.px(70)};
+    private static final int[] METADATA_COL_STRETCH = {0, 1, 2};
 
     /** 字段表外面那层带标题的容器，标题里带列数；自检要读它。 */
     private final JPanel columnsBox;
-    private final JTable fieldTable;
+    private final FillTable fieldTable;
 
     public SqlMetadataDialog(Frame owner, SqlScript.ParsedTable table,
                              String displayName, boolean upper) {
@@ -123,16 +127,15 @@ public final class SqlMetadataDialog extends JDialog {
                     Boolean.TRUE.equals(c.primaryKey) ? "是" : "",
                     Boolean.FALSE.equals(c.nullable) ? "否" : "是"});
         }
-        fieldTable = new JTable(model);
+        fieldTable = new FillTable(model, METADATA_COL_FLOORS, METADATA_COL_STRETCH);
         Tables.style(fieldTable);
+        fieldTable.fitColumns();   // 字体定下来之后重算底宽
         fieldTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         fieldTable.getTableHeader().setReorderingAllowed(false);
-        // 关掉列自适应，且列宽随内容长：超长字段名不会被切进省略号，
-        // 表格比弹窗宽时横向滚动条能把尾巴带出来
-        // （Qt 侧同一个做法：Interactive + setStretchLastSection(false) + sizeHintForColumn）
+        // 关掉列自适应：超长字段名不会被切进省略号，表格比弹窗宽时横向滚动条把尾巴带出来；
+        // 视口比底宽宽时把富余摊给字段名/注释/类型三列铺满弹窗
+        // （Qt 侧同一个做法：FillWidthTable + fill_widths）
         fieldTable.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);
-        Tables.fitColumns(fieldTable, new int[]{UiScale.px(230), UiScale.px(280),
-                UiScale.px(160), UiScale.px(70), UiScale.px(70)});
         JScrollPane scroll = new JScrollPane(fieldTable);
         // 表格左上角的标识（与第一页「待导入文件」同一做法）：标题里带列数，
         // 不必滚到表格末尾数这一张表解析出了多少列
@@ -168,6 +171,11 @@ public final class SqlMetadataDialog extends JDialog {
     /** 自检用：这一列摆出来的宽度够不够装下它真需要的宽度（与结构弹窗同一条判据）。 */
     public boolean columnFitsContent(int col) {
         return Tables.columnFitsContent(fieldTable, col);
+    }
+
+    /** 自检用：内容装得下时列宽总和是不是正好铺满视口（右侧不留白条）。 */
+    public boolean columnsFillViewport() {
+        return Tables.fillsViewport(fieldTable);
     }
 
     public String columnTitle() {
