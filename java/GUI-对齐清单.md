@@ -4704,3 +4704,100 @@ Java 还原后重编再跑自检回到 RC 0。
   而本轮两栈只换了同一串文字。对撞键 `w.initials.text` 两边同步改值，
   上面两条码点一致即为这一键的等价证明。
 - 版本仍 **2.6.0**，理由同 §93.6。
+
+
+## 95. 第三页结果表表头按列挂字段注释（title）
+
+用户 2026-10-28：「tab3的对于执行结果的表格展示，表头应该有个title的样式，把字段注释展示出来」。
+这一页查出来的列名多是拼音首字母（`ddje`），只看列名读不出含义，注释只有库知道。
+
+### 95.1 注释不在结果集里，两栈都得反查
+
+先实测再定做法，两条都不成立：
+
+- MySQL 协议里的列定义根本不带注释；
+- JDBC 标准接口没有 `getColumnComment`，随包 Connector/J 8.0.33 的
+  `com.mysql.cj.jdbc.result.ResultSetMetaData` 里也没这个方法
+  （`javap` 过：只有 `getTableName / getColumnName / getSchemaName / getFields` 等）。
+
+所以两栈统一：拿**库名 + 真表名 + 真列名**回查 `information_schema.COLUMNS`。
+名字必须取原始名而不是别名，同一句
+`SELECT id, sj AS t_time, amt+0 AS calc, 1 AS lit FROM e2m_probe_cmt x` 实测：
+
+| 取值口 | 表名 | 列名 | 表达式列 |
+| --- | --- | --- | --- |
+| PyMySQL `cursor._result.fields[i]` | `table_name='x'`（别名）/ `org_table='e2m_probe_cmt'` | `name='t_time'` / `org_name='sj'` | `org_table=''`、`org_name=''` |
+| Java 标准 `md.getTableName/getColumnName` | `'x'`（别名） | `'t_time'`（标签） | `''` |
+| Java `CJ Field.getOriginalTableName/getOriginalName` | `'e2m_probe_cmt'` | `'sj'` | `null` |
+
+- Python 取 `org_table / org_name / db`（`db` 是 bytes，先归一成 str）；
+  Java 在 `md instanceof com.mysql.cj.jdbc.result.ResultSetMetaData` 时取
+  `getFields()` 的原始名，不是这个驱动就退回标准名——那时带别名的列只是少一句提示。
+- 键的拼法两栈一致：库名不分大小写、表名按服务端原样（Linux 上表名区分大小写，
+  而两边这些名字都出自同一台服务端）、列名转小写（MySQL 列名本就不区分）。
+- 一个结果集最多一条查询：把所有列的表按库分组，一次 `TABLE_NAME IN (...)` 查完，
+  参数全走占位符，不拼字符串。
+- 只在图形界面这条通道反查（Python 的 `result_cb` 分支、Java 的 `Results` 分支），
+  命令行那条一个字节不变；反查整段兜异常退化成"全空串"，不报错也不打日志——
+  执行器的文本行是两栈逐行对撞的，这里多打一行就红一片。
+
+### 95.2 表头怎么挂
+
+- Qt：`setHorizontalHeaderLabels` 造出来的表头项就是 `QTableWidgetItem`，
+  直接对它 `setToolTip(...)`；`QHeaderView` 取的就是 model 的 `ToolTipRole`，
+  用例从 `model().headerData(col, Horizontal, ToolTipRole)` 读回同一条，不只看内部字段。
+- Swing：`JTableHeader` 整条只有一个 tooltip，按列挂只能自己接鼠标——表头上
+  `addMouseMotionListener`，`mouseMoved` 里 `columnAtPoint` + `convertColumnIndexToModel`
+  取模型列，把这一列那句 `setToolTipText`；停在没注释的列上就 `setToolTipText(null)`，
+  不留上一列的。
+- 前缀同一句 `字段注释：`（`main.py:HEADER_COMMENT_PREFIX` /
+  `MainFrame.HEADER_COMMENT_PREFIX`，两边注释互指）。
+- 空态：还没结果集时整条表头挂一句引导 `RESULT_HEADER_HINT`（两栈同一句文案），
+  建页时就挂上，跑出结果才撤。Java 侧顺手把「清空结果区」那条路并进
+  `clearSqlRunTable(caption)` 一个收口——之前两条路各写一遍，清完的状态不一样，
+  正是这句引导没回来（第一次跑十步闸门就是它变红抓出来的）。
+
+### 95.3 用例
+
+- Python：`F64` 喂带 `comments` 的结果集，验表头项 toolTip、model 的 `ToolTipRole`、
+  没注释的列留空、整条引导被撤；`F59b` 验清空后引导回来；`F65` 用没有字段描述的假游标
+  验退化成等长空串且不炸（换驱动不能让结果表格消失）；
+  `G12 / G12b / G12c` 真库建带注释的探针表，走 `core.sql_execute.run` 的图形通道，
+  断 `comments == ['主键编号', '采集时间', '', '']`，再开窗口喂进真表头验 title，探针表用完即删。
+- Java 自检：`sql_run_result_table` 里喂带注释的结果集（`MainFrame.newResultSet`
+  加了 `comments` 重载），除按列的 tip 值之外，把表头上**真的** `MouseMotionListener`
+  取出来分发一次 `MOUSE_MOVED`，验"停在有注释的列上表头 tooltip 就是那句"、
+  "停在没注释的列上提示被清空"；末尾「清空结果区」之后验整条引导。
+  没有让系统真动光标（自检抢用户的鼠标不合适），证到的是监听挂载与按列取注释这两步。
+- Java 真库：`verify/SqlExecCli` 第 4 段用与 `G12` 逐字相同的建表与查询，
+  断 `data.comments` 等于 `["主键编号","采集时间","",""]`——两栈取数口径在这里对撞，
+  不只看界面画成什么样。探针表 `e2msqlexecprobe_cmt` 与原有那张一起 drop，
+  跑前跑后库里的表清单仍要求一张不多一张不少。
+
+### 95.4 验证
+
+- `pack_test.py` 带凭据：**通过 862 / 失败 0 / 跳过 5**，退出码 0（`F64/F59b/F65/G12/G12b/G12c`
+  与 `T15` 全绿）；本轮先做过变异抽查——把 `main.py` 挂 title 那段删掉，
+  用例报 `通过 860 / 失败 2`，红的正是 `F64`（读到 `('', '', '')`）与 `G12b`
+  （读到 `['', '', '', '']`），退出码 1；逐字节还原后 `main.py` md5
+  `38bf37481ca3d0542bbb91ec26bb8e17`。
+- Java 自检同样做过变异：把 `setSqlRunHeaderTips` 的前缀去掉，报
+  `表头的字段注释 title 没按列对上：第 0 列=主键编号 …` 与
+  `鼠标停在有注释的列上，表头 tooltip 不是那句注释：姓名（人才卡上的）`两条红、退出码 1；
+  还原后 `MainFrame.java` md5 `ea3857756da395980e4f3495b410badd`，重跑自检退出码 0。
+- `SqlExecCli` 真库回归退出码 0，收尾行带上"结果集按真表真列取回字段注释"。
+- 十步闸门与对撞的最新一次结果见本节末尾两行。
+
+### 95.5 版本升到 2.7.0
+
+上一版 2.6.0 已经出过包（本轮就按用户要求把 Java 包放到了
+`C:\Users\acliu\Desktop\工具\excel2mysql-java-2.6.0-win64`），再改就不能同名不同内容；
+而这轮是"以前做不到、现在能做"（结果表表头能悬停看字段注释），按判据升 **minor → 2.7.0**。
+改的九处：`version.py`、`build_stamp.py`、根 `java/pom.xml`（`<version>` 与 `<app.version>`）、
+`java/app/pom.xml`、`java/verify/pom.xml` 的 parent、`java/构建验证.bat` 两处 jar 名（保持 CRLF）、
+`help_doc.py` 与 `java/assets/conn.ini` 示例里的 jar 名、`README.md` 六处；
+`HelpDoc.java` 由改过的 `help_doc.py` 重导，`T15` 逐处核过。
+- `构建验证.bat`（版本改到 2.7.0、`HelpDoc.java` 重导之后那一次）：十步全过，退出码 0，
+  第 10 步 Swing 自检带着本轮三段表头 title 断言一起过。
+- `界面双端对撞.bat`：**331 键逐键一致**，退出码 0。没加新键——`dumpWidget` 取的是控件
+  自身的 tip，逐列表头 title 不在里面，这条口径由两栈各自的自检/用例分别钉住。

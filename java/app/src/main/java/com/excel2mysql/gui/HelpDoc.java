@@ -99,7 +99,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.6.0.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.7.0.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -803,6 +803,13 @@ public final class HelpDoc {
                     "<li>表格上方那句说明写清看的是哪一条、有多少行：<code>第 2 条 · 共 37 行</code>；" + NL +
                     "结果集超过 200 行时只装前 200 行，句子跟着变成" + NL +
                     "<code>共 205 行（表格只装前 200 行，其余没取回来）</code>，避免几十万行把界面刷死</li>" + NL +
+                    "<li><b>表头把字段注释当 title 挂着</b>：鼠标停在列名上就出现" + NL +
+                    "<code>字段注释：订单金额</code>——这一页查的多是拼音首字母列名（<code>ddje</code>），" + NL +
+                    "只有注释能读懂是哪一列。注释是查完语句顺手按<b>真表真列</b>从" + NL +
+                    "<code>information_schema</code> 取回的，所以表别名（<code>FROM 水库表 t</code>）和" + NL +
+                    "列别名（<code>sj AS 时间</code>）照样查得到；表达式列（<code>amt+0</code>、" + NL +
+                    "<code>1 AS lit</code>）对不上具体列就留空，库里这一列没写注释也留空，不乱猜。" + NL +
+                    "还没结果时整条表头挂一句引导，说明注释在各列的 title 上</li>" + NL +
                     "<li>一批里有多条查出结果的语句时，表格上方出现一个下拉，按 <code>第 N 条 · 语句前 60 字</code>" + NL +
                     "列出每一条，默认停在最近那条，切换就把表格与说明一起换掉；只有一条结果时不摆这个下拉。" + NL +
                     "一批多于 50 个结果集时只保留最近 50 个回看，更早的丢弃并在结果区写明丢了几个</li>" + NL +

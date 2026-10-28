@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v2.6.0** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v2.7.0** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -285,7 +285,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.6.0` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.7.0` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -379,9 +379,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-2.6.0-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-2.6.0-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-2.6.0-win64\excel2mysql-2.6.0.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-2.7.0-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-2.7.0-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-2.7.0-win64\excel2mysql-2.7.0.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -1057,6 +1057,13 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
 - 查询出来的结果画成**真表格**（不是把表格文字打进结果区）：表头一行是列名、一行一条数据，
   隔行底色、只读；列宽按内容排，列名或取值长就把表格撑宽、用横向滚动条看全，不会挤成省略号。
   空格子写 `NULL`，取值里的换行与制表符写成可见转义 `\n` / `\t`，单格超过 40 列截断补省略号
+- **表头按列挂字段注释当 title**：鼠标停在列名上出现 `字段注释：订单金额`——这一页查的多是
+  拼音首字母列名（`ddje`），只有注释能读懂是哪一列。注释由执行器在拿到结果集之后按
+  **真表真列**回查 `information_schema.COLUMNS` 得到（`core/sql_execute.py` 的
+  `column_comments` / Java 侧 `SqlExecute.columnComments`，两栈逐值一致）：表别名
+  （`FROM 水库表 t`）与列别名（`sj AS 时间`）按原表原列查得到，表达式列（`amt+0`、`1 AS lit`）
+  与库里没写注释的列留空，不乱猜；反查失败也只是没有提示，不影响结果展示，
+  且只在图形界面这条通道做，命令行的逐字输出不变。还没有结果集时整条表头挂一句引导
 - 表格上方那句说明写清看的是哪一条、有多少行（`第 2 条 · 共 37 行`）；结果集超过 200 行只装
   前 200 行，句子跟着变成 `共 205 行（表格只装前 200 行，其余没取回来）`。
   一批里有多条查出结果时上方出现下拉（`第 N 条 · 语句前 60 字`），默认停在最近那条，
