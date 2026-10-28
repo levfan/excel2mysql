@@ -20,17 +20,24 @@ import java.util.TreeSet;
  * 断的是落库副作用，不是"没抛异常"：回滚没生效时语句照样一条条写着"执行成功"，
  * 只有回查表里的行数才能看出那批 INSERT 到底提没提交。
  *
- * 四段各测一件事：
+ * 各段测一件事：
  *   1 建表（单独提交，给后面几段一张干净的探针表）
  *   2 先写两行再撞一句坏语句 → 整批回滚，表里必须还是 0 行
  *   3 写一行 + 一句带结果集的查询 → 提交，表里 1 行，结果集文本要能数出行数
  *   4 一句带结果集的查询顺手取回字段注释 → 与 Python 侧逐值一样（界面表头 title 靠它）
+ *   5 只写注释的一批 → 零执行
+ *   6 版本注释里的 SET FOREIGN_KEY_CHECKS=0 → 真发进服务端，被外键引用的父表才删得掉
+ *      （这一句以前被普通通道当纯注释丢掉，现场就是 MySQL 3730 删不掉表）
+ *
+ * 发给 check_sql_exec_parity.py 逐行对撞的只有 1、2、3、5、6 这五批——那五段的输入
+ * Python 侧也会跑；第 4 段（字段注释）的 Python 那一份在 pack_test 的 G12 里，
+ * 混进行序列就变成"两条线谁都没错，却报行数不同"。
  *
  * 同时把执行器发出的每一行原文打到标准输出（前缀 LINE|），Python 侧用同一段输入
  * 跑 core/sql_execute.py，两份行序列逐行对——两个页签/两条线说的话不一样，
  * 现场就会按一边的经验去理解另一边。
  *
- * 只动 e2msqlexecprobe / e2msqlexecprobe2 这两张探针表；跑前跑后库里的表清单
+ * 只动 e2msqlexecprobe 开头的那几张探针表；跑前跑后库里的表清单
  * 必须一张不多一张不少。口令只走环境变量 E2M_PASS，不落任何文件。
  */
 public final class SqlExecCli {
@@ -38,6 +45,22 @@ public final class SqlExecCli {
     private static final String PROBE = "e2msqlexecprobe";
     /** 第 4 段专用：列上带 COMMENT 的探针表，用完即 drop，不留给下一轮撞名。 */
     private static final String PROBE2 = "e2msqlexecprobe_cmt";
+    /** 第 6 段专用：父子两张探针表，用来验版本注释里的 SET 真发进了服务端。 */
+    private static final String PROBE_FK_PARENT = "e2msqlexecprobe_p";
+    private static final String PROBE_FK_CHILD = "e2msqlexecprobe_c";
+
+    /** 与 check_sql_exec_parity.py 的 B5 逐字相同的一条批（语句之间只夹一个换行）。 */
+    private static final String FK_BATCH =
+            "CREATE TABLE " + PROBE_FK_PARENT + " (id INT PRIMARY KEY);" + (char) 10
+                    + "CREATE TABLE " + PROBE_FK_CHILD + " (id INT, pid INT,"
+                    + " CONSTRAINT e2m_fk_ibfk_1 FOREIGN KEY (pid)"
+                    + " REFERENCES " + PROBE_FK_PARENT + " (id));" + (char) 10
+                    + "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                    + " FOREIGN_KEY_CHECKS=0 */;" + (char) 10
+                    + "DROP TABLE " + PROBE_FK_PARENT + ";" + (char) 10
+                    + "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;" + (char) 10
+                    + "CREATE TABLE " + PROBE_FK_PARENT + " (id INT PRIMARY KEY);" + (char) 10
+                    + "DROP TABLE " + PROBE_FK_CHILD + ";";
 
     /** 收集执行器发出的每一行，既用于断言也用于打印。 */
     private static final class Capture implements SqlExecute.Out {
@@ -152,7 +175,9 @@ public final class SqlExecCli {
                             setsCmt.add(data);
                         }
                     });
-            emitted.addAll(cmt.lines);
+            // 这一批的行不进 emitted：emitted 是发给 check_sql_exec_parity.py 逐行对撞的那份，
+            // 里面只能有它自己也会跑的输入。注释探针只在 Java 侧跑（Python 那份在 pack_test 的
+            // G12），把它的行混进来就成了"Python 22 行 / Java 26 行"，两条线谁都没错却全线红。
             if (rCmt.failed || !rCmt.committed) {
                 problems.add("带注释探针表那批应成功提交，实际 failed=" + rCmt.failed
                         + " committed=" + rCmt.committed + " 错误=" + rCmt.error);
@@ -182,10 +207,34 @@ public final class SqlExecCli {
             if (!contains(c4.lines, "没有可执行的语句")) {
                 problems.add("空输入没给出那句话：" + tail(c4.lines));
             }
+
+            // ---- 6 版本注释里的 SET FOREIGN_KEY_CHECKS=0：真发给服务端，父表才删得掉 ----
+            // 现场那条 MySQL 3730 的复现：这一句以前被普通通道当纯注释丢掉，外键检查一直开着，
+            // 删被引用的父表就被拒。断的是落库副作用（父表真被删掉又重建、子表真被删），
+            // "没抛异常"分不清删没删——被挡住时执行器只是停下，两张探针表都还在库里。
+            // 文本与批次位置都跟 check_sql_exec_parity.py 的 B5 一样，两边逐行对撞。
+            Capture c5 = new Capture();
+            SqlExecute.Report r5 = SqlExecute.run(db, FK_BATCH, c5);
+            emitted.addAll(c5.lines);
+            if (r5.failed || !r5.committed) {
+                problems.add("外键那批应全部提交，实际 failed=" + r5.failed
+                        + " committed=" + r5.committed + " 错误=" + r5.error);
+            }
+            if (tableExists(db, PROBE_FK_CHILD)) {
+                problems.add("版本注释里的 SET 没生效：子表还在，"
+                        + "父表那句 DROP 被 MySQL 3730 挡下了");
+            }
+            if (!tableExists(db, PROBE_FK_PARENT)) {
+                problems.add("父表没能重建回来：那份批次的最后一句没执行");
+            }
         } finally {
             try (Statement st = db.connection().createStatement()) {
+                st.execute("SET FOREIGN_KEY_CHECKS=0");
+                st.execute("DROP TABLE IF EXISTS `" + PROBE_FK_CHILD + "`");
+                st.execute("DROP TABLE IF EXISTS `" + PROBE_FK_PARENT + "`");
                 st.execute("DROP TABLE IF EXISTS `" + PROBE + "`");
                 st.execute("DROP TABLE IF EXISTS `" + PROBE2 + "`");
+                st.execute("SET FOREIGN_KEY_CHECKS=1");
                 db.connection().commit();
             } catch (Exception ignore) {
                 problems.add("探针表没清掉：" + PROBE);
@@ -213,8 +262,8 @@ public final class SqlExecCli {
             System.exit(1);
         }
         System.out.println("+ [OK] SQL-EXEC | 建表提交、坏批回滚后表里 0 行、好批提交后 1 行、"
-                + "结果集按真表真列取回字段注释、纯注释零执行；执行器发出 "
-                + emitted.size() + " 行文本");
+                + "结果集按真表真列取回字段注释、纯注释零执行、版本注释里的 SET 真发进了服务端"
+                + "（被外键引用的父表删得掉）；执行器发出 " + emitted.size() + " 行文本");
     }
 
     private static boolean contains(List<String> lines, String needle) {

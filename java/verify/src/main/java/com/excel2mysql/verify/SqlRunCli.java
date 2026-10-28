@@ -31,6 +31,9 @@ public final class SqlRunCli {
 
     private static final String PROBE_A = "e2msqlprobe_ok";
     private static final String PROBE_B = "e2msqlprobe_bad";
+    /** 外键那支用的两张表：父表会被脚本先删再建，子表整程不动。 */
+    private static final String FK_CHILD = "e2msqlprobe_fkc";
+    private static final String FK_PARENT = "e2msqlprobe_fkp";
     private static final Charset UTF8 = Charset.forName("UTF-8");
 
     /** 只记账不渲染的回报口：进度计数与日志都要能数出来。 */
@@ -84,6 +87,7 @@ public final class SqlRunCli {
         File dir = Files.createTempDirectory("e2m-sqlrun").toFile();
         File good = new File(dir, "good.sql");
         File bad = new File(dir, "bad.sql");
+        File dump = new File(dir, "dump.sql");
         String nl = String.valueOf((char) 10);
         Files.write(good.toPath(), (
                 "CREATE TABLE " + PROBE_A + " (id INT PRIMARY KEY, name VARCHAR(20));" + nl
@@ -93,6 +97,16 @@ public final class SqlRunCli {
                 "CREATE TABLE " + PROBE_B + " (id INT PRIMARY KEY);" + nl
                         + "INSERT INTO " + PROBE_B + " VALUES (1);" + nl
                         + "INSERT INTO no_such_table_e2m VALUES (1);" + nl).getBytes(UTF8));
+        // 现场那份 MariaDB 整库 dump 的形状：抬头 + 版本注释里的 SET + 自己写的 DROP
+        Files.write(dump.toPath(), (
+                "-- MariaDB dump 10.19  Distrib 10.11.16-MariaDB" + nl
+                        + "/*!40101 SET NAMES utf8mb4 */;" + nl
+                        + "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS,"
+                        + " FOREIGN_KEY_CHECKS=0 */;" + nl
+                        + "DROP TABLE IF EXISTS `" + FK_PARENT + "`;" + nl
+                        + "CREATE TABLE `" + FK_PARENT + "` (id INT PRIMARY KEY);" + nl
+                        + "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;" + nl
+                        + "-- Dump completed on 2026-10-25 12:00:00" + nl).getBytes(UTF8));
 
         // 连不上就把原因说清楚退出：让异常栈糊在控制台上，等于这条闸门没跑过
         DbClient db;
@@ -153,7 +167,56 @@ public final class SqlRunCli {
             if (tableExists(db, PROBE_B) && count(db, PROBE_B) != 0) {
                 problems.add("坏脚本回滚没生效：" + PROBE_B + " 里有 " + count(db, PROBE_B) + " 行");
             }
+
+            // ---- 带外键的整库 dump + 「覆盖已存在表」：现场那条 MySQL 3730 的复现 ----
+            // 这一支跑的是用户实际走过的那条路（第二页的执行任务体），断的是落库副作用：
+            // 版本注释 /*!40014 SET ... FOREIGN_KEY_CHECKS=0 */; 被当纯注释丢掉、或者
+            // 补出来的 DROP 排在它前面，父表就删不掉——被挡住时那句 DROP 只是报错停下，
+            // 所以查的是"父表真被删掉又重建（行数归零）、子表一行没动"。
+            // 与 Python 侧 pack_test 的 G13 同一份夹具形状。
+            try (Statement st = db.connection().createStatement()) {
+                st.execute("SET FOREIGN_KEY_CHECKS=0");
+                st.execute("DROP TABLE IF EXISTS `" + FK_CHILD + "`");
+                st.execute("DROP TABLE IF EXISTS `" + FK_PARENT + "`");
+                st.execute("CREATE TABLE `" + FK_PARENT + "` (id INT PRIMARY KEY)");
+                st.execute("CREATE TABLE `" + FK_CHILD + "` (id INT, pid INT,"
+                        + " CONSTRAINT runcl_fk_ibfk_1 FOREIGN KEY (pid)"
+                        + " REFERENCES `" + FK_PARENT + "` (id))");
+                st.execute("INSERT INTO `" + FK_PARENT + "` VALUES (7)");
+                st.execute("INSERT INTO `" + FK_CHILD + "` VALUES (1, NULL)");
+                st.execute("SET FOREIGN_KEY_CHECKS=1");
+            }
+            db.connection().commit();
+            String dumpText = new String(Files.readAllBytes(dump.toPath()), UTF8);
+            com.excel2mysql.core.SqlScript.DropPrep prep =
+                    com.excel2mysql.core.SqlScript.prependDropTables(dumpText);
+            if (!prep.tables.isEmpty()) {
+                problems.add("脚本自己已经写了 DROP 的表还是被补了一遍（补出来的那句排在"
+                        + " dump 自带的 SET 之前，父表删不掉）：" + prep.tables);
+            }
+            List<SqlPage.Src> fkItems = new ArrayList<SqlPage.Src>();
+            fkItems.add(new SqlPage.Src(dump.getPath(), prep.text));
+            Recorder recFk = new Recorder();
+            SqlPage.RunResult resFk = SqlPage.runScripts(fkItems, cfg, recFk);
+            if (resFk.ok != 1 || resFk.fail != 0) {
+                problems.add("带外键的整库 dump 在第二页跑失败：" + tail(recFk.errors));
+            }
+            if (tableExists(db, FK_PARENT) && count(db, FK_PARENT) != 0) {
+                problems.add("父表没被删掉重建：" + FK_PARENT + " 里还剩 "
+                        + count(db, FK_PARENT) + " 行");
+            }
+            if (count(db, FK_CHILD) != 1) {
+                problems.add("子表该一行没动，实际 " + count(db, FK_CHILD) + " 行");
+            }
         } finally {
+            try (Statement st = db.connection().createStatement()) {
+                st.execute("SET FOREIGN_KEY_CHECKS=0");
+                st.execute("DROP TABLE IF EXISTS `" + FK_CHILD + "`");
+                st.execute("DROP TABLE IF EXISTS `" + FK_PARENT + "`");
+                st.execute("SET FOREIGN_KEY_CHECKS=1");
+            } catch (Exception ignore) {
+                problems.add("外键探针表没清掉：" + FK_CHILD + " / " + FK_PARENT);
+            }
             for (String t : new String[]{PROBE_A, PROBE_B}) {
                 try (Statement st = db.connection().createStatement()) {
                     st.execute("DROP TABLE IF EXISTS `" + t + "`");
@@ -171,6 +234,7 @@ public final class SqlRunCli {
             db.close();
             good.delete();
             bad.delete();
+            dump.delete();
             dir.delete();
         }
 
@@ -182,7 +246,8 @@ public final class SqlRunCli {
             System.out.println("x [ERROR] SQL-RUN | 真库执行回归未通过");
             System.exit(1);
         }
-        System.out.println("+ [OK] SQL-RUN | 语句计数 6/6 对齐，好脚本落库 2 行、坏脚本整文件回滚，探针表零残留");
+        System.out.println("+ [OK] SQL-RUN | 语句计数 6/6 对齐，好脚本落库 2 行、坏脚本整文件回滚、"
+                + "带外键的整库 dump 在这条路上删得掉父表，探针表零残留");
     }
 
     private static boolean contains(List<String> lines, String needle) {
@@ -203,7 +268,19 @@ public final class SqlRunCli {
         return s.length() <= 300 ? s : s.substring(s.length() - 300);
     }
 
+    /**
+     * 回查前先收口这条连接上早先开始的读快照。
+     *
+     * 探针表是任务体自己那条连接建出来的；这条连接还停在建表之前的快照上，
+     * 直接查那张刚出现的表，MariaDB 报的是 1023「Table definition has changed,
+     * please retry transaction」——读不到证据，反而像产品出了问题。
+     */
+    private static void fresh(DbClient db) throws Exception {
+        db.connection().commit();
+    }
+
     private static Set<String> tables(DbClient db) throws Exception {
+        fresh(db);
         Set<String> out = new LinkedHashSet<String>();
         try (Statement st = db.connection().createStatement();
              ResultSet rs = st.executeQuery("SHOW TABLES")) {
@@ -219,6 +296,7 @@ public final class SqlRunCli {
     }
 
     private static int count(DbClient db, String name) throws Exception {
+        fresh(db);
         try (Statement st = db.connection().createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM `" + name + "`")) {
             rs.next();
