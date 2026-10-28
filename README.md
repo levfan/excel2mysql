@@ -1,6 +1,6 @@
 # Excel → MySQL 批量导入工具
 
-**当前版本 v2.7.0** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
+**当前版本 v2.8.0** —— 版本号的**取值**唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、
 `--version`、随包 appinfo 都从它读）。但另有 8 处**写死的字符串**必须跟着一起改：三个 `pom.xml`
 （根 pom 的 `<version>` 与 `<app.version>`、app/verify 的 `<parent><version>`）、
 `java/构建验证.bat` 里的 jar 名、随包说明与 `java/assets/conn.ini` 注释里的示例命令、
@@ -285,7 +285,7 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 ### 拿到 Win7 真机后的最小验收（三步，别一上来就跑导入）
 
-1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.7.0` 就说明系统层面进程起得来。
+1. `excel2mysql-cli.exe --version` —— 能打印 `excel2mysql-cli 2.8.0` 就说明系统层面进程起得来。
    起不来（"找不到指定的程序/入口点"）基本是缺 UCRT（KB2999226）或那是 32 位系统，
    跟本工具无关，程序也没机会报错
 2. `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` —— 退出码 0、日志里出现
@@ -379,9 +379,9 @@ pip install -r requirements.txt
 python main.py              # 图形版
 python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
 
-java\dist\excel2mysql-java-2.7.0-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-2.7.0-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-2.7.0-win64\excel2mysql-2.7.0.jar --help   # Java 线的命令行
+java\dist\excel2mysql-java-2.8.0-win64\启动.bat              # Java 线的界面
+java\dist\excel2mysql-java-2.8.0-win64\jre\bin\java.exe -jar ^
+    java\dist\excel2mysql-java-2.8.0-win64\excel2mysql-2.8.0.jar --help   # Java 线的命令行
 ```
 
 ## 打包为 Windows 免安装 exe
@@ -647,7 +647,8 @@ qtvirtualkeyboardplugin`。后两个是插件文件本身——它们依赖的 D
    介绍条不受影响一直在；切库、改主机或改端口全部实时联动刷新，
    导入/执行前扫一眼即可确认没写错库
 2. 把 Excel 文件（`.xlsx` / `.xls`）或 ZIP 压缩包拖入虚线区域，点一下虚线区批量选择，
-   或在资源管理器里复制几个文件后回到本程序按 `Ctrl+V` 直接添加（虚线区第三行就写着这句）
+   或在资源管理器里复制几个文件后回到本程序按 `Ctrl+V` 直接添加（三页虚线区的第三行就写着这句，
+   粘贴总是加到**当前这一页**：第一页 Excel 清单、第二页脚本改名清单、第三页脚本执行队列）
    （文件名框里输入或粘贴文件夹路径后回车，会直接进入该目录，不会把目录当成文件加进来）；
    添加完成后弹窗汇总本次结果（见下方「添加结果弹窗」）
 3. 需要统一命名时，在「表名前缀」框输入内容后二选一：
@@ -982,7 +983,8 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
 ## SQL 执行器页（第三个 Tab）
 
 这一页有两种用法，共用一个结果区：手上有一份或一整套 `.sql` 脚本要按顺序打进库时，把文件拖进
-脚本清单点「执行脚本文件」；只想临时问一句、顺手改点结构时，把 SQL 敲在编辑区点「执行编辑区 SQL」。
+脚本清单（或复制文件后按 `Ctrl+V` 加进这一页的清单）点「执行脚本文件」；只想临时问一句、
+顺手改点结构时，把 SQL 敲在编辑区点「执行编辑区 SQL」。
 两路都打到上方公共连接区选定的库，输出都写进右侧「执行结果」区。文件这一路借「Excel 导入」页的
 拖拽区与清单表、「SQL 脚本改名」页的底部动作条（覆盖开关在左、主按钮在右）；两路共用同一个
 结果区，所以同一页同时只跑一个任务（互斥判据见"被挡下时"那条）。
@@ -996,7 +998,7 @@ Java 闸门第 9 步 `MetaDiffer`（Java 写出的文件与 Python 写出的逐�
   不必翻手册就知道这一页也能吃文件；这一句与另两页的介绍用同一块强调底板
 - **脚本拖拽区与清单**：与「Excel 导入」页同一形状——虚线区可点击多选，也可以直接拖入；
   只收 `.sql`，混着别的文件时日志点名 `[跳过] 不是 SQL 脚本，未读入：说明.txt`，
-  一个 `.sql` 都没有时写 `[提示] 拖入的不是 SQL 脚本文件，已忽略。`
+  一个 `.sql` 都没有时写 `[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。`
 - **清单四列**：序号 / 文件 / 大小 / 状态，只读、带斑马纹，文件名单元格悬停显示完整路径；
   大小按 B / KB / MB / GB 折算一位小数
 - **加入即回执**：加入后弹「添加结果」，正文逐条给 `[已加入] 完整路径`、

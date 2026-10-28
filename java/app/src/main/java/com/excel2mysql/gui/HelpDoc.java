@@ -99,7 +99,7 @@ public final class HelpDoc {
                     "<code>jre\\bin\\java.exe</code> 跑 <code>-jar excel2mysql-*.jar --gui</code>。" + NL +
                     "想一次带上文件，把 Excel/ZIP 拖到 <code>启动.bat</code> 的图标上。</li>" + NL +
                     "<li>要命令行：在 cmd 里跑同一条命令但不给 <code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.7.0.jar --check</code>。</li>" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-2.8.0.jar --check</code>。</li>" + NL +
                     "<li>记法就一句：首参给 <code>--gui</code> 是界面，不给是命令行。" + NL +
                     "双击 jar 文件本身不会有任何反应。</li>" + NL +
                     "</ul>" + NL +
@@ -156,7 +156,8 @@ public final class HelpDoc {
                 "<h2>支持哪些文件</h2>" + NL +
                     "<p>「Excel 导入」页的虚线区是添加文件的唯一入口：点一下弹文件选择器（可多选），" + NL +
                     "也可以把文件或压缩包直接拖进去，还可以在资源管理器里复制几个文件后回到本程序按" + NL +
-                    "<code>Ctrl+V</code> 直接添加（等同拖进虚线区）。页面上不再有单独的「添加文件」按钮。</p>" + NL +
+                    "<code>Ctrl+V</code> 直接添加（等同把文件拖进<b>眼前这一页</b>的虚线区）。" + NL +
+                    "页面上不再有单独的「添加文件」按钮。</p>" + NL +
                     "<table class=\"t\">" + NL +
                     "<tr><th>输入</th><th>行为</th></tr>" + NL +
                     "<tr><td><code>.xlsx</code></td><td>正常导入</td></tr>" + NL +
@@ -166,12 +167,17 @@ public final class HelpDoc {
                     "</table>" + NL +
                     "<h3>复制文件后按 Ctrl+V 添加</h3>" + NL +
                     "<ul>" + NL +
-                    "<li><b>绑在窗口层级</b>：三个页签都收，不用先点中某一块虚线区；正在输入的文本框里按" + NL +
-                    "<code>Ctrl+V</code> 仍然是粘文本，不会被\"添加文件\"抢走。第一、二页的虚线区都写着这句" + NL +
-                    "快捷键提示，粘进来的 Excel / ZIP 一律落到第一页的「待导入文件」清单</li>" + NL +
-                    "<li>剪贴板里是 <code>.xlsx</code> / <code>.xls</code> / <code>.zip</code> 就等同拖进虚线区，" + NL +
+                    "<li><b>绑在窗口层级，落在眼前这一页</b>：三个页签都收，不用先点中某一块虚线区；正在输入的文本框里按" + NL +
+                    "<code>Ctrl+V</code> 仍然是粘文本，不会被\"添加文件\"抢走。<b>三页的虚线区都写着这句快捷键提示</b>，" + NL +
+                    "所以粘贴加的就是当前这一页：第一页进「待导入文件」清单、第二页进待改名的脚本清单、" + NL +
+                    "第三页进脚本执行队列，别的页的清单纹丝不动</li>" + NL +
+                    "<li>剪贴板里是 <code>.xlsx</code> / <code>.xls</code> / <code>.zip</code> 就等同拖进第一页的虚线区，" + NL +
                     "走同一条解析路；日志按类型给一句回执" + NL +
                     "<code>[粘贴] 已通过粘贴添加 N 个文件，其中 X个 zip文件，Y个 xlsx文件，Z个 xls文件</code></li>" + NL +
+                    "<li>第二、三页只收 <code>.sql</code>，走的就是那一页拖拽区同一个入口，回执也与拖进来逐字一致" + NL +
+                    "（混着的别的文件点名 <code>[跳过] 不是 SQL 脚本，未读入：…</code>）；" + NL +
+                    "一个 <code>.sql</code> 都没有时写 <code>[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。</code>，" + NL +
+                    "这句与第一页同一句式</li>" + NL +
                     "<li>剪贴板里不是文件、或全是不能导入的扩展名：沿用拖拽那一句" + NL +
                     "<code>[提示] 拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略。</code>，不另写一套说法</li>" + NL +
                     "<li>这一页已经有任务在跑时先拦下来说明在等谁，那句「已通过粘贴添加」不会先说出口</li>" + NL +
@@ -729,7 +735,7 @@ public final class HelpDoc {
                     "<tr><td>脚本拖拽区</td><td>与「Excel 导入」页同一形状：虚线区可点击多选，也可以直接把" + NL +
                     "<code>.sql</code> 文件拖进来；只收 <code>.sql</code>，混着别的文件时日志点名" + NL +
                     "<code>[跳过] 不是 SQL 脚本，未读入：…</code>，一个 <code>.sql</code> 都没有时写" + NL +
-                    "<code>[提示] 拖入的不是 SQL 脚本文件，已忽略。</code></td></tr>" + NL +
+                    "<code>[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。</code></td></tr>" + NL +
                     "<tr><td>脚本清单</td><td>四列：序号 / 文件 / 大小 / 状态，只读、带斑马纹，文件名悬停显示完整路径；" + NL +
                     "大小按 B / KB / MB / GB 折算一位小数。加入后弹「添加结果」，正文逐条给" + NL +
                     "<code>[已加入] 完整路径</code>、<code>[跳过] …：已在列表</code>、" + NL +
