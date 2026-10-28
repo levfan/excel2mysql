@@ -194,9 +194,10 @@ def main():
     check("任务在跑时第三页「示例 (?)」点得出东西（非模态清单开出来了）",
           win.main_tabs.currentIndex() == 2 and samp is not None
           and samp.isVisible() and not samp.isModal()
-          and samp.list.count() == len(m.SQL_SAMPLES),
+          and sum(len(ls) for _g, ls in samp._groups) == len(m.SQL_SAMPLES),
           (win.main_tabs.currentIndex(), None if samp is None else
-           (samp.isVisible(), samp.isModal(), samp.list.count())))
+           (samp.isVisible(), samp.isModal(),
+            sum(len(ls) for _g, ls in samp._groups))))
 
     screen = app.primaryScreen()
     # 先把本程序几个窗口抬到前台再抓整屏：不抬的话拍到的是桌面上别家应用，

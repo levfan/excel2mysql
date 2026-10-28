@@ -2143,74 +2143,154 @@ app_main.connect = _real_connect
 
 _groups = []
 for _s in app_main.SQL_SAMPLES:
-    if not _groups or _groups[-1] != _s[0]:
-        _groups.append(_s[0])
-check("F31 示例库 100 条、12 个分组、说明不重样，且每条都带分组/说明/语句",
-      len(app_main.SQL_SAMPLES) == 100 and len(_groups) == 12
-      and len({s[1] for s in app_main.SQL_SAMPLES}) == 100
-      and all(len(s) == 3 and s[0] and s[1] and s[2] for s in app_main.SQL_SAMPLES),
-      (len(app_main.SQL_SAMPLES), _groups))
-check("F31b 分组按治理主题排布，治理类不少于 70 条",
+    if not _groups or _groups[-1] != _s.group:
+        _groups.append(_s.group)
+check("F31 示例库 126 条、13 个分组，七个字段都非空且短标题够短",
+      len(app_main.SQL_SAMPLES) == 126 and len(_groups) == 13
+      and all(s.group and s.title and s.desc and s.scenario and s.problem
+              and s.keywords and s.sql for s in app_main.SQL_SAMPLES)
+      and len({(s.group, s.title) for s in app_main.SQL_SAMPLES}) == 126
+      and max(len(s.title) for s in app_main.SQL_SAMPLES) <= 12
+      and all(s.title != s.desc for s in app_main.SQL_SAMPLES),
+      (len(app_main.SQL_SAMPLES), max(len(s.title) for s in app_main.SQL_SAMPLES)))
+check("F31b 分组按治理主题排布，治理类不少于 90 条",
       _groups == ["建库与选库", "建表与改表", "元数据与治理体检", "数据质量检查",
-                  "数据标准化与清洗", "主数据与重复数据", "数据血缘与影响分析",
-                  "安全与权限治理", "生命周期与归档", "性能与容量治理",
-                  "查询与执行计划", "数据修正"]
-      and sum(1 for s in app_main.SQL_SAMPLES if s[0] in _groups[2:10]) >= 70,
+                  "数据标准化与清洗", "主数据与重复数据", "编码映射与关联",
+                  "数据血缘与影响分析", "安全与权限治理", "生命周期与归档",
+                  "性能与容量治理", "查询与执行计划", "数据修正"]
+      and sum(1 for s in app_main.SQL_SAMPLES if s.group in _groups[2:11]) >= 90,
       _groups)
+check("F31c 短标题只出现在自己那一组：跨组重名允许、组内不许撞",
+      all(len({s.title for s in app_main.SQL_SAMPLES if s.group == g})
+          == sum(1 for s in app_main.SQL_SAMPLES if s.group == g) for g in _groups),
+      _groups)
+
+
+def _visible_leaves(dlg):
+    """目录里当前可见的叶子（按来源顺序），过滤前后都靠它数。"""
+    return [leaf for _g, leaves in dlg._groups for leaf in leaves if not leaf.isHidden()]
+
+
 _dlg = app_main.SqlSamplesDialog(w.sql_run_input)
-check("F32 示例对话框标题带条数、清单与示例表同条数",
-      _dlg.windowTitle() == "SQL 示例（100 条）" and _dlg.list.count() == 100,
-      (_dlg.windowTitle(), _dlg.list.count()))
-check("F33 条目文案为「【分组】说明」，打开即选中第一条",
-      _dlg.list.item(0).text() == "【建库与选库】%s" % app_main.SQL_SAMPLES[0][1]
-      and _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[0][2],
-      _dlg.list.item(0).text())
-check("F33b 示例全文是日志档 10 号等宽字体（与左侧清单同观感，不吃编辑区那档 16 号）",
+check("F32 示例对话框标题带条数，目录第一层是 13 个分组、第二层 126 条",
+      _dlg.windowTitle() == "SQL 示例（126 条）"
+      and _dlg.tree.topLevelItemCount() == 13
+      and len(_visible_leaves(_dlg)) == 126
+      and _dlg.lbl_hits.text() == "共 126 条，分 13 组",
+      (_dlg.windowTitle(), _dlg.tree.topLevelItemCount(), _dlg.lbl_hits.text()))
+check("F33 叶子只写短标题（长的那句挪到右侧介绍），打开即选中第一条",
+      _dlg.tree.topLevelItem(0).text(0) == "建库与选库"
+      and _dlg.tree.topLevelItem(0).child(0).text(0) == app_main.SQL_SAMPLES[0].title
+      and _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[0].sql
+      and ("说明：" + app_main.SQL_SAMPLES[0].desc) in _dlg.intro.toPlainText(),
+      (_dlg.tree.topLevelItem(0).child(0).text(0), _dlg.intro.toPlainText()[:40]))
+check("F33b 右侧上方那段介绍把场景与解决的问题都写出来（不是只重复说明）",
+      all(line in _dlg.intro.toPlainText() for line in
+          ("场景：" + app_main.SQL_SAMPLES[0].scenario,
+           "解决的问题：" + app_main.SQL_SAMPLES[0].problem,
+           "关键词：" + app_main.SQL_SAMPLES[0].keywords))
+      and _dlg.intro.isReadOnly() and _dlg.preview.isReadOnly(),
+      _dlg.intro.toPlainText())
+check("F33c 示例全文是日志档 10 号等宽字体（与左侧清单同观感，不吃编辑区那档 16 号）",
       _dlg.preview.font().family() == w.sql_run_input.font().family()
       and _dlg.preview.font().pointSize() == w.log.font().pointSize()
       and _dlg.preview.font().pointSize() == 10,
       (_dlg.preview.font().family(), _dlg.preview.font().pointSize()))
 check("F34 每条示例都能切成至少一句可执行语句",
-      all(split_sql_statements(s[2]) for s in app_main.SQL_SAMPLES),
-      [i for i, s in enumerate(app_main.SQL_SAMPLES) if not split_sql_statements(s[2])])
-_dlg.list.setCurrentRow(7)
-check("F35 切换选中行，右侧全文跟着换",
-      _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[7][2], _dlg.list.currentRow())
-# 换一条要把右侧滚回开头。先人为把预览弄成"能滚且已经滚走"，
-# 否则这条断言在内容本来就放得下时是恒真的（量不到复位这件事）。
-# 只要求横向滚得动：预览不折行，示例里有比可视区宽的行；纵向放得下是常态，
-# 拿它当前提会让用例在一台分辨率更高的机器上假红
-_dlg.preview.setLineWrapMode(type(_dlg.preview).NoWrap)
+      all(split_sql_statements(s.sql) for s in app_main.SQL_SAMPLES),
+      [i for i, s in enumerate(app_main.SQL_SAMPLES) if not split_sql_statements(s.sql)])
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[7])
+check("F35 切换选中的条目，右侧介绍与语句都跟着换",
+      _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[7].sql
+      and app_main.SQL_SAMPLES[7].scenario in _dlg.intro.toPlainText(),
+      _dlg.tree.currentIndex().row())
+# 换一条要把右侧滚回开头，这条断言的前提是"预览真的宽到要横向滚动"：
+# 挑单行最宽那条（撑出横向滚动条的是行宽，不是全文长度），并且切过去的那条也要同样宽——
+# 否则"回到 0"可能只是新内容本来就放得下被自动夹回去，量到的不是复位那一步。
+_byLineWidth = sorted(range(len(app_main.SQL_SAMPLES)),
+                      key=lambda i: max(len(l)
+                                        for l in app_main.SQL_SAMPLES[i].sql.split("\n")),
+                      reverse=True)
+# 量之前得先把框摆出来：没 show 过的控件不参与布局，可视区宽度还是初值，
+# 横向滚动条的 max 恒为 0，这条会假红（offscreen 下实测 (h0=0, v0=3)）。
+_dlg.show()
+_app.processEvents()
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[_byLineWidth[0]])
+check("F35a 语句全文不折行（长行交给横向滚动，不把一句 SQL 拆成三行）",
+      _dlg.preview.lineWrapMode() == type(_dlg.preview).NoWrap,
+      _dlg.preview.lineWrapMode())
+# 再把右半边拖窄（用户拖分隔条就是这个动作），让前提不取决于这台机器给对话框留了多宽。
+_sizes0 = _dlg.split.sizes()
+_dlg.split.setSizes([_dlg.width() // 4, _dlg.width() // 4])
+_app.processEvents()
 _dlg.preview.verticalScrollBar().setValue(9999)
 _dlg.preview.horizontalScrollBar().setValue(9999)
 _v0 = _dlg.preview.verticalScrollBar().value()
 _h0 = _dlg.preview.horizontalScrollBar().value()
-_dlg.list.setCurrentRow(2)
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[_byLineWidth[1]])
 check("F35b 换一条时右侧滚回开头，上一行留下的滚动位置不许留着",
       _h0 > 0 and _dlg.preview.horizontalScrollBar().value() == 0
       and _dlg.preview.verticalScrollBar().value() == 0,
       (_h0, _v0, _dlg.preview.horizontalScrollBar().value(),
        _dlg.preview.verticalScrollBar().value()))
-_dlg.preview.setLineWrapMode(type(_dlg.preview).WidgetWidth)
+_dlg.split.setSizes(_sizes0)
 _dlg.show()
 w.sql_run_input.setPlainText(app_main.SQL_RUN_DEFAULT)
-_dlg.list.setCurrentRow(3)
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[3])
 _dlg.on_insert()
 check("F36 编辑区还是默认那句时，插入直接换成正题并收起对话框",
-      w.sql_run_input.toPlainText() == app_main.SQL_SAMPLES[3][2]
+      w.sql_run_input.toPlainText() == app_main.SQL_SAMPLES[3].sql
       and not _dlg.isVisible(), w.sql_run_input.toPlainText())
 _dlg.show()
 w.sql_run_input.setPlainText("SELECT 1")
-_dlg.list.setCurrentRow(1)
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[1])
 _dlg.on_insert()
 check("F37 已有内容时插入会补分号换行再接，不覆盖原句",
       w.sql_run_input.toPlainText()
-      == "SELECT 1;\n" + app_main.SQL_SAMPLES[1][2], w.sql_run_input.toPlainText())
+      == "SELECT 1;\n" + app_main.SQL_SAMPLES[1].sql, w.sql_run_input.toPlainText())
 _dlg.show()
-_dlg.list.setCurrentRow(2)
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[2])
 _dlg.on_copy()
 check("F38 复制到剪贴板在标题上给回执",
       _dlg.windowTitle().endswith("· 已复制到剪贴板"), _dlg.windowTitle())
+
+# ---- 左侧关键词模糊搜索：命中集合必须与 sql_samples.matches 同一条 ----
+check("F38b 搜索框按关键词过滤，命中的条目与 matches 判的完全同一批",
+      (_dlg.search.setText("注释"), _app.processEvents(),
+       [leaf.data(0, app_main.Qt.UserRole) for leaf in _visible_leaves(_dlg)]
+       == [i for i, s in enumerate(app_main.SQL_SAMPLES)
+           if app_main.sample_matches(s, "注释")])[2]
+      and _dlg.lbl_hits.text() == "命中 %d 条（共 126 条）"
+          % sum(1 for s in app_main.SQL_SAMPLES if app_main.sample_matches(s, "注释")),
+      (_dlg.lbl_hits.text(), len(_visible_leaves(_dlg))))
+check("F38c 过滤后整组没命中就不摆出来，有命中的组自动展开",
+      [g.text(0) for g, leaves in _dlg._groups if not g.isHidden()]
+      == ["建库与选库", "建表与改表", "元数据与治理体检"]
+      and all(g.isExpanded() for g, leaves in _dlg._groups if not g.isHidden()),
+      [g.text(0) for g, leaves in _dlg._groups if not g.isHidden()])
+check("F38d 选中跟着落到第一条命中，右侧不许留着被筛掉的那条",
+      _dlg.preview.toPlainText()
+      == app_main.SQL_SAMPLES[_dlg.tree.currentItem().data(0, app_main.Qt.UserRole)].sql
+      and not _dlg.tree.currentItem().isHidden(),
+      _dlg.tree.currentItem().text(0))
+_dlg.search.setText("零宽字符")
+_app.processEvents()
+check("F38e 搜语句里的词也命中（关键词只是补充，不是唯一入口）",
+      len(_visible_leaves(_dlg)) == 1
+      and app_main.SQL_SAMPLES[_visible_leaves(_dlg)[0].data(0, app_main.Qt.UserRole)].title
+      == "不可见字符", _dlg.lbl_hits.text())
+_dlg.search.setText("绝不存在的关键词")
+_app.processEvents()
+check("F38f 一条都没命中也要说清下一步，不许留一片空白目录",
+      _visible_leaves(_dlg) == []
+      and _dlg.lbl_hits.text() == "没有命中：换个关键词，或清空搜索框回到全部 126 条",
+      _dlg.lbl_hits.text())
+_dlg.search.setText("")
+_app.processEvents()
+check("F38g 清空搜索框回到全量 126 条、13 组",
+      len(_visible_leaves(_dlg)) == 126 and _dlg.tree.topLevelItemCount() == 13
+      and _dlg.lbl_hits.text() == "共 126 条，分 13 组", _dlg.lbl_hits.text())
+_dlg.close()
 _dlg.deleteLater()
 
 
@@ -5230,10 +5310,10 @@ _samp = xwin.sql_run_samples
 check("Y1l 两条任务在跑时切到第三页点「示例 (?)」，非模态清单照样开得出来",
       xwin.main_tabs.currentIndex() == 2 and len(xwin._tasks) == 2
       and _samp is not None and _samp.isVisible() and _samp.isModal() is False
-      and _samp.list.count() == len(app_main.SQL_SAMPLES),
+      and len(_visible_leaves(_samp)) == len(app_main.SQL_SAMPLES),
       (xwin.main_tabs.currentIndex(), len(xwin._tasks),
        None if _samp is None else (_samp.isVisible(), _samp.isModal(),
-                                   _samp.list.count())))
+                                   len(_visible_leaves(_samp)))))
 if _samp is not None:
     _samp.close()
 _r1 = dialogs[0].geometry() if len(dialogs) == 2 else None

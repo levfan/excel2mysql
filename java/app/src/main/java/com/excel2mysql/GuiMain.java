@@ -1,6 +1,7 @@
 package com.excel2mysql;
 
 import com.excel2mysql.gui.MainFrame;
+import com.excel2mysql.gui.SqlSamples;
 import com.excel2mysql.gui.UiScale;
 import com.excel2mysql.gui.LogPanel;
 
@@ -928,6 +929,16 @@ public final class GuiMain {
             }
         }
         return false;
+    }
+
+    /** 第一条命中某个关键词的示例序号：界面上过滤后的第一条必须是它。 */
+    private static int firstHitIndex(String needle) {
+        for (int i = 0; i < SqlSamples.ALL.length; i++) {
+            if (SqlSamples.matches(SqlSamples.ALL[i], needle)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /** 数一句文案里有几行（按 \n 切），拖拽区文案的"第三行"就这么核。 */
@@ -2243,16 +2254,34 @@ public final class GuiMain {
                     + " 正文=" + frame.lastDialogText().replace((char) 10, ' '));
         }
 
-        // 示例清单：条数、条目文案、选中切换预览
-        if (frame.sqlSamplesCount() != 100) {
-            problems.add("SQL 示例不是 100 条：" + frame.sqlSamplesCount());
+        // 示例目录：条数与分组、短标题、右侧介绍与语句、关键词过滤
+        if (frame.sqlSamplesCount() != 126) {
+            problems.add("SQL 示例不是 126 条：" + frame.sqlSamplesCount());
         }
+        int titleTooLong = 0;
         for (int i = 0; i < frame.sqlSamplesCount(); i++) {
+            SqlSamples.Sample s = SqlSamples.ALL[i];
             String sql = frame.sqlSampleSql(i);
             if (sql == null || sql.trim().isEmpty()
                     || com.excel2mysql.core.SqlScript.splitStatements(sql).isEmpty()) {
                 problems.add("第 " + (i + 1) + " 条示例切不出语句：" + sql);
             }
+            if (s.title == null || s.title.isEmpty() || s.scenario == null
+                    || s.scenario.isEmpty() || s.problem == null || s.problem.isEmpty()
+                    || s.keywords == null || s.keywords.isEmpty()) {
+                problems.add("第 " + (i + 1) + " 条示例的短标题/场景/问题/关键词有空着");
+            }
+            if (s.title.length() > 12) {
+                titleTooLong++;
+            }
+            if (s.title.equals(s.desc)) {
+                // 目录叶子与右侧介绍同一句话时，介绍那一段等于没写
+                problems.add("第 " + (i + 1) + " 条示例的短标题与说明一字不差，"
+                        + "右侧那段介绍没有多出任何信息");
+            }
+        }
+        if (titleTooLong > 0) {
+            problems.add("有 " + titleTooLong + " 条短标题超过 12 字，目录那一列会被撑歪");
         }
         frame.showSqlSamples();
         if (!frame.sqlSamplesShowing()) {
@@ -2267,16 +2296,69 @@ public final class GuiMain {
                     : previewFont.getFamily() + "/" + previewFont.getSize()
                     + "，期望 " + wantPreviewPx + "px"));
         }
-        if (!"SQL 示例（100 条）".equals(frame.sqlSamplesTitle())) {
+        if (!"SQL 示例（126 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
         }
-        if (!frame.sqlSamplesItemText(0).startsWith("【")
-                || !frame.sqlSamplesPreviewText().equals(frame.sqlSampleSql(0))) {
-            problems.add("示例清单打开后没选中第一条：" + frame.sqlSamplesItemText(0));
+        if (frame.sqlSamplesGroupCount() != 13 || frame.sqlSamplesVisibleCount() != 126
+                || !"共 126 条，分 13 组".equals(frame.sqlSamplesHitsText())) {
+            problems.add("示例目录不是「13 组 → 126 条」两层："
+                    + frame.sqlSamplesGroupCount() + " 组 / "
+                    + frame.sqlSamplesVisibleCount() + " 条 / " + frame.sqlSamplesHitsText());
+        }
+        if (!SqlSamples.ALL[0].title.equals(frame.sqlSamplesItemText(0))
+                || !frame.sqlSamplesPreviewText().equals(frame.sqlSampleSql(0))
+                || frame.sqlSamplesIntroText().indexOf("场景："
+                        + SqlSamples.ALL[0].scenario) < 0) {
+            problems.add("示例目录打开后没选中第一条，或右侧介绍没跟着出来："
+                    + frame.sqlSamplesItemText(0));
+        }
+        if (frame.sqlSamplesIntroText().indexOf("解决的问题："
+                + SqlSamples.ALL[0].problem) < 0) {
+            problems.add("右侧介绍没写「解决的问题」那一句");
         }
         frame.setSqlSamplesRow(7);
-        if (!frame.sqlSamplesPreviewText().equals(frame.sqlSampleSql(7))) {
-            problems.add("切换选中行，右侧语句没跟着换");
+        if (!frame.sqlSamplesPreviewText().equals(frame.sqlSampleSql(7))
+                || frame.sqlSamplesIntroText().indexOf(SqlSamples.ALL[7].scenario) < 0) {
+            problems.add("切换选中的条目，右侧语句或介绍没跟着换");
+        }
+        // 关键词过滤：命中集合必须与 SqlSamples.matches 判的同一批，命中数要说出来
+        frame.typeSqlSamplesFilter("注释");
+        int expectHits = 0;
+        StringBuilder expectGroups = new StringBuilder();
+        String lastGroup = null;
+        for (int i = 0; i < SqlSamples.ALL.length; i++) {
+            if (!SqlSamples.matches(SqlSamples.ALL[i], "注释")) {
+                continue;
+            }
+            expectHits++;
+            if (!SqlSamples.ALL[i].group.equals(lastGroup)) {
+                if (expectGroups.length() > 0) {
+                    expectGroups.append('|');
+                }
+                expectGroups.append(SqlSamples.ALL[i].group);
+                lastGroup = SqlSamples.ALL[i].group;
+            }
+        }
+        if (frame.sqlSamplesVisibleCount() != expectHits
+                || !expectGroups.toString().equals(frame.sqlSamplesGroupTitles())
+                || !("命中 " + expectHits + " 条（共 126 条）")
+                        .equals(frame.sqlSamplesHitsText())) {
+            problems.add("搜「注释」的命中与预期不一致：界面 " + frame.sqlSamplesVisibleCount()
+                    + " 条 / " + frame.sqlSamplesGroupTitles() + "，应 " + expectHits
+                    + " 条 / " + expectGroups);
+        }
+        if (!frame.sqlSamplesPreviewText().equals(SqlSamples.ALL[firstHitIndex("注释")].sql)) {
+            problems.add("过滤后选中没落到第一条命中，右侧留着被筛掉的那条");
+        }
+        frame.typeSqlSamplesFilter("绝不存在的关键词");
+        if (frame.sqlSamplesVisibleCount() != 0
+                || !frame.sqlSamplesHitsText().startsWith("没有命中")) {
+            problems.add("一条都没命中时没把话说清：" + frame.sqlSamplesHitsText());
+        }
+        frame.typeSqlSamplesFilter("");
+        if (frame.sqlSamplesVisibleCount() != 126 || frame.sqlSamplesGroupCount() != 13
+                || !"共 126 条，分 13 组".equals(frame.sqlSamplesHitsText())) {
+            problems.add("清空搜索框没回到全量：" + frame.sqlSamplesHitsText());
         }
         frame.clickSqlSamplesCopy();
         // 剪贴板可能被别的进程占用，两条回执都算有回执；点了之后标题一动不动才是问题
@@ -6542,20 +6624,19 @@ public final class GuiMain {
             } else if (!frame.sqlSamplesTitle().contains("SQL 示例")) {
                 problems.add("开出来的不是那份示例清单：" + frame.sqlSamplesTitle());
             }
-            // 换一条要把右侧滚回开头：预览不折行，上一行留下的横向位置会切掉新语句的开头。
-            // 先把最长那条滚到最右，再切到别条，等事件分发线程把复位做完再看读数
+            // 换一条要把右侧滚回开头：预览不折行，上一条留下的横向位置会切掉新语句的开头。
+            // 挑"单行最宽"那条而不是"全文最长"那条——撑出横向滚动条的是行宽不是总长；
+            // 切过去的那条也要同样宽，否则"回到 0"可能只是新内容本来就放得下被夹回去，
+            // 量到的不是复位。先把两侧滚到最右/最下，再换条，等事件分发线程做完看读数
             final javax.swing.JScrollPane spane = frame.sqlSamplesPane();
             if (spane == null) {
                 problems.add("示例预览没有滚动容器，验不了换条后的滚动复位");
+            } else if (frame.sqlSamplesPreviewWraps()) {
+                problems.add("示例预览折了行：长行该交给横向滚动，不把一句 SQL 拆成三行");
             } else {
-                int longest = 0;
-                for (int i = 1; i < frame.sqlSamplesCount(); i++) {
-                    if (frame.sqlSampleSql(i).length() > frame.sqlSampleSql(longest).length()) {
-                        longest = i;
-                    }
-                }
-                final int li = longest;
-                invokeUi(() -> frame.setSqlSamplesRow(li));
+                final int widest = orderByLineWidth(frame, 0);
+                final int second = orderByLineWidth(frame, 1);
+                invokeUi(() -> frame.setSqlSamplesRow(widest));
                 invokeUi(() -> {
                     spane.getHorizontalScrollBar().setValue(
                             spane.getHorizontalScrollBar().getMaximum());
@@ -6563,7 +6644,8 @@ public final class GuiMain {
                             spane.getVerticalScrollBar().getMaximum());
                 });
                 final int h0 = spane.getHorizontalScrollBar().getValue();
-                invokeUi(() -> frame.setSqlSamplesRow(2));
+                final int v0 = spane.getVerticalScrollBar().getValue();
+                invokeUi(() -> frame.setSqlSamplesRow(second));
                 long resetUntil = System.currentTimeMillis() + 2000;
                 while (System.currentTimeMillis() < resetUntil
                         && (spane.getHorizontalScrollBar().getValue() != 0
@@ -6571,13 +6653,19 @@ public final class GuiMain {
                     Thread.sleep(20);
                 }
                 if (h0 <= 0) {
-                    problems.add("示例里找不到一条宽到要横向滚动的（最长那条第 "
-                            + (li + 1) + " 条），这条复位没量到");
-                } else if (spane.getHorizontalScrollBar().getValue() != 0
-                        || spane.getVerticalScrollBar().getValue() != 0) {
-                    problems.add("换一条示例后右侧没滚回开头：横 "
-                            + spane.getHorizontalScrollBar().getValue() + " 纵 "
-                            + spane.getVerticalScrollBar().getValue());
+                    problems.add("示例里没有一条宽到要横向滚动的（最宽那条第 "
+                            + (widest + 1) + " 条、" + lineWidth(frame.sqlSampleSql(widest))
+                            +  " 字符），这条复位没量到");
+                } else if (spane.getHorizontalScrollBar().getValue() != 0) {
+                    problems.add("换一条示例后右侧没滚回行首：横 "
+                            + spane.getHorizontalScrollBar().getValue()
+                            + "（换条前停在 " + h0 + "）");
+                } else if (v0 > 0 && spane.getVerticalScrollBar().getValue() != 0) {
+                    // 纵向只在"上一条确实把内容顶出可视区"时才断——高分屏上五条 SQL
+                    // 本来就放得下，拿它当无条件前提会假红
+                    problems.add("换一条示例后右侧没滚回开头：纵 "
+                            + spane.getVerticalScrollBar().getValue()
+                            + "（换条前停在 " + v0 + "）");
                 }
             }
             // 清单开着、任务还在跑：这时候回一次事件分发线程，"点得动"才算数
@@ -6607,6 +6695,26 @@ public final class GuiMain {
             MainFrame.modalProgress = false;
             forceCloseDialogs();
         }
+    }
+
+    /** 一条示例里最宽那行有多少字符：撑出横向滚动条的是行宽，不是全文长度。 */
+    private static int lineWidth(String sql) {
+        int max = 0;
+        for (String line : sql.split("\r?\n")) {
+            max = Math.max(max, line.length());
+        }
+        return max;
+    }
+
+    /** 按"最宽行"从宽到窄排第 rank 名（0 是最宽那条）的示例序号。 */
+    private static int orderByLineWidth(MainFrame frame, int rank) {
+        List<Integer> order = new ArrayList<Integer>();
+        for (int i = 0; i < frame.sqlSamplesCount(); i++) {
+            order.add(i);
+        }
+        java.util.Collections.sort(order, (a, b) ->
+                lineWidth(frame.sqlSampleSql(b)) - lineWidth(frame.sqlSampleSql(a)));
+        return order.get(rank);
     }
 
     /** 抓不到图的时候别把 null 打进日志，说人话。 */

@@ -582,27 +582,56 @@ def main():
     win.on_sql_samples()
     app.processEvents()
     _sd = win.sql_run_samples
+
+    def _sd_leaves(dlg):
+        return [leaf for _g, leaves in dlg._groups for leaf in leaves
+                if not leaf.isHidden()]
+
+    def _sd_groups(dlg):
+        return "|".join(norm(g.text(0)) for g, leaves in dlg._groups
+                        if not g.isHidden())
+
     put("samples.title", _sd.windowTitle())
-    put("samples.count", _sd.list.count())
-    put("samples.item.0", norm(_sd.list.item(0).text()))
+    # 目录两层：第一层是分组数，第二层是当前可见条目数（不过滤时等于总条数）
+    put("samples.groups", str(_sd.tree.topLevelItemCount()))
+    put("samples.count", str(len(_sd_leaves(_sd))))
+    put("samples.hits", norm(_sd.lbl_hits.text()))
+    put("samples.item.0", norm(_sd_leaves(_sd)[0].text(0)))
+    put("samples.intro.0", _sd.intro.toPlainText())
     put("samples.preview.0", _sd.preview.toPlainText())
-    # 全文预览的字号也是界面事实：这是与左侧清单并排的阅读面，不吃编辑区那一档（编辑区已随日志档）
+    # 语句全文的字号也是界面事实：这是与左侧目录并排的阅读面，不吃编辑区那一档
     put("samples.preview.font.pt", str(_sd.preview.font().pointSize()))
-    _sd.list.setCurrentRow(7)
+    # 长行不折行：两边都得靠横向滚动，不能一边把 SQL 折三行、一边拖滚动条
+    put("samples.preview.wrap", "nowrap" if _sd.preview.lineWrapMode()
+        == type(_sd.preview).NoWrap else "wrap")
+    _sd.tree.setCurrentItem(_sd_leaves(_sd)[7])
     put("samples.preview.7", _sd.preview.toPlainText())
+    # 关键词过滤：两边同一个词必须命中同一批条目，命中数与剩下的分组都按键比
+    _sd.search.setText(u"注释")
+    app.processEvents()
+    put("samples.filter.count", str(len(_sd_leaves(_sd))))
+    put("samples.filter.groups", _sd_groups(_sd))
+    put("samples.filter.hits", norm(_sd.lbl_hits.text()))
+    _sd.search.setText(u"绝不存在的关键词")
+    app.processEvents()
+    put("samples.filter.none", norm(_sd.lbl_hits.text()))
+    _sd.search.setText("")
+    app.processEvents()
+    put("samples.filter.cleared", "%s|%s" % (len(_sd_leaves(_sd)),
+                                             norm(_sd.lbl_hits.text())))
     # 不比对「复制到剪贴板」的那句回执：剪贴板可能被别的进程占用，
     # 两条线各跑一次的成败不同，那是现场状态不是界面差异（两条线各自的自检里咬回执本身）
     _sd.show()
     win.sql_run_input.setPlainText(m.SQL_RUN_DEFAULT)
-    _sd.list.setCurrentRow(3)
+    _sd.tree.setCurrentItem(_sd_leaves(_sd)[3])
     _sd.btn_insert.click()
     put("samples.insert.default", win.sql_run_input.toPlainText())
     _sd.show()
     win.sql_run_input.setPlainText("SELECT 1")
-    _sd.list.setCurrentRow(1)
+    _sd.tree.setCurrentItem(_sd_leaves(_sd)[1])
     _sd.btn_insert.click()
     # 追加那条只比"补没补分号换行"：两条线的行分隔符不同（\r\n 与 \n），
-    # 正文本身已由 samples.sql.1 那一键钉住。
+    # 正文本身已由 samples.preview.* 那几键钉住。
     put("samples.insert.append",
         "yes" if win.sql_run_input.toPlainText().startswith("SELECT 1;\n") else "no")
     win.sql_run_input.setPlainText(m.SQL_RUN_DEFAULT)

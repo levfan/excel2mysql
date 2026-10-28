@@ -275,14 +275,30 @@ public final class GuiDump {
                 frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
                 frame.showSqlSamples();
                 put("samples.title", frame.sqlSamplesTitle());
-                put("samples.count", String.valueOf(frame.sqlSamplesCount()));
+                // 目录两层：第一层是分组数，第二层是当前可见条目数（不过滤时等于总条数）
+                put("samples.groups", String.valueOf(frame.sqlSamplesGroupCount()));
+                put("samples.count", String.valueOf(frame.sqlSamplesVisibleCount()));
+                put("samples.hits", norm(frame.sqlSamplesHitsText()));
                 put("samples.item.0", norm(frame.sqlSamplesItemText(0)));
+                put("samples.intro.0", frame.sqlSamplesIntroText());
                 put("samples.preview.0", frame.sqlSamplesPreviewText());
-                // 全文预览的字号也是界面事实：这是与左侧清单并排的阅读面，不吃编辑区那档 16 号
+                // 语句全文的字号也是界面事实：这是与左侧目录并排的阅读面，不吃编辑区那档 16 号
                 put("samples.preview.font.pt", String.valueOf(UiScale.fontPxToPt(
                         frame.sqlRunPreviewFont().getSize())));
+                // 长行不折行：两边都得靠横向滚动，不能一边把 SQL 折三行、一边拖滚动条
+                put("samples.preview.wrap", frame.sqlSamplesPreviewWraps() ? "wrap" : "nowrap");
                 frame.setSqlSamplesRow(7);
                 put("samples.preview.7", frame.sqlSamplesPreviewText());
+                // 关键词过滤：两边同一个词必须命中同一批条目，命中数与剩下的分组都按键比
+                frame.typeSqlSamplesFilter("注释");
+                put("samples.filter.count", String.valueOf(frame.sqlSamplesVisibleCount()));
+                put("samples.filter.groups", norm(frame.sqlSamplesGroupTitles()));
+                put("samples.filter.hits", norm(frame.sqlSamplesHitsText()));
+                frame.typeSqlSamplesFilter("绝不存在的关键词");
+                put("samples.filter.none", norm(frame.sqlSamplesHitsText()));
+                frame.typeSqlSamplesFilter("");
+                put("samples.filter.cleared", frame.sqlSamplesVisibleCount() + "|"
+                        + norm(frame.sqlSamplesHitsText()));
                 // 不比对「复制到剪贴板」的那句回执：剪贴板可能被别的进程占用，
                 // 两条线各跑一次的成败不同，那是现场状态不是界面差异（Java 自检里咬回执本身）
                 frame.showSqlSamples();
