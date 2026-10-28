@@ -688,7 +688,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         south.add(new javax.swing.JSeparator(), BorderLayout.NORTH);
         south.add(op, BorderLayout.CENTER);
 
-        JPanel page = new JPanel(new BorderLayout());
+        // 页级纵向间距取第三页那一档（Python 侧 QVBoxLayout 的默认 spacing 同样是 6）：
+        // 介绍条与拖拽区之间留出同一段空白，底部动作条与上方内容也不再贴死
+        JPanel page = new JPanel(new BorderLayout(0, UiScale.px(6)));
         // 目标库提示条在上、那句介绍紧跟在下面：两行都在页签内容的最上面一列
         JPanel head = new JPanel(new BorderLayout());
         head.add(impHint, BorderLayout.NORTH);

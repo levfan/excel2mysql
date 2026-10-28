@@ -243,7 +243,9 @@ public final class SqlPage extends JPanel {
 
     public SqlPage(Host host) {
         this.host = host;
-        setLayout(new BorderLayout());
+        // 页级纵向间距取第三页那一档（Python 侧 QVBoxLayout 的默认 spacing 同样是 6）：
+        // 介绍条与拖拽区之间留出同一段空白，底部动作条与上方内容也不再贴死
+        setLayout(new BorderLayout(0, UiScale.px(6)));
 
         model = new DefaultTableModel(COLUMNS, 0) {
             @Override
