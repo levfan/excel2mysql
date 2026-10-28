@@ -538,7 +538,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         prefixBtns.add(replacePrefix);
         // 命名规则工具条贴表格上沿（与 main.py 同一位置）：它管的是"表名/字段名怎么起"，
         // 与表格内容同组，但不占下面前缀行——前缀行要留给输入框与两颗按钮。
-        // setSelected 不触发 ActionListener，启动时不会凭空打一行"切换"日志
+        // 只把首字母勾上（setSelected 不触发 ActionListener，启动时不会凭空打一行"切换"日志），
+        // 转大写保持未勾选，由用户按需勾上
         initialsBox = new javax.swing.JCheckBox("表名与字段名取拼音首字母");
         initialsBox.setSelected(true);
         initialsBox.setToolTipText("由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、"
@@ -548,10 +549,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 + (initialsBox.isSelected() ? "拼音首字母" : "全拼")
                 + "（对之后添加的文件生效）"));
         upperBox = new javax.swing.JCheckBox("表名与字段名转大写");
-        upperBox.setSelected(true);
         upperBox.setToolTipText("由中文或文件名转写出来的表名与字段名全部大写"
                 + "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；"
-                + "默认已勾选，取消则用小写。文件名括号里写下的英文表名同样转大写；"
+                + "默认不勾选，勾上才转大写。文件名括号里写下的英文表名同样转大写；"
                 + "结构定义 Sheet 里人工写下的字段名也一起转大写，取消勾选则保持写下的原样；"
                 + "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。");
         upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："

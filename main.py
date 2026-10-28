@@ -1939,7 +1939,7 @@ class MainWindow(QWidget):
 
         # 命名规则工具条贴表格上沿：它管的是"表名/字段名怎么起"，与表格内容同组，
         # 但不占下面前缀行——前缀行要留给前缀输入框与两颗按钮。
-        # 两颗都默认勾上：新加的文件直接按「首字母 + 大写」起名。
+        # 只把首字母勾上：新加的文件按「首字母 + 小写」起名，转大写由用户按需勾。
         # 在连信号之前设好，免得启动时凭空打一行"切换"日志
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("命名规则："))
@@ -1951,11 +1951,10 @@ class MainWindow(QWidget):
             "文件名括号里显式写下的英文表名不受影响；对之后添加的文件生效。")
         self.chk_initials.toggled.connect(self.on_initials_toggled)
         self.chk_upper = QCheckBox("表名与字段名转大写")
-        self.chk_upper.setChecked(True)
         self.chk_upper.setToolTip(
             "由中文或文件名转写出来的表名与字段名全部大写\n"
             "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；\n"
-            "默认已勾选，取消则用小写。文件名括号里写下的英文表名同样转大写；\n"
+            "默认不勾选，勾上才转大写。文件名括号里写下的英文表名同样转大写；\n"
             "结构定义 Sheet 里人工写下的字段名也一起转大写，取消勾选则保持写下的原样；\n"
             "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
         self.chk_upper.toggled.connect(self.on_upper_toggled)

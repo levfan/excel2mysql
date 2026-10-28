@@ -102,8 +102,8 @@ public final class GuiMain {
                 startupLog = frame.logPanel().text();
                 com.excel2mysql.gui.MainFrame.connCandidates = keepCandidates;
                 holder[0] = frame;
-                if (!frame.initialsBox().isSelected() || !frame.upperBox().isSelected()) {
-                    problems.add("两颗命名开关应默认勾选（取拼音首字母 / 转大写）");
+                if (!frame.initialsBox().isSelected() || frame.upperBox().isSelected()) {
+                    problems.add("命名开关默认状态不对：首字母应勾选、转大写应不勾选");
                 }
                 // 空表引导语只在表还空着时画得出来，趁添加夹具之前验
                 ui_guidance(frame, problems);
@@ -117,8 +117,8 @@ public final class GuiMain {
                     problems.add("禁用态的「开始导入」底色不是禁用色，而是 "
                             + frame.importButton().getBackground());
                 }
-                // 后面几十处旧用例的期望值仍按全拼、小写写；先取消勾选保持口径不变，
-                // 命名开关自己的用例（naming_switches）会重新勾上再验一遍
+                // 后面几十处旧用例的期望值仍按全拼、小写写；先把首字母取消勾选保持口径不变
+                //（转大写默认就未勾），命名开关自己的用例（naming_switches）会重新勾上再验一遍
                 frame.initialsBox().setSelected(false);
                 frame.upperBox().setSelected(false);
                 String addSummary = frame.addFiles(files);
@@ -1362,7 +1362,7 @@ public final class GuiMain {
         File tmp = null;
         try {
             tmp = java.nio.file.Files.createTempDirectory("e2m-naming-selftest").toFile();
-            // 1) 勾回默认口径（首字母 + 大写）：新加的文件直接按这套起名
+            // 1) 勾上两颗开关（首字母 + 大写）：新加的文件直接按这套起名
             frame.initialsBox().doClick();
             frame.upperBox().doClick();
             File a = writeNamingFixture(tmp, "水库信息表.xlsx",
@@ -1370,7 +1370,7 @@ public final class GuiMain {
             frame.addFiles(java.util.Arrays.asList(a.getPath()));
             com.excel2mysql.core.TableOps.Table ta = lastTable(frame);
             if (ta == null || !"SKXXB".equals(ta.tableName)) {
-                problems.add("默认勾选下新表名不是 SKXXB：" + (ta == null ? "(无表)" : ta.tableName));
+                problems.add("勾上首字母 + 大写后新表名不是 SKXXB：" + (ta == null ? "(无表)" : ta.tableName));
             } else if (ta.columns.isEmpty() || !"DDJE".equals(ta.columns.get(0).field)) {
                 problems.add("勾上首字母 + 大写后字段名不是 DDJE："
                         + (ta.columns.isEmpty() ? "(无字段)" : ta.columns.get(0).field));
