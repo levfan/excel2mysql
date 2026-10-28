@@ -47,7 +47,8 @@ from PySide6.QtWidgets import (
     QLineEdit, QSpinBox, QPushButton, QComboBox, QFileDialog, QTableWidget,
     QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QGroupBox,
     QMessageBox, QHeaderView, QCheckBox, QAbstractItemView, QScrollArea, QStyle,
-    QDialog, QDialogButtonBox, QTabWidget, QSplitter, QListWidget,
+    QDialog, QDialogButtonBox, QTabWidget, QSplitter,
+    QTreeWidget, QTreeWidgetItem,
     QFrame, QSizePolicy,
 )
 
@@ -70,7 +71,7 @@ from core.sql_script import (
     edit_column,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
-from sql_samples import SAMPLES as SQL_SAMPLES
+from sql_samples import SAMPLES as SQL_SAMPLES, matches as sample_matches
 from core.mysql_io import (
     build_ddl, connect, list_databases, create_table, insert_data,
 )
@@ -4655,11 +4656,16 @@ class SqlScriptDdlDialog(QDialog):
 
 # ---------------------------------------------------------------------------
 class SqlSamplesDialog(QDialog):
-    """「示例 (?)」打开的那个对话框：左边挑，右边看全文，可复制也可插进编辑区。
+    """「示例 (?)」打开的那个对话框：左边搜关键词 + 目录，右边上方介绍、下方语句。
 
     非模态：这一页的用法是照着清单改语句、执行、再看结果，
-    模态框会把编辑区锁住，等于让人把 SQL 抄两遍。清单与语句正文都取自
+    模态框会把编辑区锁住，等于让人把 SQL 抄两遍。目录与正文都取自
     sql_samples.py（Java 那条线导出同一份表），两边不会各说各话。
+
+    目录分两层（分组 → 短标题）而不是把上百条平铺在第一层：示例只会越加越多，
+    平铺时找一条要滚半天；上面再给一行关键词过滤，常用路径就是"搜一下、点第一条"。
+    右侧分上下两块是因为一条示例要回答两个问题——"我什么时候要用它、它替我挡掉什么"
+    和"语句到底怎么写"，只看语句的人会把场景丢在手册里。
     """
 
     def __init__(self, editor, parent=None):
@@ -4667,30 +4673,38 @@ class SqlSamplesDialog(QDialog):
         self._editor = editor
         self.setModal(False)
         self.setWindowTitle("SQL 示例（%d 条）" % len(SQL_SAMPLES))
-        fit_client(self, 900, 560)
+        fit_client(self, 980, 620)
         lay = QVBoxLayout(self)
 
-        self.list = QListWidget()
-        for group, desc, _sql in SQL_SAMPLES:
-            self.list.addItem("【%s】%s" % (group, desc))
-        self.preview = QPlainTextEdit(SQL_SAMPLES[0][2])
-        self.preview.setReadOnly(True)
-        # 左边清单是界面基准 9 号，右边全文按日志档 10 号：这是照着挑的阅读弹窗，
-        # 不吃编辑区那档 16 号（16 号在并排清单旁边显得突兀）
-        self.preview.setFont(QFont("Consolas", LOG_FONT_SIZE))
-        self.list.currentRowChanged.connect(self._on_pick)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(
+            "关键词过滤：短标题、说明、场景、解决的问题、关键词与语句都算")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._refilter)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setUniformRowHeights(True)
+        self.lbl_hits = QLabel()
+        self._groups = []                         # [(分组项, [叶子项])]，按来源顺序
+        self._build_tree()
 
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(QLabel("示例清单（按分组，选中看右半边的全文）"))
-        ll.addWidget(self.list, 1)
+        ll.addWidget(self.search)
+        ll.addWidget(QLabel("示例目录（分组 → 条目）"))
+        ll.addWidget(self.tree, 1)
+        ll.addWidget(self.lbl_hits)
 
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.addWidget(QLabel("语句全文（可全选复制）"))
-        rl.addWidget(self.preview, 1)
+        self.intro = QPlainTextEdit()
+        self.intro.setReadOnly(True)
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        # 与编辑区同一条口径：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
+        self.preview.setLineWrapMode(QPlainTextEdit.NoWrap)
+        # 目录与介绍是界面基准 9 号那一档，只有语句正文按日志档 10 号：
+        # 这是照着挑的阅读弹窗，不吃编辑区那档 16 号（16 号在并排清单旁显得突兀）
+        self.preview.setFont(QFont("Consolas", LOG_FONT_SIZE))
         btns = QHBoxLayout()
         self.btn_copy = QPushButton("复制到剪贴板")
         self.btn_copy.clicked.connect(self.on_copy)
@@ -4698,30 +4712,111 @@ class SqlSamplesDialog(QDialog):
         self.btn_insert.clicked.connect(self.on_insert)
         self.btn_close = QPushButton("关闭")
         self.btn_close.clicked.connect(self.hide)
+        btns.addStretch(1)
         btns.addWidget(self.btn_copy)
         btns.addWidget(self.btn_insert)
         btns.addWidget(self.btn_close)
-        rl.addLayout(btns)
+        sql_box = QWidget()
+        sl = QVBoxLayout(sql_box)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.addWidget(QLabel("语句全文（可全选复制）"))
+        sl.addWidget(self.preview, 1)
+        sl.addLayout(btns)
+
+        self.right_split = QSplitter(Qt.Vertical)
+        self.right_split.setChildrenCollapsible(False)
+        self.right_split.setHandleWidth(6)
+        self.right_split.addWidget(self.intro)
+        self.right_split.addWidget(sql_box)
+        self.right_split.setStretchFactor(0, 2)
+        self.right_split.setStretchFactor(1, 3)
+        self.right_split.setSizes([170, 330])
 
         self.split = QSplitter(Qt.Horizontal)
         self.split.setChildrenCollapsible(False)
         self.split.setHandleWidth(6)
         self.split.addWidget(left)
-        self.split.addWidget(right)
-        self.split.setStretchFactor(0, 42)
-        self.split.setStretchFactor(1, 58)
-        self.split.setSizes([380, 520])
+        self.split.addWidget(self.right_split)
+        self.split.setStretchFactor(0, 38)
+        self.split.setStretchFactor(1, 62)
+        self.split.setSizes([360, 580])
         lay.addWidget(self.split, 1)
 
-        self.list.setCurrentRow(0)          # 打开就有一条被选中，右边不是空白
+        self.tree.currentItemChanged.connect(self._on_pick)
+        self._refilter("")            # 一开框就把"共 N 条，分 M 组"说出来
+        if self._groups:
+            first_leaf = self._groups[0][1][0]
+            self._groups[0][0].setExpanded(True)
+            self.tree.setCurrentItem(first_leaf)   # 打开就有一条被选中，右边不是空白
 
-    def _on_pick(self, row):
-        if 0 <= row < len(SQL_SAMPLES):
-            self.preview.setPlainText(SQL_SAMPLES[row][2])
-            # 换一条就把右侧滚回开头：上一条长文留下的滚动位置会让新语句
-            # 看着像"缺了上半截"（与 Java 侧 openSqlSamples 的复位同一处理）
-            for bar in (self.preview.verticalScrollBar(),
-                        self.preview.horizontalScrollBar()):
+    def _build_tree(self):
+        """按来源顺序搭两层目录：分组是父节点，条目只写短标题（长的那句在右侧）。
+
+        叶子上带示例序号——点开哪条就按哪条取，命中与否不在这里缓存，
+        判断统一走 sql_samples.matches，两栈同一个词才命中同一批条目。
+        """
+        current = None
+        for idx, sample in enumerate(SQL_SAMPLES):
+            if current is None or current[0] != sample.group:
+                current = (sample.group, QTreeWidgetItem([sample.group]))
+                self.tree.addTopLevelItem(current[1])
+                self._groups.append((current[1], []))
+            leaf = QTreeWidgetItem([sample.title])
+            leaf.setData(0, Qt.UserRole, idx)
+            leaf.setToolTip(0, sample.desc)
+            current[1].addChild(leaf)
+            self._groups[-1][1].append(leaf)
+
+    def _refilter(self, needle):
+        """搜索框逐字过滤：命中的叶子留下，整组没命中就把这组也收起藏掉。"""
+        key = (needle or "").strip()
+        hits = 0
+        first = None
+        for group_item, leaves in self._groups:
+            shown = 0
+            for leaf in leaves:
+                ok = sample_matches(SQL_SAMPLES[leaf.data(0, Qt.UserRole)], needle)
+                leaf.setHidden(not ok)
+                if ok:
+                    shown += 1
+                    if first is None:
+                        first = leaf
+            group_item.setHidden(shown == 0)
+            group_item.setExpanded(bool(key) and shown > 0)
+            hits += shown
+        if not key:
+            self.lbl_hits.setText("共 %d 条，分 %d 组" % (len(SQL_SAMPLES), len(self._groups)))
+        elif hits:
+            self.lbl_hits.setText("命中 %d 条（共 %d 条）" % (hits, len(SQL_SAMPLES)))
+        else:
+            self.lbl_hits.setText("没有命中：换个关键词，或清空搜索框回到全部 %d 条"
+                                  % len(SQL_SAMPLES))
+        if first is not None:
+            self.tree.setCurrentItem(first)
+
+    def _sample_index(self):
+        item = self.tree.currentItem()
+        if item is None:
+            return -1
+        value = item.data(0, Qt.UserRole)
+        return value if isinstance(value, int) else -1
+
+    def intro_text(self, idx):
+        """右侧上方那段介绍：纯文本四行，不引 HTML 引擎（两栈同一份排版口径）。"""
+        s = SQL_SAMPLES[idx]
+        return ("【%s · %s】\n说明：%s\n场景：%s\n解决的问题：%s\n关键词：%s"
+                % (s.group, s.title, s.desc, s.scenario, s.problem, s.keywords))
+
+    def _on_pick(self, item=None, _prev=None):
+        idx = self._sample_index()
+        if idx < 0:
+            return                      # 点中的是分组那一行：右侧保持上一条示例
+        self.intro.setPlainText(self.intro_text(idx))
+        self.preview.setPlainText(SQL_SAMPLES[idx].sql)
+        # 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
+        # 看着像"缺了上半截"（与 Java 侧 openSqlSamples 的复位同一处理）
+        for view in (self.intro, self.preview):
+            for bar in (view.verticalScrollBar(), view.horizontalScrollBar()):
                 bar.setValue(bar.minimum())
 
     def on_copy(self):

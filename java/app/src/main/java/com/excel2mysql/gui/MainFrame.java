@@ -173,7 +173,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JPanel sqlRunEditorHead;
     private final List<RunScript> sqlRunFiles = new ArrayList<RunScript>();
     private javax.swing.JDialog sqlRunSamples;
-    private javax.swing.JList<String> sqlRunSamplesList;
+    /** 示例弹窗：左边搜索框 + 两层目录，右边上方介绍、下方语句。 */
+    private javax.swing.JTextField sqlRunSamplesSearch;
+    private javax.swing.JTree sqlRunSamplesTree;
+    private javax.swing.JLabel sqlRunSamplesHits;
+    private javax.swing.JTextArea sqlRunIntro;
     private javax.swing.JTextArea sqlRunPreview;
     private javax.swing.JScrollPane sqlRunPreviewScroll;
     private javax.swing.JButton sqlRunCopyBtn;
@@ -3450,7 +3454,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                         : javax.swing.JOptionPane.INFORMATION_MESSAGE);
     }
 
-    /** 「示例 (?)」打开的那个对话框：左边挑，右边看全文，可复制也可插进编辑区。 */
+    /** 「示例 (?)」打开的那个对话框：左边搜关键词 + 目录，右边上方介绍、下方语句。 */
     private void openSqlSamples() {
         if (sqlRunSamples != null && sqlRunSamples.isShowing()) {
             sqlRunSamples.toFront();
@@ -3459,36 +3463,35 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         final javax.swing.JDialog dlg = new javax.swing.JDialog(this,
                 "SQL 示例（" + SqlSamples.ALL.length + " 条）", false);
         dlg.setDefaultCloseOperation(javax.swing.JDialog.HIDE_ON_CLOSE);
-        final javax.swing.DefaultListModel<String> model =
-                new javax.swing.DefaultListModel<String>();
-        for (SqlSamples.Sample s : SqlSamples.ALL) {
-            model.addElement("【" + s.group + "】" + s.desc);
-        }
-        sqlRunSamplesList = new javax.swing.JList<String>(model);
-        sqlRunSamplesList.setSelectedIndex(0);
-        final javax.swing.JList<String> list = sqlRunSamplesList;
+
+        // 目录分两层（分组 → 短标题）而不是把上百条平铺在第一层：示例只会越加越多，
+        // 平铺时找一条要滚半天；上面再给一行关键词过滤，常用路径就是"搜一下、点第一条"
+        sqlRunSamplesTree = new javax.swing.JTree();
+        sqlRunSamplesTree.setRootVisible(false);
+        sqlRunSamplesTree.setShowsRootHandles(true);
+        // JTree 默认就是单选（SINGLE_TREE_SELECTION），与 Python 侧的目录同一行为
+        sqlRunSamplesSearch = new javax.swing.JTextField();
+        sqlRunSamplesSearch.setToolTipText("关键词过滤：短标题、说明、场景、解决的问题、"
+                + "关键词与语句都算（清空回到全部）");
+        sqlRunSamplesHits = new javax.swing.JLabel();
+        final javax.swing.JScrollPane treeScroll = new javax.swing.JScrollPane(sqlRunSamplesTree);
+
+        sqlRunIntro = new javax.swing.JTextArea(6, 60);
+        sqlRunIntro.setEditable(false);
+        sqlRunIntro.setLineWrap(true);
+        sqlRunIntro.setWrapStyleWord(true);
+        sqlRunIntro.setFont(com.excel2mysql.gui.Tables.font());
         sqlRunPreview = new javax.swing.JTextArea(12, 60);
         sqlRunPreview.setEditable(false);
-        // 左边清单是界面基准 9 号，右边全文按日志档 10 号（LogPanel.DEFAULT_FONT_SIZE），
-        // 不跟编辑区那档 16 号——这是照着挑的阅读弹窗，16 号在并排清单旁边显得突兀
+        // 与编辑区同一条口径：长行交给横向滚动，不把一句 SQL 折成三行
+        sqlRunPreview.setLineWrap(false);
+        // 目录与介绍是界面基准那一档，只有语句正文按日志档（LogPanel.DEFAULT_FONT_SIZE）：
+        // 这是照着挑的阅读弹窗，不跟编辑区那档 16 号——16 号在并排清单旁边显得突兀
         sqlRunPreview.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
                 UiScale.fontPt(LogPanel.DEFAULT_FONT_SIZE)));
-        sqlRunPreview.setText(SqlSamples.ALL[0].sql);
-        final javax.swing.JTextArea preview = sqlRunPreview;
-        final javax.swing.JScrollPane previewScroll = new javax.swing.JScrollPane(preview);
+        final javax.swing.JScrollPane previewScroll = new javax.swing.JScrollPane(sqlRunPreview);
         sqlRunPreviewScroll = previewScroll;
-        list.addListSelectionListener(e -> {
-            int i = list.getSelectedIndex();
-            if (i >= 0) {
-                preview.setText(SqlSamples.ALL[i].sql);
-                // 换一条就把右侧滚回开头：预览不折行，上一行留下的横向位置会停在原处，
-                // 新语句的开头被推到可视区左边外面，看着像"少了半句"
-                SwingUtilities.invokeLater(() -> {
-                    previewScroll.getHorizontalScrollBar().setValue(0);
-                    previewScroll.getVerticalScrollBar().setValue(0);
-                });
-            }
-        });
+        sqlRunSamplesTree.addTreeSelectionListener(e -> showSqlSample());
 
         javax.swing.JPanel buttons = new javax.swing.JPanel(
                 new java.awt.FlowLayout(java.awt.FlowLayout.LEFT,
@@ -3498,7 +3501,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             String receipt;
             try {
                 java.awt.datatransfer.StringSelection sel =
-                        new java.awt.datatransfer.StringSelection(preview.getText());
+                        new java.awt.datatransfer.StringSelection(sqlRunPreview.getText());
                 java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, null);
                 receipt = "· 已复制到剪贴板";
             } catch (RuntimeException ex) {
@@ -3512,7 +3515,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunInsertBtn = new javax.swing.JButton("插入到编辑区");
         sqlRunInsertBtn.addActionListener(e -> {
             String cur = sqlRunInput.getText();
-            String add = preview.getText();
+            String add = sqlRunPreview.getText();
             sqlRunInput.setText((cur == null || cur.trim().isEmpty() || "SELECT 1 AS 连通检查;"
                     .equals(cur.trim())) ? add : cur + (cur.endsWith(";") ? "" : ";")
                     + com.excel2mysql.core.LogText.NL + add);
@@ -3524,25 +3527,180 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         buttons.add(sqlRunInsertBtn);
         buttons.add(closeBtn);
 
-        javax.swing.JPanel right = new javax.swing.JPanel(new java.awt.BorderLayout(
+        // 右侧上下两块：一条示例要回答两个问题——"什么时候用、替我挡掉什么"
+        // 与"语句到底怎么写"，只看语句的人会把场景丢在手册里
+        javax.swing.JPanel sqlBox = new javax.swing.JPanel(new java.awt.BorderLayout(
                 0, UiScale.px(4)));
-        right.add(new javax.swing.JLabel("语句全文（可全选复制）"), java.awt.BorderLayout.NORTH);
-        right.add(previewScroll, java.awt.BorderLayout.CENTER);
-        right.add(buttons, java.awt.BorderLayout.SOUTH);
+        sqlBox.add(new javax.swing.JLabel("语句全文（可全选复制）"), java.awt.BorderLayout.NORTH);
+        sqlBox.add(previewScroll, java.awt.BorderLayout.CENTER);
+        sqlBox.add(buttons, java.awt.BorderLayout.SOUTH);
+        javax.swing.JSplitPane right = new javax.swing.JSplitPane(
+                javax.swing.JSplitPane.VERTICAL_SPLIT,
+                new javax.swing.JScrollPane(sqlRunIntro), sqlBox);
+        right.setDividerSize(UiScale.px(6));
+        right.setResizeWeight(0.38D);
 
         javax.swing.JPanel left = new javax.swing.JPanel(new java.awt.BorderLayout(
                 0, UiScale.px(2)));
-        left.add(new javax.swing.JLabel("示例清单（按分组，选中看右半边的全文）"),
+        left.add(sqlRunSamplesSearch, java.awt.BorderLayout.NORTH);
+        javax.swing.JPanel leftHead = new javax.swing.JPanel(new java.awt.BorderLayout());
+        leftHead.add(new javax.swing.JLabel("示例目录（分组 → 条目）"),
                 java.awt.BorderLayout.NORTH);
-        left.add(new javax.swing.JScrollPane(list), java.awt.BorderLayout.CENTER);
+        leftHead.add(sqlRunSamplesHits, java.awt.BorderLayout.SOUTH);
+        left.add(treeScroll, java.awt.BorderLayout.CENTER);
+        left.add(leftHead, java.awt.BorderLayout.SOUTH);
+        javax.swing.event.DocumentListener filter = new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                filterSqlSamples();
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                filterSqlSamples();
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                filterSqlSamples();
+            }
+        };
+        sqlRunSamplesSearch.getDocument().addDocumentListener(filter);
 
         javax.swing.JSplitPane split = new javax.swing.JSplitPane(
                 javax.swing.JSplitPane.HORIZONTAL_SPLIT, left, right);
-        split.setResizeWeight(0.42D);
+        split.setResizeWeight(0.38D);
         dlg.getContentPane().add(split, java.awt.BorderLayout.CENTER);
-        Windows.clientSize(dlg.getContentPane(), dlg, 900, 560);
-        dlg.setVisible(true);
+        Windows.clientSize(dlg.getContentPane(), dlg, 980, 620);
         sqlRunSamples = dlg;
+        filterSqlSamples();       // 建好目录并选中第一条：一开框右侧不是空白
+        dlg.setVisible(true);
+    }
+
+    /** 目录里的一个节点：分组节点只带名字，叶子带短标题与示例序号。 */
+    private static final class SampleNode {
+        private final String label;
+        private final int index;
+
+        SampleNode(String label, int index) {
+            this.label = label;
+            this.index = index;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    /**
+     * 按关键词重建目录：命中的叶子留下，整组没命中就不把这组挂上去。
+     *
+     * 不缓存命中结果、也不给 JTree 套 RowFilter（Swing 的树没有内建过滤），
+     * 100 个节点重建一次的开销可以忽略；匹配走 SqlSamples.matches，
+     * 与 Python 侧同一份字段拼法，同一个词两边必须命中同一批条目。
+     */
+    private javax.swing.tree.DefaultMutableTreeNode buildSamplesRoot(String needle) {
+        javax.swing.tree.DefaultMutableTreeNode root =
+                new javax.swing.tree.DefaultMutableTreeNode("示例目录");
+        javax.swing.tree.DefaultMutableTreeNode group = null;
+        int hits = 0;
+        for (int i = 0; i < SqlSamples.ALL.length; i++) {
+            SqlSamples.Sample s = SqlSamples.ALL[i];
+            if (!SqlSamples.matches(s, needle)) {
+                continue;
+            }
+            hits++;
+            if (group == null || !s.group.equals(String.valueOf(group.getUserObject()))) {
+                group = new javax.swing.tree.DefaultMutableTreeNode(s.group);
+                root.add(group);
+            }
+            group.add(new javax.swing.tree.DefaultMutableTreeNode(new SampleNode(s.title, i)));
+        }
+        return root;
+    }
+
+    /** 搜索框每改一次：重建目录、展开有命中的组、选中第一条命中、把命中数说出来。 */
+    private void filterSqlSamples() {
+        String needle = sqlRunSamplesSearch == null ? "" : sqlRunSamplesSearch.getText();
+        javax.swing.tree.DefaultMutableTreeNode root = buildSamplesRoot(needle);
+        sqlRunSamplesTree.setModel(new javax.swing.tree.DefaultTreeModel(root));
+        int groups = root.getChildCount();
+        int hits = 0;
+        for (int i = 0; i < groups; i++) {
+            javax.swing.tree.DefaultMutableTreeNode g =
+                    (javax.swing.tree.DefaultMutableTreeNode) root.getChildAt(i);
+            hits += g.getChildCount();
+            sqlRunSamplesTree.expandPath(new javax.swing.tree.TreePath(
+                    new Object[]{root, g}));
+        }
+        if (needle == null || needle.trim().isEmpty()) {
+            sqlRunSamplesHits.setText("共 " + SqlSamples.ALL.length + " 条，分 "
+                    + samplesGroupCount() + " 组");
+        } else if (hits > 0) {
+            sqlRunSamplesHits.setText("命中 " + hits + " 条（共 "
+                    + SqlSamples.ALL.length + " 条）");
+        } else {
+            sqlRunSamplesHits.setText("没有命中：换个关键词，或清空搜索框回到全部 "
+                    + SqlSamples.ALL.length + " 条");
+        }
+        if (hits > 0) {
+            sqlRunSamplesTree.setSelectionRow(1);      // 第 0 行是隐藏根，第一条命中在第 1 行
+        } else {
+            sqlRunSamplesTree.clearSelection();
+        }
+    }
+
+    /** 全部示例一共几个分组（不过滤时的分组数，说给命中那行用）。 */
+    private static int samplesGroupCount() {
+        int n = 0;
+        String last = null;
+        for (SqlSamples.Sample s : SqlSamples.ALL) {
+            if (!s.group.equals(last)) {
+                n++;
+                last = s.group;
+            }
+        }
+        return n;
+    }
+
+    /** 把选中那条示例的介绍与语句刷到右边两块。 */
+    private void showSqlSample() {
+        javax.swing.tree.TreePath path = sqlRunSamplesTree.getSelectionPath();
+        Object node = path == null ? null : path.getLastPathComponent();
+        Object held = node instanceof javax.swing.tree.DefaultMutableTreeNode
+                ? ((javax.swing.tree.DefaultMutableTreeNode) node).getUserObject() : null;
+        if (!(held instanceof SampleNode)) {
+            return;                            // 点中的是分组那一行：右侧保持上一条示例
+        }
+        SqlSamples.Sample s = SqlSamples.ALL[((SampleNode) held).index];
+        sqlRunIntro.setText(SqlSamples.introText(s));
+        sqlRunPreview.setText(s.sql);
+        // 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
+        // 看着像"缺了上半截"（与 Python 侧 _on_pick 的复位同一处理）
+        SwingUtilities.invokeLater(() -> {
+            sqlRunPreviewScroll.getHorizontalScrollBar().setValue(0);
+            sqlRunPreviewScroll.getVerticalScrollBar().setValue(0);
+            sqlRunIntro.setCaretPosition(0);
+        });
+    }
+
+    /** 自检与对撞用：把选中那条示例刷到右侧（showSqlSample 的公开口）。 */
+    public void selectSqlSample(int ordinal) {
+        int seen = 0;
+        javax.swing.tree.TreeModel model = sqlRunSamplesTree.getModel();
+        Object root = model.getRoot();
+        for (int g = 0; g < model.getChildCount(root); g++) {
+            Object group = model.getChild(root, g);
+            for (int c = 0; c < model.getChildCount(group); c++) {
+                Object leaf = model.getChild(group, c);
+                if (seen++ == ordinal) {
+                    sqlRunSamplesTree.setSelectionPath(new javax.swing.tree.TreePath(
+                            new Object[]{root, group, leaf}));
+                    return;
+                }
+            }
+        }
     }
 
     /** 给自检与双端对撞用：这一页的可观察量都从这几个口子出去。 */
@@ -3681,8 +3839,80 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return sqlRunPreview == null ? null : sqlRunPreview.getFont();
     }
 
-    public String sqlSamplesItemText(int index) {
-        return sqlRunSamplesList == null ? "" : sqlRunSamplesList.getModel().getElementAt(index);
+    /** 目录里可见的第 n 个叶子（从 0 数）的短标题：与 Python 侧 tree 的第 n 个可见条目同口径。 */
+    public String sqlSamplesItemText(int ordinal) {
+        int seen = 0;
+        javax.swing.tree.TreeModel model = sqlRunSamplesTree == null
+                ? null : sqlRunSamplesTree.getModel();
+        if (model == null) {
+            return "";
+        }
+        Object root = model.getRoot();
+        for (int g = 0; g < model.getChildCount(root); g++) {
+            Object group = model.getChild(root, g);
+            for (int c = 0; c < model.getChildCount(group); c++) {
+                Object leaf = model.getChild(group, c);
+                if (seen++ == ordinal) {
+                    return String.valueOf(
+                            ((javax.swing.tree.DefaultMutableTreeNode) leaf).getUserObject());
+                }
+            }
+        }
+        return "";
+    }
+
+    /** 目录第一层有几个分组（过滤后就是命中的组数）。 */
+    public int sqlSamplesGroupCount() {
+        return sqlRunSamplesTree == null ? -1
+                : sqlRunSamplesTree.getModel().getChildCount(
+                        sqlRunSamplesTree.getModel().getRoot());
+    }
+
+    /** 目录里当前可见的条目数（不过滤时等于总条数）。 */
+    public int sqlSamplesVisibleCount() {
+        int n = 0;
+        javax.swing.tree.TreeModel model = sqlRunSamplesTree == null
+                ? null : sqlRunSamplesTree.getModel();
+        if (model == null) {
+            return -1;
+        }
+        Object root = model.getRoot();
+        for (int g = 0; g < model.getChildCount(root); g++) {
+            n += model.getChildCount(model.getChild(root, g));
+        }
+        return n;
+    }
+
+    /** 命中那句提示的原文：过滤有没有把话说清楚，看这一句。 */
+    public String sqlSamplesHitsText() {
+        return sqlRunSamplesHits == null ? "" : sqlRunSamplesHits.getText();
+    }
+
+    /** 目录第一层当前可见的分组名（用 | 连），过滤后剩下的就是命中的那几组。 */
+    public String sqlSamplesGroupTitles() {
+        if (sqlRunSamplesTree == null) {
+            return "";
+        }
+        javax.swing.tree.TreeModel model = sqlRunSamplesTree.getModel();
+        Object root = model.getRoot();
+        StringBuilder sb = new StringBuilder();
+        for (int g = 0; g < model.getChildCount(root); g++) {
+            if (sb.length() > 0) {
+                sb.append('|');
+            }
+            sb.append(String.valueOf(model.getChild(root, g)));
+        }
+        return sb.toString();
+    }
+
+    /** 往搜索框里写关键词，走的正是用户敲字那条路（DocumentListener 自己会重筛）。 */
+    public void typeSqlSamplesFilter(String needle) {
+        sqlRunSamplesSearch.setText(needle);
+    }
+
+    /** 右侧上方那段介绍的原文（说明 / 场景 / 解决的问题 / 关键词）。 */
+    public String sqlSamplesIntroText() {
+        return sqlRunIntro == null ? "" : sqlRunIntro.getText();
     }
 
     public String sqlSamplesPreviewText() {
@@ -3694,8 +3924,14 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return sqlRunPreviewScroll;
     }
 
-    public void setSqlSamplesRow(int index) {
-        sqlRunSamplesList.setSelectedIndex(index);
+    /** 语句全文折不折行：与 Python 侧的 NoWrap 同一口径，长行只能靠横向滚动。 */
+    public boolean sqlSamplesPreviewWraps() {
+        return sqlRunPreview != null && sqlRunPreview.getLineWrap();
+    }
+
+    /** 选中目录里第 n 个可见叶子。 */
+    public void setSqlSamplesRow(int ordinal) {
+        selectSqlSample(ordinal);
     }
 
     public void clickSqlSamplesCopy() {
