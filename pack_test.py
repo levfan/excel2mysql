@@ -3103,7 +3103,7 @@ check("M19c 尾部拉丁词没配冒号分隔时不猜它是注释（数量 qty 
       and _col_to_field("身份证ID") == "shen_fen_zheng_id",
       [_col_to_field("数量 qty"), _col_to_field("身份证ID")])
 
-# 命名开关：表名与字段名取拼音首字母（用户 2026-10-20 点名要的开关，默认全拼照旧）
+# 命名开关：表名和字段名取中文拼音首字母（用户 2026-10-20 点名要的开关，默认全拼照旧）
 check("M21 首字母开关：汉字音节一律取首字母，默认全拼不受影响",
       _col_to_field("订单金额", initials=True) == "ddje"
       and _col_to_field("订单金额") == "ding_dan_jin_e",

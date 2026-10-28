@@ -1354,7 +1354,7 @@ public final class GuiMain {
             problems.add("界面上缺少命名开关（取拼音首字母 / 转大写）");
             return;
         }
-        if (!"表名与字段名取拼音首字母".equals(frame.initialsBox().getText())
+        if (!"表名和字段名取中文拼音首字母".equals(frame.initialsBox().getText())
                 || !"表名与字段名转大写".equals(frame.upperBox().getText())) {
             problems.add("命名开关文案不对：" + frame.initialsBox().getText() + " / "
                     + frame.upperBox().getText());
@@ -2863,12 +2863,12 @@ public final class GuiMain {
         boolean hasSqlInitials = false;
         for (java.awt.Component c : ((java.awt.Container) page.upperBox().getParent()).getComponents()) {
             if (c instanceof javax.swing.JCheckBox
-                    && "表名与字段名取拼音首字母".equals(((javax.swing.JCheckBox) c).getText())) {
+                    && "表名和字段名取中文拼音首字母".equals(((javax.swing.JCheckBox) c).getText())) {
                 hasSqlInitials = true;
             }
         }
         if (hasSqlInitials) {
-            problems.add("SQL 页不应再有「表名与字段名取拼音首字母」开关");
+            problems.add("SQL 页不应再有「表名和字段名取中文拼音首字母」开关");
         }
         // 命名规则工具条贴表格上沿（与第一页同一处），序号列收窄，表格加斑马纹
         java.awt.Container sqlNameBar = page.upperBox().getParent();
