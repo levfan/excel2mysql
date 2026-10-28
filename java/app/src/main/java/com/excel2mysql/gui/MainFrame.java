@@ -2036,9 +2036,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 粘贴添加：剪贴板里是 Excel / ZIP 就等同拖进虚线区，走同一条解析路。
-     * 类型不对或压根不是文件，交给 acceptedDrops 那句已有的"已忽略"回执；
-     * 任务位被占时先拦下来——那句"已通过粘贴添加"不能在没加成的情况下说出口。
+     * 粘贴添加：剪贴板里是文件就等同拖进**眼前这一页**的虚线区，走同一页拖进来那条路。
+     * 三页的虚线区都写着这句快捷键提示，所以粘贴必须落在当前页：第二页进脚本改名清单、
+     * 第三页进脚本执行队列、第一页进 Excel 待导入表。类型不对或压根不是文件，
+     * 交给那一页已有的"已忽略"回执；任务位被占时先拦下来——
+     * 那句"已通过粘贴添加"不能在没加成的情况下说出口。
      */
     public void pasteFiles() {
         java.awt.Component focus = java.awt.KeyboardFocusManager
@@ -2050,8 +2052,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         pastePaths(clipboardFilePaths());
     }
 
-    /** 粘贴的那批路径走这一条：自检不碰系统剪贴板，也能验到计数与留痕。 */
+    /** 粘贴的那批路径走这一条：加到用户眼前这一页，不是永远加到第一页。 */
     public void pastePaths(List<String> paths) {
+        int page = tabs.getSelectedIndex();
+        if (page == 1) {
+            sqlPage.dropFiles(paths);
+            return;
+        }
+        if (page == 2) {
+            onRunScriptsDropped(paths);
+            return;
+        }
         List<String> accepted = acceptedDrops(paths);
         if (accepted.isEmpty()) {
             return;
@@ -3116,7 +3127,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             }
         }
         if (keep.isEmpty()) {
-            sqlRunLog.log("[提示] 拖入的不是 SQL 脚本文件，已忽略。");
+            sqlRunLog.log("[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。");
             return;
         }
         if (!wrong.isEmpty()) {

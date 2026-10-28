@@ -1717,7 +1717,8 @@ class DropArea(QWidget):
     EXCEL_HINT = "将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n" \
                  "（支持 .xlsx / .xls / .zip，可多选）\n" + PASTE_HINT
     SQL_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）\n" + PASTE_HINT
-    RUN_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选；按列表顺序执行）"
+    RUN_HINT = "将 SQL 脚本拖到此处，或点击选择文件\n" \
+               "（支持 .sql，可多选；按列表顺序执行）\n" + PASTE_HINT
 
     # 淡蓝底 + 悬停加深：底色本身就要让人看出"这块是可以放东西的地方"，
     # 不能等鼠标移上去才发现。色值与 Java 侧 DropArea 同一组，由对撞键核同值。
@@ -2745,7 +2746,7 @@ class MainWindow(QWidget):
         keep = [p for p in paths if p.lower().endswith(".sql")]
         wrong = [p for p in paths if not p.lower().endswith(".sql")]
         if not keep:
-            append_log(self.sql_log, "[提示] 拖入的不是 SQL 脚本文件，已忽略。")
+            append_log(self.sql_log, "[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。")
             return
         if wrong:
             append_log(self.sql_log,
@@ -3396,7 +3397,7 @@ class MainWindow(QWidget):
         keep = [p for p in paths if p.lower().endswith(".sql")]
         wrong = [p for p in paths if not p.lower().endswith(".sql")]
         if not keep:
-            append_log(self.sql_run_log, "[提示] 拖入的不是 SQL 脚本文件，已忽略。")
+            append_log(self.sql_run_log, "[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。")
             return
         if wrong:
             append_log(self.sql_run_log,
@@ -3680,10 +3681,10 @@ class MainWindow(QWidget):
             append_log(self.log, "[提示] 拖入或粘贴的不是 Excel 或 ZIP 文件，已忽略。")
 
     def on_paste_files(self):
-        """窗口级 Ctrl+V：剪贴板里是 Excel / ZIP 就等同拖进虚线区，走同一条解析路。
+        """窗口级 Ctrl+V：剪贴板里是文件就等同拖进眼前这一页的虚线区，走同一条解析路。
 
         焦点在文本框里时先交回它自己粘文本——输入框里的 Ctrl+V 是粘内容，
-        不该被"添加文件"抢走；剪贴板不是文件或类型不对，一律走拖拽那条已有的口径。
+        不该被"添加文件"抢走；类型不对就走那一页已有的"已忽略"回执。
         """
         focus = QApplication.focusWidget()
         if isinstance(focus, (QLineEdit, QPlainTextEdit)):
@@ -3694,7 +3695,19 @@ class MainWindow(QWidget):
         self.paste_paths(paths)
 
     def paste_paths(self, paths):
-        """粘贴进来的那批路径走这一条：对撞器与用例不碰系统剪贴板也能验到计数。"""
+        """粘贴进来的那批路径走这一条：加到用户眼前这一页，不是永远加到第一页。
+
+        三页的虚线区都写着"复制文件后按 Ctrl+V 直接添加"，那这句就得在当前页兑现；
+        第二、三页直接把这批路径交给各自拖拽区的那个入口，回执与拖进来的逐字一致。
+        对撞器与用例不碰系统剪贴板，也是走这一条验计数。
+        """
+        page = self.main_tabs.currentIndex()
+        if page == 1:
+            self.on_sql_files_dropped(paths)
+            return
+        if page == 2:
+            self.on_run_scripts_dropped(paths)
+            return
         accepted = [f for f in paths if f.lower().endswith(IMPORT_EXTS)]
         if not accepted:
             self.on_files_dropped(paths)

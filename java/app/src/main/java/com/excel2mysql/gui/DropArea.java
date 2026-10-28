@@ -43,7 +43,8 @@ public final class DropArea extends javax.swing.JPanel {
             "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选）\n" + PASTE_HINT;
     /** 第三页（SQL 执行器）的脚本队列：同一块拖拽区，多一句"按列表顺序执行"。 */
     public static final String RUN_HINT =
-            "将 SQL 脚本拖到此处，或点击选择文件\n（支持 .sql，可多选；按列表顺序执行）";
+            "将 SQL 脚本拖到此处，或点击选择文件\n"
+            + "（支持 .sql，可多选；按列表顺序执行）\n" + PASTE_HINT;
     private static final Color LINE = new Color(0xa8, 0xbc, 0xd8);
     private static final Color LINE_HOVER = new Color(0x2f, 0x6f, 0xeb);
     private static final Color BG = new Color(0xea, 0xf2, 0xfd);

@@ -723,7 +723,7 @@ public final class SqlPage extends JPanel {
                     ? keep : wrong).add(p);
         }
         if (keep.isEmpty()) {
-            log("[提示] 拖入的不是 SQL 脚本文件，已忽略。");
+            log("[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。");
             return;
         }
         if (!wrong.isEmpty()) {
