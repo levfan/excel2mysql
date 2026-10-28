@@ -2344,7 +2344,8 @@ public final class GuiMain {
         String[][] body = {{"1", "张三丰", "Logistics Division"}, {"2", "李四", "卫勤处"}};
         java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> one =
                 new ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
-        one.add(MainFrame.newResultSet(1, "select * from t_mixed", head, body));
+        one.add(MainFrame.newResultSet(1, "select * from t_mixed", head,
+                new String[]{"主键编号", "姓名（人才卡上的）", ""}, body));
         frame.feedSqlRunSets(one, 0);
         javax.swing.JTable t = frame.sqlRunResultTable();
         if (!t.isVisible() || t.getRowCount() != 2 || t.getColumnCount() != 3
@@ -2358,6 +2359,56 @@ public final class GuiMain {
         }
         if (frame.sqlRunCellsEditable()) {
             problems.add("结果表格应只读：用户改格子改的是显示，库里没动");
+        }
+        // 表头 title：字段注释按列挂着，第三列没有注释就不该留提示
+        String tip0 = MainFrame.HEADER_COMMENT_PREFIX + "主键编号";
+        String tip1 = MainFrame.HEADER_COMMENT_PREFIX + "姓名（人才卡上的）";
+        if (!tip0.equals(frame.sqlRunHeaderTipAt(0)) || !tip1.equals(frame.sqlRunHeaderTipAt(1))
+                || !frame.sqlRunHeaderTipAt(2).isEmpty()) {
+            problems.add("表头的字段注释 title 没按列对上：第 0 列=" + frame.sqlRunHeaderTipAt(0)
+                    + " 第 1 列=" + frame.sqlRunHeaderTipAt(1)
+                    + " 第 2 列=" + frame.sqlRunHeaderTipAt(2));
+        }
+        // 接线取证：把表头上真的鼠标监听取出来，按落在第 2 列中间分发一次 MOUSE_MOVED，
+        // 看整条表头的 tooltip 有没有换成那一列的注释。
+        // 没让系统真动光标（自检抢用户的鼠标不合适），证到的是"监听挂在表头上 + 按列取注释"
+        javax.swing.table.TableColumnModel tipsCm = t.getColumnModel();
+        int tipX = tipsCm.getColumn(0).getWidth() + tipsCm.getColumn(1).getWidth() / 2;
+        if (tipsCm.getColumn(1).getWidth() <= 0) {
+            problems.add("表头还没排版就取不到列宽，鼠标落点算不出来：第 1 列宽 "
+                    + tipsCm.getColumn(1).getWidth());
+        } else {
+            java.util.List<java.awt.event.MouseMotionListener> motions =
+                    java.util.Arrays.asList(t.getTableHeader().getMouseMotionListeners());
+            if (motions.isEmpty()) {
+                problems.add("结果表表头没挂鼠标移动监听：字段注释的 title 没人换");
+            } else {
+                t.getTableHeader().setToolTipText(null);
+                java.awt.event.MouseEvent move = new java.awt.event.MouseEvent(
+                        t.getTableHeader(), java.awt.event.MouseEvent.MOUSE_MOVED,
+                        System.currentTimeMillis(), 0, tipX,
+                        Math.max(1, t.getTableHeader().getHeight() / 2), 0, false);
+                for (java.awt.event.MouseMotionListener ml : motions) {
+                    ml.mouseMoved(move);
+                }
+                if (!tip1.equals(t.getTableHeader().getToolTipText())) {
+                    problems.add("鼠标停在有注释的列上，表头 tooltip 不是那句注释："
+                            + t.getTableHeader().getToolTipText());
+                }
+                int bareX = tipsCm.getColumn(0).getWidth() + tipsCm.getColumn(1).getWidth()
+                        + tipsCm.getColumn(2).getWidth() / 2;
+                java.awt.event.MouseEvent move2 = new java.awt.event.MouseEvent(
+                        t.getTableHeader(), java.awt.event.MouseEvent.MOUSE_MOVED,
+                        System.currentTimeMillis(), 0, bareX,
+                        Math.max(1, t.getTableHeader().getHeight() / 2), 0, false);
+                for (java.awt.event.MouseMotionListener ml : motions) {
+                    ml.mouseMoved(move2);
+                }
+                if (t.getTableHeader().getToolTipText() != null) {
+                    problems.add("停在没注释的列上还留着上一列的提示："
+                            + t.getTableHeader().getToolTipText());
+                }
+            }
         }
         if (!"第 1 条 · 共 2 行".equals(frame.sqlRunCaptionText())) {
             problems.add("表格上方那句说明没写清是第几条、共几行：" + frame.sqlRunCaptionText());
@@ -2457,6 +2508,10 @@ public final class GuiMain {
                     + " 选项数=" + frame.sqlRunChooserItemCount()
                     + " 说明=" + frame.sqlRunCaptionText()
                     + " 回执行数=" + frame.sqlRunLogPanel().lineCount());
+        }
+        // 清空后表头要回到那句"注释挂在各列 title 上"的引导：留着上一列的注释会指错地方
+        if (!MainFrame.RESULT_HEADER_HINT.equals(t.getTableHeader().getToolTipText())) {
+            problems.add("清空结果区后表头没回到引导句：" + t.getTableHeader().getToolTipText());
         }
         // 一批全是写语句：不摆空表，说明要讲清为什么没有表格
         frame.feedSqlRunSets(

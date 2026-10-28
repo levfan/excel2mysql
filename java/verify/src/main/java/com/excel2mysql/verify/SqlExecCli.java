@@ -8,6 +8,7 @@ import com.excel2mysql.core.SqlExecute;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -19,21 +20,24 @@ import java.util.TreeSet;
  * 断的是落库副作用，不是"没抛异常"：回滚没生效时语句照样一条条写着"执行成功"，
  * 只有回查表里的行数才能看出那批 INSERT 到底提没提交。
  *
- * 三段各测一件事：
- *   1 建表（单独提交，给后面两段一张干净的探针表）
+ * 四段各测一件事：
+ *   1 建表（单独提交，给后面几段一张干净的探针表）
  *   2 先写两行再撞一句坏语句 → 整批回滚，表里必须还是 0 行
  *   3 写一行 + 一句带结果集的查询 → 提交，表里 1 行，结果集文本要能数出行数
+ *   4 一句带结果集的查询顺手取回字段注释 → 与 Python 侧逐值一样（界面表头 title 靠它）
  *
  * 同时把执行器发出的每一行原文打到标准输出（前缀 LINE|），Python 侧用同一段输入
  * 跑 core/sql_execute.py，两份行序列逐行对——两个页签/两条线说的话不一样，
  * 现场就会按一边的经验去理解另一边。
  *
- * 只动 e2msqlexecprobe 这一张表；跑前跑后库里的表清单必须一张不多一张不少。
- * 口令只走环境变量 E2M_PASS，不落任何文件。
+ * 只动 e2msqlexecprobe / e2msqlexecprobe2 这两张探针表；跑前跑后库里的表清单
+ * 必须一张不多一张不少。口令只走环境变量 E2M_PASS，不落任何文件。
  */
 public final class SqlExecCli {
 
     private static final String PROBE = "e2msqlexecprobe";
+    /** 第 4 段专用：列上带 COMMENT 的探针表，用完即 drop，不留给下一轮撞名。 */
+    private static final String PROBE2 = "e2msqlexecprobe_cmt";
 
     /** 收集执行器发出的每一行，既用于断言也用于打印。 */
     private static final class Capture implements SqlExecute.Out {
@@ -130,7 +134,44 @@ public final class SqlExecCli {
                 problems.add("结果集没把行内容打出来：" + tail(c3.lines));
             }
 
-            // ---- 4 只写注释的一批：什么都不执行，也不能当成成功提交 ----
+            // ---- 4 带结果集的查询顺手取回字段注释：界面表格的表头 title 靠它 ----
+            // 建表与查询与 Python 侧 pack_test 的 G 组用同一段文本，两栈拿到的注释串
+            // 必须逐值一样：别名列（sj AS t_time）要按真列名查到注释，表达式列（amt+0、1 AS lit）
+            // 查不到就留空——这三类同时钉住"取 org 名而不是别名"这条口径。
+            Capture cmt = new Capture();
+            final List<SqlExecute.ResultSetData> setsCmt = new ArrayList<SqlExecute.ResultSetData>();
+            SqlExecute.Report rCmt = SqlExecute.run(db,
+                    "CREATE TABLE " + PROBE2 + " (id INT COMMENT '主键编号',"
+                            + " sj DATETIME COMMENT '采集时间', amt DECIMAL(10,2))"
+                            + " COMMENT='注释探针';" + (char) 10
+                            + "SELECT id, sj AS t_time, amt+0 AS calc, 1 AS lit FROM "
+                            + PROBE2 + " x;", cmt, null, null,
+                    new SqlExecute.Results() {
+                        @Override
+                        public void accept(SqlExecute.ResultSetData data) {
+                            setsCmt.add(data);
+                        }
+                    });
+            emitted.addAll(cmt.lines);
+            if (rCmt.failed || !rCmt.committed) {
+                problems.add("带注释探针表那批应成功提交，实际 failed=" + rCmt.failed
+                        + " committed=" + rCmt.committed + " 错误=" + rCmt.error);
+            }
+            if (setsCmt.size() != 1) {
+                problems.add("那一批应有 1 个结果集，实际 " + setsCmt.size() + " 个");
+            } else {
+                SqlExecute.ResultSetData d = setsCmt.get(0);
+                List<String> want = Arrays.asList("主键编号", "采集时间", "", "");
+                if (!d.columns.equals(Arrays.asList("id", "t_time", "calc", "lit"))) {
+                    problems.add("结果集列名不对：" + d.columns);
+                }
+                if (!d.comments.equals(want)) {
+                    problems.add("字段注释与 Python 侧口径不一致：要 " + want + "，实到 "
+                            + d.comments);
+                }
+            }
+
+            // ---- 5 只写注释的一批：什么都不执行，也不能当成成功提交 ----
             Capture c4 = new Capture();
             SqlExecute.Report r4 = SqlExecute.run(db, "-- 只是一句注释", c4);
             emitted.addAll(c4.lines);
@@ -144,6 +185,7 @@ public final class SqlExecCli {
         } finally {
             try (Statement st = db.connection().createStatement()) {
                 st.execute("DROP TABLE IF EXISTS `" + PROBE + "`");
+                st.execute("DROP TABLE IF EXISTS `" + PROBE2 + "`");
                 db.connection().commit();
             } catch (Exception ignore) {
                 problems.add("探针表没清掉：" + PROBE);
@@ -171,7 +213,8 @@ public final class SqlExecCli {
             System.exit(1);
         }
         System.out.println("+ [OK] SQL-EXEC | 建表提交、坏批回滚后表里 0 行、好批提交后 1 行、"
-                + "纯注释零执行；执行器发出 " + emitted.size() + " 行文本");
+                + "结果集按真表真列取回字段注释、纯注释零执行；执行器发出 "
+                + emitted.size() + " 行文本");
     }
 
     private static boolean contains(List<String> lines, String needle) {

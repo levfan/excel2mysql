@@ -1578,6 +1578,22 @@ check("F63 结果集被截断：说明写清共几行、只装了前几行",
       and w.lbl_sql_run_caption.text()
           == "第 1 条 · 共 %d 行（表格只装前 %d 行，其余没取回来）" % (_PREVIEW + 5, _PREVIEW),
       (_rtab.rowCount(), w.lbl_sql_run_caption.text()))
+# 表头 title：结果集带回来的字段注释要按列挂在各自表头上。
+# 这一页查出来的多是拼音首字母列名（ddje 这种），只有注释能读懂是哪一列。
+# 这里喂的是 core 已经取好注释的结果集，真库那条链路在 G12。
+_fab = {"sets": [{"seq": 1, "sql": "select ddje, sj from t",
+                 "columns": ["ddje", "sj"], "comments": ["订单金额", ""],
+                 "rows": [["10.00", ""]], "total": 1, "printed": 1}],
+        "sets_dropped": 0}
+w._show_sql_run_result(_fab)
+check("F64 结果表表头按列挂字段注释当 title，没注释的列不留提示",
+      _rtab.horizontalHeaderItem(0).toolTip() == app_main.HEADER_COMMENT_PREFIX + "订单金额"
+      and _rtab.horizontalHeaderItem(1).toolTip() == ""
+      and _rtab.model().headerData(0, _QtFlags.Horizontal, _QtFlags.ToolTipRole)
+          == app_main.HEADER_COMMENT_PREFIX + "订单金额"
+      and _rtab.horizontalHeader().toolTip() == "",
+      (_rtab.horizontalHeaderItem(0).toolTip(), _rtab.horizontalHeaderItem(1).toolTip(),
+       _rtab.horizontalHeader().toolTip()))
 w.on_sql_run_clear_result()
 check("F59 清空结果区：表格、下拉、说明与文本一起清",
       _rtab.rowCount() == 0 and _rtab.isHidden()
@@ -1586,6 +1602,21 @@ check("F59 清空结果区：表格、下拉、说明与文本一起清",
       and w.lbl_sql_run_caption.text() == "还没有执行结果",
       (_rtab.rowCount(), _rtab.isHidden(), w.cb_sql_run_set.count(),
        w.lbl_sql_run_caption.text()))
+check("F59b 清空后整条表头回到那句引导：留着上一列的注释会指错地方",
+      _rtab.horizontalHeader().toolTip() == app_main.RESULT_HEADER_HINT,
+      _rtab.horizontalHeader().toolTip())
+
+
+class _NoMetaCur:
+    """假游标：没有 _result（不是 PyMySQL，或驱动没给字段描述）也不该炸。"""
+
+    connection = None
+
+
+from core import sql_execute as _sx
+check("F65 驱动没给字段来源时字段注释退化成等长空串，结果照样展示",
+      _sx.column_comments(_NoMetaCur(), 3) == ["", "", ""],
+      _sx.column_comments(_NoMetaCur(), 3))
 app_main.connect = lambda cfg: _RunConn()
 w.sql_run_input.setPlainText("CREATE TABLE t_c (id INT);")
 w.sql_run_log.clear()
@@ -6774,6 +6805,59 @@ else:
         with connect(_cfg).cursor() as _c:
             _c.execute("SHOW DATABASES LIKE '%s'" % _g11db)
             check("G11e 探针库已清理（只删本轮建出来的）", _c.fetchone() is None)
+
+        # G12 真库顺手取回字段注释，并按列挂到表头 title 上。
+        # 建表与查询与 Java 侧 verify/SqlExecCli 第 4 段逐字相同：两栈拿到的注释串必须一模一样。
+        # 钉住三件事——带表别名（FROM 表 x）要按真表名查、`sj AS t_time` 要按真列名查、
+        # 表达式列（amt+0 与 1 AS lit）查不到就留空，不瞎猜注释。
+        _g12tbl = "packtest_probe_cmt"
+        _g12text = ("CREATE TABLE `%s` (id INT COMMENT '主键编号',"
+                    " sj DATETIME COMMENT '采集时间', amt DECIMAL(10,2))"
+                    " COMMENT='注释探针';\n"
+                    "SELECT id, sj AS t_time, amt+0 AS calc, 1 AS lit FROM `%s` x;"
+                    % (_g12tbl, _g12tbl))
+        _g12sets = []
+        _g12conn = connect(_cfg)
+        _g12win = None
+        try:
+            with _g12conn.cursor() as c:
+                c.execute("DROP TABLE IF EXISTS `%s`" % _g12tbl)
+            _g12conn.commit()
+            _run_exec(_g12conn, _g12text, lambda t: None, result_cb=_g12sets.append)
+            check("G12 真库结果集按真表真列取回字段注释（别名列查得到、表达式列留空）",
+                  len(_g12sets) == 1
+                  and _g12sets[0]["columns"] == ["id", "t_time", "calc", "lit"]
+                  and _g12sets[0]["comments"] == ["主键编号", "采集时间", "", ""],
+                  [(_s.get("columns"), _s.get("comments")) for _s in _g12sets])
+            # 换到空目录再开窗口：程序目录里那份 conn.ini 会让窗口自己去连库，
+            # 这条用例只管注释取没取到、挂没挂上，不该顺带连一次库
+            app_main.program_dir = lambda: _gdir
+            try:
+                _g12win = app_main.MainWindow()
+            finally:
+                app_main.program_dir = _gpdir
+            _g12win.show()
+            _g12win._show_sql_run_result({"sets": _g12sets, "sets_dropped": 0})
+            _g12tab = _g12win.sql_run_result_table
+            check("G12b 注释挂进真表头的 title：停在 ddje 这类列名上看到的就是这句",
+                  _g12tab.horizontalHeaderItem(0).toolTip()
+                      == app_main.HEADER_COMMENT_PREFIX + "主键编号"
+                  and _g12tab.horizontalHeaderItem(1).toolTip()
+                      == app_main.HEADER_COMMENT_PREFIX + "采集时间"
+                  and _g12tab.horizontalHeaderItem(2).toolTip() == ""
+                  and _g12tab.horizontalHeaderItem(3).toolTip() == ""
+                  and _g12tab.horizontalHeader().toolTip() == "",
+                  [_g12tab.horizontalHeaderItem(i).toolTip() for i in range(4)])
+        finally:
+            if _g12win is not None:
+                _g12win.close()
+            with _g12conn.cursor() as c:
+                c.execute("DROP TABLE IF EXISTS `%s`" % _g12tbl)
+            _g12conn.commit()
+            _g12conn.close()
+        with connect(_cfg).cursor() as _c:
+            _c.execute("SHOW TABLES LIKE '%s'" % _g12tbl)
+            check("G12c 注释探针表已清理", _c.fetchone() is None)
 
     except Exception as e:
         check("G0 连接 MySQL 失败", False, f"{type(e).__name__}: {e}")
