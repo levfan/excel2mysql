@@ -7589,6 +7589,70 @@ else:
 
 
 # ---------------------------------------------------------------------------
+# X 组：项目技能自己的正文纪律（S 号已被"文件名括号内容判定"占了，这里往后排到 X）。
+# 为什么要钉成守卫：让我写"提交信息要简洁"这条技能时，那个文件自己涨到 205 行、
+# 表格格子 83 字。规则写长了就没人照做，所以别再往技能里加句子，改成机器判定。
+# 长内容有家可归：references/*.md 不受这些上限约束，SKILL.md 只留决策与命令。
+section("X 项目技能的正文纪律")
+
+_SKILL_CAPS = {"lines": 80, "sec": 15, "cell": 30, "cols": 3, "code": 5}
+_SKILL_LABELS = ("X1 frontmatter 三键齐",
+                 "X2 单个 SKILL.md ≤80 行",
+                 "X3 单个小节 ≤15 行",
+                 "X4 表格 ≤3 列且每格 ≤30 字",
+                 "X5 代码块 ≤5 行",
+                 "X6 正文没有独白与待办占位",
+                 "X7 指向 references 的路径都真实存在")
+_skill_root = os.path.join(_ROOT, ".agents", "skills")
+if not os.path.isdir(_skill_root):
+    for _lbl in _SKILL_LABELS:
+        skip(_lbl, "冻结态包内没有 .agents/skills，只在开发态核")
+else:
+    _hits = [[] for _ in _SKILL_LABELS]
+    _skill_files = sorted(glob.glob(os.path.join(_skill_root, "*", "SKILL.md")))
+    check("X0 技能目录里真的有 SKILL.md（路径写错时不许静默通过）", bool(_skill_files),
+          [os.path.basename(os.path.dirname(f)) for f in _skill_files])
+    for _fp in _skill_files:
+        _nm = os.path.basename(os.path.dirname(_fp))
+        _txt = open(_fp, encoding="utf-8").read()
+        _ls = _txt.rstrip("\n").split("\n")
+        if any(k not in "\n".join(_ls[:6]) for k in ("name:", "description:", "whenToUse:")):
+            _hits[0].append(_nm)
+        if len(_ls) > _SKILL_CAPS["lines"]:
+            _hits[1].append("%s %d 行" % (_nm, len(_ls)))
+        _body, _t = [], None
+        for _l in _ls + ["## 哨兵"]:
+            if _l.startswith("## "):
+                if _t is not None and len([x for x in _body if x.strip()]) > _SKILL_CAPS["sec"]:
+                    _hits[2].append("%s 的「%s」%d 行" % (_nm, _t[:14], len(_body)))
+                _t, _body = _l[3:], []
+            elif _t is not None:
+                _body.append(_l)
+        _inb, _n = False, 0
+        for _l in _ls:
+            _s = _l.strip()
+            if _s.startswith("```"):
+                if _inb and _n > _SKILL_CAPS["code"]:
+                    _hits[4].append("%s 一处 %d 行" % (_nm, _n))
+                _inb, _n = not _inb, 0
+            elif _inb:
+                _n += 1
+            elif _s.startswith("|") and _s.endswith("|"):
+                _cs = [c.strip() for c in _s.strip("|").split("|")]
+                if len(_cs) > _SKILL_CAPS["cols"]:
+                    _hits[3].append("%s 一行 %d 列" % (_nm, len(_cs)))
+                elif any(len(c) > _SKILL_CAPS["cell"] for c in _cs):
+                    _hits[3].append("%s 一格 %d 字" % (_nm, max(len(c) for c in _cs)))
+        if re.search(r"我(打算|会先|先把|认为|觉得)|待补|TODO|FIXME", _txt):
+            _hits[5].append(_nm)
+        for _ref in sorted(set(re.findall(r"references/[\w.\-]+\.md", _txt))):
+            if not os.path.isfile(os.path.join(os.path.dirname(_fp), _ref)):
+                _hits[6].append("%s 指向不存在的 %s" % (_nm, _ref))
+    for _i, _lbl in enumerate(_SKILL_LABELS):
+        check(_lbl, not _hits[_i], _hits[_i] or "全部达标")
+
+
+# ---------------------------------------------------------------------------
 # 收尾：走的是 atexit 上注册的同一道 `_qt_teardown`，Z1 是它自己的哨兵
 section("Z 收尾与退出码")
 
