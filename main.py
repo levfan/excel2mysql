@@ -5273,11 +5273,11 @@ class SqlSamplesDialog(QDialog):
         # 内容仍是那五行，只是按角色上色：标题一档、字段名一档、关键词成一块
         paint_styled(self.intro, _intro, intro_spans(_intro),
                      intro_formats(self.intro), SAMPLE_INTRO_BLOCK_SPACING)
-        # 语句正文按角色上色：与两个 DDL 预览同一套切分、同一组色，
-        # 内容一字不改（用例钉"读回来的纯文本 == 示例原文"）
-        _sql = SQL_SAMPLES[idx].sql
-        paint_styled(self.preview, _sql, ddl_spans(_sql),
-                     ddl_formats(self.preview), DDL_BLOCK_SPACING)
+        # 语句正文这一栏两端都保持素色：Java 侧要按角色上色就得换 JTextPane，
+        # 而 JTextPane 只能折行，`samples.preview.wrap` 这条对撞键钉的是两端都不折行
+        # （编辑器口径：一句 SQL 折成三行之后，分号在哪得自己数）。
+        # 只给 Qt 一侧上色，闸门照不出来、两栈还会长得不一样，所以整条留着不做。
+        self.preview.setPlainText(SQL_SAMPLES[idx].sql)
         # 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
         # 看着像"缺了上半截"（与 Java 侧 openSqlSamples 的复位同一处理）
         for view in (self.intro, self.preview):
