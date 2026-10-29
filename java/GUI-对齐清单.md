@@ -5548,3 +5548,91 @@ Java 侧在 `MainFrame` 上加四个只读入口（`sqlSamplesResizable` / `sqlS
 刷成 LF 行尾（116 行 CR 全丢），按字节改回 CRLF 后 `git diff` 只剩版本号那两行。
 dist/ 下与现场手上的包仍是旧版本正文，等用户开口打包才换。
 
+## 106. 示例库左侧目录：字号并入表格那一档、行高跟着字高走、分组行按章节标题上色
+
+### 106.1 用户报的原话与改前量到的数
+
+用户 2026-10-29 的口径是「sql示例对话框中，左侧目录的字体和间距太小了，观看很不舒服，
+而且色彩过于单一，没有阅读的欲望」。这一栏是这个窗口里唯一逐条读的清单：右侧语句正文
+本来就是日志档 10 号等宽，缺的是左侧两层清单的层次。
+
+"小"和"单一"要先落成能对比的数，否则改完没人能说清改了什么。离屏构造同一颗控件读真值：
+
+| 量 | 改前 | 改后 |
+| --- | --- | --- |
+| 字号 | 继承 `QApplication` 默认，9 号 Sans Serif | 11 号，与 `TABLE_FONT_SIZE` 同档 |
+| 层级缩进 `indentation()` | 20 px | 26 px |
+| 行高（delegate 的 `sizeHint` 实测） | 12 px，等于 9 号字高、没有留白 | 21 px，11 号字高 15 + 留白 6 |
+| 分组行与条目行的差别 | 只有缩进 | 分组行加粗 + `#1f5fd0` 字色 + `#f4f8ff` 底色；条目行不加粗、底色是 `NoBrush` |
+
+字号并入表格那一档、留白用表格同一个数（`SAMPLE_TREE_ROW_PADDING` 与 `TABLE_ROW_PADDING`
+都是 6），是为了让"这栏读起来和那张待导入表一样"这句话有出处，不是再定一套观感。
+配色也不新造：`#1f5fd0` / `#f4f8ff` 就是介绍条与主按钮那一组冷色里的两个，Java 侧同值。
+
+### 106.2 两端的改法
+
+| 端 | 改动 |
+| --- | --- |
+| Python | 新常量 `SAMPLE_TREE_FONT_SIZE`（= `TABLE_FONT_SIZE`）、`SAMPLE_TREE_ROW_PADDING`、`SAMPLE_TREE_INDENT`、`SAMPLE_GROUP_FG`、`SAMPLE_GROUP_BG`；`SqlSamplesDialog` 里给树 `setFont` / `setIndentation`，再挂 `_TreeRowDelegate`——Qt 的树行高由样式给定，字号抬到 11 号就会顶行，行高必须跟着字高走，算法与 `style_table_font` 那句 `fontMetrics().height() + 留白` 同一条；建目录时只给分组项 `setFont(0, 粗体)` / `setForeground(0, …)` / `setBackground(0, …)`，叶子项一律不动 |
+| Java | `Tables` 上同名五个常量（三个 int 加两个 `java.awt.Color`）；`JTree.setFont(Tables.font())`、`setRowHeight(字高 + UiScale.px(6))`。Qt 只有一个 `indentation`，Swing 把它拆成左右两段，于是 `BasicTreeUI` 的 `setLeftChildIndent` 与 `setRightChildIndent` 各取 `UiScale.px(26) / 2`，合起来才是同一个设计值；新增 `SampleTreeRenderer` 做两态上色，并把三颗默认图标（文件、闭文件夹、开文件夹）置空——Qt 那侧本来就只有一个展开三角，留着图标会让两层看着更像并列 |
+
+只对分组行显式上色，条目行两端都不碰：Java 渲染器里条目行走 `tree.getForeground()`，
+Python 侧不设 `setForeground` 也是同一个前景色，但底色一边报默认值、一边报 `NoBrush`
+就比不了，所以对撞键只比"显式设了的那一行"，条目行只比字重。
+
+### 106.3 用例与对撞键
+
+- Python `pack_test.py`：F33d 钉字号进表格那一档 + 留白为正 + 缩进同一个设计值；F33e 钉
+  分组行"加粗 / 字色 / 底色"三件同时成立、条目行不加粗且底色为 `NoBrush`；F33f 钉住两个
+  色值就是 `#1f5fd0` / `#f4f8ff`，防的是下一次有人为了"更好看"另造一套。
+- Java `GuiMain`：示例库那一段前插四条，读 `sampleTreeFontPt()`（真控件字号折回设计档）
+  与 `sampleTreeCellStyle(group)`（走真 cellRenderer 的返回值，不是在 Java 侧抄一份常量）。
+- 对撞器 `gui_dump_py.py` / `GuiDump.java`：新增 `sample.tree.font.pt`、`sample.tree.group`、
+  `sample.tree.leaf.bold` 三键，356 ↔ 356。
+
+### 106.4 这一轮最值钱的一条：键比的是返回值时，观感要靠像素确认
+
+Java 第一版把底色设进渲染器就收手了。`sampleTreeCellStyle(true)` 返回 `#f4f8ff`，界面
+自检绿、对撞绿——屏上却没有那条色带。原因是 `DefaultTreeCellRenderer` 继承的 `JLabel`
+默认不透明，`setOpaque(false)` 时 `paint()` 根本不画背景，`setBackground` 白设。补上
+`setOpaque(group)` 之后渲染图里才出现色带，这一处注释也留在渲染器里。
+
+于是记下这条判据：取"渲染器被问到会怎么答"的键，只能证明渲染器的分支写对了，
+不能证明它画出来了。观感类改动要么落到像素（把窗口 `printAll` 进 `BufferedImage`
+自己量那条带子的颜色），要么在清单里显式写成未取证，不能拿键绿当屏上有色。
+
+配套两条现场约束一起留档：
+
+- 取证脚本一开始用 `Robot.createScreenCapture` 抓屏幕矩形，第一张就抓到了用户桌面上
+  另一个窗口的画面。那张图当场删除、从未进过 `git add`，探针改成 `Window.printAll`
+  只画自己这个窗口——取证工具不许碰别人的画面。
+- 改完看到选中行有一层浅色，怀疑是这一轮带出来的：量了调色板 `Highlight` 在 active 与
+  inactive 两态都是 `#4c5f6b`，再用 HEAD 那份 `main.py` 在同条件下重拍对照，确认与本轮无关。
+
+### 106.5 变异抽查
+
+把产品代码故意改坏，用与 F33d / F33e 逐字同一条的判据表达式跑，确认断言真的会红：
+
+| 变异 | F33d | F33e |
+| --- | --- | --- |
+| 原样 | 绿 | 绿 |
+| 摘掉 `setFont` / `setIndentation` / `setItemDelegate` 三行 | 红（回到 9 号 / 20 px / 行高 12） | 绿 |
+| 只摘掉分组行那三行上色 | 绿 | 红 |
+
+两次变异后都按 md5 逐字节还原（`b8a847f1c9e1c9ada7b03e06eb87575e` 与备份一致），还原后
+`import main` 无输出。Java 侧没做同款变异：`setOpaque` 那一处正是"变异了也不会红"的那条，
+红的是渲染图——这件事写在 106.4，不假装有用例咬住。
+
+### 106.6 这一轮的验证数字
+
+| 闸门 | 结果 |
+| --- | --- |
+| `pack_test.py`（带真库凭据） | 通过 924 / 失败 0 / 跳过 5（I4·I5、J10、N10 缺真实 `.xls`，M14 缺语料，T14 冻结态专属）；G 组真跑，F33d/e/f 三条为绿 |
+| `java/构建验证.bat` | 十步全过（`JAVA_EXIT=0`），第 10 步界面自检含这一轮新增的四条 |
+| `java/界面双端对撞.bat` | Python 侧 356 键 / Java 侧 356 键，逐键一致（`PARITY_EXIT=0`） |
+| `check_sql_samples.py`（真库） | 合计 126 条，失败 0 条（`CHECK_EXIT=0`） |
+| `mvn -B -o -pl app compile`（排版修正后重编） | 退出码 0，日志空 |
+
+版本升 patch 到 3.3.1：这一轮只动字号、行距、缩进与配色，没有任何"以前做不到、现在
+能做"的事，老做法原样还在，按判据进补丁位而不是次版本位。
+
