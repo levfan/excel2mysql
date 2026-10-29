@@ -5460,3 +5460,91 @@ help_doc.py 十五节正文整体重写，保持锚点、目录标题与 HTML �
 产物名随 pom 变成 excel2mysql-3.1.1.jar 与 excel2mysql-java-3.1.1-win64。
 现场手上那个包与仓库里 dist/ 下的三个产物仍是 3.1.0 的正文，
 等按指令重打包后才换成这一轮。
+
+## 105. 示例库窗口改成两端独立顶层窗口，标题栏拿到原生最小化与最大化
+
+### 105.1 需求与两端的平台事实
+
+用户点名「sql示例对话框，可以自己调整大小，支持最小化，最大化」，随后把范围收窄成
+只做 Python 与 Java 两端图形版，命令行这一轮不动。
+
+改之前先把两端的平台能力量清楚，因为判据不是同一件事：
+
+| 取证 | 方法 | 结果 |
+| --- | --- | --- |
+| Python 侧原本有没有那两颗按钮 | 离屏构造 `SqlSamplesDialog`，读 `windowFlags()` | `0x8003003`：只有系统菜单、标题、关闭三颗，没有 `WindowMinimizeButtonHint` / `WindowMaximizeButtonHint`；但没有 `MSWindowsFixedSizeDialogHint`、`minimumSize` 为 0×0，说明拖边框改大小本来就是通的，缺的只是标题栏按钮 |
+| Swing 的对话框能不能最小化 | `javap java.awt.Dialog` 与 `java.awt.Frame`（本机 JDK 1.8.0_202）对照 | `Dialog` 上既没有 `setExtendedState` 也没有 `ICONIFIED` 常量，两者只在 `Frame` 上——`JDialog` 做不出最小化，这不是实现细节而是 API 缺口 |
+| 改完之后系统实际给了什么 | 真机（`QT_QPA_PLATFORM=windows`）`GetWindowLongW(HWND, GWL_STYLE)` | `0x96CF0000`：`WS_MINIMIZEBOX`、`WS_MAXIMIZEBOX`、`WS_THICKFRAME` 三位都在 |
+
+最后一行是这件事唯一的直接证据：标题栏那两颗按钮由系统画，离屏平台答不出它画没画，
+`grab()` 出来的图也不含外框装饰，所以这一轮没有拿渲染图当判据。
+
+### 105.2 两端的改法
+
+| 端 | 改动 |
+| --- | --- |
+| Python | `SqlSamplesDialog.__init__` 设 `Qt.Window \| WindowTitleHint \| WindowSystemMenuHint \| WindowMinimizeButtonHint \| WindowMaximizeButtonHint \| WindowCloseButtonHint`；构造点从 `SqlSamplesDialog(self.sql_run_input, self)` 改成不传 parent，`parent` 形参随之删掉（两个调用点都不传）。认了 owner 的窗口在 Windows 上没有独立任务栏项、主窗口最小化时跟着藏，这两条与「开着用的清单」相反 |
+| Java | `openSqlSamples()` 里 `new JDialog(this, 标题, false)` 换成 `new JFrame(标题)`，不认 owner；字段 `sqlRunSamples` 的类型同步换成 `JFrame`；`HIDE_ON_CLOSE`、`Windows.clientSize(contentPane, win, 980, 620)` 与非模态用法都不动。主窗口是 `EXIT_ON_CLOSE`，这颗框不会把 JVM 留在后台 |
+
+随之成立的行为变化，两端一致：窗口在任务栏单占一格，主窗口最小化时它不跟着藏；
+点「示例 (?)」时若已开着就 `raise_()` / `toFront()` 抬到前，这条原有逻辑没改。
+
+### 105.3 用例
+
+Python 侧在示例库那一段（F32–F38g 之后）加 8 条：F38h 窗口类型位与 min/max/close
+三颗 hint 齐、parent 为空；F38i 未被钉成固定尺寸且仍非模态；F38j / F38k 放大到
+1180×760 与缩到 640×420 都真改得动、缩小时右侧那块不被压没；F38l 最大化后宽到屏幕
+可用区那一档；F38m 从最大化还原回到原尺寸而不是默认尺寸；F38n 最小化状态切得动；
+F38o 还原后目录选中项与语句正文都还在。
+
+Java 侧在 `MainFrame` 上加四个只读入口（`sqlSamplesResizable` / `sqlSamplesHasOwner` /
+`sqlSamplesMaximizeThenRestore` / `sqlSamplesMinimizeThenRestore`），自检在示例库标题
+那条之后接三段：形态（可改大小且不认 owner）、最大化那一刻的宽度不小于屏幕可用区宽、
+最小化扩展状态切得过去并认账。`Windows.workArea` 用来取可用区宽，不写死像素。
+
+### 105.4 变异抽查与判据的咬合范围
+
+三条独立变异，确认断言不是摆设：
+
+| 变异 | 结果 |
+| --- | --- |
+| 删掉 `setWindowFlags(...)` 那一行，跑全量 | `通过 880 / 失败 1`，红的正是 F38h（读回 `0x8003003`） |
+| 把构造点改回带 parent（探针直接算 F38h 那个布尔式） | `False`——`parent() is None` 这一支单独也咬得住 |
+| Java 加一行 `dlg.setResizable(false)`，重打 jar 跑第十步 | 退出码 1，报「示例窗口不是独立顶层窗口：可改大小=false 认主窗口当 owner=false」 |
+
+要记下这条判据的边界：F38l / F38n 那两条几何与状态断言在第一项变异下仍然绿——
+离屏平台的 `showMaximized()` / `showMinimized()` 不看窗口标志也能切状态。真正咬住
+「标题栏有没有那两颗按钮」的只有 F38h 的窗口标志与真机样式位那一次读取，几何那几条
+守的是窗口形态别把内容压坏、还原回得来。报告里不能把它们说成按钮存在的证据。
+
+另一条边界：把 `JFrame` 退回 `JDialog` 不会让自检变红，而是直接编不过（`Frame` 的
+扩展状态方法在 `Dialog` 上不存在），所以那一档的保护来自类型系统而不是用例。
+
+### 105.5 文档
+
+`help_doc.py` 里「示例 (?)」那一格原先写「对话框不阻塞界面，可边看边改」，形态一改
+这句就不准了，改成写明独立窗口、边框可拖、标题栏有最小化与最大化、主窗口最小化时不
+跟着藏。`HelpDoc.java` 是生成物，按 `tools/check_generated.py --write` 重导并复核与源
+逐字节一致；类文档首行与 Java 侧方法注释里的「对话框」一并改成「窗口」。
+
+### 105.6 这一轮的验证数字
+
+五道闸门都在最终状态上实跑，真库凭据从 `.pt_env` 载入（G 组与示例回归不是 SKIP）：
+
+| 闸门 | 结果 |
+| --- | --- |
+| `pack_test.py`（带真库凭据） | 通过 904 / 失败 0 / 5 项显式记为未覆盖；G1–G8 真跑，T15 核过版本号 |
+| `pack_test38.py`（3.8 旧栈） | 通过 261 / 失败 0 / 跳过 1（V25 需要真实 `.xls` 样本） |
+| `pack_test38.py`（3.12 新栈） | 通过 252 / 失败 0 / 跳过 4（三条是 3.8 专属契约，一条是 V25） |
+| `java/构建验证.bat` | 十步全过；拼音差分 57228 条全部一致；第 10 步界面自检含这一轮新增的三段 |
+| `java/界面双端对撞.bat` | Python 侧 340 键 / Java 侧 340 键，逐键一致；另有 6 项现场实测尺寸只留档不比 |
+| `check_sql_samples.py`（真库） | 合计 126 条，失败 0 条 |
+
+版本升 minor 到 3.2.0：判据是「以前做不到、现在能做」且老做法原样还在——示例清单
+原先只能拖边框改大小，现在标题栏能最小化与最大化，没去掉任何既有能力，也不是修复，
+所以进次版本位而不是补丁位（`3.1.1 → 3.2.0`，patch 归零）。`version.py` 与 11 处写死
+的字符串一起改，T15 逐处核过；产物名随 pom 变成 `excel2mysql-3.2.0.jar` 与
+`excel2mysql-java-3.2.0-win64`。`java/构建验证.bat` 里的 jar 名随 `sed` 改号时曾被顺手
+刷成 LF 行尾（116 行 CR 全丢），按字节改回 CRLF 后 `git diff` 只剩版本号那两行。
+dist/ 下与现场手上的包仍是旧版本正文，等用户开口打包才换。
+
