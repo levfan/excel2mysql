@@ -2299,6 +2299,21 @@ public final class GuiMain {
         if (!"SQL 示例（126 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
         }
+        // 这张清单要是 JDialog，最小化那颗按钮根本画不出来（AWT 的 Dialog 连
+        // setExtendedState 都没有），所以窗口形态按"真按一次再量结果"查，判据对齐 Python 侧 F38h
+        if (!frame.sqlSamplesResizable() || frame.sqlSamplesHasOwner()) {
+            problems.add("示例窗口不是独立顶层窗口：可改大小=" + frame.sqlSamplesResizable()
+                    + " 认主窗口当 owner=" + frame.sqlSamplesHasOwner());
+        }
+        int samplesMaxW = frame.sqlSamplesMaximizeThenRestore();
+        int workW = com.excel2mysql.gui.Windows.workArea(frame).width;
+        if (samplesMaxW < workW) {
+            problems.add("示例窗口最大化按不动：最大化那一刻宽 " + samplesMaxW
+                    + "，屏幕可用区宽 " + workW);
+        }
+        if (!frame.sqlSamplesMinimizeThenRestore()) {
+            problems.add("示例窗口最小化按不动：切了 ICONIFIED 回读扩展状态没认账");
+        }
         if (frame.sqlSamplesGroupCount() != 13 || frame.sqlSamplesVisibleCount() != 126
                 || !"共 126 条，分 13 组".equals(frame.sqlSamplesHitsText())) {
             problems.add("示例目录不是「13 组 → 126 条」两层："

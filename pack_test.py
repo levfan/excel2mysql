@@ -2290,6 +2290,59 @@ _app.processEvents()
 check("F38g 清空搜索框回到全量 126 条、13 组",
       len(_visible_leaves(_dlg)) == 126 and _dlg.tree.topLevelItemCount() == 13
       and _dlg.lbl_hits.text() == "共 126 条，分 13 组", _dlg.lbl_hits.text())
+# 独立顶层窗口才有原生最小化/最大化：挂在主窗口底下的对话框在 Windows 上只有那颗关闭叉，
+# 主窗口最小化时它还留在屏上挡路。判据取窗口标志，因为按钮本身是系统画的。
+_dlg_flags = int(_dlg.windowFlags())
+check("F38h 示例窗口是独立顶层窗口，窗口标志带原生最小化与最大化",
+      (_dlg_flags & app_main.Qt.WindowType_Mask) == int(app_main.Qt.Window)
+      and bool(_dlg_flags & app_main.Qt.WindowMinimizeButtonHint)
+      and bool(_dlg_flags & app_main.Qt.WindowMaximizeButtonHint)
+      and bool(_dlg_flags & app_main.Qt.WindowCloseButtonHint)
+      and _dlg.parent() is None,
+      hex(_dlg_flags))
+check("F38i 没被钉成固定尺寸对话框，也仍非模态：拖边框改大小和边看边改语句这两条都要在",
+      not bool(_dlg_flags & app_main.Qt.MSWindowsFixedSizeDialogHint)
+      and not _dlg.isModal(), hex(_dlg_flags))
+_before = (_dlg.width(), _dlg.height())
+_dlg.resize(1180, 760)
+_app.processEvents()
+check("F38j 改大小真的改得动：放大之后宽高就是给的那个数",
+      (_dlg.width(), _dlg.height()) == (1180, 760),
+      (_before, (_dlg.width(), _dlg.height())))
+_dlg.resize(640, 420)
+_app.processEvents()
+check("F38k 缩小也改得动，缩到小尺寸右侧那块不许被压到看不见",
+      (_dlg.width(), _dlg.height()) == (640, 420)
+      and _dlg.right_split.sizes()[1] > 0,
+      ((_dlg.width(), _dlg.height()), _dlg.right_split.sizes()))
+_dlg.resize(*_before)
+_app.processEvents()
+# 最大化/最小化这两颗按钮是系统画的，用例按的是按下之后的窗口状态与几何
+_avail = app_main.QApplication.primaryScreen().availableGeometry()
+_dlg.showMaximized()
+_app.processEvents()
+_widened = _dlg.width()
+check("F38l 最大化真按得动：铺到屏幕可用区那么宽，比正常那一档明显更宽",
+      _dlg.isMaximized() and _widened > _before[0]
+      and _widened >= _avail.width() - 20,
+      (_widened, _before, _avail.width()))
+_dlg.showNormal()
+_app.processEvents()
+check("F38m 从最大化还原回到原来那一档，不是还原成默认尺寸",
+      not _dlg.isMaximized() and _dlg.width() == _before[0],
+      (_dlg.isMaximized(), _dlg.width(), _before[0]))
+_dlg.showMinimized()
+_app.processEvents()
+check("F38n 最小化真按得动：切到最小化状态，窗口还挂在程序手里",
+      _dlg.isMinimized(), _dlg.isMinimized())
+_dlg.showNormal()
+_dlg.raise_()
+_app.processEvents()
+check("F38o 从最小化还原回来还能接着挑：目录与语句都在",
+      not _dlg.isMinimized() and _dlg.isVisible()
+      and _dlg.preview.toPlainText()
+      == app_main.SQL_SAMPLES[_dlg._sample_index()].sql,
+      (_dlg.isMinimized(), _dlg.isVisible(), _dlg._sample_index()))
 _dlg.close()
 _dlg.deleteLater()
 
