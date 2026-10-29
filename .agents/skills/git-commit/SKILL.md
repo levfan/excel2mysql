@@ -146,6 +146,8 @@ app/verify 的 `<parent><version>`）、`java/构建验证.bat` 里的 jar 名�
 
 ```
 type(scope): 祈使句中文描述，不超过 50 字，结尾不加句号
+
+一句话讲清为什么改，整条（主题 + 空行 + 正文）不超过 140 字。
 ```
 
 - `type`：`feat` / `fix` / `test` / `docs` / `refactor` / `perf` / `build` / `chore`
@@ -153,11 +155,19 @@ type(scope): 祈使句中文描述，不超过 50 字，结尾不加句号
   `zip`（core/zip_import.py）、`merge`（core/merge_check.py）、`sql`（core/sql_script.py）、
   `naming`（core/naming.py）、`mysql`（core/mysql_io.py）、`progress`（进度框与子线程）、
   `help`（help_doc.py / ui_help.py 使用说明）、`pack`（打包与 spec）
-- body 写动机与影响，不逐文件罗列；用 heredoc 传多行消息避免转义事故
+- **正文只回答"为什么要改"这一件事，一到两行写完。** 不许写进 commit message：
+  改了哪些文件、用例编号与断言条数、闸门退出码与通过数、守卫的名字、取证过程、
+  改动前后的对照表。那些属于 `java/GUI-对齐清单.md`、`RELEASE.md` 和当轮对用户的汇报，
+  不属于 git 历史。写不完通常说明这一次提交塞的事太多，按性质拆开，而不是把正文写长。
+  反面教材：本项目 `bd8a6bb` 380 字、`d2d9c58` 299 字，把取证表格整段抄进了提交信息，
+  用户 2026-10-29 判为"太长、说得很啰嗦"。
+- 用 heredoc 传多行消息避免转义事故
 - **主题行与正文之间必须空一行**：只给一个换行的话 git 会把整段并成 subject，
   `git log --oneline` 与 GitHub 提交列表里会拖出一条超长标题
   （本项目 `121dded` / `5534cd5` / `c2f4a33` 三个提交就踩了；已推送的不改写历史，此后必须避免）
-- 提交后立刻复核格式：`git log -1 --format=%s` 只应有一行且 ≤50 字，`git log -1 --format=%b` 应非空
+- 提交后逐条复核，超了就重写这条再提交下一个：
+  `git log -1 --format=%s` 只应有一行且 ≤50 字；`git log -1 --format=%b` 应非空；
+  `git log -1 --format=%B | wc -m` 应 ≤140（`wc -m` 数的是字符，中文按一个算，别用 `wc -c`）
 - 本项目没有数据库迁移脚本，**不要**套用"db 独立成 commit"那类外部规则
 
 示例（一次带测试的功能改动 = 两个 commit，注意每个提交内部的空行）：
@@ -165,11 +175,11 @@ type(scope): 祈使句中文描述，不超过 50 字，结尾不加句号
 ```
 feat(naming): 新增「替换首个前缀」按首段改写表名
 
-换掉第一个下划线之前那段，ods_t_order → change_t_order。
+现场要按业务段重命名，ods_t_order 直接改成 change_t_order。
 
-test(naming): 覆盖首段切分、撞名去重与 SQL 引用同步改写
+test(naming): 覆盖首段切分与 SQL 引用同步改写
 
-32 条断言，含跳过的表也计入进度项。
+改名后脚本里的表引用要跟着走，漏一处就导错表。
 ```
 
 ## 入库红线
