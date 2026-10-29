@@ -4335,14 +4335,14 @@ check("P16b 说明交代点击虚线区就能选文件",
 check("P17 进度框章节写清了「后台线程 + 可取消 + 逐项进度」",
       "进度框与耗时" in _doc_all and "非模态" in _doc_all
       and "当前这一项做完" in _doc_all)
-check("P17b 进度框章节交代了各页可以并行、互斥按占用的东西判",
-      "另外两个页照常能用" in _doc_all and "互斥按占用的东西判" in _doc_all
-      and "各写自己的目录" in _doc_all and "sql_meta_data_file_年月日" in _doc_all,
-      [t for t in ("另外两个页照常能用", "互斥按占用的东西判", "各写自己的目录",
-                   "sql_meta_data_file_年月日") if t not in _doc_all])
-check("P17c 说明交代了两个进度框错开摆、两颗生成按钮不必互相等",
-      "往右下错开一格" in _doc_all and "两颗按钮也不必互相等" in _doc_all,
-      [t for t in ("往右下错开一格", "两颗按钮也不必互相等") if t not in _doc_all])
+check("P17b 进度框章节交代了各页可以并行、互斥按占用的资源判定",
+      "另外两个页签仍可正常使用" in _doc_all and "互斥按占用的资源判定" in _doc_all
+      and "各写独立目录" in _doc_all and "sql_meta_data_file_年月日" in _doc_all,
+      [t for t in ("另外两个页签仍可正常使用", "互斥按占用的资源判定",
+                   "各写独立目录", "sql_meta_data_file_年月日") if t not in _doc_all])
+check("P17c 说明交代了两个进度框错开摆放、两颗生成按钮无需互等",
+      "向右下方偏移一档" in _doc_all and "两颗按钮无需互相等待" in _doc_all,
+      [t for t in ("向右下方偏移一档", "两颗按钮无需互相等待") if t not in _doc_all])
 check("P17d 快速上手交代了 conn.ini 预填、优先级与三种说法",
       "程序所在目录" in _doc_all and "E2M_PASS" in _doc_all
       and "找到了但读不了" in _doc_all and "内置默认值" in _doc_all,
