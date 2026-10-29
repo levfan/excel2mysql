@@ -172,7 +172,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 编辑区那一栏的头一行（SQL 文本 + 示例 + 两颗清空 + 执行编辑区 SQL）。 */
     private javax.swing.JPanel sqlRunEditorHead;
     private final List<RunScript> sqlRunFiles = new ArrayList<RunScript>();
-    private javax.swing.JDialog sqlRunSamples;
+    private javax.swing.JFrame sqlRunSamples;
     /** 示例弹窗：左边搜索框 + 两层目录，右边上方介绍、下方语句。 */
     private javax.swing.JTextField sqlRunSamplesSearch;
     private javax.swing.JTree sqlRunSamplesTree;
@@ -3454,15 +3454,22 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                         : javax.swing.JOptionPane.INFORMATION_MESSAGE);
     }
 
-    /** 「示例 (?)」打开的那个对话框：左边搜关键词 + 目录，右边上方介绍、下方语句。 */
+    /**
+     * 「示例 (?)」打开的那个窗口：左边搜关键词 + 目录，右边上方介绍、下方语句。
+     *
+     * 用的是 JFrame 而不是 JDialog：AWT 的 Dialog 没有 setExtendedState，
+     * Windows 上那颗框也只有关闭叉——最小化/最大化两件事在对话框上根本做不出来。
+     * 不认主窗口当 owner，它才单占任务栏一格、主窗口最小化时不跟着藏；
+     * 这张清单正是开着用的。与 Python 侧 SqlSamplesDialog 的 Qt.Window 同一口径。
+     */
     private void openSqlSamples() {
         if (sqlRunSamples != null && sqlRunSamples.isShowing()) {
             sqlRunSamples.toFront();
             return;
         }
-        final javax.swing.JDialog dlg = new javax.swing.JDialog(this,
-                "SQL 示例（" + SqlSamples.ALL.length + " 条）", false);
-        dlg.setDefaultCloseOperation(javax.swing.JDialog.HIDE_ON_CLOSE);
+        final javax.swing.JFrame dlg = new javax.swing.JFrame(
+                "SQL 示例（" + SqlSamples.ALL.length + " 条）");
+        dlg.setDefaultCloseOperation(javax.swing.JFrame.HIDE_ON_CLOSE);
 
         // 目录分两层（分组 → 短标题）而不是把上百条平铺在第一层：示例只会越加越多，
         // 平铺时找一条要滚半天；上面再给一行关键词过滤，常用路径就是"搜一下、点第一条"
@@ -3800,6 +3807,46 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public boolean sqlSamplesShowing() {
         return sqlRunSamples != null && sqlRunSamples.isShowing();
+    }
+
+    /** 这张清单的窗口形态：改得了大小、且不认主窗口当 owner，才是独立顶层窗口。 */
+    public boolean sqlSamplesResizable() {
+        return sqlRunSamples != null && sqlRunSamples.isResizable();
+    }
+
+    /** 有没有认主窗口当 owner：认了就单占不了任务栏一格、主窗口最小化时它跟着藏。 */
+    public boolean sqlSamplesHasOwner() {
+        return sqlRunSamples != null && sqlRunSamples.getOwner() != null;
+    }
+
+    /**
+     * 真最大化一次再还原，回量最大化那一刻的窗口宽度。
+     * Frame 上没有 isMaximizable 那种能力位（那是 Dialog 的），只能按下去量结果。
+     */
+    public int sqlSamplesMaximizeThenRestore() {
+        if (sqlRunSamples == null) {
+            return -1;
+        }
+        java.awt.Rectangle before = sqlRunSamples.getBounds();
+        sqlRunSamples.setExtendedState(java.awt.Frame.MAXIMIZED_BOTH);
+        int widened = sqlRunSamples.getWidth();
+        sqlRunSamples.setExtendedState(java.awt.Frame.NORMAL);
+        sqlRunSamples.setBounds(before);
+        return widened;
+    }
+
+    /** 真最小化一次再还原，回读扩展状态：Dialog 连这个 API 都没有，走得通就说明是顶层窗口。 */
+    public boolean sqlSamplesMinimizeThenRestore() {
+        if (sqlRunSamples == null) {
+            return false;
+        }
+        sqlRunSamples.setExtendedState(java.awt.Frame.ICONIFIED);
+        boolean iconified = (sqlRunSamples.getExtendedState()
+                & java.awt.Frame.ICONIFIED) != 0;
+        sqlRunSamples.setExtendedState(java.awt.Frame.NORMAL);
+        sqlRunSamples.setVisible(true);
+        sqlRunSamples.toFront();
+        return iconified;
     }
 
     /** 收起那份示例清单：它是非模态的，自检点完得自己收，不然会留在屏上挡后面的场景。 */

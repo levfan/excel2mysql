@@ -3726,7 +3726,7 @@ class MainWindow(QWidget):
             self.sql_run_samples.raise_()
             self.sql_run_samples.activateWindow()
             return
-        self.sql_run_samples = SqlSamplesDialog(self.sql_run_input, self)
+        self.sql_run_samples = SqlSamplesDialog(self.sql_run_input)
         self.sql_run_samples.show()
 
     def _conn_cfg(self) -> dict:
@@ -4656,7 +4656,7 @@ class SqlScriptDdlDialog(QDialog):
 
 # ---------------------------------------------------------------------------
 class SqlSamplesDialog(QDialog):
-    """「示例 (?)」打开的那个对话框：左边搜关键词 + 目录，右边上方介绍、下方语句。
+    """「示例 (?)」打开的那个独立窗口：左边搜关键词 + 目录，右边上方介绍、下方语句。
 
     非模态：这一页的用法是照着清单改语句、执行、再看结果，
     模态框会把编辑区锁住，等于让人把 SQL 抄两遍。目录与正文都取自
@@ -4666,12 +4666,18 @@ class SqlSamplesDialog(QDialog):
     平铺时找一条要滚半天；上面再给一行关键词过滤，常用路径就是"搜一下、点第一条"。
     右侧分上下两块是因为一条示例要回答两个问题——"我什么时候要用它、它替我挡掉什么"
     和"语句到底怎么写"，只看语句的人会把场景丢在手册里。
+
+    挂 Qt.Window 且不认主窗口当 parent：Windows 上认了 owner 的窗口没有最小化/最大化那两颗
+    按钮、也不单占任务栏一格，主窗口一最小化它还跟着藏——这张清单正是开着用的。
     """
 
-    def __init__(self, editor, parent=None):
-        super().__init__(parent)
+    def __init__(self, editor):
+        super().__init__()
         self._editor = editor
         self.setModal(False)
+        self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
+                            | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+                            | Qt.WindowCloseButtonHint)
         self.setWindowTitle("SQL 示例（%d 条）" % len(SQL_SAMPLES))
         fit_client(self, 980, 620)
         lay = QVBoxLayout(self)
