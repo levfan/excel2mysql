@@ -216,8 +216,8 @@ def copy_project_doc():
         text = fh.read()
     if 'src="assets/app_icon.png"' not in text:
         raise RuntimeError("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.png")
-    if len(text) < 40000:
-        raise RuntimeError("README.md 只有 %d 字符，不像完整文档（项目里唯一的一份文档）" % len(text))
+    if len(text) < 9000:
+        raise RuntimeError("README.md 只有 %d 字符，命令参考那几节不像齐备（现场只带这一份文档）" % len(text))
     out = os.path.join(APP_DIST, "README.md")
     with open(out, "wb") as fh:
         fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
@@ -228,8 +228,8 @@ def copy_project_doc():
     if not os.path.isdir(os.path.dirname(icon_dst)):
         os.makedirs(os.path.dirname(icon_dst))
     shutil.copy2(icon_src, icon_dst)
-    if os.path.getsize(out) < 40000:
-        raise RuntimeError("包里的 README.md 比仓库那份小，拷贝被截断")
+    if os.path.getsize(out) != len(text.encode("utf-8")) + text.count("\n"):
+        raise RuntimeError("包里的 README.md 字节数与仓库那份对不上（行尾转换算进去也不该差）")
     return "README.md %d 字符（与仓库逐字节一致）+ assets/app_icon.png" % len(text)
 
 

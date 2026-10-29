@@ -912,7 +912,10 @@ else:
     check(W_DOC_LABELS[1], not _undoc, _undoc or "全部覆盖")
     _secs = ("前置条件", "怎么用最省事的四条", "支持哪些输入", "连接信息",
              "动作与选项", "日志形态与退出码", "最小验收", "跑不通时")
-    check(W_DOC_LABELS[2], len(doc) > 40000 and all(s in doc for s in _secs),
+    # 长度下限按"开发向文档"取：README 只承载选型、环境、打包、启动、命令参考与闸门，
+    # 界面操作细则在 help_doc.py（程序内《使用说明》），所以这里核的是命令参考没被砍空，
+    # 不是整篇手册的字数
+    check(W_DOC_LABELS[2], len(doc) > 9000 and all(s in doc for s in _secs),
           (len(doc), [s for s in _secs if s not in doc]))
     # 退出码只从「日志形态与退出码」那张表取：整篇扫会把别的表格首列数字当成退出码
     _sec = re.search(r"^### \d+\.5 日志形态与退出码.*?(?=^### |\Z)", doc, re.M | re.S)
