@@ -12,13 +12,14 @@ if not exist "%JDK8%\bin\javac.exe" (
 set "JAVA_HOME=%JDK8%"
 set "PATH=%JDK8%\bin;%PATH%"
 
+cd /d "%~dp0"
+
+rem 先落到本脚本所在目录再找 venv：从项目根或资源管理器双击进来都要能找到
 set "PY=..\.venv\Scripts\python.exe"
 if not exist "%PY%" (
     echo x [ERROR] PARITY ^| python venv not found: %PY%
     exit /b 3
 )
-
-cd /d "%~dp0"
 
 echo === 1/2 build app and verify ===
 call mvn -B -q install -pl app,verify || exit /b 1
