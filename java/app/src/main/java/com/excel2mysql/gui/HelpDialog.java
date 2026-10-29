@@ -230,8 +230,17 @@ public final class HelpDialog extends JDialog {
         try {
             javax.swing.text.Document doc = browser.getDocument();
             String text = doc.getText(0, doc.getLength());
-            int at = text.indexOf("这个工具把一批");
+            // 按首章标题定位，再跳过标题与正文之间的空白落到首句：写死正文首句的话，
+            // 改一句文案就会让这道自检假红（正文首句本来就是文案，随时会改）
+            int at = text.indexOf("快速上手");
             if (at < 0) {
+                return -1;
+            }
+            at += "快速上手".length();
+            while (at < text.length() && Character.isWhitespace(text.charAt(at))) {
+                at++;
+            }
+            if (at >= text.length()) {
                 return -1;
             }
             java.awt.Rectangle r = browser.modelToView(at);
