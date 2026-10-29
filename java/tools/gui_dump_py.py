@@ -925,8 +925,13 @@ def main():
     # 放大镜按像素判"画出来没有"，不判有没有挂上图标对象
     put("sample.search.hint", sdg.search.placeholderText())
     _si = sdg.search.grab().toImage()
-    _sink = sum(1 for y in range(_si.height()) for x in range(min(22, _si.width()))
-                if (_si.pixel(x, y) & 0x00ffffff) != 0x00ffffff)
+    # 按颜色数，不按"非白"数：输入框自己那条蓝边也是非白的。第一版按非白数，
+    # 变异抽查里把 addAction 整行删掉它照样报 painted（Java 侧报 blank，
+    # 两处不一致才被对撞逼出来）——判据与 pack_test 的 F33h 同一条带、同一种色
+    _sink = sum(1 for y in range(_si.height()) for x in range(2, min(24, _si.width()))
+                if abs(((_si.pixel(x, y) >> 16) & 0xff) - 0x1f) <= 16
+                and abs(((_si.pixel(x, y) >> 8) & 0xff) - 0x5f) <= 16
+                and abs((_si.pixel(x, y) & 0xff) - 0xd0) <= 16)
     put("sample.search.icon", "%d|%s" % (m.SAMPLE_SEARCH_ICON_SIZE,
                                          "painted" if _sink > 0 else "blank"))
     sdg.close()

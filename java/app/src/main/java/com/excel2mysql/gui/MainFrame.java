@@ -3772,9 +3772,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 加上焦点条件两端就不一致了（而且自检里焦点在谁身上本来就不稳定）
             if (getText().isEmpty()) {
                 java.awt.FontMetrics fm = getFontMetrics(getFont());
-                java.awt.Color inactive = javax.swing.UIManager
-                        .getColor("TextField.inactiveForeground");
-                g2.setColor(inactive == null ? java.awt.Color.GRAY : inactive);
+                java.awt.Color inactive = sampleHintInkColor();
+                g2.setColor(inactive);
                 g2.drawString(hint, getMargin().left,
                         (getHeight() + fm.getHeight()) / 2 - fm.getDescent());
             }
@@ -3830,12 +3829,26 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
+     * 空态那句提示实际用的字色：画的人与量的人共读这一支。
+     *
+     * 各自取一次的话，画的是 UIManager 那支、量的是 GRAY 那支，判据就会因为
+     * "量的颜色根本没画过"而恒 0（假红），或者反过来把别的灰当提示（假绿）。
+     */
+    static java.awt.Color sampleHintInkColor() {
+        java.awt.Color inactive = javax.swing.UIManager
+                .getColor("TextField.inactiveForeground");
+        return inactive == null ? java.awt.Color.GRAY : inactive;
+    }
+
+    /**
      * 把搜索框画进一张图，数某一段里"属于我们那支颜色"的像素。
      *
      * 0 档 = 放大镜那一块，只认分组蓝 `#1f5fd0` 那一族（容差 16）。第一版这里数的是
      * "非白像素"，结果输入框自己的蓝色边线被当成墨——把 `drawImage` 整行删掉自检照样绿，
      * 一条咬不住的断言比不写更糟，所以改成按颜色认。
-     * 2 档 = 提示文字那一块（从左边距往后数非白）：那块里没有边线，白底上只有字。
+     * 2 档 = 提示文字那一块，同样按颜色认（提示自己那支灰，容差 48 放宽到反锯齿的边）：
+     * 变异抽查实测"把整句提示不画"时按非白数照样 >0，因为数进了控件四周那条框线，
+     * 所以这一档除了换颜色，还把范围收进内线（上下各让 3px、右边让 3px）。
      */
     public int sampleSearchInk(int band) {
         if (sqlRunSamplesSearch == null || sqlRunSamplesSearch.getWidth() <= 0
@@ -3852,21 +3865,23 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunSamplesSearch.paint(g2);
         g2.dispose();
         int iconPx = sqlRunSamplesSearch.iconPixels();
+        int want = band == 0 ? Tables.SAMPLE_GROUP_FG.getRGB()
+                : sampleHintInkColor().getRGB();
+        int tol = band == 0 ? 16 : 48;
+        int wr = (want >> 16) & 0xff, wg = (want >> 8) & 0xff, wb = want & 0xff;
         int from = band == 0 ? 2 : sqlRunSamplesSearch.getMargin().left;
-        int to = band == 0 ? iconPx + UiScale.px(6) : w;
+        int to = band == 0 ? iconPx + UiScale.px(6) : w - UiScale.px(3);
+        int top = band == 0 ? 0 : UiScale.px(3);
+        int bottom = band == 0 ? h : h - UiScale.px(3);
         int ink = 0;
-        for (int y = 0; y < h; y++) {
+        for (int y = top; y < bottom; y++) {
             for (int x = from; x < to; x++) {
                 int argb = img.getRGB(x, y);
                 int r = (argb >> 16) & 0xff;
                 int g = (argb >> 8) & 0xff;
                 int b = argb & 0xff;
-                if (band == 0) {
-                    if (Math.abs(r - 0x1f) <= 16 && Math.abs(g - 0x5f) <= 16
-                            && Math.abs(b - 0xd0) <= 16) {
-                        ink++;
-                    }
-                } else if ((argb & 0x00ffffff) != 0x00ffffff) {
+                if (Math.abs(r - wr) <= tol && Math.abs(g - wg) <= tol
+                        && Math.abs(b - wb) <= tol) {
                     ink++;
                 }
             }
