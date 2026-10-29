@@ -65,18 +65,18 @@ whenToUse: 新建或重写 README.md；用户说"README 太啰嗦""改成用户�
 | `pack_test38.py` W29 | 含 `excel2mysql-cli` 的行里出现的 `--xxx` 必须是 argparse 真有的 |
 | W29b | 全篇每个 `--xxx` 都真实存在（放行 Java 线的 `--no-sql` / `--no-excel` / `--gui`），且写明完整清单看 `--help` |
 | W29e | 全文不许出现版本号形态的串（`vX.Y.Z`、`excel2mysql… X.Y.Z`、`.jar`、`-win64`）；`127.0.0.1` 不算 |
-| W29c | 八个节名齐（`选哪个包` / `上手` / `连接信息` / `会踩的坑` / `退出码` / `Win7 上起不来` / `再往深` / `许可`）+ 篇幅区间 |
+| W29c | 八节名齐 + 篇幅区间，这两项住在 `_pack_common.py` 的 `README_SECTIONS` / `README_LEN_RANGE` |
 | W30 | 只在「退出码」那一节取反引号包住的数字，必须与 `cli.py` 的常量**完全相等** |
 | W31 | 不许出现像真凭据的口令值（`改成你的密码` 这类占位算合规） |
-| W31b | 出现字面串 `下划线自己写` |
-| W31c | `KB2999226`、`DLL load failed`、`只拷 exe`、`跑不起来`、`win7_sp1_patch`、`3.check_win7.bat`、`4.install_minimal.bat` 全要在 |
+| W31b/c | `下划线自己写`；`KB2999226`、`DLL load failed`、`只拷 exe`、`跑不起来`、`win7_sp1_patch` 与两支修复脚本名 |
 | W31d | `Java 版`、`Windows 10 1809`、`三个包共用同一套`、`RELEASE.md` 在 README；`api-ms-win-crt`、`pack_test38.py` 在 RELEASE.md |
-| `build_java_dist.py` | `java.exe -jar` / `启动.bat` 那几行不许出现 `--run-sql` 等本包不认的开关；`--no-sql`、`--no-excel`、`--gui`、`Windows 7`、`KB2999226`、`退出码` 都要写到；同样禁版本号形态 |
+| 出包闸门 | `build_exe.py` 与 `build_java_dist.py` 读同一份常量核产物里那一份；只在一处挂断言，另一条线就等到打包才炸 |
+| `build_java_dist.py` | `java.exe -jar` / `启动.bat` 那几行不许出现本包不认的开关；`--no-sql`、`--no-excel`、`--gui`、`Windows 7`、`KB2999226`、`退出码` 要写到；同样禁版本号形态 |
 
 ## 三条推论
 
-1. 删 README 里任何字面串之前，先确认没有守卫在数它。改名会红 `W29c`，
-   退出码换成散文会红 `W30`，去掉某支脚本名会红 `W31c`。
+1. 删任何字面串前先确认谁在数它：`grep -rn "README" *.py java/tools/*.py`。
+   改名红 `W29c`，退出码换散文红 `W30`，脚本名丢了红 `W31c`，砍太短红出包闸门。
 2. README 与它的守卫必须同一次提交。拆开必有一头是红的。
 3. 守卫要跟着改严或改准，不能只是放宽到能过。本轮的两次改法可以照抄这个形状：
    `W30` 从"读表格首列"换成"读反引号数字"，判据仍是与常量完全相等，没松；
@@ -89,8 +89,8 @@ whenToUse: 新建或重写 README.md；用户说"README 太啰嗦""改成用户�
 
 1. 先跑 `pack_test38.py` 取基线，确认 W 组当前是绿的
 2. 写 README；同时把被删字面串对应的守卫改掉（节名、正则、must 清单、`_VERSION_SITES`）
-3. 跑 `pack_test38.py`（`.venv38` 与 `.venv` 两栈）+ `pack_test.py`（T 组）+
-   `java/构建验证.bat`，退出码全 0 才算过
+3. 跑 `pack_test38.py`（`.venv38` 与 `.venv` 两栈）+ `pack_test.py` + `java/构建验证.bat`，
+   退出码全 0；改过字面串再加跑 `python build_exe.py --fast`，让出包那道文档检查也走一遍
 4. 变异抽查一次，确认新守卫咬得住
 5. README 与守卫一起提交，提交信息里写清"哪些字面串被搬走、对应改了哪条守卫"
 
