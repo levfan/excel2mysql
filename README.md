@@ -1,6 +1,6 @@
 # <img src="assets/app_icon.png" width="44" height="44" alt="excel2mysql 图标"> Excel → MySQL 批量导入工具
 
-把从关系库导出的中文表头 Excel 批量导入 MySQL：表名与字段名由中文转拼音、字段注释保留中文表头、类型与宽度按全量数据实测推断、导入前可逐字段改名与改类型。同一套逻辑有三个交付形态（Windows 图形版、Windows 7 命令行版、Java 版），三条线跑出来的表结构由差分用例逐条对平。当前版本 v3.1.0，许可 MIT（见 `LICENSE`）。
+把从关系库导出的中文表头 Excel 批量导入 MySQL：表名与字段名由中文转拼音、字段注释保留中文表头、类型与宽度按全量数据实测推断、导入前可逐字段改名与改类型。同一套逻辑有三个交付形态（Windows 图形版、Windows 7 命令行版、Java 版），三条线跑出来的表结构由差分用例逐条对平。当前版本 v3.1.1，许可 MIT（见 `LICENSE`）。
 
 | 项 | 内容 |
 | --- | --- |
@@ -99,7 +99,7 @@ pip install -r requirements.txt
 | --- | --- | --- | --- |
 | 图形版 `dist\excel2mysql\` | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
 | 命令行版 `dist\excel2mysql-cli\` | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
-| Java 版 `java\dist\excel2mysql-java-3.1.0-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
+| Java 版 `java\dist\excel2mysql-java-3.1.1-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
 | 三端一起 | `一键打包-三端.bat` | 按图形版 → 命令行版 → Java 版顺序调用，任一步非 0 即停住 | 不接受参数 |
 
 各线闸门的步骤：
@@ -134,8 +134,8 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 | --- | --- | --- |
 | 图形版 | 双击 `dist\excel2mysql\excel2mysql.exe` | 目标机不装 Python；`excel2mysql.exe` 与 `_internal` 必须同级放在一起，只拷 exe 跑不起来 |
 | 命令行版 | `dist\excel2mysql-cli\excel2mysql-cli.exe <路径> -c conn.ini` | PyInstaller 5.x 的 onedir 是平铺布局，没有 `_internal`；整目录复制或压成 zip 分发 |
-| Java 图形界面 | 双击 `java\dist\excel2mysql-java-3.1.0-win64\启动.bat` | 内部就是包内运行时加 `--gui`，不依赖目标机装没装 Java |
-| Java 命令行 | `java\dist\excel2mysql-java-3.1.0-win64\jre\bin\java.exe -jar java\dist\excel2mysql-java-3.1.0-win64\excel2mysql-3.1.0.jar <路径> -c conn.ini` | 同一个 jar 的两种模式，不给 `--gui` 就是命令行；在别的工作目录下也能自动读到产物同级的 `conn.ini` |
+| Java 图形界面 | 双击 `java\dist\excel2mysql-java-3.1.1-win64\启动.bat` | 内部就是包内运行时加 `--gui`，不依赖目标机装没装 Java |
+| Java 命令行 | `java\dist\excel2mysql-java-3.1.1-win64\jre\bin\java.exe -jar java\dist\excel2mysql-java-3.1.1-win64\excel2mysql-3.1.1.jar <路径> -c conn.ini` | 同一个 jar 的两种模式，不给 `--gui` 就是命令行；在别的工作目录下也能自动读到产物同级的 `conn.ini` |
 
 随包件（打包脚本逐条断言存在，缺一件不出包）：
 
@@ -157,12 +157,12 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 | 双界面对撞 | 两条 GUI 线的控件文案、按钮启用条件、弹窗文字、写出的文件内容逐键比对 | `java\界面双端对撞.bat` |
 | SQL 示例真库回归 | 126 条示例逐条打到真 MySQL 上跑一遍 | `.venv\Scripts\python check_sql_samples.py` |
 
-v3.1.0 这一轮的实测结果：
+v3.1.1 这一轮的实测结果：
 
 | 项 | 结果 |
 | --- | --- |
 | `pack_test.py` | 通过 896 / 失败 0 / 显式记账未覆盖 5 |
-| `pack_test38.py` | 旧栈通过 243 / 失败 0 / 14 项显式 `SKIP` |
+| `pack_test38.py` | 旧栈通过 261 / 失败 0 / 1 项显式 `SKIP`（V25 需要真实 `.xls` 样本） |
 | Java 线十步 | 全过；拼音差分 57228 条语料 0 条不一致；jpinyin 路线实测否决（注入同款词典后仍有 0.3% 结构性不等） |
 | 双端对撞 | 340 项界面事实逐键一致，另有 6 项「现场实测尺寸」只留档不比 |
 | SQL 示例真库回归 | 126 条，失败 0 条 |
@@ -181,7 +181,7 @@ v3.1.0 这一轮的实测结果：
 | 系统 | 64 位 Windows 7 SP1 及以上，且系统装有 UCRT（KB2999226 / KB4019990）；缺它时进程在进入 Python 之前就被系统拦下 |
 | 症状与修复 | 缺补丁报 `ImportError: DLL load failed while importing _socket`；用包内 `win7_sp1_patch\` 的 `3.check_win7.bat` 自检、`4.install_minimal.bat` 安装，详见第 5 章 |
 | 数据库 | 目标 MySQL 可达，账号有 `CREATE` 与 `INSERT` 权限；只做连通性校验用 `--check` |
-| 首次上机 | 先跑 `excel2mysql-cli.exe --version`，能打印 `excel2mysql-cli 3.1.0` 说明系统层面进程起得来，再谈导入 |
+| 首次上机 | 先跑 `excel2mysql-cli.exe --version`，能打印 `excel2mysql-cli 3.1.1` 说明系统层面进程起得来，再谈导入 |
 
 ### 7.2 怎么用最省事的四条
 
