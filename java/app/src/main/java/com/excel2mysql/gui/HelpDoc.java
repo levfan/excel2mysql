@@ -88,7 +88,7 @@ public final class HelpDoc {
                     "<code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到" + NL +
                     "<code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.1.1.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.2.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
