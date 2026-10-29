@@ -5854,3 +5854,136 @@ emoji 可能渲染成豆腐块，只有同一条画法才画得出同一个形�
 "以前做不到、现在能做"的一件事，老做法原样能用。交付包还是 `3.3.1` 那一批，等用户开口
 再重打。
 
+## 110. SQL 格式化：编辑区那颗按钮与 Ctrl+Alt+L，示例正文也按同一套重排
+
+### 110.1 要的是什么
+
+用户连着两条：「tab3 里 SQL 文本区，全选 SQL 文本，快捷键 Ctrl+Alt+L，可以给 SQL 格式化」
+与「SQL 示例中的 SQL 也要格式化」。前者是 IDE 的键位（DataGrip / IDEA 那一条），
+后者是"能力要覆盖内容出现的每一处"——同一段语句在编辑区排齐了、从示例窗口插进来
+却又乱了，等于没有。
+
+落点分三层：
+
+| 层 | 做了什么 |
+| --- | --- |
+| 口径 | `core/sql_script.py` 新增 `format_sql` 与 `format_refusal`，Java 侧 `SqlScript.formatSql` / `formatRefusal` 同构 |
+| 界面 | 「SQL 文本」那一栏加一颗「格式化 SQL」（次要档），焦点在编辑区时 `Ctrl+Alt+L` 同一件事（两端） |
+| 语料 | `sql_samples.py` 那 126 条的语句正文按格式化器重排一遍，再导出 `SqlSamples.java` |
+
+格式化只做三件事：关键字与类型大写、深度 0 的从句各起一行、`CREATE / ALTER TABLE`
+那份字段清单一个字段一行。色值与排版都不动内容。
+
+### 110.2 三条性质，一条跨栈判据
+
+`format_sql` 是纯函数，钉它靠三条性质加一条跨栈比对：
+
+1. 幂等——排两次与排一次逐字相同（`SF1`）。
+2. 不改语义——`split_sql_statements` 切出来条数相同、逐条"内容签名"相同（`SF2`）。
+   内容签名 = 丢掉空白、词一律大写后的 token 流。第一版这里直接比字符串，
+   把 `id,name` 排成 `id, name` 判成破功——**判据不能把功能本身判成 bug**。
+3. 与工具自己生成的 DDL 零差异——`format_sql(build_ddl(...)) == build_ddl(...)`（`SF3`）。
+   这条是"格式化过的脚本"与「预览 DDL」弹窗长得一样的根据。
+4. 跨栈逐字节相同——`export_sql_golden.py` 用 Python 侧真函数生成 `op=format` 记录
+   （126 条示例 + 30 条专门踩规则的输入 + 脚本夹具，共 665 项），`SqlDiffer` 拿 Java
+   的输出逐字比。加这个分支时同一批要改 `SqlDiffer`：未知 `op` 只 WARN 一句就退 0，
+   只加导出侧不加比对侧等于没比。
+
+还有一条写死的期望串（`SF4`）：语料比的是"两栈一样"，两边一起改错它不会红，
+所以另钉一份手写的期望输出当第三个见证。
+
+### 110.3 规则本身踩到的几处
+
+- `@@version` 这类系统变量必须整串当一个 token，否则被拆成 `@ @ VERSION`。
+- `<=` `<>` `!=` `||` `->` 是两个符号字符合成一个运算符，中间不能补空格；
+  第一版排出来是 `amount < = 0`。
+- 类型括号贴紧（`VARCHAR(64)`、`count(1)`），关键字后的括号留一格
+  （`VALUES (1, 2)`、`PRIMARY KEY (id)`），表名后的括号留一格——
+  不认表名这一条会写出 `tmp_customer(`。
+- 表选项的等号两边贴紧（`ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`），与
+  `SHOW CREATE TABLE` 同形；比较运算的等号照旧留空格。
+- `DECIMAL(20,4)` 里逗号后不补空格，与 `build_ddl` 逐字同形（性质 3 逼出来的）。
+- `SET` 在 `DEFAULT CHARACTER SET` 里不是从句，不能换行；`GROUP` / `ORDER` 只有紧跟
+  `BY` 才算；`LEFT` 要真接到 `JOIN` 才换行，否则 `LEFT JOIN` 会被拆成两行。
+- `clause`（"现在在哪一段"）只在从句关键词上更新。按每个词都覆盖的话，
+  `WHERE a = 1 AND ...` 走到 AND 时 clause 已经变成表名，AND 就不换行了。
+- 字段清单的展开只认"`(` 之前恰好是 `CREATE [TEMPORARY] TABLE [IF NOT EXISTS] 表名`
+  或 `ALTER TABLE 表名`"。按"语句头里有 CREATE/ALTER TABLE"判，会把
+  `MODIFY COLUMN amount DECIMAL(20,4)` 的类型括号当清单开头拆开。
+- 超过 100 列就在下一个逗号处折行；条件链（AND / OR）不分深浅都拆。
+  示例库改排后最长行从 94 涨到 255 那条，是一个函数调用里的长算式——
+  再拆就要动括号内的形状，读不回来了，留着。
+
+### 110.4 一处两栈不一致，是 Python 侧漏的
+
+`CREATE TABLE IF NOT EXISTS db.\`tbl\` (id INT PRIMARY KEY)` 这一条，Python 不展开字段清单、
+Java 展开。表头判断里 Python 把 token 滤成"只留 word / str / num / var"，点号被丢掉，
+于是限定名 `db` `.` `tbl` 被读成"表名之后还有别的东西"。Java 侧按原意实现。
+跨栈语料把这种"一侧顺手写对、另一侧写漏"照出来了——改 Python，两边同形。
+
+### 110.5 快捷键挂在哪儿
+
+Qt 侧没有用 `QShortcut`：窗口级 `QShortcut` 在焦点落进编辑区时抢不到按键（第 99 节实测过，
+Ctrl+V 那条也是因此挂应用级过滤）。这一条挂在编辑区自己的事件过滤上
+（`FormatKeyFilter`），只在焦点是这块编辑区时算，连接区输入框里按同一串不动任何东西。
+
+Swing 侧挂在编辑区的 `WHEN_FOCUSED` 输入表上，动作名 `e2mFormatSql`。
+
+自检环境里按键派发这一段拿不到真焦点：`KeyboardFocusManager` 要把事件发给"窗口被系统
+激活后的焦点所有者"，无头自检里不是。所以 Java 侧钉的是两件事——这串键位映射到
+`e2mFormatSql`（读真 InputMap）、映射到的那个 `Action` 跑一遍确实把这段排开（跑产品挂
+进去的同一个对象，不抄副本）；按钮那颗走 `ActionListener` 同步触发。
+**真按一次键盘有没有反应属于无自动化覆盖**，交付前手工按一次。
+中途试过两种更"真"的写法，都不通：`component.dispatchEvent` 绕过焦点管理器（按下去没
+反应），`invokeAndWait` / `postEvent` 在自检自己就站在事件分发线程上时是自己等自己
+（实测抛 `Cannot call invokeAndWait from the event dispatcher thread`）。
+
+### 110.6 三种结局都要说话
+
+`on_format_sql` / `formatSqlInEditor` 三条出口各有回执（`F22d`–`F22g` 与 Java 自检对应段）：
+
+- 排了：结果区日志写"已排齐 N 行、M 条语句：只改大小写与换行，语句内容不动"，光标回开头。
+- 没得排（已经整齐）：写"这段 SQL 已经是排好的形状，一个字没动"，不静默。
+- 不许排（整库 dump、带 `DELIMITER`，或空）：`format_refusal` 给理由，日志与弹窗双写，
+  正文一个字不动。判据用 `is_dump_script` 与 DELIMITER 指令，不猜"含很多 SET"。
+
+### 110.7 变异抽查四条
+
+| 变异 | 应变红 | 实测 |
+| --- | --- | --- |
+| 删掉 `installEventFilter` 那一行 | F22d | 红（按键后正文没动） |
+| `format_refusal` 短路成永远不拒绝 | F22f | 红（第一版变异只废到"空输入"分支，F22f 照绿——重做才红） |
+| 删掉 Swing 侧那条键位绑定 | Java 自检 | 红：`Ctrl+Alt+L 没挂在 WHEN_FOCUSED 输入表上：none` |
+| Java 侧把表选项等号贴紧那条短路 | `SqlDiffer` | 红：665 项里 6 项不一致，全是 `format` |
+
+四份改动都按 md5 还原（`main.py` = `d6f875fd…`、`core/sql_script.py` = `27a9ad17…`、
+`MainFrame.java` = `c1c78ab9…`），还原后重跑闸门全绿。
+
+### 110.8 语料重排与它的证据
+
+`sql_samples.py` 126 条的 `sql` 字段全部换成 `format_sql` 之后的形状，其余六个字段逐条
+比对未变；`SqlSamples.java` 重导、`check_generated.py` 绿；`sql.jsonl.gz` 重生成后
+`SqlDiffer` 665 项 0 不一致；`check_sql_samples.py` 在真库上把 126 条逐条跑一遍
+——合计 126 条、失败 0 条。这条是"重排没把语句改坏"的最硬证据（格式化器只保证
+token 流同形，真库跑通才算兑现）。
+
+对撞键 +4：`sqlrun.format.key`（两栈各自跑绑定指向的动作，比"排开没有"）、
+`sqlrun.format.tip`，加上那颗新按钮自己带来的 label / tip 两键，362 → 366 键。
+
+### 110.9 闸门
+
+| 闸门 | 结果 |
+| --- | --- |
+| `pack_test.py`（带真库凭据） | 通过 955 / 失败 0 / 跳过 5（新增 SF1–SF6 与 F22c–F22g 共 9 条） |
+| `构建验证.bat` 十步 | 全过，退出码 0 |
+| `界面双端对撞.bat` | 366 键逐键一致，退出码 0 |
+| `check_sql_samples.py` | 126 条真库执行，失败 0 |
+| `SqlDiffer` | 665 项 0 不一致（含新加的 format 分支） |
+
+### 110.10 版本号
+
+升 minor：`3.3.2 → 3.4.0`。"以前做不到、现在能做"这条命中——旧版没有把一段 SQL
+排齐的入口，也没有这个键位；老做法（自己手动排版）照旧能用。交付包还是 `3.3.2`
+那一批，等用户开口再重打。
+
+
