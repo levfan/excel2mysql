@@ -887,13 +887,13 @@ finally:
 # 冻结态包内没有仓库根那份 README.md（产物里那份是打包时拷进去的），逐条显式 SKIP
 # （源文件断言的老坑），"产物里到底有没有带 README.md"由闸门按实际产物目录核。
 W_DOC_LABELS = ("W29 CLI 可照抄行里的长选项都在 argparse 里真实存在",
-                "W29b argparse 里每个长选项都被文档覆盖到",
-                "W29c 文档不是空壳：够长且八个必备小节齐",
+                "W29b 文档里出现的每个长选项都真实存在，且指明完整清单看 --help",
+                "W29c 用户向文档够长但没重新涨回去，八个必备小节齐",
                 "W30 退出码表与 cli 常量一一对应",
                 "W31 文档里不含真实口令或内网地址",
                 "W31b 写清了 --prefix 的分隔符要自己写上",
                 "W31c 写清了缺 UCRT 的症状、KB 号与包内修复脚本",
-                "W31d 写清了另外两条线与各自系统门槛")
+                "W31d 写清了另外两条线与各自系统门槛，并把构建向内容指到 RELEASE.md")
 doc_path = os.path.join(ROOT, "README.md")
 if not os.path.isfile(doc_path):
     for _lbl in W_DOC_LABELS:
@@ -908,17 +908,23 @@ else:
     _ghost = sorted({t for ln in _cli_lines
                      for t in re.findall(r"--[a-z][a-z0-9-]*", ln) if t not in _long_opts})
     check(W_DOC_LABELS[0], not _ghost, _ghost or "无凭空写出的开关")
-    _undoc = [o for o in _long_opts if o not in doc]
-    check(W_DOC_LABELS[1], not _undoc, _undoc or "全部覆盖")
-    _secs = ("前置条件", "怎么用最省事的四条", "支持哪些输入", "连接信息",
-             "动作与选项", "日志形态与退出码", "最小验收", "跑不通时")
-    # 长度下限按"开发向文档"取：README 只承载选型、环境、打包、启动、命令参考与闸门，
-    # 界面操作细则在 help_doc.py（程序内《使用说明》），所以这里核的是命令参考没被砍空，
-    # 不是整篇手册的字数
-    check(W_DOC_LABELS[2], len(doc) > 9000 and all(s in doc for s in _secs),
+    # 用户向 README 不再逐项抄 cli 的开关表（完整清单的权威是 --help），改成反向核：
+    # 文档里写出来的每一个 --xxx 都必须真存在，写一个不存在的开关就红。
+    # 这比原来那条「每个长选项都必须在文档里出现」更严：原来管覆盖，现在管不许凭空写。
+    # 放行表：Java 那条线的三个开关不属于 Python argparse，但出包闸门（build_java_dist.py
+    # 的 must 清单）要求 README 必须写到它们，所以点名放行——往表里加名字要讲得出理由
+    _JAVA_ONLY = ("--no-sql", "--no-excel", "--gui")
+    _ghost_all = sorted({t for t in re.findall(r"--[a-z][a-z0-9-]*", doc)
+                         if t not in _long_opts and t not in _JAVA_ONLY})
+    check(W_DOC_LABELS[1], not _ghost_all and "--help" in doc,
+          _ghost_all or "全部真实存在，且写明完整清单以 --help 为准")
+    _secs = ("选哪个包", "30 秒跑通", "支持哪些输入", "连接信息",
+             "常用开关速查", "退出码", "Windows 7 起不来怎么办", "进阶与源码")
+    # 上下限一起核：下限防用户向文档被砍成空壳，上限防构建与测试内容一点点长回来
+    check(W_DOC_LABELS[2], 2000 < len(doc) < 6000 and all(s in doc for s in _secs),
           (len(doc), [s for s in _secs if s not in doc]))
-    # 退出码只从「日志形态与退出码」那张表取：整篇扫会把别的表格首列数字当成退出码
-    _sec = re.search(r"^### \d+\.5 日志形态与退出码.*?(?=^### |\Z)", doc, re.M | re.S)
+    # 退出码只从「退出码」那一节取：整篇扫会把别的表格首列数字当成退出码
+    _sec = re.search(r"^## \d+\. 退出码.*?(?=^## |\Z)", doc, re.M | re.S)
     _codes_doc = sorted({int(x) for x in
                          re.findall(r"^\|\s*(\d{1,3})\s*\|", _sec.group(0), re.M)}) if _sec else []
     _codes_real = sorted({cli_mod.EXIT_OK, cli_mod.EXIT_USAGE, cli_mod.EXIT_PARSE,
@@ -933,12 +939,20 @@ else:
     check(W_DOC_LABELS[4], not _leak and "Root@" not in doc and "172.18." not in doc, _leak)
     check(W_DOC_LABELS[5], "自己写上下划线" in doc, doc.count("--prefix"))
     check(W_DOC_LABELS[6],
-          "KB2999226" in doc and "api-ms-win-crt" in doc and "只拷 exe 跑不起来" in doc
+          "KB2999226" in doc and "DLL load failed" in doc
+          and "只拷 exe" in doc and "跑不起来" in doc
           and "win7_sp1_patch" in doc and "3.check_win7.bat" in doc
           and "4.install_minimal.bat" in doc,
-          "文档要点到 win7_sp1_patch 里那几支脚本，现场才知道修复工具就在包里")
+          "文档要点到 win7_sp1_patch 里那几支脚本，现场才知道修复工具就在包里；"
+          "「只拷 exe 跑不起来」这条坑也必须写在用户手上那份文档里")
+    _rel_path = os.path.join(ROOT, "RELEASE.md")
+    _rel = open(_rel_path, encoding="utf-8").read() if os.path.isfile(_rel_path) else ""
     check(W_DOC_LABELS[7],
-          "Java 版" in doc and "Windows 10 1809" in doc and "三条线跑出来的表结构" in doc)
+          "Java 版" in doc and "Windows 10 1809" in doc
+          and "三个包共用同一套" in doc and "RELEASE.md" in doc
+          and bool(_rel) and "api-ms-win-crt" in _rel and "pack_test38.py" in _rel,
+          "README 要答得出选型与系统门槛、口径只说一次并把构建内容指过去；"
+          "搬出去的内容必须真落在 RELEASE.md 里，不能只是删掉")
 
 
 # ---------------------------------------------------------------------------
