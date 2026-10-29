@@ -76,7 +76,7 @@ pip install -r requirements.txt
 | --- | --- | --- | --- |
 | 图形版 `dist\excel2mysql\` | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
 | 命令行版 `dist\excel2mysql-cli\` | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
-| Java 版 `java\dist\excel2mysql-java-3.3.1-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
+| Java 版 `java\dist\excel2mysql-java-3.3.2-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
 | 三端一起 | `一键打包-三端.bat` | 按图形版 → 命令行版 → Java 版顺序调用，任一步非 0 即停住 | 不接受参数 |
 
 各线闸门的步骤：
@@ -111,7 +111,7 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 | --- | --- | --- |
 | 图形版 | PyInstaller 6.x onedir：`excel2mysql.exe` + `_internal\` | 两者必须同级放在一起，只拷 exe 跑不起来 |
 | 命令行版 | PyInstaller 5.x onedir：平铺，没有 `_internal` | 整目录复制或压成 zip 分发 |
-| Java 版 | `启动.bat` + `excel2mysql-3.3.1.jar` + `jre\` | 内部就是包内 `jre\bin\java.exe -jar … --gui`，不依赖目标机装没装 Java |
+| Java 版 | `启动.bat` + `excel2mysql-3.3.2.jar` + `jre\` | 内部就是包内 `jre\bin\java.exe -jar … --gui`，不依赖目标机装没装 Java |
 
 随包件（打包脚本逐条断言存在，缺一件不出包）：
 
