@@ -401,6 +401,7 @@ def main():
     dump_widget("sql_drop_existing", win.chk_sql_drop)
     dump_widget("initials", win.chk_initials)
     dump_widget("upper", win.chk_upper)
+    dump_widget("lower", win.chk_lower)
     # 切换日志那句也要跨线比：工具提示比得到、日志正文比不到，两栈各写各的最容易漂。
     # 点一下取尾行、马上点回去，开关状态与后面那些键都不受影响。
     win.chk_upper.toggle()
@@ -410,7 +411,16 @@ def main():
     put("upper.toggle.log", _utl[_uta:].splitlines()[0] if _uta >= 0 else u"(没留痕)")
     win.chk_upper.toggle()
     app.processEvents()
+    # 「转小写」这颗也取一句切换日志：两颗互斥时是谁按掉了谁，只在日志里看得出来
+    win.chk_lower.toggle()
+    app.processEvents()
+    _ltl = win.log.toPlainText()
+    _lta = _ltl.rfind(u"[提示] 表名与字段名大小写切换为")
+    put("lower.toggle.log", _ltl[_lta:].splitlines()[0] if _lta >= 0 else u"(没留痕)")
+    win.chk_lower.toggle()
+    app.processEvents()
     dump_widget("sql_upper", win.chk_sql_upper)
+    dump_widget("sql_lower", win.chk_sql_lower)
     dump_buttons(win)
     dump_table("file", win.file_table)
     dump_table("sql", win.sql_table)

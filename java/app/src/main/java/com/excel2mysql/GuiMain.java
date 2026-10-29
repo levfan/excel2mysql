@@ -103,8 +103,9 @@ public final class GuiMain {
                 startupLog = frame.logPanel().text();
                 com.excel2mysql.gui.MainFrame.connCandidates = keepCandidates;
                 holder[0] = frame;
-                if (!frame.initialsBox().isSelected() || frame.upperBox().isSelected()) {
-                    problems.add("命名开关默认状态不对：首字母应勾选、转大写应不勾选");
+                if (!frame.initialsBox().isSelected() || frame.upperBox().isSelected()
+                        || frame.lowerBox().isSelected()) {
+                    problems.add("命名开关默认状态不对：首字母应勾选、两颗大小写都应不勾选");
                 }
                 // 空表引导语只在表还空着时画得出来，趁添加夹具之前验
                 ui_guidance(frame, problems);
@@ -122,6 +123,7 @@ public final class GuiMain {
                 //（转大写默认就未勾），命名开关自己的用例（naming_switches）会重新勾上再验一遍
                 frame.initialsBox().setSelected(false);
                 frame.upperBox().setSelected(false);
+                frame.lowerBox().setSelected(false);
                 String addSummary = frame.addFiles(files);
                 // 有了待导入的表，同一颗按钮要转回强调色（禁用色留在上面那条断言里钉着）
                 if (!frame.importButton().isEnabled()) {
@@ -1465,6 +1467,33 @@ public final class GuiMain {
         return n;
     }
 
+    /**
+     * 按给定的大小写档解析一份结构定义表，回第一个字段名。
+     * 直接走 Names + TableBuilder，不碰控件：这颗开关管到什么，用命名层的结果说才算数。
+     */
+    private static String structField(String path, boolean upper, boolean lower) {
+        com.excel2mysql.core.Names n =
+                new com.excel2mysql.core.Names(com.excel2mysql.core.PinyinLoader.get());
+        n.setUpperOnly(upper);
+        n.setLowerOnly(lower);
+        return new com.excel2mysql.core.TableBuilder(
+                new com.excel2mysql.core.Infer(n), n).build(path).table.columns.get(0).field;
+    }
+
+    /** 日志里「大小写切换为」出现了几次：一次点击只该留一条，被按掉的那颗不该补一句。 */
+    private static int countCaseLogs(MainFrame frame) {
+        return countIn(frame.logPanel().text(), "[提示] 表名与字段名大小写切换为：");
+    }
+
+    /** 数一段文本里某个子串出现几次（日志路由到别的面板时，判"有没有多写一遍"只能靠计数）。 */
+    private static int countIn(String text, String key) {
+        int n = 0;
+        for (int i = text.indexOf(key); i >= 0; i = text.indexOf(key, i + 1)) {
+            n++;
+        }
+        return n;
+    }
+
     private static void naming_switches(MainFrame frame, List<String> problems) {
         if (frame.initialsBox() == null || frame.upperBox() == null) {
             problems.add("界面上缺少命名开关（取拼音首字母 / 转大写）");
@@ -1512,6 +1541,33 @@ public final class GuiMain {
             if (!frame.logPanel().contains("[提示] 命名规则切换为：全拼")
                     || !frame.logPanel().contains("[提示] 表名与字段名大小写切换为：小写")) {
                 problems.add("取消两颗开关没有留下日志");
+            }
+            // 2b) 第二颗「转小写」（用户 2026-10-29 点名）：界面上要有、默认不勾、
+            // 勾上把「转大写」按掉，而且一次点击只留一条日志
+            if (frame.lowerBox() == null) {
+                problems.add("界面上缺少「表名与字段名转小写」开关");
+            } else if (!"表名与字段名转小写".equals(frame.lowerBox().getText())) {
+                problems.add("「转小写」开关文案不对：" + frame.lowerBox().getText());
+            } else {
+                int logsBefore = countCaseLogs(frame);
+                frame.upperBox().doClick();
+                frame.lowerBox().doClick();
+                if (!frame.lowerBox().isSelected() || frame.upperBox().isSelected()) {
+                    problems.add("两颗大小写开关没有互斥：大写=" + frame.upperBox().isSelected()
+                            + " 小写=" + frame.lowerBox().isSelected());
+                }
+                if (!frame.logPanel().contains("[提示] 表名与字段名大小写切换为：小写"
+                        + "（对之后添加的文件生效，结构定义 Sheet 里手写的字段名跟着转小写）")) {
+                    problems.add("勾「转小写」没按当前生效档位留痕");
+                }
+                if (countCaseLogs(frame) != logsBefore + 2) {
+                    problems.add("互斥切换多打了日志（被按掉那颗不该补一句）：多打 "
+                            + (countCaseLogs(frame) - logsBefore - 2) + " 条");
+                }
+                frame.lowerBox().doClick();     // 收回默认档，后面的用例仍按全拼小写跑
+                if (frame.lowerBox().isSelected() || frame.upperBox().isSelected()) {
+                    problems.add("收尾没收干净，大小写开关还亮着");
+                }
             }
             // 3) 空模板按字段名定类型：全拼、小写口径下，类型各归各位
             File c = writeNamingFixture(tmp, "采集模板（t_empty_kinds）.xlsx",
@@ -3156,6 +3212,13 @@ public final class GuiMain {
         if (page.upperBox().isSelected()) {
             problems.add("SQL 页大写开关默认应不勾选");
         }
+        if (page.lowerBox() == null) {
+            problems.add("SQL 页缺少「表名与字段名转小写」开关");
+        } else if (!"表名与字段名转小写".equals(page.lowerBox().getText())) {
+            problems.add("SQL 页「转小写」文案不对：" + page.lowerBox().getText());
+        } else if (page.lowerBox().isSelected()) {
+            problems.add("SQL 页小写开关默认应不勾选");
+        }
         boolean hasSqlInitials = false;
         for (java.awt.Component c : ((java.awt.Container) page.upperBox().getParent()).getComponents()) {
             if (c instanceof javax.swing.JCheckBox
@@ -3318,6 +3381,81 @@ public final class GuiMain {
             }
         } catch (Exception e) {
             problems.add("结构定义模式的大小写用例跑不起来：" + e);
+        }
+        // 「表名与字段名转小写」（用户 2026-10-29 点名）：转写那一路本来就落在小写，
+        // 这颗真管到的是元数据里人工手写的大写字段名，所以夹具特意把字段名写成大写
+        try {
+            java.io.File hcase = new java.io.File(dir, "人工大写（t_hand_upper）.xlsx");
+            org.apache.poi.xssf.usermodel.XSSFWorkbook hwb =
+                    new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+            org.apache.poi.ss.usermodel.Sheet hs = hwb.createSheet("元数据");
+            String[] hh = {"序号", "字段名", "字段注释", "数据类型", "长度", "是否主键", "是否可为空"};
+            org.apache.poi.ss.usermodel.Row ihr = hs.createRow(0);
+            for (int i = 0; i < hh.length; i++) {
+                ihr.createCell(i).setCellValue(hh[i]);
+            }
+            String[] hrow = {"1", "ITEM_CODE", "品目编码", "VARCHAR", "20", "是", "否"};
+            org.apache.poi.ss.usermodel.Row hr = hs.createRow(1);
+            for (int i = 0; i < hrow.length; i++) {
+                hr.createCell(i).setCellValue(hrow[i]);
+            }
+            org.apache.poi.ss.usermodel.Sheet hds = hwb.createSheet("数据");
+            hds.createRow(0).createCell(0).setCellValue("item_code");
+            hds.createRow(1).createCell(0).setCellValue("PM-000002");
+            writeWorkbook(hwb, hcase);
+            String path = hcase.getPath();
+            String keep = structField(path, false, false);
+            String lowered = structField(path, false, true);
+            String both = structField(path, true, true);
+            if (!"ITEM_CODE".equals(keep)) {
+                problems.add("两颗大小写开关都不勾时手写字段名该原样留着，实际：" + keep);
+            }
+            if (!"item_code".equals(lowered)) {
+                problems.add("勾上「转小写」后元数据里手写的大写字段名没跟着转：" + lowered);
+            }
+            if (!"ITEM_CODE".equals(both)) {
+                problems.add("两档同时给时应按大写，实际：" + both);
+            }
+        } catch (Exception e) {
+            problems.add("结构定义模式的转小写用例跑不起来：" + e);
+        }
+        // 第二页的「转小写」：勾上把「转大写」按掉，显示与生成件都回到小写，脚本正文照旧不动
+        named.lowerBox().doClick();
+        if (named.upperBox().isSelected() || !named.lowerBox().isSelected()) {
+            problems.add("SQL 页两颗大小写开关没有互斥：大写=" + named.upperBox().isSelected()
+                    + " 小写=" + named.lowerBox().isSelected());
+        }
+        if (!"t_case9".equals(named.sqlRowDisplayName(0))) {
+            problems.add("勾「转小写」后当前表名显示没回到小写：" + named.sqlRowDisplayName(0));
+        }
+        java.io.File lowerRoot = new java.io.File(dir, "lower_named");
+        named.logPanel().clearLog();
+        // 任务体里的 sink.log 落在主窗口当前那一页的面板，不在 named 自己这块：
+        // 两处一起读才判得住档位。后面还有一条要验「转大写」的旧断言，所以这里不清主页面，
+        // 只数它出现几次、有没有被这一档多写一遍
+        int upperLineBefore = countIn(frame.sqlPage().logPanel().text(),
+                "[命名] 生成物表名与字段名：转大写");
+        named.generateExcel(true, lowerRoot.getPath());
+        java.io.File lowerDir = new java.io.File(lowerRoot, "sql_meta_data_file_" + today());
+        String lowerFile = "大小写检查表（t_case9）.xlsx";
+        List<String> lowerNames = new ArrayList<String>();
+        String[] lowListed = lowerDir.list();
+        if (lowListed != null) {
+            for (String n : lowListed) {
+                lowerNames.add(n);
+            }
+        }
+        if (!lowerNames.contains(lowerFile)) {
+            problems.add("勾「转小写」后标准件目录里的文件不对，应只有 " + lowerFile
+                    + "：" + lowerNames);
+        }
+        String lowGen = named.logPanel().text() + "\n" + frame.sqlPage().logPanel().text();
+        if (!lowGen.contains("[命名] 生成物表名与字段名：转小写")) {
+            problems.add("小写档的生成日志没写明档位：" + tailOf(lowGen).replace((char) 10, (char) 32));
+        }
+        if (countIn(frame.sqlPage().logPanel().text(),
+                "[命名] 生成物表名与字段名：转大写") != upperLineBefore) {
+            problems.add("勾的是小写档，生成日志里却又多写了一遍「转大写」");
         }
         String onDisk = null;
         try {

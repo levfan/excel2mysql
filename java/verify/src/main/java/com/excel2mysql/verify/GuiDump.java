@@ -124,6 +124,7 @@ public final class GuiDump {
                 dumpWidget("drop_existing", frame.dropExistingBox());
                 dumpWidget("initials", frame.initialsBox());
                 dumpWidget("upper", frame.upperBox());
+                dumpWidget("lower", frame.lowerBox());
                 // 切换日志那句同样跨线比（工具提示比不到日志正文）：点一下取尾行、
                 // 再点回去，开关状态与后面那些键都不受影响
                 frame.upperBox().doClick();
@@ -131,7 +132,14 @@ public final class GuiDump {
                 int uta = utl.lastIndexOf("[提示] 表名与字段名大小写切换为");
                 put("upper.toggle.log", uta < 0 ? "(没留痕)" : utl.substring(uta).split("\n")[0]);
                 frame.upperBox().doClick();
+                // 「转小写」这颗也取一句切换日志：两颗互斥时是谁按掉了谁，只在日志里看得出来
+                frame.lowerBox().doClick();
+                String ltl = frame.logPanel().text();
+                int lta = ltl.lastIndexOf("[提示] 表名与字段名大小写切换为");
+                put("lower.toggle.log", lta < 0 ? "(没留痕)" : ltl.substring(lta).split("\n")[0]);
+                frame.lowerBox().doClick();
                 dumpWidget("sql_upper", frame.sqlPage().upperBox());
+                dumpWidget("sql_lower", frame.sqlPage().lowerBox());
                 dumpWidget("sql_drop_existing", frame.sqlPage().dropExistingBox());
                 dumpButtons();
                 dumpTable("file", frame.fileTable());
