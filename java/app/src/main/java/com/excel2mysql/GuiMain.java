@@ -917,6 +917,45 @@ public final class GuiMain {
         }
     }
 
+    /**
+     * 把控件画进一张图，数属于某一档颜色的像素。
+     *
+     * 只读字符属性会假绿：富文本件在 kit 不对、或颜色被控件自己的前景盖掉时，
+     * 属性设了也画不出来，所以判"上色了没有"一律按颜色数像素，不按"非白"数
+     * （非白会把控件自己的边线与反锯齿的灰边一起算成墨）。
+     * 弹窗里的正文块常常还没被布局，量之前先给它一个够看的尺寸。
+     */
+    private static int inkOf(java.awt.Component c, java.awt.Color want) {
+        if (c == null) {
+            return -1;
+        }
+        int w = Math.max(c.getWidth(), 800);
+        int h = Math.max(c.getHeight(), 200);
+        c.setSize(w, h);
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+                w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        try {
+            g.setColor(java.awt.Color.WHITE);
+            g.fillRect(0, 0, w, h);
+            c.paint(g);
+        } finally {
+            g.dispose();
+        }
+        int n = 0;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int argb = img.getRGB(x, y);
+                if (Math.abs(((argb >> 16) & 0xff) - want.getRed()) <= 18
+                        && Math.abs(((argb >> 8) & 0xff) - want.getGreen()) <= 18
+                        && Math.abs((argb & 0xff) - want.getBlue()) <= 18) {
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+
     /** 整棵子树里找有没有进度条控件（页内进度条拿掉了，留着就是回归）。 */
     private static boolean hasProgressBar(java.awt.Container root) {
         if (root == null) {
@@ -2374,6 +2413,24 @@ public final class GuiMain {
         if (!"0".equals(leafStyle[0])) {
             problems.add("示例目录的条目行不该加粗");
         }
+        // 搜索那一栏（用户 2026-10-30 报"不点过去都不知道这是搜索框"）：
+        // 提示句要放得下、放大镜与空态提示都按像素判画出来没有。
+        // 前面几条过滤用例往框里打过字，先清空再量，否则数到的是用户输入的字
+        frame.typeSqlSamplesFilter("");
+        if (!com.excel2mysql.gui.Tables.SAMPLE_SEARCH_HINT.equals(frame.sampleSearchHint())) {
+            problems.add("示例搜索框的提示句不是那一句：" + frame.sampleSearchHint());
+        }
+        int[] hintFit = frame.sampleSearchHintFit();
+        if (hintFit[0] < 0 || hintFit[0] > hintFit[1]) {
+            problems.add("示例搜索框的提示句放不下：需 " + hintFit[0]
+                    + "px，可用 " + hintFit[1] + "px（放不下的提示会被当成杂字）");
+        }
+        if (frame.sampleSearchInk(0) <= 0) {
+            problems.add("示例搜索框左侧那颗放大镜没画出来（那块里没有分组蓝那一族的像素）");
+        }
+        if (frame.sampleSearchInk(2) <= 0) {
+            problems.add("示例搜索框空态没画灰字提示（清空后文字那一块一个墨点都没有）");
+        }
         // 这张清单要是 JDialog，最小化那颗按钮根本画不出来（AWT 的 Dialog 连
         // setExtendedState 都没有），所以窗口形态按"真按一次再量结果"查，判据对齐 Python 侧 F38h
         if (!frame.sqlSamplesResizable() || frame.sqlSamplesHasOwner()) {
@@ -2410,6 +2467,22 @@ public final class GuiMain {
         if (!frame.sqlSamplesPreviewText().equals(frame.sqlSampleSql(7))
                 || frame.sqlSamplesIntroText().indexOf(SqlSamples.ALL[7].scenario) < 0) {
             problems.add("切换选中的条目，右侧语句或介绍没跟着换");
+        }
+        // 介绍块按角色上色（用户 2026-10-30 报"样式太单一"）：内容一字不许改，
+        // 上色读真文档的角色串 + 数像素，不读"有没有设过属性"
+        frame.setSqlSamplesRow(0);
+        String introSig = frame.sqlSamplesIntroSignature();
+        if (!introSig.startsWith("T") || !introSig.contains("L")
+                || !introSig.substring(introSig.lastIndexOf('|') + 1).startsWith("K")) {
+            problems.add("介绍块的角色分布不对（标题与字段名在前，最后一段应是关键词那块）："
+                    + introSig);
+        }
+        if (!SqlSamples.introText(SqlSamples.ALL[0]).equals(frame.sqlSamplesIntroText())) {
+            problems.add("介绍块上色时把纯文本也改了");
+        }
+        if (frame.sqlSamplesIntroInk(0) <= 0 || frame.sqlSamplesIntroInk(1) <= 0) {
+            problems.add("介绍块没真上到色：标题蓝 " + frame.sqlSamplesIntroInk(0)
+                    + " 个像素，分组蓝与关键词块 " + frame.sqlSamplesIntroInk(1) + " 个");
         }
         // 关键词过滤：命中集合必须与 SqlSamples.matches 判的同一批，命中数要说出来
         frame.typeSqlSamplesFilter("注释");
@@ -2540,6 +2613,18 @@ public final class GuiMain {
         if (frame.sqlRunRowExecButton() != null
                 && frame.isRowExecutable()) {
             problems.add("空清单时行内【执行】的判据不该亮着");
+        }
+        // 这颗按钮的观感（用户 2026-10-30 报"很不醒目"）：档位、行高、上色三件一起钉，
+        // 上色按颜色数像素，不读属性——上一轮就是"读返回值"让假绿的守卫混过去的
+        if (!"secondary".equals(frame.sqlRunRowExecRole())) {
+            problems.add("行内【执行】没套次级强调档，档位是：" + frame.sqlRunRowExecRole());
+        }
+        int[] rowH = frame.sqlRunRowHeights();
+        if (rowH[0] < 0 || rowH[0] < rowH[1]) {
+            problems.add("清单行高 " + rowH[0] + " 低于按钮最小高 " + rowH[1] + "，按钮会被裁");
+        }
+        if (frame.sqlRunRowExecInk() <= 0) {
+            problems.add("行内【执行】没上到次级档那支强调蓝（画出来一个蓝像素都没有）");
         }
         if (frame.sqlRunDropArea() == null
                 || !com.excel2mysql.gui.DropArea.RUN_HINT.equals(
@@ -3882,10 +3967,22 @@ public final class GuiMain {
                 new com.excel2mysql.gui.SqlScriptDdlDialog(null, previewPages);
         ddlDlg.pack();
         if (ddlDlg.tabCount() != previewPages.size()
-                || !ddlDlg.tabText(0).equals(previewPages.get(0)[1])
+                || !ddlDlg.tabText(0).equals(
+                        com.excel2mysql.gui.RichText.normalizeNewlines(
+                                previewPages.get(0)[1]))
                 || !ddlDlg.tabTitleAt(0).equals(previewPages.get(0)[0])) {
             problems.add("预览DDL 弹窗的页数、标题或正文与数据对不上："
                     + ddlDlg.tabCount() + " 页 / 应有 " + previewPages.size() + " 页");
+        }
+        // 这一页的正文本来就是脚本自己那句，上色只许改字重与颜色，不许动内容
+        String scriptSig = ddlDlg.tabSignature(0);
+        if (!scriptSig.contains("L") || !scriptSig.contains("B")
+                || !scriptSig.contains("W")) {
+            problems.add("脚本页的 DDL 预览角色分布不对（字段名/类型/关键字都得有）："
+                    + scriptSig);
+        }
+        if (inkOf(ddlDlg.tabView(0), com.excel2mysql.gui.RichText.LABEL_FG) <= 0) {
+            problems.add("脚本页的 DDL 预览里字段名那支分组蓝一个像素都没画出来");
         }
         ddlDlg.dispose();
         page.previewDdl();
@@ -6011,6 +6108,20 @@ public final class GuiMain {
             if (first.contains("DROP TABLE")) {
                 problems.add("没勾覆盖已存在表，DDL 里却出现 DROP");
             }
+            // 按角色上色（用户 2026-10-30 报"色调太单一"）：角色串读真文档，
+            // 有没有真画到屏按颜色数像素——设了属性不等于画得出来
+            String sig = plain.tabSignature(0);
+            if (!sig.contains("L") || !sig.contains("T")
+                    || !sig.contains("B") || !sig.contains("W")) {
+                problems.add("DDL 预览的角色分布不对（应有字段名/注释/类型/关键字四档）："
+                        + sig);
+            }
+            if (sig.contains("D")) {
+                problems.add("没勾覆盖开关，DDL 预览里却出现警示色那一段：" + sig);
+            }
+            if (inkOf(plain.tabView(0), com.excel2mysql.gui.RichText.LABEL_FG) <= 0) {
+                problems.add("DDL 预览里字段名那支分组蓝一个像素都没画出来");
+            }
         } finally {
             plain.dispose();
         }
@@ -6019,6 +6130,13 @@ public final class GuiMain {
         try {
             if (!dropping.tabText(0).startsWith("DROP TABLE IF EXISTS")) {
                 problems.add("勾了覆盖已存在表，DDL 第一页却没有以 DROP 开头");
+            }
+            if (!dropping.tabSignature(0).startsWith("D")) {
+                problems.add("勾了覆盖开关，补上的那句 DROP 没走警示色："
+                        + dropping.tabSignature(0));
+            }
+            if (inkOf(dropping.tabView(0), com.excel2mysql.gui.RichText.DANGER_FG) <= 0) {
+                problems.add("DROP 那一行的告警橙没画到屏上");
             }
         } finally {
             dropping.dispose();

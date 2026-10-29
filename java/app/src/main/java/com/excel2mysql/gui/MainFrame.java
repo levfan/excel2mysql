@@ -174,10 +174,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private final List<RunScript> sqlRunFiles = new ArrayList<RunScript>();
     private javax.swing.JFrame sqlRunSamples;
     /** 示例弹窗：左边搜索框 + 两层目录，右边上方介绍、下方语句。 */
-    private javax.swing.JTextField sqlRunSamplesSearch;
+    private SearchField sqlRunSamplesSearch;
     private javax.swing.JTree sqlRunSamplesTree;
     private javax.swing.JLabel sqlRunSamplesHits;
-    private javax.swing.JTextArea sqlRunIntro;
+    private javax.swing.JTextPane sqlRunIntro;
     private javax.swing.JTextArea sqlRunPreview;
     private javax.swing.JScrollPane sqlRunPreviewScroll;
     private javax.swing.JButton sqlRunCopyBtn;
@@ -2677,6 +2677,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunRowExec.setFocusPainted(false);
         sqlRunRowExec.setFont(Tables.font());
         sqlRunRowExec.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        // 行内这颗套"次级强调"档（与「保存修改后ddl脚本」同一档）：原生灰按钮夹在行里
+        // 看着像表格自己的边框，不像能点的东西（用户 2026-10-30 报"很不醒目"）。
+        // 不用主按钮那档铺满蓝——清单可能十几行，一屏十几颗同分量的蓝
+        // 会把页底真正的主操作「批量执行脚本文件」压掉。
+        com.excel2mysql.gui.Buttons.secondary(sqlRunRowExec);
+        // 描边与加粗会抬高按钮的最小高：行高不跟着走，渲染出来的按钮上下会被削掉一圈
+        int execRowH = sqlRunRowExec.getPreferredSize().height + UiScale.px(2);
+        if (sqlRunFilesTable.getRowHeight() < execRowH) {
+            sqlRunFilesTable.setRowHeight(execRowH);
+        }
         sqlRunFilesTable.getColumnModel().getColumn(4).setCellRenderer(
                 new javax.swing.table.TableCellRenderer() {
                     @Override
@@ -2684,7 +2694,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                             javax.swing.JTable t, Object v, boolean selected,
                             boolean focus, int row, int column) {
                         sqlRunRowExec.setEnabled(isRowExecutable());
-                        sqlRunRowExec.setBackground(t.getBackground());
+                        // 这里不再 setBackground：次级档的底色由 Buttons 自己上，
+                        // 每格再涂一次表格白底会把那层浅蓝抹掉
                         return sqlRunRowExec;
                     }
                 });
@@ -3537,16 +3548,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         sqlRunSamplesTree.setCellRenderer(new SampleTreeRenderer());
         // JTree 默认就是单选（SINGLE_TREE_SELECTION），与 Python 侧的目录同一行为
-        sqlRunSamplesSearch = new javax.swing.JTextField();
-        sqlRunSamplesSearch.setToolTipText("关键词过滤：短标题、说明、场景、解决的问题、"
-                + "关键词与语句都算（清空回到全部）");
+        sqlRunSamplesSearch = new SearchField(Tables.SAMPLE_SEARCH_HINT,
+                UiScale.px(Tables.SAMPLE_SEARCH_ICON_SIZE));
+        sqlRunSamplesSearch.setToolTipText(Tables.SAMPLE_SEARCH_TIP);
         sqlRunSamplesHits = new javax.swing.JLabel();
         final javax.swing.JScrollPane treeScroll = new javax.swing.JScrollPane(sqlRunSamplesTree);
 
-        sqlRunIntro = new javax.swing.JTextArea(6, 60);
+        // 介绍块从 JTextArea 换成 JTextPane：前者不支持一段一种样式，
+        // 要按角色上色（标题一档、字段名一档、关键词成一块）只能换富文本件。
+        // JTextPane 默认就按词折行，不再需要 setLineWrap / setWrapStyleWord。
+        sqlRunIntro = new javax.swing.JTextPane();
         sqlRunIntro.setEditable(false);
-        sqlRunIntro.setLineWrap(true);
-        sqlRunIntro.setWrapStyleWord(true);
         sqlRunIntro.setFont(com.excel2mysql.gui.Tables.font());
         sqlRunPreview = new javax.swing.JTextArea(12, 60);
         sqlRunPreview.setEditable(false);
@@ -3720,6 +3732,237 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
     }
 
+    /**
+     * 示例库的搜索框：Swing 没有占位文本，所以空态自己画一句灰字提示，
+     * 并在框内左侧画一颗放大镜——不点进来也得看得出这一条能输入。
+     *
+     * 提示只画、不写进 getText()：写进文本的话过滤逻辑会拿它当关键词（清空后一条都不剩），
+     * 对撞键也会把提示读成正文，那是假象。
+     */
+    private static final class SearchField extends javax.swing.JTextField {
+
+        private final String hint;
+        private final java.awt.Image icon;
+        private final int iconPx;
+
+        SearchField(String hint, int iconPx) {
+            this.hint = hint;
+            this.iconPx = iconPx;
+            this.icon = findIcon(iconPx);
+            setMargin(new java.awt.Insets(UiScale.px(2), iconPx + UiScale.px(8),
+                    UiScale.px(2), UiScale.px(2)));
+        }
+
+        String hintText() {
+            return hint;
+        }
+
+        int iconPixels() {
+            return iconPx;
+        }
+
+        @Override
+        protected void paintComponent(java.awt.Graphics g) {
+            super.paintComponent(g);
+            java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+            g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                    java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.drawImage(icon, UiScale.px(4), (getHeight() - iconPx) / 2, null);
+            // 只看"文本为空"，不看焦点：Qt 的占位文字在聚焦且为空时照样显示，
+            // 加上焦点条件两端就不一致了（而且自检里焦点在谁身上本来就不稳定）
+            if (getText().isEmpty()) {
+                java.awt.FontMetrics fm = getFontMetrics(getFont());
+                java.awt.Color inactive = javax.swing.UIManager
+                        .getColor("TextField.inactiveForeground");
+                g2.setColor(inactive == null ? java.awt.Color.GRAY : inactive);
+                g2.drawString(hint, getMargin().left,
+                        (getHeight() + fm.getHeight()) / 2 - fm.getDescent());
+            }
+            g2.dispose();
+        }
+    }
+
+    /**
+     * 自绘放大镜：与 Python 侧 `make_find_icon` 同一条几何——圆环占左上六成、
+     * 手柄从环边拉到右下角、线宽 max(1.3, size/9)，配色复用分组行那个强调蓝。
+     * 不用主题图标（Windows 上取到空图标），也不用 emoji（字体里没有就变豆腐块）。
+     */
+    static java.awt.Image findIcon(int size) {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+                size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g2 = img.createGraphics();
+        g2.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.setColor(Tables.SAMPLE_GROUP_FG);
+        g2.setStroke(new java.awt.BasicStroke(Math.max(1.3f, size / 9.0f)));
+        float ring = size * 0.58f;
+        g2.draw(new java.awt.geom.Ellipse2D.Float(0.8f, 0.8f, ring, ring));
+        g2.draw(new java.awt.geom.Line2D.Float(ring + 0.8f, ring + 0.8f,
+                size - 1.2f, size - 1.2f));
+        g2.dispose();
+        return img;
+    }
+
+    /** 搜索框那句空态提示（对撞键 sample.search.hint 读真控件上的这句）。 */
+    public String sampleSearchHint() {
+        return sqlRunSamplesSearch == null ? "-" : sqlRunSamplesSearch.hintText();
+    }
+
+    /** 提示句放不放得下：Swing 不会像 Qt 那样把超长的占位句截成半句，量给用例看。 */
+    public int[] sampleSearchHintFit() {
+        if (sqlRunSamplesSearch == null) {
+            return new int[]{-1, -1};
+        }
+        java.awt.FontMetrics fm = sqlRunSamplesSearch.getFontMetrics(
+                sqlRunSamplesSearch.getFont());
+        return new int[]{fm.stringWidth(sqlRunSamplesSearch.hintText()),
+                sqlRunSamplesSearch.getWidth() - sqlRunSamplesSearch.getMargin().left
+                        - sqlRunSamplesSearch.getMargin().right};
+    }
+
+    /** 放大镜的档号与"画出来没有"（对撞键 sample.search.icon，按像素判不是按对象判）。 */
+    public String sampleSearchIconSpec() {
+        if (sqlRunSamplesSearch == null) {
+            return "-";
+        }
+        return Tables.SAMPLE_SEARCH_ICON_SIZE + "|"
+                + (sampleSearchInk(0) > 0 ? "painted" : "blank");
+    }
+
+    /**
+     * 把搜索框画进一张图，数某一段里"属于我们那支颜色"的像素。
+     *
+     * 0 档 = 放大镜那一块，只认分组蓝 `#1f5fd0` 那一族（容差 16）。第一版这里数的是
+     * "非白像素"，结果输入框自己的蓝色边线被当成墨——把 `drawImage` 整行删掉自检照样绿，
+     * 一条咬不住的断言比不写更糟，所以改成按颜色认。
+     * 2 档 = 提示文字那一块（从左边距往后数非白）：那块里没有边线，白底上只有字。
+     */
+    public int sampleSearchInk(int band) {
+        if (sqlRunSamplesSearch == null || sqlRunSamplesSearch.getWidth() <= 0
+                || sqlRunSamplesSearch.getHeight() <= 0) {
+            return -1;
+        }
+        int w = sqlRunSamplesSearch.getWidth();
+        int h = sqlRunSamplesSearch.getHeight();
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+                w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g2 = img.createGraphics();
+        g2.setColor(java.awt.Color.WHITE);
+        g2.fillRect(0, 0, w, h);
+        sqlRunSamplesSearch.paint(g2);
+        g2.dispose();
+        int iconPx = sqlRunSamplesSearch.iconPixels();
+        int from = band == 0 ? 2 : sqlRunSamplesSearch.getMargin().left;
+        int to = band == 0 ? iconPx + UiScale.px(6) : w;
+        int ink = 0;
+        for (int y = 0; y < h; y++) {
+            for (int x = from; x < to; x++) {
+                int argb = img.getRGB(x, y);
+                int r = (argb >> 16) & 0xff;
+                int g = (argb >> 8) & 0xff;
+                int b = argb & 0xff;
+                if (band == 0) {
+                    if (Math.abs(r - 0x1f) <= 16 && Math.abs(g - 0x5f) <= 16
+                            && Math.abs(b - 0xd0) <= 16) {
+                        ink++;
+                    }
+                } else if ((argb & 0x00ffffff) != 0x00ffffff) {
+                    ink++;
+                }
+            }
+        }
+        return ink;
+    }
+
+    /** 介绍块读回来的角色分布（对撞键 intro.rich）：按颜色认，不读常量。 */
+    public String sqlSamplesIntroSignature() {
+        return sqlRunIntro == null ? "" : com.excel2mysql.gui.RichText.roleSignature(sqlRunIntro);
+    }
+
+    /** 介绍块真画出来的像素里，属于某一档颜色的有多少（自检按这个判"上色了没有"）。 */
+    public int sqlSamplesIntroInk(int role) {
+        if (sqlRunIntro == null || sqlRunIntro.getWidth() <= 0
+                || sqlRunIntro.getHeight() <= 0) {
+            return -1;
+        }
+        java.awt.Color want = role == 0 ? com.excel2mysql.gui.RichText.TITLE_FG
+                : com.excel2mysql.gui.RichText.LABEL_FG;
+        int w = sqlRunIntro.getWidth();
+        int h = sqlRunIntro.getHeight();
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+                w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g2 = img.createGraphics();
+        g2.setColor(java.awt.Color.WHITE);
+        g2.fillRect(0, 0, w, h);
+        sqlRunIntro.paint(g2);
+        g2.dispose();
+        int n = 0;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int argb = img.getRGB(x, y);
+                if (Math.abs(((argb >> 16) & 0xff) - want.getRed()) <= 18
+                        && Math.abs(((argb >> 8) & 0xff) - want.getGreen()) <= 18
+                        && Math.abs((argb & 0xff) - want.getBlue()) <= 18) {
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+
+    /** 行内那颗【执行】的档位（对撞键 run.row.exec.style 读它，值取自 Buttons 打的那枚标记）。 */
+    public String sqlRunRowExecRole() {
+        return com.excel2mysql.gui.Buttons.role(sqlRunRowExec);
+    }
+
+    /** 行高与那颗按钮的最小高：行高低于按钮就会被裁，用例钉这一对数。 */
+    public int[] sqlRunRowHeights() {
+        if (sqlRunFilesTable == null || sqlRunRowExec == null) {
+            return new int[]{-1, -1};
+        }
+        return new int[]{sqlRunFilesTable.getRowHeight(),
+                sqlRunRowExec.getPreferredSize().height};
+    }
+
+    /**
+     * 把行内那颗按钮画进一张图，数次级档那支字色（#1f5fd0）的像素：没上色就是 0。
+     *
+     * 空清单时这颗是禁用的，禁用档的字色是另一支灰蓝，数不到强调蓝——所以量之前先把它
+     * 拨成可用，量完再还原，探的是"能用时它长什么样"。
+     */
+    public int sqlRunRowExecInk() {
+        if (sqlRunRowExec == null) {
+            return -1;
+        }
+        java.awt.Dimension pref = sqlRunRowExec.getPreferredSize();
+        if (pref.width <= 0 || pref.height <= 0) {
+            return -1;
+        }
+        boolean wasEnabled = sqlRunRowExec.isEnabled();
+        sqlRunRowExec.setEnabled(true);
+        sqlRunRowExec.setSize(pref);
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
+                pref.width, pref.height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g2 = img.createGraphics();
+        g2.setColor(java.awt.Color.WHITE);
+        g2.fillRect(0, 0, pref.width, pref.height);
+        sqlRunRowExec.paint(g2);
+        g2.dispose();
+        sqlRunRowExec.setEnabled(wasEnabled);
+        int n = 0;
+        for (int y = 0; y < pref.height; y++) {
+            for (int x = 0; x < pref.width; x++) {
+                int argb = img.getRGB(x, y);
+                if (Math.abs(((argb >> 16) & 0xff) - 0x1f) <= 16
+                        && Math.abs(((argb >> 8) & 0xff) - 0x5f) <= 16
+                        && Math.abs((argb & 0xff) - 0xd0) <= 16) {
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+
     /** 目录里的一个节点：分组节点只带名字，叶子带短标题与示例序号。 */
     private static final class SampleNode {
         private final String label;
@@ -3817,7 +4060,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return;                            // 点中的是分组那一行：右侧保持上一条示例
         }
         SqlSamples.Sample s = SqlSamples.ALL[((SampleNode) held).index];
-        sqlRunIntro.setText(SqlSamples.introText(s));
+        // 内容仍是 SqlSamples.introText 那五行，只是按角色上色；纯文本一字不改，
+        // 自检与对撞都有一条钉"读回来的纯文本 == introText"
+        String intro = SqlSamples.introText(s);
+        com.excel2mysql.gui.RichText.paint(sqlRunIntro, intro,
+                com.excel2mysql.gui.RichText.introSpans(intro), UiScale.px(4));
         sqlRunPreview.setText(s.sql);
         // 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
         // 看着像"缺了上半截"（与 Python 侧 _on_pick 的复位同一处理）
@@ -4095,7 +4342,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 右侧上方那段介绍的原文（说明 / 场景 / 解决的问题 / 关键词）。 */
     public String sqlSamplesIntroText() {
-        return sqlRunIntro == null ? "" : sqlRunIntro.getText();
+        // 走 RichText.textOf：JTextPane 文档末尾那个隐形换行不是内容，
+        // 留着它，"纯文本一字未改"的判据与对撞键都会假红
+        return sqlRunIntro == null ? "" : com.excel2mysql.gui.RichText.textOf(sqlRunIntro);
     }
 
     public String sqlSamplesPreviewText() {

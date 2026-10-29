@@ -540,6 +540,14 @@ def main():
     dump_widget("run_drop_existing", None)
     dump_table("sqlrun", win.sql_run_table)
     put("table.sqlrun.title", title_of_table(win.sql_run_table))
+    # 行内那颗【执行】的档位：走产品自己的工厂方法取真控件，不在这里抄一份样式字符串
+    _rowcell = win._run_row_cell(0, "探针.sql")
+    _rowbtn = _rowcell.findChild(m.QPushButton)
+    _sheet = _rowbtn.styleSheet() if _rowbtn is not None else ""
+    put("run.row.exec.style",
+        "secondary" if _sheet == m.SECONDARY_BUTTON_QSS
+        else ("primary" if _sheet == m.PRIMARY_BUTTON_QSS else "plain"))
+    _rowcell.deleteLater()
     put("sqlrun.noedit", "1" if win.sql_run_table.editTriggers()
         == m.QAbstractItemView.NoEditTriggers else "0")
     _run_bar = find_layout(win.main_tabs.widget(2), win.btn_run_scripts)
@@ -879,10 +887,14 @@ def main():
     put("env.dlg.ddl.size", "%dx%d" % (dlg.width(), dlg.height()))
     put("ddl.tabs", "|".join(dlg.tabs.tabText(i) for i in range(dlg.tabs.count())))
     put("ddl.first", dlg.tabs.widget(0).toPlainText())
+    # 角色分布从真文档按颜色读回来：正文这条键已经比过一字不差，这一条比的就是
+    # "两栈把同一句 DDL 切成同样的段没有"（切分规则改一侧必红）
+    put("ddl.rich", m.styled_signature(dlg.tabs.widget(0)))
     dlg.deleteLater()
     win.chk_drop.setChecked(True)
     dlg2 = m.DDLDialog(win.tables, True, win)
     put("ddl.drop.first", dlg2.tabs.widget(0).toPlainText())
+    put("ddl.drop.rich", m.styled_signature(dlg2.tabs.widget(0)))
     dlg2.deleteLater()
     win.chk_drop.setChecked(False)
 
@@ -905,6 +917,18 @@ def main():
                                            _brush_hex(_grp.foreground(0)),
                                            _brush_hex(_grp.background(0))))
     put("sample.tree.leaf.bold", str(int(_leaf0.font(0).bold())))
+    # 介绍块的角色分布：从真文档里按颜色读回来，两栈切分不一致就会在这里红
+    sdg.tree.setCurrentItem(_leaf0)
+    app.processEvents()
+    put("intro.rich", m.styled_signature(sdg.intro))
+    # 搜索那一栏：提示句整句要放得下（上一版 30 字的长句被截成半句，看着不像提示），
+    # 放大镜按像素判"画出来没有"，不判有没有挂上图标对象
+    put("sample.search.hint", sdg.search.placeholderText())
+    _si = sdg.search.grab().toImage()
+    _sink = sum(1 for y in range(_si.height()) for x in range(min(22, _si.width()))
+                if (_si.pixel(x, y) & 0x00ffffff) != 0x00ffffff)
+    put("sample.search.icon", "%d|%s" % (m.SAMPLE_SEARCH_ICON_SIZE,
+                                         "painted" if _sink > 0 else "blank"))
     sdg.close()
     sdg.deleteLater()
 

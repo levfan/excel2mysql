@@ -1996,6 +1996,47 @@ check("F43d 操作列那一格真是一颗【执行】按钮，与批量那颗�
       _row_btn is not None and _row_btn.text() == "执行"
       and _row_btn.isEnabled() == w.btn_run_scripts.isEnabled(),
       (_row_btn.text() if _row_btn else None, _row_btn.isEnabled() if _row_btn else None))
+
+
+def _accent_ink(img, x0=0, x1=None, tol=16, target=(0x1f, 0x5f, 0xd0)):
+    """数图里属于某一档强调蓝的像素（默认分组蓝，可换主按钮那一支）。
+
+    按"有没有非白像素"判会连控件自己的边线一起算成墨——这条判据的第一版就是这么假绿的。
+    """
+    if img is None or img.width() <= 0:
+        return -1
+    tr, tg, tb = target
+    end = img.width() if x1 is None else min(x1, img.width())
+    n = 0
+    for y in range(img.height()):
+        for x in range(x0, end):
+            p = img.pixel(x, y)
+            if (abs(((p >> 16) & 0xff) - tr) <= tol
+                    and abs(((p >> 8) & 0xff) - tg) <= tol
+                    and abs((p & 0xff) - tb) <= tol):
+                n += 1
+    return n
+
+
+# 行内那颗的观感（用户 2026-10-30 报"很不醒目"）：套的是现成的次级强调档，
+# 不是主按钮那档——清单可能十几行，一屏同分量的蓝会把页底主操作压掉
+_row_ss = _row_btn.styleSheet() if _row_btn is not None else ""
+check("F43h 行内【执行】套上次级强调档，且行高跟着按钮最小高走（不跟就会被裁）",
+      "#1f5fd0" in _row_ss and "#f4f8ff" in _row_ss
+      and w.sql_run_table.rowHeight(1) >= _row_btn.sizeHint().height(),
+      (_row_ss[:44], w.sql_run_table.rowHeight(1), _row_btn.sizeHint().height()))
+_plain_btn = app_main.QPushButton("执行")
+_plain_btn.setStyleSheet("")
+_plain_btn.resize(_row_btn.size())
+_plain_btn.show()
+_app.processEvents()
+check("F43i 那颗按钮真上了强调蓝：数像素，并拿不套样式的同款按钮当对照",
+      _accent_ink(_row_btn.grab().toImage()) > 0
+      and _accent_ink(_plain_btn.grab().toImage()) == 0,
+      (_accent_ink(_row_btn.grab().toImage()),
+       _accent_ink(_plain_btn.grab().toImage())))
+_plain_btn.close()
+_plain_btn.deleteLater()
 # Del 键：选中一行出清单，磁盘上的脚本不动
 w.sql_run_table.selectRow(0)
 from PySide6.QtGui import QKeyEvent as _QKE
@@ -2216,6 +2257,66 @@ check("F33e 分组行按章节标题画：加粗 + 强调蓝 + 浅蓝底，条�
 check("F33f 配色复用介绍条那一组冷色，不另造新色值（两栈同值由对撞键比出来）",
       app_main.SAMPLE_GROUP_FG == "#1f5fd0" and app_main.SAMPLE_GROUP_BG == "#f4f8ff",
       (app_main.SAMPLE_GROUP_FG, app_main.SAMPLE_GROUP_BG))
+# 搜索那一栏（用户 2026-10-30 报"不点过去搜，都不知这是搜索框"）：提示句要整句放得下，
+# 放大镜按 grab 的像素判画出来没有——挂上图标对象不等于画上（上一轮 setOpaque 那个坑）
+_dlg.show()
+_app.processEvents()
+_ph = _dlg.search.placeholderText()
+_phw = _dlg.search.fontMetrics().horizontalAdvance(_ph)
+_phroom = _dlg.search.width() - 22 - 20        # 前导图标与清除按钮各占一块，量出来是预留
+check("F33g 搜索框提示句是那句短句，且整句在框里放得下（长句被截半句就不像提示）",
+      _ph == app_main.SAMPLE_SEARCH_HINT and 0 < _phw <= _phroom,
+      (_ph, _phw, _phroom))
+_pimg = _dlg.search.grab().toImage()
+_pink = _accent_ink(_pimg, 2, 24)     # 只看框内左侧那一小块，边线的蓝不算（helper 见 F43f 旁）
+check("F33h 放大镜真画在框内左侧：数那一族颜色的像素，边框的蓝不算",
+      len(_dlg.search.actions()) == 1 and _pink > 0,
+      (len(_dlg.search.actions()), _pink))
+check("F33i 长说明退回 tooltip，与 Java 侧同一句（同值由对撞键比）",
+      _dlg.search.toolTip() == app_main.SAMPLE_SEARCH_TIP,
+      _dlg.search.toolTip()[:20])
+# 介绍块按角色上色（用户 2026-10-30 报"样式太单一"）：内容一字不许改，
+# 角色串与像素都从真文档 / 真渲染里读，不读"有没有设过属性"
+_sig = app_main.styled_signature(_dlg.intro)
+_iimg = _dlg.intro.grab().toImage()
+check("F33j 介绍块上色后纯文本一字未改，标题/字段名两档在前、最后一档是关键词那块",
+      _dlg.intro.toPlainText() == _dlg.intro_text(_dlg._sample_index())
+      and _sig.startswith("T") and "L" in _sig
+      and _sig.rsplit("|", 1)[-1].startswith("K"),
+      (_dlg._sample_index(), _sig))
+check("F33k 那三档颜色真上到屏：标题蓝与分组蓝各自数像素",
+      _accent_ink(_iimg, target=(0x2f, 0x6f, 0xeb)) > 0 and _accent_ink(_iimg) > 0,
+      (_accent_ink(_iimg, target=(0x2f, 0x6f, 0xeb)), _accent_ink(_iimg)))
+# 两个 DDL 预览弹窗按角色上色（用户 2026-10-30 报"色调太单一，能不能来点高亮"）：
+# 正文一字不许改；角色串从真文档读、颜色从真渲染里数，两栈切得同不同形由对撞键 ddl.rich 判
+_ddl_cols = [{"field": "id", "type": "BIGINT UNSIGNED", "comment": "主键",
+              "nullable": False, "primary_key": True},
+             {"field": "student_name", "type": "VARCHAR(64)", "comment": "姓名",
+              "nullable": False}]
+_ddl_body = build_ddl("ods_t_student", "学生基本信息", _ddl_cols, True)
+for _where, _ddlg in (("第一页", app_main.DDLDialog(
+                           [{"table_name": "ods_t_student",
+                             "table_comment": "学生基本信息",
+                             "columns": _ddl_cols}], True, None)),
+                      ("脚本页", app_main.SqlScriptDdlDialog(
+                           [("ods_t_student", _ddl_body)], None))):
+    _ddlg.show()
+    _app.processEvents()
+    _pane = _ddlg.tabs.widget(0)
+    _dsig = app_main.styled_signature(_pane)
+    _dimg = _pane.grab().toImage()
+    check("F33l %s的 DDL 预览上色后正文一字未改，五档角色都在" % _where,
+          _pane.toPlainText() == _ddl_body
+          and _dsig.startswith("D") and "L" in _dsig and "T" in _dsig
+          and "B" in _dsig and "W" in _dsig,
+          _dsig[:70])
+    check("F33m %s那几档颜色真上到屏：DROP 的橙、注释的亮蓝、字段的分组蓝各自数到像素" % _where,
+          _accent_ink(_dimg, target=(0xb2, 0x6a, 0x00)) > 0
+          and _accent_ink(_dimg, target=(0x2f, 0x6f, 0xeb)) > 0
+          and _accent_ink(_dimg) > 0,
+          (_accent_ink(_dimg, target=(0xb2, 0x6a, 0x00)),
+           _accent_ink(_dimg, target=(0x2f, 0x6f, 0xeb)), _accent_ink(_dimg)))
+    _ddlg.deleteLater()
 check("F34 每条示例都能切成至少一句可执行语句",
       all(split_sql_statements(s.sql) for s in app_main.SQL_SAMPLES),
       [i for i, s in enumerate(app_main.SQL_SAMPLES) if not split_sql_statements(s.sql)])

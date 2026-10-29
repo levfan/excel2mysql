@@ -161,6 +161,9 @@ public final class GuiDump {
                 put("sample.tree.group",
                         grpStyle[0] + "|" + grpStyle[1] + "|" + grpStyle[2]);
                 put("sample.tree.leaf.bold", leafStyle[0]);
+                // 搜索那一栏：提示句整句 + 放大镜按像素判画出来没有（与 Python 侧同两条键）
+                put("sample.search.hint", frame.sampleSearchHint());
+                put("sample.search.icon", frame.sampleSearchIconSpec());
                 frame.closeSqlSamples();
                 // 连接区：跑业务时收起成一条状态栏，只报当前是哪个库（用户口径）
                 put("conn.state", frame.connStateText());
@@ -205,6 +208,8 @@ public final class GuiDump {
                 put("run.exec.head", join(execHead, "|"));
                 put("run.row.exec", frame.sqlRunFilesTable().getColumnCount() + "|"
                         + norm(frame.sqlRunFilesTable().getColumnName(4)));
+                // 行内那颗【执行】的档位（与 Python 侧同一条：读渲染件自己身上的标记）
+                put("run.row.exec.style", frame.sqlRunRowExecRole());
                 put("split.sql.order", frame.sqlPage().segmentOrder());
                 // 日志默认高度 = 它自己的最小高度（用户口径：默认压到最低，仍可拖）。
                 // 比的是真控件量出来的高度，不是各栈抄一份配置值。
@@ -299,6 +304,8 @@ public final class GuiDump {
                 put("samples.hits", norm(frame.sqlSamplesHitsText()));
                 put("samples.item.0", norm(frame.sqlSamplesItemText(0)));
                 put("samples.intro.0", frame.sqlSamplesIntroText());
+                // 介绍块的角色分布：从真文档里按颜色读回来，与 Python 侧同一条键
+                put("intro.rich", frame.sqlSamplesIntroSignature());
                 put("samples.preview.0", frame.sqlSamplesPreviewText());
                 // 语句全文的字号也是界面事实：这是与左侧目录并排的阅读面，不吃编辑区那档 16 号
                 put("samples.preview.font.pt", String.valueOf(UiScale.fontPxToPt(
@@ -727,6 +734,8 @@ public final class GuiDump {
                     put("env.dlg.ddl.size", clientSize(plain));
                     put("ddl.tabs", tabs.toString());
                     put("ddl.first", plain.tabCount() == 0 ? "" : plain.tabText(0));
+                    // 与 Python 侧同一条：正文已比过一字不差，这条比的是两栈切分是否同形
+                    put("ddl.rich", plain.tabCount() == 0 ? "" : plain.tabSignature(0));
                 } finally {
                     plain.dispose();
                 }
@@ -735,6 +744,8 @@ public final class GuiDump {
                 DDLDialog dropping = new DDLDialog(frame, frame.tables(), true);
                 try {
                     put("ddl.drop.first", dropping.tabCount() == 0 ? "" : dropping.tabText(0));
+                    put("ddl.drop.rich",
+                            dropping.tabCount() == 0 ? "" : dropping.tabSignature(0));
                 } finally {
                     dropping.dispose();
                 }

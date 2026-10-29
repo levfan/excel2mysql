@@ -6,7 +6,7 @@ import javax.swing.JDialog;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
-import javax.swing.JTextArea;
+import javax.swing.JTextPane;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.Frame;
@@ -29,12 +29,14 @@ public final class SqlScriptDdlDialog extends JDialog {
         // 与结构弹窗同理：Qt 的 QTabWidget 默认单行滚动，Swing 默认换行
         tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
         for (String[] page : pages) {
-            JTextArea area = new JTextArea();
+            // 与第一页那个弹窗同件同法：正文本来就是脚本自己的那句，一个字不改，
+            // 只按角色上色（字段名与注释两支蓝、类型加粗、关键字退灰、DROP 走告警橙）
+            JTextPane area = new JTextPane();
             area.setEditable(false);
             // Python 用 QFont("Menlo") 的默认档；按 DPI 折成物理像素才对得上
             area.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
                     UiScale.fontPt(UiScale.UI_POINT_SIZE)));
-            area.setText(page[1]);
+            RichText.paint(area, page[1], RichText.ddlSpans(page[1]), UiScale.px(2));
             area.setCaretPosition(0);
             JScrollPane scroll = new JScrollPane(area);
             scroll.setBorder(BorderFactory.createEmptyBorder());
@@ -78,18 +80,34 @@ public final class SqlScriptDdlDialog extends JDialog {
     }
 
     public String tabText(int index) {
+        JTextPane pane = paneAt(index);
+        return pane == null ? "" : RichText.textOf(pane);
+    }
+
+    /** 自检与对撞用：这一页读回来的角色分布（按颜色认，不读常量）。 */
+    public String tabSignature(int index) {
+        JTextPane pane = paneAt(index);
+        return pane == null ? "" : RichText.roleSignature(pane);
+    }
+
+    /** 自检用：这一页那块正文，供"真画出来没有"的像素判据取用。 */
+    public java.awt.Component tabView(int index) {
+        return paneAt(index);
+    }
+
+    private JTextPane paneAt(int index) {
         JTabbedPane tabs = findTabs(getContentPane());
         if (tabs == null) {
-            return "";
+            return null;
         }
         java.awt.Component c = tabs.getComponentAt(index);
         if (c instanceof JScrollPane) {
             java.awt.Component inner = ((JScrollPane) c).getViewport().getView();
-            if (inner instanceof JTextArea) {
-                return ((JTextArea) inner).getText();
+            if (inner instanceof JTextPane) {
+                return (JTextPane) inner;
             }
         }
-        return "";
+        return null;
     }
 
     private static JTabbedPane findTabs(java.awt.Container c) {

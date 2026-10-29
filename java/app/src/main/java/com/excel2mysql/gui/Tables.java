@@ -34,6 +34,19 @@ public final class Tables {
     public static final java.awt.Color SAMPLE_GROUP_BG = new java.awt.Color(0xf4, 0xf8, 0xff);
 
     /**
+     * 「SQL 示例」搜索那一栏的提示文案与放大镜尺寸，与 Python 侧
+     * main.py 的 SAMPLE_SEARCH_* 同值（对撞键 sample.search.hint / sample.search.icon）。
+     *
+     * 提示句要短到放得进框里：Swing 没有占位文本，这句只在空态自己画，
+     * 而 Qt 侧那版 30 个字的长句在 283px 的框里只显出前 20 个字，截在半句上。
+     * 长说明留在 tooltip，两端同一句。
+     */
+    public static final String SAMPLE_SEARCH_HINT = "搜索示例：标题、说明、关键词";
+    public static final String SAMPLE_SEARCH_TIP = "关键词过滤：短标题、说明、场景、解决的问题、"
+            + "关键词与语句都算（清空回到全部）";
+    public static final int SAMPLE_SEARCH_ICON_SIZE = 14;
+
+    /**
      * 每张表格左上角那一句标识（标题边框）。用户口径：每个表格都要有标识，
      * 第一页的「待导入文件」就是样子——标题里顺带写明这一张表怎么操作。
      * 与 Python 侧 main.py 的 FILE_TABLE_TITLE / SQL_TABLE_TITLE / COLUMN_TABLE_TITLE 同句，

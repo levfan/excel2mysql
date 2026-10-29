@@ -37,10 +37,10 @@ warnings.filterwarnings("ignore", message=".*no longer supported by the Python c
 import functools
 import re
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent, QSize
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent, QSize, QRectF, QPointF
 from PySide6.QtGui import (
     QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat,
-    QPainter, QPen, QPainterPath, QBrush,
+    QTextBlockFormat, QPainter, QPen, QPainterPath, QBrush, QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -158,6 +158,27 @@ SAMPLE_TREE_INDENT = 26
 # 分组行像章节标题、条目像正文，层次靠这个出来，不靠装饰
 SAMPLE_GROUP_FG = "#1f5fd0"
 SAMPLE_GROUP_BG = "#f4f8ff"
+
+# 搜索那一栏：一句 30 字的提示在 283px 宽的框里只显出前 20 个字，截在半句上，
+# 看着像灰底杂字而不像提示；所以提示换短句，认得出"这是搜索"的活交给放大镜。
+# 放大镜自绘：主题图标在 Windows 上取不到（QIcon.fromTheme 给空图标），
+# emoji 又可能渲染成豆腐块，两端同一条画法才画得出同一个形状。
+SAMPLE_SEARCH_HINT = "搜索示例：标题、说明、关键词"
+SAMPLE_SEARCH_TIP = ("关键词过滤：短标题、说明、场景、解决的问题、"
+                     "关键词与语句都算（清空回到全部）")
+SAMPLE_SEARCH_ICON_SIZE = 14
+
+# 介绍块的角色配色：标题一档、字段名一档、关键词成一块，值本身保持正文默认色。
+# 全用现成色值（主按钮蓝、目录分组蓝），一个新色都不造；两端同一组色与同一条切分规则，
+# 对撞键 intro.rich 把两栈各自读回的角色段比一遍。
+SAMPLE_INTRO_TITLE_FG = "#2f6feb"
+SAMPLE_INTRO_LABEL_FG = "#1f5fd0"
+SAMPLE_INTRO_CHIP_FG = "#ffffff"
+SAMPLE_INTRO_CHIP_BG = "#1f5fd0"
+SAMPLE_INTRO_BLOCK_SPACING = 4
+
+# DDL 预览的行距：一页几十行，每行都留介绍块那一档就太松，取它的一半。
+DDL_BLOCK_SPACING = 2
 
 # 每张表格左上角那一句标识（组框标题）。用户口径：每个表格都要有标识，
 # 第一页的「待导入文件」就是样子——标题里顺带写明这一张表怎么操作。
@@ -3659,10 +3680,23 @@ class MainWindow(QWidget):
             # 行内那颗【执行】只管这一行的脚本：清单每次重排都重新建，
             # 绑定的行号就与这一行同生同死，不会指到别的脚本上去
             self.sql_run_table.setCellWidget(i, 4, self._run_row_cell(i, s["path"]))
+            # 描边与 padding 会抬高按钮的最小高：Qt 的 cellWidget 是按行高裁的，
+            # 行高不跟着走就会把按钮上下削掉一圈，所以量按钮自己的 sizeHint
+            cell_btn = self.sql_run_table.cellWidget(i, 4).findChild(QPushButton)
+            if cell_btn is not None:
+                cell_btn.ensurePolished()
+                need = cell_btn.sizeHint().height() + 2
+                if self.sql_run_table.rowHeight(i) < need:
+                    self.sql_run_table.setRowHeight(i, need)
         self._sync_gen_buttons()
 
     def _run_row_cell(self, row_index, path):
         btn = QPushButton("执行")
+        # 行内这颗套"次级强调"档（与「保存脚本」同一档）：不套样式就是一颗原生灰按钮，
+        # 夹在行里看着像表格自己的边框，不像能点的东西（用户 2026-10-30 报"很不醒目"）。
+        # 不用主按钮那档铺满蓝：清单可能十几行，一屏十几颗同等分量的蓝
+        # 会把页底真正的主操作「批量执行脚本文件」压掉。
+        btn.setStyleSheet(SECONDARY_BUTTON_QSS)
         btn.setToolTip("只执行这一行的脚本文件：\n%s" % path)
         btn.clicked.connect(lambda _=False, r=row_index: self.on_run_script_row(r))
         cell = QWidget()
@@ -4702,9 +4736,12 @@ class DDLDialog(QDialog):
         self.tabs = QTabWidget()
         for t in tables:
             ddl = build_ddl(t["table_name"], t["table_comment"], t["columns"], drop_if_exists)
-            te = QPlainTextEdit(ddl)
+            te = QPlainTextEdit()
             te.setReadOnly(True)
             te.setFont(QFont("Menlo"))
+            # 同一套角色上色：注释最亮、标识符次级蓝、类型加粗、关键字退到背景，
+            # 勾了覆盖开关补上的那句 DROP 走警示色
+            paint_styled(te, ddl, ddl_spans(ddl), ddl_formats(te), DDL_BLOCK_SPACING)
             self.tabs.addTab(te, t["table_name"])
         lay.addWidget(self.tabs)
         btns = QDialogButtonBox(QDialogButtonBox.Close)
@@ -4729,9 +4766,11 @@ class SqlScriptDdlDialog(QDialog):
         lay = QVBoxLayout(self)
         self.tabs = QTabWidget()
         for name, ddl in pages:
-            te = QPlainTextEdit(ddl)
+            te = QPlainTextEdit()
             te.setReadOnly(True)
             te.setFont(QFont("Menlo"))
+            # 正文仍是脚本自己那一句，一个字不改，只按角色上色（与第一页那个弹窗同一套）
+            paint_styled(te, ddl, ddl_spans(ddl), ddl_formats(te), DDL_BLOCK_SPACING)
             self.tabs.addTab(te, name)
         lay.addWidget(self.tabs)
         btns = QDialogButtonBox(QDialogButtonBox.Close)
@@ -4751,6 +4790,238 @@ class _TreeRowDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         base = super().sizeHint(option, index)
         return QSize(base.width(), base.height() + SAMPLE_TREE_ROW_PADDING)
+
+
+def make_find_icon(size=SAMPLE_SEARCH_ICON_SIZE):
+    """搜索框左侧那颗放大镜：圆环占左上六成，手柄从环边拉到右下角。
+
+    两端各画一遍但同一条几何，Java 侧见 `MainFrame.findIcon`。
+    """
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(SAMPLE_GROUP_FG))
+    pen.setWidthF(max(1.3, size / 9.0))
+    p.setPen(pen)
+    ring = size * 0.58
+    p.drawEllipse(QRectF(0.8, 0.8, ring, ring))
+    p.drawLine(QPointF(ring + 0.8, ring + 0.8), QPointF(size - 1.2, size - 1.2))
+    p.end()
+    return QIcon(pm)
+
+
+def rich_format(fg=None, bg=None, bold=False, size_pt=None):
+    """一条角色对应的字符格式（介绍块与 DDL 预览共用这一套造法）。
+
+    字号只收绝对值：Qt 的 QTextCharFormat 没有"相对大一号"这种接口，
+    要按控件自己的字号推，由调用方算好传进来。
+    """
+    fmt = QTextCharFormat()
+    if fg:
+        fmt.setForeground(QColor(fg))
+    if bg:
+        fmt.setBackground(QColor(bg))
+    if bold:
+        fmt.setFontWeight(QFont.Bold)
+    if size_pt:
+        fmt.setFontPointSize(size_pt)
+    return fmt
+
+
+def rich_text(text):
+    r"""换行归一成 \n：两栈的文档里段界只占一个字符。
+
+    脚本正文是从磁盘读进来的，CRLF 那份会让文档比原文短一截——角色段是按原文算的
+    偏移，插进文档就整体错一格（第一行还是对的，越往后越歪）。Java 侧同一条在
+    gui.RichText.normalizeNewlines。
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def paint_styled(view, text, spans, formats, block_spacing=0):
+    """按角色给纯文本控件上色：文本内容逐字不变（换行除外，见 rich_text），只换字重与颜色。
+
+    两端各有一份同构实现（Java 侧 gui.RichText）。对撞键比的是"从真文档里读回来的
+    角色段"，不是这里抄的常量——改了切分规则，另一侧一定会发现。
+    """
+    text = rich_text(text)
+    cur = view.textCursor()
+    cur.beginEditBlock()
+    cur.mergeCharFormat(QTextCharFormat())
+    cur.select(QTextCursor.Document)
+    cur.removeSelectedText()
+    last = 0
+    for start, end, role in spans:
+        if start > last:
+            # 段与段之间那些字符（就是行末那个换行）要显式用默认格式插：
+            # 不传格式的话光标会沿用上一段的格式，换行符跟着被算进标题那一档
+            cur.insertText(text[last:start], QTextCharFormat())
+        cur.insertText(text[start:end], formats.get(role))
+        last = max(last, end)
+    if last < len(text):
+        cur.insertText(text[last:], QTextCharFormat())
+    if block_spacing:
+        bfmt = QTextBlockFormat()
+        bfmt.setBottomMargin(block_spacing)
+        blk = view.document().firstBlock()
+        while blk.isValid():
+            bcur = QTextCursor(blk)
+            bcur.mergeBlockFormat(bfmt)
+            blk = blk.next()
+    cur.endEditBlock()
+    cur.movePosition(QTextCursor.Start)
+    view.setTextCursor(cur)
+
+
+def intro_spans(text):
+    """介绍那五行的角色切分：第一行是标题，每行冒号前是字段名，关键词的值单独成块。"""
+    text = rich_text(text)
+    spans = []
+    pos = 0
+    for line in text.split("\n"):
+        end = pos + len(line)
+        if pos == 0:
+            spans.append((0, end, "title"))
+        else:
+            cut = line.find("：")
+            if cut < 0:
+                spans.append((pos, end, "value"))
+            else:
+                spans.append((pos, pos + cut + 1, "label"))
+                spans.append((pos + cut + 1, end,
+                              "chip" if line.startswith("关键词：") else "value"))
+        pos = end + 1
+    return spans
+
+
+# 角色 → 屏幕上看得见的特征。签名与 Java 侧 roleAt 认同一组数，改一处必须同批改另一侧。
+RICH_KEYWORD_FG = "#9aa7b8"          # 关键字：退到背景那一档
+RICH_DANGER_FG = LOG_WARN_COLOR      # DROP 那一行：预览里唯一会把数据真删掉的动作
+
+
+def _char_role(fmt):
+    """把一个字符格式归到某一档角色，判据是颜色与字重，不是"当初设了什么"。"""
+    bg = fmt.background()
+    if bg.style() != Qt.NoBrush and bg.color().name() == SAMPLE_INTRO_CHIP_BG:
+        return "K"
+    fg = fmt.foreground()
+    name = fg.color().name() if fg.style() != Qt.NoBrush else ""
+    if name == SAMPLE_INTRO_TITLE_FG:
+        return "T"
+    if name == SAMPLE_INTRO_LABEL_FG:
+        return "L"
+    if name == RICH_KEYWORD_FG:
+        return "W"
+    if name == RICH_DANGER_FG:
+        return "D"
+    if fmt.fontWeight() >= QFont.Bold:
+        return "B"                   # 类型那一档：不加颜色，只加粗
+    return "V"
+
+
+def styled_signature(view):
+    """读回文档里每一段的角色归属，压成 "T12|L3|V23|L4|K18" 这样一串。
+
+    判角色靠颜色不靠记忆：这条串说的是"屏幕上现在哪一段是什么色"，两栈的切分规则
+    一旦不一致，对撞就会红，而不是两边各自读同一份常量绿着。
+    两处读法必须与 Java 侧（gui.RichText.roleSignature）逐字对齐，否则比的是读法不是切分：
+    一是逐字取格式要先选中这一个字再读，光标停在 i 处时 charFormat() 给的是插入点格式
+    （等于前一个字的格式），整串会右移一格；二是换行符整个跳过——它是段落分隔符，
+    本身没有字形，Qt 从段界读回来的是下一段那一档、Swing 读回来的是上一段那一档，
+    两边各说各话，把它计进段长就永远对不齐。
+    """
+    doc = view.document()
+    text = doc.toPlainText()
+    cur = QTextCursor(doc)
+    out = []
+    prev, run = None, 0
+    for i in range(len(text)):
+        if text[i] == "\n":
+            continue
+        cur.setPosition(i)
+        cur.setPosition(i + 1, QTextCursor.KeepAnchor)
+        role = _char_role(cur.charFormat())
+        if role == prev:
+            run += 1
+        else:
+            if prev is not None:
+                out.append("%s%d" % (prev, run))
+            prev, run = role, 1
+    if prev is not None:
+        out.append("%s%d" % (prev, run))
+    return "|".join(out)
+
+
+DDL_KEYWORDS = frozenset(("CREATE", "TABLE", "PRIMARY", "KEY", "NOT", "NULL", "DEFAULT",
+                          "ENGINE", "CHARSET", "COLLATE", "IF", "EXISTS", "DROP",
+                          "UNIQUE", "COMMENT", "AUTO_INCREMENT", "USING", "INNODB",
+                          "UTF8MB4"))
+# UNSIGNED / BINARY 记在类型那一档不是关键字：DDL 里它们紧跟在 BIGINT、VARCHAR 后面，
+# 拆开看就是同一个字段的两半，一半加粗一档退灰会让人以为是两个东西。
+DDL_TYPES = frozenset(("VARCHAR", "CHAR", "DECIMAL", "NUMERIC", "INT", "INTEGER", "BIGINT",
+                       "TINYINT", "SMALLINT", "MEDIUMINT", "FLOAT", "DOUBLE", "DATE",
+                       "DATETIME", "TIMESTAMP", "TIME", "YEAR", "TEXT", "TINYTEXT",
+                       "MEDIUMTEXT", "LONGTEXT", "BLOB", "JSON", "BIT",
+                       "UNSIGNED", "BINARY"))
+DDL_TOKEN_RE = re.compile(r"`[^`]*`|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*")
+
+
+def ddl_spans(text):
+    """把一句 DDL 切成 (起, 止, 角色)：按"一行一字段"的形状认角色，不跑完整 SQL 语法。
+
+    `DROP TABLE` 那一行整行标警示色——整段预览里只有它会把数据真删掉，它该跳出来。
+    引号与反引号那两条排在裸词前面，注释里出现的 NULL 之类不会被误当成关键字。
+    """
+    text = rich_text(text)
+    spans = []
+    pos = 0
+    for line in text.split("\n"):
+        if line.lstrip().upper().startswith("DROP TABLE"):
+            spans.append((pos, pos + len(line), "danger"))
+        else:
+            for tok in DDL_TOKEN_RE.finditer(line):
+                w = tok.group(0)
+                if w.startswith("`"):
+                    role = "ident"
+                elif w.startswith("'"):
+                    role = "comment"
+                elif w.upper() in DDL_TYPES:
+                    role = "type"
+                elif w.upper() in DDL_KEYWORDS:
+                    role = "keyword"
+                else:
+                    continue
+                spans.append((pos + tok.start(), pos + tok.end(), role))
+        pos += len(line) + 1
+    return spans
+
+
+def ddl_formats(view):
+    """中文注释最亮（那是人要读的内容），标识符次级蓝，类型只加粗，关键字退到背景。"""
+    return {
+        "ident": rich_format(fg=SAMPLE_INTRO_LABEL_FG),
+        "comment": rich_format(fg=SAMPLE_INTRO_TITLE_FG),
+        "type": rich_format(bold=True),
+        "keyword": rich_format(fg=RICH_KEYWORD_FG),
+        "danger": rich_format(fg=RICH_DANGER_FG, bold=True),
+    }
+
+
+def intro_formats(view):
+    """标题用主按钮那支蓝并大一号；字段名用目录分组那支蓝；关键词整段铺底成一块。
+
+    值本身保持正文默认色，这样"哪是标签、哪是内容"靠颜色就分得开。
+    大一号是按这块自己的当前字号推的，不写死绝对值——换 DPI 或改界面基准都跟着走。
+    """
+    base = view.font().pointSize()
+    return {
+        "title": rich_format(fg=SAMPLE_INTRO_TITLE_FG, bold=True,
+                             size_pt=(base + 1) if base > 0 else None),
+        "label": rich_format(fg=SAMPLE_INTRO_LABEL_FG, bold=True),
+        "value": rich_format(),
+        "chip": rich_format(fg=SAMPLE_INTRO_CHIP_FG, bg=SAMPLE_INTRO_CHIP_BG),
+    }
 
 
 class SqlSamplesDialog(QDialog):
@@ -4781,9 +5052,11 @@ class SqlSamplesDialog(QDialog):
         lay = QVBoxLayout(self)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText(
-            "关键词过滤：短标题、说明、场景、解决的问题、关键词与语句都算")
+        self.search.setPlaceholderText(SAMPLE_SEARCH_HINT)
+        self.search.setToolTip(SAMPLE_SEARCH_TIP)
         self.search.setClearButtonEnabled(True)
+        # 前导图标：不点进去也得看出这一条是能输入的搜索框（Java 侧同款自绘）
+        self.search.addAction(make_find_icon(), QLineEdit.LeadingPosition)
         self.search.textChanged.connect(self._refilter)
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
@@ -4927,7 +5200,10 @@ class SqlSamplesDialog(QDialog):
         idx = self._sample_index()
         if idx < 0:
             return                      # 点中的是分组那一行：右侧保持上一条示例
-        self.intro.setPlainText(self.intro_text(idx))
+        _intro = self.intro_text(idx)
+        # 内容仍是那五行，只是按角色上色：标题一档、字段名一档、关键词成一块
+        paint_styled(self.intro, _intro, intro_spans(_intro),
+                     intro_formats(self.intro), SAMPLE_INTRO_BLOCK_SPACING)
         self.preview.setPlainText(SQL_SAMPLES[idx].sql)
         # 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
         # 看着像"缺了上半截"（与 Java 侧 openSqlSamples 的复位同一处理）
