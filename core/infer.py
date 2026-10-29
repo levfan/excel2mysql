@@ -457,8 +457,18 @@ def _varchar_tier(needed: int) -> int:
     return _VARCHAR_MAX_CHARS
 
 
+def case_switch(name: str, upper: bool, lower: bool) -> str:
+    """大小写档的唯一落点：两档由界面保证只亮一颗，同时给时按大写。
+
+    界面那颗「转小写」与规则层的小写档都走这里，两边各写一遍迟早会写出两种优先级。
+    """
+    if upper:
+        return name.upper()
+    return name.lower() if lower else name
+
+
 def parse_table_name_and_comment(filename: str, initials: bool = False,
-                                 upper: bool = False) -> tuple:
+                                 upper: bool = False, lower: bool = False) -> tuple:
     """
     从文件名解析 (表名, 表注释)。
 
@@ -467,7 +477,8 @@ def parse_table_name_and_comment(filename: str, initials: bool = False,
     则 表名   = 括号内的英文  dim_reservoir_info
        表注释 = 括号前的中文  北京市水务局-基础信息
     中英文括号均可；括号内容必须是**可直接当表名用的英文标识符**（以字母或下划线开头、
-    只含字母/数字/下划线、至少含一个字母）才采用，并统一转小写（upper=True 转大写）。
+    只含字母/数字/下划线、至少含一个字母）才采用，并统一转小写（upper=True 转大写；
+    lower=True 与不勾同结果，这一路本来就落在小写）。
     括号里是使用者显式写下的英文名，首字母开关不影响它，但大小写开关要管到它。
     以下情况一律回退到"由完整文件名汉字转拼音"：括号内是中文（人事处人员）、
     纯数字序号（7）（2026）、版本号（V2）（v2）（V2_1）、空或纯符号 —— 因此不会产生
@@ -492,12 +503,13 @@ def parse_table_name_and_comment(filename: str, initials: bool = False,
         # 回退时表名与注释都用**完整文件名**（含括号内容）：
         # 只取括号前的话，人员信息表（人事处）与人员信息表（财务部）会塌成同名加 _2，
         # 谁也看不出是哪一份；括号里的汉字转拼音进表名，数字序号也保留做区分
-        return sanitize_table_name(stem, initials=initials, upper=upper), stem
-    return sanitize_table_name(stem, initials=initials, upper=upper), stem
+        return sanitize_table_name(stem, initials=initials, upper=upper, lower=lower), stem
+    return sanitize_table_name(stem, initials=initials, upper=upper, lower=lower), stem
 
 
 def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
-                      initials: bool = False, upper: bool = False) -> str:
+                      initials: bool = False, upper: bool = False,
+                      lower: bool = False) -> str:
     """
     文本 -> 拼音表名组件：小写字母/数字/下划线，符合 MySQL 表名规范。
     各类分隔符（连字符、空格、斜杠、括号等）统一转下划线；连续英文/数字原样保留；
@@ -507,7 +519,8 @@ def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
     这样每个汉字都还在名字里，比"砍掉后半段"更能区分不同文件；
     数字/英文音节整段保留，数字开头自动补 t_ 前缀。无法产出有效字符时返回空串。
     initials=True 时汉字音节一律取首字母（用户开关选了「取中文首字母」）。
-    upper=True 时整名转大写（用户开关选了「表名与字段名大写」）。
+    upper=True 时整名转大写（用户开关选了「表名与字段名大写」）；
+    lower=True 时整名转小写，与不勾同结果（音节切分时英文段已被拉成小写）。
     """
     text = str(text).strip()
     if not text:
@@ -515,16 +528,18 @@ def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
     syllables = _syllables(text)
     if not syllables:
         return ""
-    return _fit_name(syllables, limit, "t_", initials=initials, upper=upper)
+    return _fit_name(syllables, limit, "t_", initials=initials, upper=upper,
+                     lower=lower)
 
 
 def sanitize_table_name(text: str, initials: bool = False,
-                        upper: bool = False) -> str:
+                        upper: bool = False, lower: bool = False) -> str:
     """
     文本 -> 默认表名：汉字转拼音（音节间下划线分隔），符合 MySQL 命名规范
     （仅小写字母/数字/下划线，不以数字开头，最长 64 字符；upper=True 时为大写）。
     """
-    name = _cn_to_table_name(text, limit=64, initials=initials, upper=upper)
+    name = _cn_to_table_name(text, limit=64, initials=initials, upper=upper,
+                             lower=lower)
     if not name:
         name = "T_IMPORT_DATA" if upper else "t_import_data"
     return name
@@ -551,7 +566,7 @@ def _syllables(text):
 
 
 def _fit_name(syllables, limit, digit_prefix, initials: bool = False,
-              upper: bool = False):
+              upper: bool = False, lower: bool = False):
     """全拼优先；全拼装不下就整名降级为各音节首字母（仿字段规则）。
 
     首字母之间不加下划线——单字母加分隔符不增加可读性，却让长度翻倍，
@@ -562,6 +577,8 @@ def _fit_name(syllables, limit, digit_prefix, initials: bool = False,
     一律取首字母（与降级形式同一套紧凑写法），英文/数字段照旧整段保留。
     upper=True 是大小写开关：定稿后整名转大写（限长与降级判定都按小写算，
     大写不改变长度，先截断再转大小写，结果与先转再截断一致）。
+    lower=True 是同一开关的小写档：音节切分时英文段已被拉成小写，所以这一档
+    在这条路上与不勾同结果，写在这里是为了两档走同一个落点。
     """
     def _fit(pieces):
         out = ""
@@ -583,7 +600,7 @@ def _fit_name(syllables, limit, digit_prefix, initials: bool = False,
     if name[:1].isdigit():
         name = digit_prefix + name          # 数字开头补前缀，保证合法标识符
     name = name[:limit]
-    return name.upper() if upper else name
+    return case_switch(name, upper, lower)
 
 
 def _strip_header_annotations(text: str) -> str:
@@ -612,7 +629,7 @@ def _strip_header_annotations(text: str) -> str:
 
 
 def _col_to_field(cn: str, limit: int = _FIELD_MAX_LEN, initials: bool = False,
-                  upper: bool = False) -> str:
+                  upper: bool = False, lower: bool = False) -> str:
     """中文表头 -> 蛇形拼音字段名。
 
     规则（确定性，只有 30 字符这一个阈值）：
@@ -623,7 +640,7 @@ def _col_to_field(cn: str, limit: int = _FIELD_MAX_LEN, initials: bool = False,
          首字母仍超长时截断兜底；
       5. 纯英文表头原样蛇形化，不做拼音转换；数字开头补 f_ 前缀。
       initials=True 时汉字音节一律取首字母（用户在开关里选了「取中文首字母」）；
-      upper=True 时整名转大写（大小写开关）。
+      upper=True 时整名转大写（大小写开关）；lower=True 是小写档，与不勾同结果。
     """
     if cn is None or str(cn).strip() == "":
         return "COL" if upper else "col"
@@ -633,7 +650,8 @@ def _col_to_field(cn: str, limit: int = _FIELD_MAX_LEN, initials: bool = False,
     syllables = _syllables(cleaned)
     if not syllables:
         return "COL" if upper else "col"
-    return _fit_name(syllables, limit, "f_", initials=initials, upper=upper)
+    return _fit_name(syllables, limit, "f_", initials=initials, upper=upper,
+                     lower=lower)
 
 
 def dedup_field(seen: dict, field: str) -> str:
@@ -725,7 +743,7 @@ def _has_leading_zero(v: str) -> bool:
 
 
 def infer_columns(df: pd.DataFrame, initials: bool = False,
-                  upper: bool = False) -> list:
+                  upper: bool = False, lower: bool = False) -> list:
     """
     全量扫描每列，返回字段定义列表：
     [{"field": 拼音字段名, "comment": 中文表头, "type": "VARCHAR(64)", "max_len": 12}, ...]
@@ -751,7 +769,8 @@ def infer_columns(df: pd.DataFrame, initials: bool = False,
     cols = []
     seen = {}
     for i, h in enumerate(headers):
-        field = dedup_field(seen, _col_to_field(h, initials=initials, upper=upper))
+        field = dedup_field(seen, _col_to_field(h, initials=initials, upper=upper,
+                                                lower=lower))
         coldata = df.iloc[:, i]
         max_len = 0
         has_value = False
@@ -1082,16 +1101,16 @@ def _meta_nullable(v) -> bool:
 
 
 def _build_structured(filepath: str, sheets: dict, initials: bool = False,
-                      upper: bool = False) -> dict:
+                      upper: bool = False, lower: bool = False) -> dict:
     """
     第 2 类 Excel：结构定义模式。字段名/类型/长度/主键/可空全部以元数据 Sheet 定义为准，
     不再从数据推断；数据 Sheet 按字段名对齐（大小写不敏感），
     多余列忽略并记录，缺失列补 NULL；只有定义没有数据时建空表。
-    勾上大小写开关时元数据里手写的字段名一起转大写（数据 Sheet 按字段名对齐是大小写
-    不敏感的，转完照样对得上）；不勾时保持原样——不做大写转换不等于替使用者改名。
+    勾上大小写开关时元数据里手写的字段名一起转（数据 Sheet 按字段名对齐是大小写
+    不敏感的，转完照样对得上）；两颗都不勾时保持原样——不做大小写转换不等于替使用者改名。
     """
     table_name, table_comment = parse_table_name_and_comment(
-        filepath, initials=initials, upper=upper)
+        filepath, initials=initials, upper=upper, lower=lower)
     meta_name = next(n for n, sdf in sheets.items() if _match_meta_roles(sdf) is not None)
     roles = _match_meta_roles(sheets[meta_name])
     meta = sheets[meta_name].dropna(axis=0, how="all")
@@ -1104,10 +1123,10 @@ def _build_structured(filepath: str, sheets: dict, initials: bool = False,
     for _, row in meta.iterrows():
         field = str(cell(row, "field") or "").strip()
         field = re.sub(r"\s+", "_", field)
-        if upper:
-            # 开关写的是「表名与字段名转大写」，结构定义模式不能只转表名半句。
-            # 不勾时保持原样：不做大写转换 ≠ 替使用者把手写的名字改成小写。
-            field = field.upper()
+        if upper or lower:
+            # 开关写的是「表名与字段名转大写/转小写」，结构定义模式不能只转表名半句。
+            # 两颗都不勾时保持原样：不做大小写转换 ≠ 替使用者把手写的名字改档。
+            field = case_switch(field, upper, lower)
         typ = _norm_meta_type(cell(row, "type"), cell(row, "length"))
         if not field or typ is None:
             continue                      # 缺字段名或类型定义的行跳过
@@ -1340,7 +1359,7 @@ def _flatten_merged_header(filepath: str, sheet_name: str, plan: dict) -> pd.Dat
 
 
 def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
-                    upper: bool = False) -> dict:
+                    upper: bool = False, lower: bool = False) -> dict:
     """
     读取单个 Excel，自动识别两类格式并返回表定义：
       第 1 类（普通数据表）：单个数据 Sheet，表名/注释来自文件名，字段从数据推断；
@@ -1349,7 +1368,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     返回 dict：filepath / table_name / base_table_name / table_comment / columns / df /
     primary_key / pk_reason / source("normal"|"structured") 等。
     initials=True 取拼音首字母（结构定义模式手写的字段名不受它影响）；
-    upper=True 表名与字段名转大写，结构定义模式里手写的字段名也一样转。
+    upper=True 表名与字段名转大写、lower=True 转小写，结构定义模式里手写的字段名也一样转。
     """
     def _note(text):
         # 大文件读盘与推断要好几秒，逐阶段报一句，进度框上能看到"还在动"
@@ -1390,7 +1409,8 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
             break
     if meta_name is not None:
         _note("按字段定义组装")
-        td = _build_structured(filepath, sheets, initials=initials, upper=upper)
+        td = _build_structured(filepath, sheets, initials=initials, upper=upper,
+                               lower=lower)
         td["merged_header"] = merged_info
         return td
     df = next(iter(sheets.values()))
@@ -1399,9 +1419,9 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     df, keep_empty = _drop_unnamed_blank_columns(df)
     df = df.dropna(axis=0, how="all")
     table_name, table_comment = parse_table_name_and_comment(
-        filepath, initials=initials, upper=upper)
+        filepath, initials=initials, upper=upper, lower=lower)
     _note("推断字段类型")
-    columns = infer_columns(df, initials=initials, upper=upper)
+    columns = infer_columns(df, initials=initials, upper=upper, lower=lower)
     # 一列都没有时先回原始工作簿问一次列宽：表头整行没写字的模板，pandas 把宽度一起丢了，
     # 但"几列"这件事文件里还记着 —— 用户要的是这种照样建表（只是不插数据），不是报错。
     blank_headers = []
@@ -1409,7 +1429,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         width = _first_row_width(filepath)
         if width:
             df = _blank_header_frame(width)
-            columns = infer_columns(df, initials=initials, upper=upper)
+            columns = infer_columns(df, initials=initials, upper=upper, lower=lower)
             keep_empty = []
             blank_headers = [c["field"] for c in columns]
             _note("表头整行没写字：按列宽 %d 兜底成 col 起的字段名" % width)

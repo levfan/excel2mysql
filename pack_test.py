@@ -2918,6 +2918,7 @@ check("K13 三段此消彼长，总和守恒", abs(sum(u) - sum(d)) <= 2, f"{sum
 check("K14 前缀行与大写开关留在表格区；保存/执行/生成与覆盖开关已挪到分隔条外的底部动作条",
       sp2.widget(1).isAncestorOf(w.ed_sql_prefix)
       and sp2.widget(1).isAncestorOf(w.chk_sql_upper)
+      and sp2.widget(1).isAncestorOf(w.chk_sql_lower)
       and not sp2.widget(1).isAncestorOf(w.btn_sql_run)
       and not sp2.isAncestorOf(w.btn_sql_run)
       and not sp2.isAncestorOf(w.chk_sql_drop))
@@ -2988,6 +2989,7 @@ check("K24 命名规则工具条贴表格上沿（Excel 页），不再挤在前
       _name_lay is not None
       and _name_lay.itemAt(1).widget() is w.chk_initials
       and _name_lay.itemAt(2).widget() is w.chk_upper
+      and _name_lay.itemAt(3).widget() is w.chk_lower
       and _fl.itemAt(1).widget() is w.file_table,
       [_name_lay.itemAt(i).widget().__class__.__name__
        if _name_lay.itemAt(i).widget() is not None else "弹簧"
@@ -3020,6 +3022,7 @@ _sname = _sl.itemAt(0).layout()
 check("K27 命名规则工具条贴表格上沿（SQL 页）",
       _sname is not None
       and _sname.itemAt(1).widget() is w.chk_sql_upper
+      and _sname.itemAt(2).widget() is w.chk_sql_lower
       and _sl.itemAt(1).widget() is w.sql_table,
       _sname.itemAt(0).widget().text() if _sname is not None else "缺")
 _sl_page_lay = _sql_page.layout()
@@ -3523,11 +3526,64 @@ check("M22i 同一份文件不勾开关：表名与字段名都退回元数据�
                                                         "cat_level1"],
       (_mtd_off["table_name"], [c["field"] for c in _mtd_off["columns"]]))
 
+# 转小写开关（用户 2026-10-29 点名，与「转大写」对称的一颗）。先量清它管到哪儿：
+# 拼音转写这一路在 _syllables 里就把英文段 lower() 过了，所以勾不勾都是小写——
+# 真有动作的是结构定义 Sheet 里手写的字段名与「SQL 脚本改名」那一页
+check("M22j 转写路径本来就是小写：勾转小写不改坏表头英文段、括号英文名与表名",
+      _col_to_field("订单ORDER金额", lower=True) == "ding_dan_order_jin_e"
+      and _col_to_field("订单ORDER金额") == "ding_dan_order_jin_e"
+      and sanitize_table_name("水库BASE信息", lower=True) == "shui_ku_base_xin_xi"
+      and parse_table_name_and_comment("水库基础信息（DIM_Reservoir_Info）.xlsx",
+                                       lower=True)[0] == "dim_reservoir_info",
+      [_col_to_field("订单ORDER金额", lower=True),
+       sanitize_table_name("水库BASE信息", lower=True),
+       parse_table_name_and_comment("水库基础信息（DIM_Reservoir_Info）.xlsx",
+                                    lower=True)[0]])
+check("M22k 与首字母开关叠加：转写动作照旧由首字母那颗定，小写档不改降级口径",
+      _col_to_field("订单order金额", initials=True, lower=True) == "ddorderje"
+      and _col_to_field("7号线", initials=True, lower=True) == "f_7hx",
+      [_col_to_field("订单order金额", initials=True, lower=True),
+       _col_to_field("7号线", initials=True, lower=True)])
+check("M22l 兜底标识符不留大写尾巴：空名表名与空表头字段在小写档都是小写",
+      sanitize_table_name("", lower=True) == "t_import_data"
+      and _col_to_field("", lower=True) == "col",
+      [sanitize_table_name("", lower=True), _col_to_field("", lower=True)])
+# 两颗勾由界面保证不会同时亮；规则层仍要有一个确定口径，否则调用方传错就是未定义行为
+check("M22m 两档同时给时按大写（互斥归界面管，规则层给定一个确定结果）",
+      _col_to_field("订单order金额", upper=True, lower=True) == "DING_DAN_ORDER_JIN_E"
+      and sanitize_table_name("水库BASE信息", upper=True, lower=True) == "SHUI_KU_BASE_XIN_XI",
+      _col_to_field("订单order金额", upper=True, lower=True))
+_lo_meta = pd.DataFrame({
+    "序号": [1, 2],
+    "字段名(英文)": ["ITEM_CODE", "ITEM_NAME"],
+    "字段注释(中文)": ["品目编码", "品目名称"],
+    "数据类型": ["VARCHAR", "VARCHAR"],
+    "长度": ["20", "60"],
+    "是否主键": ["是", ""],
+    "是否可为空": ["否", "是"]})
+_lo_data = pd.DataFrame({"item_code": ["PM-000001"], "item_name": ["服务器"]})
+_lo = build_table_def(make_xlsx("人工大写（t_lower_switch）.xlsx",
+                                 {"元数据": _lo_meta, "数据": _lo_data}), lower=True)
+check("M22n 结构定义模式（转小写真正管到的一路）：手写的大写字段名一起转，数据 Sheet 照旧对得上",
+      _lo["table_name"] == "t_lower_switch"
+      and [c["field"] for c in _lo["columns"]] == ["item_code", "item_name"]
+      and _lo["primary_key"] == "item_code"
+      and list(_lo["df"]["item_code"]) == ["PM-000001"],
+      (_lo["table_name"], [c["field"] for c in _lo["columns"]], _lo["primary_key"]))
+_lo_off = build_table_def(make_xlsx("人工大写（t_lower_keep）.xlsx",
+                                     {"元数据": _lo_meta, "数据": _lo_data}))
+check("M22o 同一份文件不勾任何大小写开关：手写名一个字母都不动",
+      [c["field"] for c in _lo_off["columns"]] == ["ITEM_CODE", "ITEM_NAME"]
+      and _lo_off["primary_key"] == "ITEM_CODE",
+      [c["field"] for c in _lo_off["columns"]])
+
 # 图形版默认口径（用户 2026-10-28）：只勾首字母、转大写不勾，新加文件按首字母 + 小写起名
 _dw = app_main.MainWindow()
-check("M23 图形版默认只勾首字母，转大写不勾选",
-      _dw.chk_initials.isChecked() and not _dw.chk_upper.isChecked(),
-      (_dw.chk_initials.isChecked(), _dw.chk_upper.isChecked()))
+check("M23 图形版默认只勾首字母，转大写与转小写都不勾选",
+      _dw.chk_initials.isChecked() and not _dw.chk_upper.isChecked()
+      and not _dw.chk_lower.isChecked(),
+      (_dw.chk_initials.isChecked(), _dw.chk_upper.isChecked(),
+       _dw.chk_lower.isChecked()))
 check("M23a 默认状态在连信号前设好，启动时不会凭空打一行切换日志",
       "[提示] 命名规则切换为" not in _dw.log.toPlainText()
       and "[提示] 表名与字段名大小写切换为" not in _dw.log.toPlainText(),
@@ -5610,9 +5666,10 @@ f1 = make_xlsx("订单表（ods_t_order）.xlsx", {"S": pd.DataFrame({"编号": 
 f2 = make_xlsx("测试表（adb_table2）.xlsx", {"S": pd.DataFrame({"编号": ["B1"]})})
 f3 = make_xlsx("用户表（users）.xlsx", {"S": pd.DataFrame({"编号": ["C1"]})})
 def _legacy_naming(win):
-    """R 组验的是前缀改写：先关掉两颗命名开关，别让默认大写改写期望值。"""
+    """R 组验的是前缀改写：把三颗命名开关全按掉，转写与大小写都不许改写期望值。"""
     win.chk_initials.setChecked(False)
     win.chk_upper.setChecked(False)
+    win.chk_lower.setChecked(False)
     return win
 
 
@@ -5863,9 +5920,11 @@ with open(nsql, "w", encoding="utf-8") as _nfh:
                "  PRIMARY KEY (`id`)\n"
                ") ENGINE=InnoDB COMMENT='大小写检查表';\n")
 nw = app_main.MainWindow()
-check("R43 第一页只勾首字母、大小写默认不勾；第二页只留大小写开关且默认不勾选",
+check("R43 第一页只勾首字母、两颗大小写默认不勾；第二页只留大小写开关且默认不勾选",
       nw.chk_initials.isChecked() and not nw.chk_upper.isChecked()
-      and not nw.chk_sql_upper.isChecked() and not hasattr(nw, "chk_sql_initials"))
+      and not nw.chk_lower.isChecked()
+      and not nw.chk_sql_upper.isChecked() and not nw.chk_sql_lower.isChecked()
+      and not hasattr(nw, "chk_sql_initials"))
 _orig_gofn5 = app_main.QFileDialog.getOpenFileNames
 app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([nsql], "SQL (*.sql)"))
 try:
@@ -6712,6 +6771,107 @@ check("R75m 焦点不在输入框、剪贴板又没文件：当前页给一句�
 rw6.clipboard_file_paths = _rw_clip
 rw6.main_tabs.setCurrentIndex(0)
 rw6.close()
+
+# ---- 第二颗大小写开关「表名与字段名转小写」（用户 2026-10-29 点名，与转大写对称）----
+# 用一支全新的窗口，别复用 nw：前面那些用例改过它的清单与脚本正文，混在一起红了好看不出是谁的锅
+_lcmeta = pd.DataFrame({
+    "序号": [1, 2],
+    "字段名(英文)": ["ITEM_CODE", "ITEM_NAME"],
+    "字段注释(中文)": ["品目编码", "品目名称"],
+    "数据类型": ["VARCHAR", "VARCHAR"],
+    "长度": ["20", "60"],
+    "是否主键": ["是", ""],
+    "是否可为空": ["否", "是"]})
+_lcdata = pd.DataFrame({"item_code": ["PM-1"], "item_name": ["服务器"]})
+
+
+def _lc_struct_fixture(name):
+    """结构定义模式夹具：元数据里的字段名是人工写的大写英文，数据 Sheet 写的是小写。"""
+    return make_xlsx(name, {"元数据": _lcmeta, "数据": _lcdata})
+
+
+_lcxlsx_a = _lc_struct_fixture("人工大写（t_lc_struct_a）.xlsx")
+_lcxlsx_b = _lc_struct_fixture("人工大写（t_lc_struct_b）.xlsx")
+_lcsql = os.path.join(_tmpdir, "大小写小写检查.sql")
+with io.open(_lcsql, "w", encoding="utf-8") as _fh:
+    _fh.write("CREATE TABLE `T_CASE10` (\n"
+              "  `ORDER_ID` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '编号',\n"
+              "  `AMOUNT` decimal(10,2) DEFAULT NULL COMMENT '金额',\n"
+              "  PRIMARY KEY (`ORDER_ID`)\n"
+              ") ENGINE=InnoDB COMMENT='小写检查表';\n")
+cw = app_main.MainWindow()
+cw._add_files([_lcxlsx_a])
+check("R80 两颗大小写开关默认都不勾：结构定义里手写的字段名原样保留",
+      not cw.chk_upper.isChecked() and not cw.chk_lower.isChecked()
+      and [c["field"] for c in cw.tables[0]["columns"]] == ["ITEM_CODE", "ITEM_NAME"],
+      [c["field"] for c in cw.tables[0]["columns"]])
+_cw_log_before = cw.log.toPlainText().count("大小写切换为")
+cw.chk_lower.setChecked(True)
+check("R80b 勾「转小写」自动取消「转大写」，切换日志只多一条（按掉那颗不许再补一句）",
+      not cw.chk_upper.isChecked() and cw.chk_lower.isChecked()
+      and cw.log.toPlainText().count("大小写切换为") == _cw_log_before + 1,
+      cw.log.toPlainText().count("大小写切换为") - _cw_log_before)
+cw._add_files([_lcxlsx_b])
+check("R80c 勾上转小写之后添加的表：结构定义里手写的大写字段名真的转成小写",
+      [c["field"] for c in cw.tables[-1]["columns"]] == ["item_code", "item_name"]
+      and cw.tables[-1]["primary_key"] == "item_code",
+      ([c["field"] for c in cw.tables[-1]["columns"]], cw.tables[-1]["primary_key"]))
+cw.chk_upper.setChecked(True)
+_cw_lines = cw.log.toPlainText().splitlines()
+check("R80d 反向也互斥，且日志说的是当前生效那一档",
+      cw.chk_upper.isChecked() and not cw.chk_lower.isChecked()
+      and "大小写切换为：大写" in _cw_lines[-1] and "跟着转大写" in _cw_lines[-1],
+      _cw_lines[-1:])
+cw.chk_upper.setChecked(False)
+check("R80e 两颗都不勾时不假装是「小写档」：转写的仍是小写，手写名保持原样",
+      "大小写切换为：小写" in cw.log.toPlainText().splitlines()[-1]
+      and "保持原样" in cw.log.toPlainText().splitlines()[-1],
+      cw.log.toPlainText().splitlines()[-1:])
+cw.add_sql_paths([_lcsql])
+cw.chk_sql_lower.setChecked(True)
+check("R81 第二页勾「转小写」：清单显示小写，脚本里的实际表名与正文都不动",
+      cw.sql_table.item(0, 3).text() == "t_case10"
+      and cw._sql_rows[0]["actual"] == "T_CASE10"
+      and "`T_CASE10`" in cw.sql_files[0]["text"]
+      and not cw.chk_sql_upper.isChecked(),
+      (cw.sql_table.item(0, 3).text(), cw._sql_rows[0]["actual"]))
+_cw_meta = cw._build_sql_metadata_dialog(0)
+check("R81b 表元数据弹窗跟着显示小写字段名",
+      _cw_meta is not None and _cw_meta.tableWidget().item(0, 0).text() == "order_id"
+      and _cw_meta.tableWidget().item(1, 0).text() == "amount",
+      None if _cw_meta is None else
+      [_cw_meta.tableWidget().item(r, 0).text() for r in range(2)])
+_cw_sql_lines = cw.sql_log.toPlainText().splitlines()
+check("R81c 第二页勾「转小写」同样与「转大写」互斥，日志写明清单/元数据/生成物一起变而正文不改",
+      "[提示] 表名与字段名大小写切换为：小写"
+      "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）" in _cw_sql_lines[-1],
+      _cw_sql_lines[-1:])
+cw.chk_sql_upper.setChecked(True)
+check("R81d 第二页切到大写档后显示跟着翻回来",
+      cw.sql_table.item(0, 3).text() == "T_CASE10"
+      and not cw.chk_sql_lower.isChecked(), cw.sql_table.item(0, 3).text())
+cw.chk_sql_upper.setChecked(False)
+check("R81e 第二页两颗都不勾时明说「保持原样」，不硬说成小写",
+      "大小写切换为：保持原样" in cw.sql_log.toPlainText().splitlines()[-1]
+      and cw.sql_table.item(0, 3).text() == "T_CASE10",
+      (cw.sql_log.toPlainText().splitlines()[-1:], cw.sql_table.item(0, 3).text()))
+# 生成件这一路直接调工作函数：走按钮会把产物写进程序同级目录，用例不该往交付目录里丢文件
+_lc_log_lines = []
+cw.chk_sql_lower.setChecked(True)
+_lc_out = os.path.join(_tmpdir, "小写生成件")
+_res_lc = app_main.sql_meta_export_task(
+    [(_lcsql, cw.sql_files[0]["text"])], _lc_out, False, False,
+    app_main.ProgressSink(on_log=lambda text, *a: _lc_log_lines.append(text)), lower=True)
+_lc_written = _res_lc["written"] or []
+check("R81f 生成件走小写档：日志点明这一档，产物文件名按小写表名落，脚本正文照旧是大写",
+      any("生成物表名与字段名：转小写" in l for l in _lc_log_lines)
+      and len(_lc_written) == 1
+      and os.path.basename(_lc_written[0]) == os.path.basename(_lc_written[0]).lower()
+      and "t_case10" in os.path.basename(_lc_written[0])
+      and "`T_CASE10`" in cw.sql_files[0]["text"],
+      ([l for l in _lc_log_lines if "生成物" in l],
+       [os.path.basename(p) for p in _lc_written]))
+cw.close()
 
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 

@@ -60,7 +60,7 @@ from core.log_text import (
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
     replace_first_segment, sanitize_table_name, _col_to_field, dedup_field,
-    table_name_problem,
+    table_name_problem, case_switch,
 )
 from core.sql_execute import executable_statements, run as run_sql_statements
 from core.sql_script import (
@@ -942,7 +942,7 @@ _PARSE_UNITS = 5
 
 
 def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
-                       initials=False, upper=False):
+                       initials=False, upper=False, lower=False):
     """ZIP 展开 + 逐文件解析表结构，返回待导入列表与汇总计数。
 
     进度总项数先按「每个压缩包 1 项 + 包内每个 Excel 解出 1 项 + 每个待解析 Excel
@@ -1021,7 +1021,7 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
 
         try:
             td = build_table_def(f, progress_cb=phase, initials=initials,
-                                 upper=upper)
+                                 upper=upper, lower=lower)
             tables.append(td)
             (added_zip if f in from_zip else added_loose).append(f)
             pk = td.get("primary_key")
@@ -1627,19 +1627,19 @@ def sql_run_task(text, cfg, sink):
             pass
 
 
-def _sql_naming(name, initials, upper, is_table):
-    """第二页的命名开关：只重写含中文的名字；纯英文只在勾了大写时改大小写。
+def _sql_naming(name, initials, upper, lower, is_table):
+    """第二页的命名开关：只重写含中文的名字；纯英文只在勾了大小写档时改大小写。
 
-    脚本里的英文标识符本来就是合法表名/字段名，默认不勾选时一个字不动；
-    勾「取拼音首字母」才有转写动作，勾「转大写」才有大小写动作。
+    脚本里的英文标识符本来就是合法表名/字段名，两颗都不勾时一个字不动；
+    勾「取拼音首字母」才有转写动作，勾「转大写」或「转小写」才有大小写动作。
     """
     if initials and re.search(r"[\u4e00-\u9fff]", name):
         name = (sanitize_table_name(name, initials=True)
                 if is_table else _col_to_field(name, initials=True))
-    return name.upper() if upper else name
+    return case_switch(name, upper, lower)
 
 
-def sql_meta_export_task(items, out_root, with_meta, upper, sink):
+def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False):
     """「SQL 脚本改名」页的生成标准/简易 Excel：先从脚本正文解析表定义，再走同一套导出。
 
     items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
@@ -1652,6 +1652,8 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink):
 
     if upper:
         sink.log("[命名] 生成物表名与字段名：转大写")
+    elif lower:
+        sink.log("[命名] 生成物表名与字段名：转小写")
     tables, where, used_tables = [], {}, {}
     for path, text in items:
         if sink.cancelled:
@@ -1669,15 +1671,15 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink):
                 sink.log("! [WARN] 说明 | `%s`：%s" % (name, note))
             if not t["columns"]:
                 continue        # 为什么不可导出，上面那条说明已经讲了
-            if upper:
+            if upper or lower:
                 t = dict(t)
                 t["table_name"] = dedup_field(
-                    used_tables, _sql_naming(t["table_name"], False, upper, True))
+                    used_tables, _sql_naming(t["table_name"], False, upper, lower, True))
                 seen_fields = {}
                 t["columns"] = [
                     dict(c, field=dedup_field(
                         seen_fields,
-                        _sql_naming(c["field"], False, upper, False)))
+                        _sql_naming(c["field"], False, upper, lower, False)))
                     for c in t["columns"]
                 ]
             tables.append(t)
@@ -2065,11 +2067,22 @@ class MainWindow(QWidget):
             "由中文或文件名转写出来的表名与字段名全部大写\n"
             "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；\n"
             "默认不勾选，勾上才转大写。文件名括号里写下的英文表名同样转大写；\n"
-            "结构定义 Sheet 里人工写下的字段名也一起转大写，取消勾选则保持写下的原样；\n"
+            "结构定义 Sheet 里人工写下的字段名也一起转大写，两颗大小写开关都不勾\n"
+            "则保持写下的原样；与「表名与字段名转小写」互斥，勾这颗会取消那一颗；\n"
             "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
         self.chk_upper.toggled.connect(self.on_upper_toggled)
+        self.chk_lower = QCheckBox("表名与字段名转小写")
+        self.chk_lower.setToolTip(
+            "由中文转写出来的表名与字段名本来就落在小写（ding_dan_jin_e、skjcxx），\n"
+            "这一档在转写那一路与不勾同结果；文件名括号里写下的英文表名本来也统一转小写。\n"
+            "这颗真管到的是结构定义 Sheet 里人工手写的字段名：勾上才把它们转成小写\n"
+            "（ITEM_CODE → item_code），两颗都不勾时一个字母都不动；\n"
+            "与「表名与字段名转大写」互斥，勾这颗会取消那一颗；\n"
+            "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
+        self.chk_lower.toggled.connect(self.on_lower_toggled)
         name_row.addWidget(self.chk_initials)
         name_row.addWidget(self.chk_upper)
+        name_row.addWidget(self.chk_lower)
         name_row.addStretch(1)
         fl.addLayout(name_row)
 
@@ -2445,9 +2458,18 @@ class MainWindow(QWidget):
         self.chk_sql_upper.setToolTip(
             "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部大写\n"
             "（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；默认不勾选。\n"
-            "脚本正文不改，手动改过的新表名会保留其输入内容。")
+            "脚本正文不改，手动改过的新表名会保留其输入内容；\n"
+            "与「表名与字段名转小写」互斥，勾这颗会取消那一颗。")
         self.chk_sql_upper.toggled.connect(self.on_sql_upper_toggled)
         name_bar.addWidget(self.chk_sql_upper)
+        self.chk_sql_lower = QCheckBox("表名与字段名转小写")
+        self.chk_sql_lower.setToolTip(
+            "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部小写\n"
+            "（T_ORDER → t_order、ORDER_AMOUNT → order_amount）；默认不勾选。\n"
+            "脚本正文不改，手动改过的新表名会保留其输入内容；\n"
+            "与「表名与字段名转大写」互斥，勾这颗会取消那一颗。")
+        self.chk_sql_lower.toggled.connect(self.on_sql_lower_toggled)
+        name_bar.addWidget(self.chk_sql_lower)
         name_bar.addStretch(1)
 
         self.sql_table = EmptyHintTable(0, 5, "请把 SQL 脚本拖到上方虚线区")
@@ -2624,7 +2646,8 @@ class MainWindow(QWidget):
         return page
 
     def _sql_display_name(self, actual):
-        return actual.upper() if self.chk_sql_upper.isChecked() else actual
+        return case_switch(actual, self.chk_sql_upper.isChecked(),
+                           self.chk_sql_lower.isChecked())
 
     def _refresh_sql_table(self):
         self._refreshing_sql_table = True
@@ -2695,7 +2718,8 @@ class MainWindow(QWidget):
                 "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
             return None
         return SqlMetadataDialog(table, row["display"],
-                                 self.chk_sql_upper.isChecked(), self,
+                                 upper=self.chk_sql_upper.isChecked(),
+                                 lower=self.chk_sql_lower.isChecked(), parent=self,
                                  on_edit=functools.partial(self._apply_sql_field_edit,
                                                            row_index))
 
@@ -2827,11 +2851,28 @@ class MainWindow(QWidget):
         append_log(self.sql_log, 
             "[表名] %s → %s（已同步改写 %d 处引用；未落盘）" % (old, new, changed))
 
-    def on_sql_upper_toggled(self, checked):
-        self._refresh_sql_table()
-        append_log(self.sql_log, 
+    def _sql_case_state(self):
+        """第二页当前生效的大小写档：两颗都不勾时清单显示的就是脚本里写的那个样子。"""
+        if self.chk_sql_upper.isChecked():
+            return "大写"
+        if self.chk_sql_lower.isChecked():
+            return "小写"
+        return "保持原样"
+
+    def _log_sql_case_switch(self):
+        append_log(self.sql_log,
             "[提示] 表名与字段名大小写切换为：%s（当前表名清单、表元数据和生成的 Excel 一起变；"
-            "脚本正文不改）" % ("大写" if checked else "保持原样"))
+            "脚本正文不改）" % self._sql_case_state())
+
+    def on_sql_upper_toggled(self, checked):
+        self._keep_one_case_switch(self.chk_sql_upper, self.chk_sql_lower)
+        self._refresh_sql_table()
+        self._log_sql_case_switch()
+
+    def on_sql_lower_toggled(self, checked):
+        self._keep_one_case_switch(self.chk_sql_lower, self.chk_sql_upper)
+        self._refresh_sql_table()
+        self._log_sql_case_switch()
 
     def on_sql_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -3204,7 +3245,11 @@ class MainWindow(QWidget):
                    f"===== 开始生成{label}excel文件（脚本 %d 个，输出根目录 {out_root}）====="
                    % len(self.sql_files))
         items = [(s["path"], s["text"]) for s in self.sql_files]
-        self._run_modal("正在生成%sexcel文件…" % label, sql_meta_export_task,
+        # upper 留在 args 元组里、只把 lower 用关键字绑：_run_modal 会把 sink 追加在
+        # 位置参数末尾，upper 一旦也被 partial 绑走，sink 就撞上它（同 3969 行那条教训）
+        self._run_modal("正在生成%sexcel文件…" % label,
+                        functools.partial(sql_meta_export_task,
+                                          lower=self.chk_sql_lower.isChecked()),
                         (items, out_root, with_meta, self.chk_sql_upper.isChecked()),
                         on_done=self._finish_sql_gen_excel, log_view=self.sql_log)
 
@@ -3871,12 +3916,40 @@ class MainWindow(QWidget):
             "[提示] 命名规则切换为：%s（对之后添加的文件生效）"
             % ("拼音首字母" if checked else "全拼"))
 
+    def _keep_one_case_switch(self, keep, other):
+        """两颗大小写勾互斥：亮一颗就按掉另一颗，不留「又大写又小写」这种自相矛盾的组合。
+
+        按掉的那颗不发自己的 toggled，否则一句切换日志会变成两条，
+        而且第二条报的还是刚被按掉那一档。
+        """
+        if keep.isChecked() and other.isChecked():
+            other.blockSignals(True)
+            other.setChecked(False)
+            other.blockSignals(False)
+
+    def _case_state(self):
+        """当前生效的大小写档，加上结构定义手写名跟着怎么办——日志与生成口径共用一份判读。"""
+        if self.chk_upper.isChecked():
+            return "大写", "跟着转大写"
+        if self.chk_lower.isChecked():
+            return "小写", "跟着转小写"
+        return "小写", "保持原样"
+
     def on_upper_toggled(self, checked):
         """大小写开关同样留痕：列表里忽然一片大写，得能对上是自己勾的。"""
-        append_log(self.log, 
+        self._keep_one_case_switch(self.chk_upper, self.chk_lower)
+        case, hand = self._case_state()
+        append_log(self.log,
             "[提示] 表名与字段名大小写切换为：%s（对之后添加的文件生效，"
-            "结构定义 Sheet 里手写的字段名勾选时一起转大写、不勾时保持原样）"
-            % ("大写" if checked else "小写"))
+            "结构定义 Sheet 里手写的字段名%s）" % (case, hand))
+
+    def on_lower_toggled(self, checked):
+        """小写档同一条留痕：勾上之后手写的大写字段名会整片变小写，得说得出是谁动的。"""
+        self._keep_one_case_switch(self.chk_lower, self.chk_upper)
+        case, hand = self._case_state()
+        append_log(self.log,
+            "[提示] 表名与字段名大小写切换为：%s（对之后添加的文件生效，"
+            "结构定义 Sheet 里手写的字段名%s）" % (case, hand))
 
     def on_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -3972,7 +4045,8 @@ class MainWindow(QWidget):
             "正在解析文件…",
             functools.partial(parse_import_files,
                               initials=self.chk_initials.isChecked(),
-                              upper=self.chk_upper.isChecked()),
+                              upper=self.chk_upper.isChecked(),
+                              lower=self.chk_lower.isChecked()),
             (files, {t.get("filepath") for t in self.tables},
              self._zip_dir() if has_zip else None, len(self._zip_origin)),
             on_done=self._finish_add_files)
@@ -4501,7 +4575,8 @@ class SqlMetadataDialog(QDialog):
     自检与取证走这一路，不去动脚本。
     """
 
-    def __init__(self, table, display_name, upper, parent=None, on_edit=None):
+    def __init__(self, table, display_name, upper, parent=None, on_edit=None,
+                 lower=False):
         super().__init__(parent)
         self.setWindowTitle("表元数据（%s）" % display_name)
         fit_client(self, 980, 640)
@@ -4513,11 +4588,11 @@ class SqlMetadataDialog(QDialog):
         lay.addWidget(head)
         if on_edit is None:
             tip = "这里按脚本里的 CREATE TABLE 原样展示；" \
-                  "勾选「表名与字段名转大写」只切换显示，不回写脚本正文。"
+                  "勾选「表名与字段名转大写」或「转小写」只切换显示，不回写脚本正文。"
         else:
             tip = "字段名、字段注释、数据类型这三列可以直接改，改完就写进脚本正文（还没落盘）；" \
                   "主键与可空照脚本里的定义显示，不在这里改。" \
-                  "「表名与字段名转大写」只切换显示，不回写脚本正文。"
+                  "「表名与字段名转大写」或「转小写」只切换显示，不回写脚本正文。"
         lay.addWidget(QLabel(tip))
         cols = table.get("columns") or []
         tw = FillWidthTable(len(cols), 5, METADATA_COL_FLOORS, METADATA_COL_STRETCH)
@@ -4525,6 +4600,7 @@ class SqlMetadataDialog(QDialog):
         tw.setHorizontalHeaderLabels(["字段名", "字段注释", "数据类型", "主键", "可空"])
         self._on_edit = on_edit
         self._upper = bool(upper)
+        self._lower = bool(lower)
         self._loading = True
         self._originals = []          # 每行的 (字段名, 注释, 类型) 原值，用来判断改了哪一格
         if on_edit is not None:
@@ -4534,7 +4610,7 @@ class SqlMetadataDialog(QDialog):
             typ = c.get("type") or ""
             comment = c.get("comment") or ""
             self._originals.append((field, comment, typ))
-            values = [field.upper() if upper else field, comment, typ,
+            values = [case_switch(field, upper, lower), comment, typ,
                       "是" if c.get("primary_key") else "",
                       "是" if c.get("nullable", True) else "否"]
             for j, value in enumerate(values):
@@ -4595,7 +4671,7 @@ class SqlMetadataDialog(QDialog):
             return
         self._loading = True          # 填回原值别再触发一次 itemChanged
         try:
-            for col, value in ((0, field.upper() if self._upper else field),
+            for col, value in ((0, case_switch(field, self._upper, self._lower)),
                                (1, comment), (2, typ)):
                 cell = self.field_table.item(row, col)
                 if cell is not None:
