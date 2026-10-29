@@ -202,27 +202,35 @@ def build_app():
     return f"{size:.0f} MB / {n} 个文件"
 
 
-def write_manual():
-    """把内置《使用说明》导成随包 README.txt，并核它真的能当手册用。
+def copy_project_doc():
+    """把项目根那份 README.md 原样拷进包里。
 
-    现场拿到包的顺序是"先翻文件、再决定要不要双击 exe"，所以没有这份文件时，
-    一台可能跑不起来的机器上没人知道要求是什么。内容不重写一遍，
-    由 export_manual_txt 从 help_doc.py 渲染，与界面内置说明同一份来源。
+    现场拿到包的顺序是"先翻文件、再决定要不要双击 exe"，所以包里必须有一份可读文档。
+    以前是打包时由 help_doc.py 渲染一份 README.txt——仓库里看不见产物那份、产物里看不见
+    仓库改的那份，两份会分叉；现在随包的就是仓库那一份，逐字节相同。
+    标题那行挂了图标，所以连 `assets/app_icon.png` 一起放进包里的同名相对路径，
+    否则文档里的图片在现场解析不出来。
     """
-    import export_manual_txt
-    from help_doc import SECTIONS
-    text = export_manual_txt.render("图形版，需 64 位 Windows 10 1809+ / Windows 11")
-    out = os.path.join(APP_DIST, "README.txt")
+    src = os.path.join(ROOT, "README.md")
+    with open(src, encoding="utf-8") as fh:
+        text = fh.read()
+    if 'src="assets/app_icon.png"' not in text:
+        raise RuntimeError("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.png")
+    if len(text) < 40000:
+        raise RuntimeError("README.md 只有 %d 字符，不像完整文档（项目里唯一的一份文档）" % len(text))
+    out = os.path.join(APP_DIST, "README.md")
     with open(out, "wb") as fh:
-        fh.write(text.replace("\n", "\r\n").encode("utf-8"))
-    if not os.path.isfile(out):
-        raise RuntimeError("随包操作手册没写出来")
-    missing = [t for _anchor, t, _body in SECTIONS if t not in text]
-    if missing:
-        raise RuntimeError(f"随包手册缺章节 {missing}，导出不全")
-    if "<" in text:
-        raise RuntimeError("随包手册里还有没去掉的 HTML 标签，现场读不下去")
-    return f"README.txt {len(text)} 字符 / {len(SECTIONS)} 章"
+        fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+    icon_src = os.path.join(ROOT, "assets", "app_icon.png")
+    if not os.path.isfile(icon_src):
+        raise RuntimeError("随包文档用的图标 assets/app_icon.png 不在仓库里")
+    icon_dst = os.path.join(APP_DIST, "assets", "app_icon.png")
+    if not os.path.isdir(os.path.dirname(icon_dst)):
+        os.makedirs(os.path.dirname(icon_dst))
+    shutil.copy2(icon_src, icon_dst)
+    if os.path.getsize(out) < 40000:
+        raise RuntimeError("包里的 README.md 比仓库那份小，拷贝被截断")
+    return "README.md %d 字符（与仓库逐字节一致）+ assets/app_icon.png" % len(text)
 
 
 def build_and_run_frozen_tests():
@@ -345,7 +353,7 @@ def main():
     step("开发态功能用例集", run_dev_tests)
     step("生成 build_stamp.py（版本/提交/构建时间）", write_build_stamp)
     step("构建产品包（onedir + GUI）", build_app)
-    step("随包操作手册（与内置《使用说明》同一份来源）", write_manual)
+    step("随包文档（项目根的 README.md 原样拷入）", copy_project_doc)
     if not (fast or app_only):
         step("构建并运行冻结态用例集", build_and_run_frozen_tests)
         step("启动验收：真实窗口出现且可交互", check_launch)

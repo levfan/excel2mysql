@@ -881,53 +881,61 @@ try:
 finally:
     os.chdir(_real_cwd)
 
-# --- W29-W31c：随包分发的使用说明（assets/README.txt）与真实参数不许漂移 ---
-# 这份说明是发到现场手里唯一的一手资料，写错一个开关名或一个退出码，
+# --- W29-W31d：随包分发的 README.md 与真实参数不许漂移 ---
+# 项目里只剩这一份文档，它同时是发到现场手里的一手资料：写错一个开关名或一个退出码，
 # 对面就会照着敲错的命令。所以用 argparse 与 cli 常量反向核它，而不是靠人读。
-# 冻结态包内没有该源文件，逐条显式 SKIP（源文件断言的老坑），
-# "产物里到底有没有带 README.txt"由闸门按实际产物目录核。
-W_DOC_LABELS = ("W29 说明里出现的长选项都在 argparse 里真实存在",
-                "W29b argparse 里每个长选项都被说明覆盖到",
-                "W29c 说明不是空壳：够长且八个小节齐",
-                "W30 说明里的退出码清单与代码常量一一对应",
-                "W31 说明里不含真实口令或内网地址",
-                "W31b 说明写清了 --prefix 的下划线要自己写上",
-                "W31c 说明写清了缺 UCRT 的症状、KB 号与拷贝方式",
-                "W31d 说明写清了另外两条线与各自系统门槛")
-doc_path = os.path.join(ROOT, "assets", "README.txt")
+# 冻结态包内没有仓库根那份 README.md（产物里那份是打包时拷进去的），逐条显式 SKIP
+# （源文件断言的老坑），"产物里到底有没有带 README.md"由闸门按实际产物目录核。
+W_DOC_LABELS = ("W29 CLI 可照抄行里的长选项都在 argparse 里真实存在",
+                "W29b argparse 里每个长选项都被文档覆盖到",
+                "W29c 文档不是空壳：够长且八个必备小节齐",
+                "W30 退出码表与 cli 常量一一对应",
+                "W31 文档里不含真实口令或内网地址",
+                "W31b 写清了 --prefix 的分隔符要自己写上",
+                "W31c 写清了缺 UCRT 的症状、KB 号与包内修复脚本",
+                "W31d 写清了另外两条线与各自系统门槛")
+doc_path = os.path.join(ROOT, "README.md")
 if not os.path.isfile(doc_path):
     for _lbl in W_DOC_LABELS:
-        skip(_lbl, "冻结态包内没有 assets/README.txt 源文件，只在开发态核")
+        skip(_lbl, "冻结态包内没有仓库根的 README.md，只在开发态核")
 else:
     doc = open(doc_path, encoding="utf-8").read()
     _long_opts = sorted({o for a in cli_mod.build_parser()._actions
                          for o in a.option_strings if o.startswith("--")})
-    _in_doc = sorted(set(re.findall(r"--[a-z][a-z0-9-]*", doc)))
-    _ghost = [o for o in _in_doc if o not in _long_opts]
+    # 幽灵开关只核"能照抄的那几行"（含 excel2mysql-cli 的行）：文档别处合法地写着
+    # build_exe.py 的 --fast、--keep-cache 和用例的 --no-parity，整篇扫会把正当提法判成错
+    _cli_lines = [ln for ln in doc.split("\n") if "excel2mysql-cli" in ln]
+    _ghost = sorted({t for ln in _cli_lines
+                     for t in re.findall(r"--[a-z][a-z0-9-]*", ln) if t not in _long_opts})
     check(W_DOC_LABELS[0], not _ghost, _ghost or "无凭空写出的开关")
-    _undoc = [o for o in _long_opts if o not in _in_doc]
+    _undoc = [o for o in _long_opts if o not in doc]
     check(W_DOC_LABELS[1], not _undoc, _undoc or "全部覆盖")
-    _secs = ("前置条件", "最省事的四条命令", "连接配置", "支持哪些输入",
-             "常用开关", "退出码", "分发与拷贝", "跑不通时")
-    check(W_DOC_LABELS[2], len(doc) > 2500 and all(s in doc for s in _secs),
+    _secs = ("前置条件", "怎么用最省事的四条", "支持哪些输入", "连接信息",
+             "动作与选项", "日志形态与退出码", "最小验收", "跑不通时")
+    check(W_DOC_LABELS[2], len(doc) > 40000 and all(s in doc for s in _secs),
           (len(doc), [s for s in _secs if s not in doc]))
-    _codes_doc = sorted({int(x) for x in re.findall(r"^ {5,}(\d{1,3})\s\s+\S", doc, re.M)})
+    # 退出码只从「日志形态与退出码」那张表取：整篇扫会把别的表格首列数字当成退出码
+    _sec = re.search(r"^### \d+\.5 日志形态与退出码.*?(?=^### |\Z)", doc, re.M | re.S)
+    _codes_doc = sorted({int(x) for x in
+                         re.findall(r"^\|\s*(\d{1,3})\s*\|", _sec.group(0), re.M)}) if _sec else []
     _codes_real = sorted({cli_mod.EXIT_OK, cli_mod.EXIT_USAGE, cli_mod.EXIT_PARSE,
                           cli_mod.EXIT_CONNECT, cli_mod.EXIT_IMPORT, cli_mod.EXIT_SCRIPT, 130})
-    check(W_DOC_LABELS[3], _codes_doc == _codes_real,
-          "说明里 %s / 代码里 %s" % (_codes_doc, _codes_real))
+    check(W_DOC_LABELS[3], bool(_sec) and _codes_doc == _codes_real,
+          "文档里 %s / 代码里 %s" % (_codes_doc, _codes_real))
     # 只在一行内判断，别跨行：`password =` 换行后紧跟 `database =` 时，
-    # 带 \s* 的正则会吃掉换行把下一个键名当成"口令值"误报
-    _leak = re.findall(r"^[ \t]*password[ \t]*=[ \t]*\S", doc, re.M)
+    # 带 \s* 的正则会吃掉换行把下一个键名当成"口令值"误报。
+    # 现场本来就要改这一行，所以"改成你的密码"这类占位不算泄漏，算的是像真凭据的形态
+    _pw = [v.strip() for v in re.findall(r"^[ \t]*password[ \t]*=[ \t]*(\S.*)$", doc, re.M)]
+    _leak = [v for v in _pw if not any(k in v for k in ("改成", "你的", "口令", "<", "留空"))]
     check(W_DOC_LABELS[4], not _leak and "Root@" not in doc and "172.18." not in doc, _leak)
-    check(W_DOC_LABELS[5], "下划线要自己写上" in doc, doc.count("--prefix"))
+    check(W_DOC_LABELS[5], "自己写上下划线" in doc, doc.count("--prefix"))
     check(W_DOC_LABELS[6],
           "KB2999226" in doc and "api-ms-win-crt" in doc and "只拷 exe 跑不起来" in doc
           and "win7_sp1_patch" in doc and "3.check_win7.bat" in doc
           and "4.install_minimal.bat" in doc,
-          "随包说明要点到 win7_sp1_patch 里那几支脚本，现场才知道修复工具就在包里")
+          "文档要点到 win7_sp1_patch 里那几支脚本，现场才知道修复工具就在包里")
     check(W_DOC_LABELS[7],
-          "Java 版" in doc and "Windows 10 1809" in doc and "表结构是一样的" in doc)
+          "Java 版" in doc and "Windows 10 1809" in doc and "三条线跑出来的表结构" in doc)
 
 
 # ---------------------------------------------------------------------------

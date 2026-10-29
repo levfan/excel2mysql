@@ -153,7 +153,7 @@ def launcher_text(version):
        其余的 %% 会原样落进脚本，变成"成功也报 FAILED"。所以统一用占位符替换。
     2. 脚本正文一律 ASCII，不写中文注释。cmd 按当前代码页逐字节解析，
        UTF-8 中文里出现会被当成命令分隔符的字节时，一行 rem 能被拆成"命令找不到"，
-       而这台机器与目标机的代码页并不一样。中文说明放 README.txt。
+       而这台机器与目标机的代码页并不一样。中文说明放随包的 README.md（项目根那一份）。
     3. 无参数也必须开图形界面：双击 启动.bat 的人要的是窗口，不是用法清单。
        拖文件进来时把文件转给界面（GuiMain 收路径参数并加载）。
     """
@@ -188,51 +188,36 @@ def launcher_text(version):
     return ("\r\n".join(lines)).replace("__JAR__", jar).encode("utf-8")
 
 
-def readme_text(version, stubs, size):
-    """随包 README.txt 的正文在项目侧 `java/assets/README.txt`，这里只填四个数。
+def copy_project_doc(dist, version):
+    """把项目根那份 README.md 原样拷进包里，连标题用的图标一起。
 
-    为什么把文案搬出脚本：要求是"项目里和构建物里都得有这份手册"。
-    正文写死在打包脚本里时，仓库里看不见它、改文案也 review 不到，
-    只有产物里那份存在——现场拿到的说明书就没有来源可查。
-    现在读同一个文件，打包时替换 {version} / {jar} / {stubs} / {size} 四个占位，
-    行尾统一成 CRLF（记事本打开不粘成一行）。
+    以前随包的是打包时渲染的 README.txt（正文在项目侧 java/assets/README.txt）与
+    export_manual_txt 渲染的使用说明.txt：仓库里看不见产物那份、产物里看不见仓库改的那份，
+    两份会分叉。现在项目里只有一份文档，包里就是它，逐字节相同；文档标题挂了图标，
+    所以把 assets/app_icon.png 放到包内的同名相对路径下，图片才解析得出来。
+    代价要说清：包里那份不再带"本包剔了几个桩、多大"这类现场数——那些是构建时才知道的数，
+    由本脚本打印在构建日志里，不再混进唯一的文档正文。
     """
-    jar = JAR_NAME_TMPL % version
-    src = os.path.join(JAVA_DIR, "assets", "README.txt")
+    src = os.path.join(ROOT, "README.md")
     if not os.path.isfile(src):
-        fail("随包手册的源文件不在项目里：%s" % src)
+        fail("项目里唯一的那份文档不在：%s" % src)
     with io.open(src, encoding="utf-8") as fh:
         text = fh.read()
-    for key, val in (("{version}", version), ("{jar}", jar),
-                     ("{stubs}", str(stubs)), ("{size}", size)):
-        if key not in text:
-            fail("手册源文件里缺占位符 %s，模板与打包脚本已经对不上" % key)
-        text = text.replace(key, val)
-    return text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
-
-
-def write_manual(dist, version):
-    """把内置《使用说明》的完整正文也放一份进包里（Java 线：界面 + 命令行同一个包）。
-
-    只带 README.txt 的话，图形版的操作细节全在 jar 里，现场要先双击才知道怎么用；
-    内容不另写一遍，走仓库根目录那份 export_manual_txt（与 Python 图形版同一来源），
-    两条 GUI 线的随包手册因此是同一份东西，只有抬头那行的产品线不同。
-    """
-    if ROOT not in sys.path:
-        sys.path.insert(0, ROOT)
-    import export_manual_txt
-    from help_doc import SECTIONS
-    label = "Java 版（界面 + 命令行同一个包），v%s，需 64 位 Windows 7 及以上" % version
-    text = export_manual_txt.render(label)
-    out = os.path.join(dist, "使用说明.txt")
-    with io.open(out, "wb") as fh:
+    if 'src="assets/app_icon.png"' not in text:
+        fail("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.png")
+    dst = os.path.join(dist, "README.md")
+    with open(dst, "wb") as fh:
         fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
-    missing = [t for _a, t, _b in SECTIONS if t not in text]
-    if missing:
-        fail("随包使用说明缺章节 %s（渲染不完整）" % missing)
-    if "<" in text:
-        fail("随包使用说明里有没去掉的 HTML 标签，现场读不下去")
-    ok("使用说明.txt：%d 字符 / %d 章，与界面内置那份同一来源" % (len(text), len(SECTIONS)))
+    icon_src = os.path.join(ROOT, "assets", "app_icon.png")
+    if not os.path.isfile(icon_src):
+        fail("随包文档要用的图标 assets/app_icon.png 不在仓库里")
+    icon_dst = os.path.join(dist, "assets", "app_icon.png")
+    if not os.path.isdir(os.path.dirname(icon_dst)):
+        os.makedirs(os.path.dirname(icon_dst))
+    shutil.copy2(icon_src, icon_dst)
+    if os.path.getsize(dst) != len(text.encode("utf-8")) + text.count("\n"):
+        fail("包里的 README.md 与仓库那份字节数不对不上（行尾转换算进去也不该差）")
+    ok("README.md %d 字符（与仓库同源）+ assets/app_icon.png" % len(text))
     return text
 
 
@@ -366,28 +351,27 @@ def main():
         fh.write(bat)
     ok("启动.bat：走图形界面、纯 ASCII、CRLF 行尾")
     size = human(dir_size(dist))
-    with open(os.path.join(dist, "README.txt"), "wb") as fh:
-        fh.write(readme_text(version, removed, size))
+    doc = copy_project_doc(dist, version)
 
-    for want in ("conn.ini", "README.txt"):
+    for want in ("conn.ini", "README.md", os.path.join("assets", "app_icon.png")):
         if not os.path.isfile(os.path.join(dist, want)):
             fail("产物里缺 %s" % want)
-    ok("产物含 conn.ini 与 README.txt")
-    write_manual(dist, version)
-    # 说明里的开关名必须真是这个 jar 认的：Python 命令行版那套 --run-sql / --swap-prefix
+    ok("产物含 conn.ini、README.md 与 assets/app_icon.png")
+    # 文档里的开关名必须真是这个 jar 认的：Python 命令行版那套 --run-sql / --swap-prefix
     # 抄到这里会让现场敲出一条"未知选项"。只核能照抄的那几行（含 java.exe -jar 或 启动.bat
     # 的示例）——"本包没有 --run-sql"这种提醒也得允许写出来，否则守卫会把解释当成错误
-    doc = readme_text(version, removed, size).decode("utf-8")
     copyable = [ln for ln in doc.split("\n")
                 if "java.exe -jar" in ln or "启动.bat" in ln]
     for ghost in ("--run-sql", "--swap-prefix", "--drop-if-exists", "--keep-temp"):
         hit = [ln for ln in copyable if ghost in ln]
         if hit:
-            fail("README.txt 的可照抄命令里写了本包不认的开关 %s：%s" % (ghost, hit[0]))
-    for must in ("--no-sql", "--no-excel", "另外两条线", "Windows 7"):
+            fail("README.md 的可照抄命令里写了本包不认的开关 %s：%s" % (ghost, hit[0]))
+    for must in ("--no-sql", "--no-excel", "--gui", "Windows 7", "KB2999226", "退出码"):
         if must not in doc:
-            fail("README.txt 缺了该有的内容：%s" % must)
-    ok("README.txt 的开关名与三条线说明对得上（可照抄行 %d 条）" % len(copyable))
+            fail("README.md 缺了该有的内容：%s" % must)
+    if ("%s" % version) not in doc:
+        fail("README.md 里没有本版版本号 %s，那份文档的版本口径与构建脱了" % version)
+    ok("README.md 的开关名、三条线内容与版本号都对得上（可照抄行 %d 条）" % len(copyable))
 
     left = count_stubs(os.path.join(dist, "jre"))
     if left:

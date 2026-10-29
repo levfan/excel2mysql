@@ -151,8 +151,8 @@ def check_env():
             "（6.x 官方只支持 Windows 8+，bootloader 不为 Win7 构建）")
     missing = [p for p in ("excel2mysql_cli38.spec", "packtest38.spec", "pack_test38.py",
                            "cli.py", "_pack_common.py", "requirements38.txt",
-                           "version.py", "assets/app_icon.ico", "assets/conn.ini",
-                           "assets/README.txt",
+                           "version.py", "README.md", "assets/app_icon.png",
+                           "assets/app_icon.ico", "assets/conn.ini",
                            os.path.join("core", "infer.py"), os.path.join("core", "mysql_io.py"),
                            os.path.join("core", "zip_import.py"), os.path.join("core", "infer.py"),
                            os.path.join("core", "merge_check.py"), os.path.join("core", "naming.py"),
@@ -272,11 +272,11 @@ def inspect_package():
             "命令行包不该带 GUI 依赖，多半是 cli.py 里 import 了 main/PySide6")
     if not any(n == "python38.dll" for n in names):
         raise RuntimeError("产物里没有 python38.dll，说明不一定是 3.8 打出来的包")
-    for want in ("conn.ini", "README.txt"):
+    for want in ("conn.ini", "README.md"):
         if not any(n == want.lower() for n in names):
             raise RuntimeError(
-                "产物同级没有 %s（spec 的 datas 漏了 assets/ 里那份）——"
-                "对方要么找不到默认配置，要么手上没有使用说明" % want)
+                "产物同级没有 %s（spec 的 datas 漏了仓库根或 assets/ 里那一份）——"
+                "对方要么找不到默认配置，要么手上没有文档" % want)
     # 仓库里有前置补丁目录，产物里就必须有同样数量的文件（内容已在 copy_prereq 逐文件核过 md5）
     if os.path.isdir(PREREQ_SRC):
         want_n = sum(len(fs) for _d, _dd, fs in os.walk(PREREQ_SRC))
@@ -437,8 +437,8 @@ def summary():
         f"解压后在 cmd 里运行 excel2mysql-cli.exe --help")
     say(f"  配置：产物同级带了一份 {os.path.join(APP_DIST, 'conn.ini')}（默认 127.0.0.1:3306/root，"
         f"口令与目标库留空），不带 -c 会自动读它；改这个文件就行")
-    say(f"  说明：产物同级的 README.txt 是写给使用方的（前置条件、四条命令、退出码、排错），"
-        f"发机器时一起拷过去即可")
+    say(f"  说明：产物同级的 README.md 就是项目根那一份（选型、命令、开关、退出码、排错都在里面，"
+        f"标题带图标，用装了 Markdown 排版器的编辑器打开更好读），发机器时连 assets/ 一起拷过去")
     if os.path.isdir(PREREQ_DST):
         say(f"  补丁：产物内 {os.path.join('win7_sp1_patch', 'win7_prereq_files')} 是 Win7 专业版"
             f"那类缺 UCRT/补丁的机器的现场修法（自检 3.check_win7.bat、最小安装 4.install_minimal.bat），"

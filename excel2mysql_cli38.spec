@@ -20,7 +20,7 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     # 默认连接配置 + 面向使用方的说明，都随包放到 exe 同级：拷走整个目录就能直接用
-    datas=[("assets/conn.ini", "."), ("assets/README.txt", ".")],
+    datas=[("assets/conn.ini", "."), ("README.md", "."), ("assets/app_icon.png", "assets")],
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
