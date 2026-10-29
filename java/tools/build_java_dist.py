@@ -16,6 +16,7 @@ from __future__ import print_function
 
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -369,9 +370,18 @@ def main():
     for must in ("--no-sql", "--no-excel", "--gui", "Windows 7", "KB2999226", "退出码"):
         if must not in doc:
             fail("README.md 缺了该有的内容：%s" % must)
-    if ("%s" % version) not in doc:
-        fail("README.md 里没有本版版本号 %s，那份文档的版本口径与构建脱了" % version)
-    ok("README.md 的开关名、三条线内容与版本号都对得上（可照抄行 %d 条）" % len(copyable))
+    # 用户向文档不写版本号（版本口径归 --version 与随包 appinfo）。打包侧反向核一次：
+    # 万一有人把带版本号的老 README 拷回来，本脚本已经不再核它对不对得上本版，
+    # 那时它会在包里静静地写着上一版的产物名。127.0.0.1 这类地址不算版本号。
+    _ver_shaped = sorted(set(re.findall(
+        r"[vV]\d+\.\d+\.\d+(?:-[A-Za-z]+\.\d+)?"
+        r"|excel2mysql[\w.\-]*[\s\-]\d+\.\d+\.\d+"
+        r"|excel2mysql[\w.\-]*\.jar"
+        r"|-win64", doc)))
+    if _ver_shaped:
+        fail("README.md 里出现了版本号形态的串 %s：用户向文档只讲怎么用" % _ver_shaped)
+    ok("README.md 的开关名、三条线内容、不写版本号都核过（可照抄行 %d 条）"
+       % len(copyable))
 
     left = count_stubs(os.path.join(dist, "jre"))
     if left:

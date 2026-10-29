@@ -888,8 +888,9 @@ finally:
 # （源文件断言的老坑），"产物里到底有没有带 README.md"由闸门按实际产物目录核。
 W_DOC_LABELS = ("W29 CLI 可照抄行里的长选项都在 argparse 里真实存在",
                 "W29b 文档里出现的每个长选项都真实存在，且指明完整清单看 --help",
+                "W29e 用户向文档不写版本号与版本化产物名",
                 "W29c 用户向文档够长但没重新涨回去，八个必备小节齐",
-                "W30 退出码表与 cli 常量一一对应",
+                "W30 退出码与 cli 常量一一对应",
                 "W31 文档里不含真实口令或内网地址",
                 "W31b 写清了 --prefix 的分隔符要自己写上",
                 "W31c 写清了缺 UCRT 的症状、KB 号与包内修复脚本",
@@ -918,27 +919,42 @@ else:
                          if t not in _long_opts and t not in _JAVA_ONLY})
     check(W_DOC_LABELS[1], not _ghost_all and "--help" in doc,
           _ghost_all or "全部真实存在，且写明完整清单以 --help 为准")
-    _secs = ("选哪个包", "30 秒跑通", "支持哪些输入", "连接信息",
-             "常用开关速查", "退出码", "Windows 7 起不来怎么办", "进阶与源码")
-    # 上下限一起核：下限防用户向文档被砍成空壳，上限防构建与测试内容一点点长回来
-    check(W_DOC_LABELS[2], 2000 < len(doc) < 6000 and all(s in doc for s in _secs),
+    # 用户向文档不写版本号：写一次就得跟着每次发版改，而看这份文档的人关心的是
+    # "怎么用"，不是"手上这是哪一版"。版本口径的权威是 version.py（窗口标题 /
+    # --version / 随包 appinfo 都读它），构建向的产物名归 RELEASE.md（那两处由 T15 核住）。
+    # 只认三种真会漏回来的形状：vX.Y.Z（可带阶段后缀）、excel2mysql 后面跟 X.Y.Z、
+    # 以及 .jar / -win64 这类版本化产物名；conn.ini 示例里的 127.0.0.1 不算版本号。
+    _ver_hits = sorted(set(re.findall(
+        r"[vV]\d+\.\d+\.\d+(?:-[A-Za-z]+\.\d+)?"
+        r"|excel2mysql[\w.\-]*[\s\-]\d+\.\d+\.\d+"
+        r"|excel2mysql[\w.\-]*\.jar"
+        r"|-win64", doc)))
+    check(W_DOC_LABELS[2], not _ver_hits, _ver_hits or "全文没有版本号形态的串")
+    _secs = ("选哪个包", "上手", "连接信息", "会踩的坑", "退出码",
+             "Win7 上起不来", "再往深", "许可")
+    # 上下限一起核：下限防用户向文档被砍成空壳，上限防构建与测试内容一点点长回来。
+    # 上限从 6000 收到 3200：正文这一轮压到两千多字，留两百多字余量，
+    # 再有人往用户向文档里塞构建细节会撞上限，而不是悄悄过掉
+    check(W_DOC_LABELS[3], 2000 < len(doc) < 3200 and all(s in doc for s in _secs),
           (len(doc), [s for s in _secs if s not in doc]))
-    # 退出码只从「退出码」那一节取：整篇扫会把别的表格首列数字当成退出码
+    # 退出码只从「退出码」那一节取：整篇扫会把别的表格首列数字当成退出码。
+    # 这一节从四列表格改成一句话讲完，取法跟着改成认反引号包住的数字；
+    # 判据没有变松——仍然要求与代码里那一套**完全相等**，少写一个码或多写一个码都红
     _sec = re.search(r"^## \d+\. 退出码.*?(?=^## |\Z)", doc, re.M | re.S)
     _codes_doc = sorted({int(x) for x in
-                         re.findall(r"^\|\s*(\d{1,3})\s*\|", _sec.group(0), re.M)}) if _sec else []
+                         re.findall(r"`(\d{1,3})`", _sec.group(0))}) if _sec else []
     _codes_real = sorted({cli_mod.EXIT_OK, cli_mod.EXIT_USAGE, cli_mod.EXIT_PARSE,
                           cli_mod.EXIT_CONNECT, cli_mod.EXIT_IMPORT, cli_mod.EXIT_SCRIPT, 130})
-    check(W_DOC_LABELS[3], bool(_sec) and _codes_doc == _codes_real,
+    check(W_DOC_LABELS[4], bool(_sec) and _codes_doc == _codes_real,
           "文档里 %s / 代码里 %s" % (_codes_doc, _codes_real))
     # 只在一行内判断，别跨行：`password =` 换行后紧跟 `database =` 时，
     # 带 \s* 的正则会吃掉换行把下一个键名当成"口令值"误报。
     # 现场本来就要改这一行，所以"改成你的密码"这类占位不算泄漏，算的是像真凭据的形态
     _pw = [v.strip() for v in re.findall(r"^[ \t]*password[ \t]*=[ \t]*(\S.*)$", doc, re.M)]
     _leak = [v for v in _pw if not any(k in v for k in ("改成", "你的", "口令", "<", "留空"))]
-    check(W_DOC_LABELS[4], not _leak and "Root@" not in doc and "172.18." not in doc, _leak)
-    check(W_DOC_LABELS[5], "自己写上下划线" in doc, doc.count("--prefix"))
-    check(W_DOC_LABELS[6],
+    check(W_DOC_LABELS[5], not _leak and "Root@" not in doc and "172.18." not in doc, _leak)
+    check(W_DOC_LABELS[6], "下划线自己写" in doc, doc.count("--prefix"))
+    check(W_DOC_LABELS[7],
           "KB2999226" in doc and "DLL load failed" in doc
           and "只拷 exe" in doc and "跑不起来" in doc
           and "win7_sp1_patch" in doc and "3.check_win7.bat" in doc
@@ -947,7 +963,7 @@ else:
           "「只拷 exe 跑不起来」这条坑也必须写在用户手上那份文档里")
     _rel_path = os.path.join(ROOT, "RELEASE.md")
     _rel = open(_rel_path, encoding="utf-8").read() if os.path.isfile(_rel_path) else ""
-    check(W_DOC_LABELS[7],
+    check(W_DOC_LABELS[8],
           "Java 版" in doc and "Windows 10 1809" in doc
           and "三个包共用同一套" in doc and "RELEASE.md" in doc
           and bool(_rel) and "api-ms-win-crt" in _rel and "pack_test38.py" in _rel,

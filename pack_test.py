@@ -6991,11 +6991,10 @@ _VERSION_SITES = [
     ("java/构建验证.bat", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
     ("help_doc.py", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
     ("java/assets/conn.ini", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
-    ("README.md", r"当前版本 v([0-9][0-9A-Za-z.\-]*)"),
-    ("README.md", r"excel2mysql-cli ([0-9][0-9A-Za-z.\-]*)"),
-    ("README.md", r"excel2mysql-java-([0-9][0-9A-Za-z.\-]*)-win64"),
-    ("README.md", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
-    # RELEASE.md 是这一轮新拆出去的构建向文档，里面也写死了产物目录名与 jar 名：
+    # README.md 从这一轮起不写版本号（用户向文档只讲怎么用，版本口径归窗口标题、
+    # --version 与随包 appinfo）；"README 里不许出现版本号形态的串"反向由
+    # pack_test38.py 的 W29e 核，别把站点加回这张表。
+    # RELEASE.md 是构建向文档，里面写死了产物目录名与 jar 名，逐处核住：
     # 不进这张表，它就会在几次改版本之后变成一份没人核的旧数
     ("RELEASE.md", r"excel2mysql-java-([0-9][0-9A-Za-z.\-]*)-win64"),
     ("RELEASE.md", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
