@@ -433,6 +433,398 @@ def split_dump_statements(text: str) -> list:
     return _split_sql(text, with_delimiter=True)
 
 
+# ---------------------------------------------------------------------------
+# SQL 格式化：编辑区那颗 Ctrl+Alt+L 走这里，示例库的正文也按同一套规则排过。
+#
+# 只做三件事：关键字大写、深度 0 的从句各起一行、CREATE / ALTER TABLE 那份字段
+# 清单一个字段一行。语义一个字都不改——判据是"格式化前后的语句切分逐条相同"，
+# 这条与幂等（格式化两次等于一次）一起钉在跨栈语料里（SqlDiffer 的 format 分支）。
+# 整库 dump 那种带 DELIMITER 的正文由调用方先按 is_dump_script 拦下并说明理由。
+# Java 侧同构实现在 core/SqlScript.java 的 formatSql。
+
+# 只有裸词才查这张表：字符串、反引号名、注释里的同名词一律不动
+SQL_FORMAT_KEYWORDS = frozenset((
+    "ADD", "AFTER", "ALL", "ALTER", "AND", "AS", "ASC", "AUTO_INCREMENT", "BEGIN",
+    "BETWEEN", "BY", "CALL",
+    "CASE", "CHANGE", "CHAR", "CHARACTER", "CHARSET", "COLLATE", "COLUMN", "COMMENT",
+    "COMMIT",
+    "CONCAT", "CONDITION", "CONSTRAINT", "CONTINUE", "CONVERT", "CREATE", "CROSS",
+    "DATABASE", "DEALLOCATE", "DEFAULT", "DELETE", "DESC", "DESCRIBE", "DISTINCT",
+    "DO", "DROP", "ELSE", "END", "ENGINE", "ESCAPE", "EXCEPT", "EXCLUDE", "EXECUTE",
+    "EXISTS", "EXPLAIN", "FETCH", "FIRST", "FOR", "FORCE", "FOREIGN", "FROM",
+    "FULL", "FUNCTION", "GRANT", "GROUP", "HAVING", "IF", "IGNORE", "IN",
+    "INDEX", "INHERITS", "INNER", "INSERT", "INTERSECT", "INTERVAL", "INTO",
+    "IS", "JOIN", "KEY", "LAST", "LEFT", "LIKE", "LIMIT", "MODE", "MODIFY",
+    "NAMES", "NATURAL", "NOT", "NULL", "NULLS", "OF", "OFFSET", "ON", "OPTION", "OR",
+    "ORDER", "OUTER", "PARTITION", "PRIMARY", "PROCEDURE", "RANGE", "READ",
+    "REFERENCES", "REGEXP", "RENAME", "REPEAT", "REPLACE", "RETURN", "REVOKE",
+    "RIGHT", "RLIKE", "ROLLBACK", "ROW", "ROWS", "SCHEMA", "SELECT", "SEPARATOR",
+    "SET", "SHARE", "SHOW", "STRAIGHT_JOIN", "TABLE", "TEMPORARY", "THEN", "TO",
+    "TRUNCATE", "UNION", "UNIQUE", "UNSIGNED", "UPDATE", "USING", "VALUES",
+    "WHEN", "WHERE", "WITH", "WRITE", "ZEROFILL",
+))
+
+# 类型名一起大写：`varchar(64)` 排成 `VARCHAR(64)` 才与工具自己生成的 DDL 同形。
+# 这张表里没有 utf8mb4 / InnoDB / general_ci 那类"值"——它们是要发给服务端的字符集与
+# 引擎名，改大小写虽不改变含义，但读起来像被工具动过手脚（DDL 预览的高亮表同理）。
+SQL_FORMAT_TYPES = frozenset((
+    "VARCHAR", "CHAR", "TEXT", "TINYTEXT", "MEDIUMTEXT", "LONGTEXT", "BLOB",
+    "TINYBLOB", "MEDIUMBLOB", "LONGBLOB", "BINARY", "VARBINARY", "DECIMAL",
+    "NUMERIC", "FLOAT", "DOUBLE", "REAL", "INT", "INTEGER", "TINYINT",
+    "SMALLINT", "MEDIUMINT", "BIGINT", "BIT", "BOOL", "BOOLEAN", "DATE",
+    "DATETIME", "TIMESTAMP", "TIME", "YEAR", "JSON",
+))
+# 实际要大写的词 = 关键字 + 类型
+SQL_FORMAT_UPPER = SQL_FORMAT_KEYWORDS | SQL_FORMAT_TYPES
+# 表选项那几位的等号贴紧写（`ENGINE=InnoDB`），与 SHOW CREATE TABLE 同形；
+# 比较运算的等号照旧留空格（`WHERE a = 1`）
+SQL_FORMAT_TIGHT_EQ = frozenset(("ENGINE", "CHARSET", "COLLATE", "COMMENT",
+                                 "AUTO_INCREMENT", "KEY_BLOCK_SIZE"))
+
+# 这些词后面紧跟的左括号是函数/类型的括号，要贴紧写；其余（关键字与表名）留一格
+SQL_FORMAT_FUNCS = frozenset((
+    "COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT", "IFNULL", "NULLIF",
+    "COALESCE", "CONCAT", "CONCAT_WS", "DATE_FORMAT", "STR_TO_DATE", "NOW",
+    "CURDATE", "CURTIME", "SYSDATE", "UNIX_TIMESTAMP", "FROM_UNIXTIME", "DATE",
+    "TIMESTAMP", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "DATABASE",
+    "SCHEMA", "VERSION", "USER", "CURRENT_USER", "SESSION_USER", "LENGTH",
+    "CHAR_LENGTH", "BIT_LENGTH", "OCTET_LENGTH", "LEFT", "RIGHT", "SUBSTRING",
+    "SUBSTRING_INDEX", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM", "REPLACE",
+    "REVERSE", "SPACE", "LPAD", "RPAD", "ABS", "CEIL", "CEILING", "FLOOR",
+    "ROUND", "TRUNC", "MOD", "POW", "POWER", "SQRT", "RAND", "GREATEST",
+    "LEAST", "CAST", "CONVERT", "MD5", "SHA1", "SHA2", "UUID", "JSON_EXTRACT",
+    "JSON_UNQUOTE", "FOUND_ROWS", "ROW_COUNT", "LAST_INSERT_ID", "CONNECTION_ID",
+    "SLEEP", "BENCHMARK", "FIELD", "INET_ATON", "INET6_ATON",
+))
+# 深度 0 上这些词一起句就另起一行
+_SQL_BREAK_WORDS = frozenset((
+    "SELECT", "FROM", "WHERE", "HAVING", "LIMIT", "OFFSET", "UNION", "INTERSECT",
+    "EXCEPT", "INSERT", "UPDATE", "DELETE", "SET", "VALUES", "ON", "USING", "JOIN",
+))
+# GROUP / ORDER 只有紧跟 BY 才算从句，否则一列真叫 order 的写法会被腰斩
+_SQL_PAIR_WORDS = frozenset(("GROUP", "ORDER"))
+# LEFT / RIGHT 这些打头的连接写法，要等到后面真出现 JOIN 才换行
+_SQL_JOIN_HEADS = frozenset(("LEFT", "RIGHT", "INNER", "FULL", "OUTER", "CROSS",
+                             "NATURAL", "STRAIGHT_JOIN"))
+# AND / OR 只在条件类从句里换行：SELECT 列表里 `a AND b` 是一个表达式，拆开反而读不断
+_SQL_COND_CLAUSES = frozenset(("WHERE", "ON", "HAVING"))
+# 两个符号字符合起来是一个运算符：`<=` `>=` `<>` `!=` `||` `->`。
+# 分开发就会写出 `amount < = 0`，那是另一个意思都读不出来的样子。
+_SQL_OP_HEAD = frozenset("<>=!|-")
+_SQL_OP_TAIL = frozenset("=<>|")
+_SQL_INDENT = "  "
+# 超过这一列就在下一个逗号处折行（编辑区不折行，横向拖动比竖向滚动难读）
+_SQL_WRAP_COL = 100
+
+
+def _sql_tokens(text):
+    """切成 (种类, 原文) 的 token：种类 ∈ word / num / str / cmt / punct / ws。
+
+    引号与注释的走法与 `_split_sql` 逐条对齐（反斜杠转义在反引号里不算、双写引号算
+    一个字符、行注释不吃行末那个换行）——两处词法一旦不一致，格式化就会把语句切歪，
+    而"切分不变"正是这条功能的判据。
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch in " \t\r\n":
+            j = i
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            out.append(("ws", text[i:j]))
+            i = j
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+            j = i + 1
+            while j < n:
+                if text[j] == "\\" and quote != "`" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == quote:
+                    if j + 1 < n and text[j + 1] == quote:
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(("str", text[i:j]))
+            i = j
+            continue
+        if (ch == "-" and nxt == "-") or ch == "#":
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            out.append(("cmt", text[i:j]))
+            i = j
+            continue
+        if ch == "/" and nxt == "*":
+            j = text.find("*/", i + 2)
+            j = n if j == -1 else j + 2
+            out.append(("cmt", text[i:j]))
+            i = j
+            continue
+        if ch == "@":
+            # 用户变量与会话变量：@@version、@db、@@GLOBAL.x——整串一个 token，
+            # 拆开会变成 `@ @ VERSION` 那种读不懂的样子（探针实测抓到的）
+            j = i + 1
+            if j < n and text[j] == "@":
+                j += 1
+            while j < n and (text[j].isalnum() or text[j] in "_$."):
+                j += 1
+            out.append(("var", text[i:j]))
+            i = j
+            continue
+        if ch.isalpha() or ch == "_" or (ch.isalnum() and ch not in "0123456789"):
+            j = i
+            while j < n and (text[j].isalnum() or text[j] in "_$"):
+                j += 1
+            out.append(("word", text[i:j]))
+            i = j
+            continue
+        if ch.isdigit():
+            j = i
+            while j < n and (text[j].isalnum() or text[j] in "_$."):
+                j += 1
+            out.append(("num", text[i:j]))
+            i = j
+            continue
+        out.append(("punct", ch))
+        i += 1
+    return out
+
+
+def _sql_next_word(tokens, at):
+    """下一个非空白 token 的原文（大写），用来判 GROUP BY / ORDER BY / x JOIN 这种两词从句。"""
+    for k in range(at + 1, len(tokens)):
+        kind, text = tokens[k]
+        if kind == "ws":
+            continue
+        return text.upper() if kind in ("word", "num") else ""
+    return ""
+
+
+def _sql_join_ahead(tokens, at):
+    """从 at 往后是不是 `LEFT [OUTER] JOIN` 这一串：只有真接到 JOIN 才换行。"""
+    for k in range(at + 1, len(tokens)):
+        up = tokens[k][1].upper()
+        if tokens[k][0] == "ws" or up in ("OUTER", "INNER"):
+            continue
+        return up == "JOIN"
+    return False
+
+
+def _sql_head_is_table_def(seen):
+    """这个左括号之前，是不是只写过 `CREATE [TEMPORARY] TABLE [IF NOT EXISTS] 表名`
+    或 `ALTER TABLE 表名`。
+
+    只认这一种开头，是为了不把 `VARCHAR(64)`、`ADD INDEX idx (col)` 里的括号
+    当成字段清单的开头展开——探针实测过：按"语句头有 CREATE/ALTER TABLE"判就会中招。
+    """
+    # 空白之外全算一个位置：表名可以写成 `db`.`tbl`，点号也是其中一格，
+    # 把它滤掉就会把限定名误判成"表名之后还有别的东西"，清单不展开了
+    # （这条是跨栈语料抓出来的：Java 侧按原意实现，Python 侧漏了）
+    words = [t for k, t in seen if k != "ws"]
+    if not words:
+        return False
+    i = 0
+    if words[0].upper() == "CREATE":
+        i = 1
+        if i < len(words) and words[i].upper() in ("TEMPORARY", "UNLOGGED"):
+            i += 1
+        if i >= len(words) or words[i].upper() != "TABLE":
+            return False
+        i += 1
+        if (i + 2 < len(words) and words[i].upper() == "IF"
+                and words[i + 1].upper() == "NOT" and words[i + 2].upper() == "EXISTS"):
+            i += 3
+    elif words[0].upper() == "ALTER":
+        i = 1
+        if i >= len(words) or words[i].upper() != "TABLE":
+            return False
+        i += 1
+    else:
+        return False
+    # 表名（可以带 `db`.`tbl` 这种点号限定，点号前后的段都不算空白 token）
+    if i >= len(words):
+        return False
+    return i + 1 >= len(words) or words[i + 1] == "."
+
+
+def _format_one_statement(tokens):
+    """一句（不含结尾分号）排成若干行。"""
+    sig = [t for t in tokens if t[0] != "ws"]
+    if not sig:
+        return []
+    lines = []
+    cur = []
+    depth = 0
+    clause = ""
+    listed = False          # 字段清单是否已经展开过（只展开第一处）
+    type_paren = []         # 每层括号是不是"类型的参数表"（VARCHAR(64) / DECIMAL(20,4)）
+
+    def indent_now():
+        return _SQL_INDENT if (listed and depth >= 1) else ""
+
+    def flush():
+        if cur:
+            lines.append(indent_now() + "".join(cur).strip())
+            del cur[:]
+
+    def gap(text, prev_kind, prev_up, tight_eq, tight_comma, prev_punct,
+            table_name=False):
+        """这个 token 前面要不要留空格。
+
+        六条：标点贴前；点号两边贴紧；函数与类型的左括号贴紧（`VARCHAR(64)`、
+        `count(1)`）；类型参数表里的逗号后面不补空格（`DECIMAL(20,4)`，与工具自己
+        生成的 DDL 逐字同形）；表选项的等号两边贴紧（`ENGINE=InnoDB`，与 SHOW CREATE
+        TABLE 同形），比较运算的等号照旧留一格；两个运算符字符合在一起是一个符号
+        （`<=`、`<>`、`!=`、`||`、`->`），中间不能插空格。
+        `table_name` 是"这个左括号前写的是表名"——表名与左括号之间留一格，
+        与 `build_ddl` 生成的形状一致；不认这一条就会写出 `tmp_customer(`。
+        """
+        if not cur:
+            return ""
+        if tight_eq or tight_comma:
+            return ""
+        head = cur[-1].strip()[-1:] if cur[-1].strip() else ""
+        if text.startswith(".") or head == "." or text[0] in ",);" or head == "(":
+            return ""
+        if (prev_punct in _SQL_OP_HEAD and len(text) == 1
+                and text in _SQL_OP_TAIL):
+            return ""
+        if text == "=" and prev_kind == "word" and prev_up in SQL_FORMAT_TIGHT_EQ:
+            return ""
+        if text == "(" and prev_kind == "word" and not table_name:
+            if prev_up in SQL_FORMAT_FUNCS or prev_up in SQL_FORMAT_TYPES:
+                return ""
+            if prev_up not in SQL_FORMAT_UPPER:
+                return ""
+        return " "
+
+    for idx, (kind, text) in enumerate(sig):
+        up = text.upper() if kind == "word" else ""
+        prev_kind, prev_text = sig[idx - 1] if idx else ("", "")
+        prev_up = prev_text.upper() if prev_kind == "word" else ""
+        prev2_kind, prev2_text = sig[idx - 2] if idx >= 2 else ("", "")
+        prev_punct = prev_text if prev_kind == "punct" else "\""
+        # 上一个 token 是等号、再上一个正好是表选项那几位 → 这一位也贴紧
+        # （等号是 punct，prev_up 只对 word 有值，这里必须拿原文比）
+        tight_eq = prev_text == "=" and prev2_text.upper() in SQL_FORMAT_TIGHT_EQ
+        tight_comma = prev_text == "," and bool(type_paren) and type_paren[-1]
+        # 关键字与类型大写；字符串、反引号名、注释、变量一律原样
+        emit = up if kind == "word" and up in SQL_FORMAT_UPPER else text
+        if kind == "punct" and text == "(":
+            head_is_table = (depth == 0 and not listed
+                             and _sql_head_is_table_def(sig[:idx]))
+            if head_is_table:
+                listed = True
+                cur.append(gap(text, prev_kind, prev_up, tight_eq, tight_comma,
+                               prev_punct, True) + text)
+                flush()
+                depth += 1
+                type_paren.append(False)
+                continue
+            depth += 1
+            type_paren.append(prev_kind == "word" and prev_up in SQL_FORMAT_TYPES)
+        elif kind == "punct" and text == ")":
+            if depth == 1 and listed:
+                flush()               # 最后一个字段先成行，缩进还在清单那一档
+            depth = max(0, depth - 1)
+            if type_paren:
+                type_paren.pop()
+        elif kind == "punct" and text == "," and depth == 1 and listed:
+            cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
+            flush()
+            continue
+
+        break_word = False
+        if kind == "word" and cur:
+            join_head = (up in _SQL_JOIN_HEADS and _sql_join_ahead(sig, idx)) or (
+                up == "JOIN" and prev_up not in _SQL_JOIN_HEADS)
+            cond_chain = up in ("AND", "OR") and clause in _SQL_COND_CLAUSES
+            if depth == 0:
+                break_word = (
+                    up in _SQL_BREAK_WORDS and up != "JOIN"
+                    and not (up == "SET" and prev_up == "CHARACTER")
+                    or (up == "JOIN" and join_head)
+                    or join_head
+                    or (up in _SQL_PAIR_WORDS and _sql_next_word(sig, idx) == "BY")
+                    or cond_chain)
+            else:
+                # 括号里的条件链也拆开：编辑器不折行，一条 WHERE 里三四个 OR 挤
+                # 在一行就要横向拖两百多列才看完
+                break_word = cond_chain
+        if break_word:
+            flush()
+        elif (cur and prev_text == "," and depth <= 1
+                and len("".join(cur)) > _SQL_WRAP_COL):
+            # 超过这一列就在下一个逗号处折行：编辑器不折行，一条二十列的 SELECT
+            # 清单挤成一行要横向拖两百多格。只在这一条已经够长时才折，
+            # 短清单照旧留在一行，读起来不碎。
+            flush()
+        if kind == "word" and depth == 0 and up in _SQL_BREAK_WORDS:
+            # 只在从句关键词上更新"现在在哪一段"：按每个词都覆盖的话，
+            # `WHERE a = 1 AND ...` 里走到 AND 时 clause 已经变成表名了
+            clause = up
+
+        if cur:
+            cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
+        else:
+            cur.append(emit)
+        if kind == "cmt" and (text.startswith("--") or text.startswith("#")):
+            flush()
+    flush()
+    return lines
+
+
+def format_refusal(text: str) -> str:
+    """这段文本该不该拒绝格式化，返回拒绝理由（空串表示可以排）。
+
+    整库 dump 的写法不能排：`DELIMITER ;;` 里的分号是客户端指令的一部分，按普通
+    语句切就会把导出文件的收尾改坏；抬头/结尾那几句导出工具才会写的话同理。
+    调用方拿到非空理由要原话回给用户，不能静默什么都不做。
+    Java 侧同构在 core/SqlScript.java 的 formatRefusal。
+    """
+    if not (text or "").strip():
+        return "这段是空的，没有可排的内容"
+    if _DELIMITER_RE.search(text):
+        return "这是整库 dump 的写法（带 DELIMITER 指令），格式化会改坏收尾"
+    if is_dump_script(text):
+        return "这是整库 dump 文件，格式化会改坏导出工具写的收尾"
+    return ""
+
+
+def format_sql(text: str) -> str:
+    """把一段 SQL 排整齐：关键字大写、从句各起一行、字段清单一行一个。
+
+    三条硬性质，全部钉在跨栈语料与用例集里：
+    ① 幂等——格式化两次与一次结果相同；
+    ② 不改语义——`split_sql_statements` 切出来的语句条数相同、逐条只差空白与
+       关键字大小写（用例按"切分后去空白再比"来判）；
+    ③ 两栈逐字节相同——Java 侧 `SqlScript.formatSql` 走同一条规则。
+    """
+    tokens = _sql_tokens(text)
+    blocks = []
+    buf = []
+    for kind, piece in tokens:
+        if kind == "punct" and piece == ";":
+            block = _format_one_statement(buf)
+            if block:
+                block[-1] = block[-1] + ";"
+                blocks.append(block)
+            buf = []
+            continue
+        buf.append((kind, piece))
+    tail = _format_one_statement(buf)
+    if tail:
+        blocks.append(tail)
+    if not blocks:
+        return text.strip()
+    return "\n".join("\n".join(block) for block in blocks)
+
+
 # 行首的 DELIMITER 指令；只认整行（后面除空白外没有别的内容）
 _DELIMITER_RE = re.compile(r"[ \t]*DELIMITER[ \t]+(\S+)[ \t]*(?:\r?\n|$)", re.IGNORECASE)
 

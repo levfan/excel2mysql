@@ -68,7 +68,7 @@ from core.sql_script import (
     parse_create_tables, rename_table_sql, apply_display_renames,
     set_table_comment, prepend_drop_tables,
     is_dump_script, dump_statements, dump_skip_reason, dump_database_switch,
-    edit_column,
+    edit_column, format_sql, format_refusal,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES, matches as sample_matches
@@ -124,6 +124,15 @@ NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
 # 「SQL 执行器」编辑区的开场文本：既是"连不连得上库"的一键自检语句，
 # 也是「插入到编辑区」判断"这段还是默认值、可以直接覆盖掉"的比对基准
 SQL_RUN_DEFAULT = "SELECT 1 AS 连通检查;"
+
+# 编辑区那段 SQL 的格式化入口：按钮文案、悬停那一句、快捷键写法三处共用。
+# 快捷键在两栈各写一遍绑定代码，能钉住的只有"文案里承诺的那一串"与"真按键有没有反应"：
+# 用例按真按键走一遍，对撞比 tooltip 文案，所以这三者不会各说各话。
+SQL_FORMAT_LABEL = "格式化 SQL"
+SQL_FORMAT_KEY = "Ctrl+Alt+L"
+SQL_FORMAT_TIP = ("排整齐左边这段 SQL：关键字与类型大写、从句各起一行、建表字段一行一个；"
+                  "整库 dump（带 DELIMITER 那种）会拒绝并说明原因。\n"
+                  "快捷键 " + SQL_FORMAT_KEY + "（焦点在这块编辑区里时按）")
 
 # 两处日志区共用的字号：9 号字现场判过"太小"，14 号在默认窗口里只能露出三行；
 # 10 号是两者之间的落点——控制台/IDE 的常见档位，比界面基准 9 号大一点。
@@ -458,6 +467,33 @@ def install_paste_filter(app):
         _PASTE_FILTER = PasteFilesFilter(app)
         app.installEventFilter(_PASTE_FILTER)
     return _PASTE_FILTER
+
+
+class FormatKeyFilter(QObject):
+    """SQL 编辑区上的 Ctrl+Alt+L：焦点在这块才生效。
+
+    与 Ctrl+V 那条不同——粘贴要"鼠标停哪儿都算"所以挂应用级过滤；格式化只针对
+    编辑区那一段 SQL，挂在控件自己的事件过滤上：焦点在连接区的输入框里按这串
+    按键，不该把按键吃掉。
+    窗口级 QShortcut 在这一套界面上实测抢不到按键（控件先消费），所以走事件过滤。
+    """
+
+    @staticmethod
+    def is_format_key(event):
+        mods = event.modifiers()
+        return (event.key() == Qt.Key_L
+                and bool(mods & Qt.ControlModifier) and bool(mods & Qt.AltModifier)
+                and not mods & (Qt.ShiftModifier | Qt.MetaModifier))
+
+    def __init__(self, callback):
+        super().__init__()
+        self._callback = callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and self.is_format_key(event):
+            self._callback()
+            return True
+        return False
 
 
 class ActionBar(QFrame):
@@ -3384,6 +3420,14 @@ class MainWindow(QWidget):
         self.btn_sql_run_samples.setToolTip("打开示例清单：选中一条可复制到剪贴板或插到编辑区")
         self.btn_sql_run_samples.clicked.connect(self.on_sql_samples)
         lh.addWidget(self.btn_sql_run_samples)
+        self.btn_sql_run_format = QPushButton(SQL_FORMAT_LABEL)
+        self.btn_sql_run_format.setStyleSheet(SECONDARY_BUTTON_QSS)
+        self.btn_sql_run_format.setToolTip(SQL_FORMAT_TIP)
+        self.btn_sql_run_format.clicked.connect(self.on_format_sql)
+        lh.addWidget(self.btn_sql_run_format)
+        # 快捷键挂在编辑区自己身上：焦点在这块里按 Ctrl+Alt+L 才排这一段
+        self.sql_run_format_key = FormatKeyFilter(self.on_format_sql)
+        self.sql_run_input.installEventFilter(self.sql_run_format_key)
         self.btn_sql_run_clear_input = QPushButton("清空编辑区")
         self.btn_sql_run_clear_input.setToolTip("只清掉左边这段 SQL，右侧结果区不动")
         self.btn_sql_run_clear_input.clicked.connect(self.on_sql_run_clear_input)
@@ -3599,6 +3643,31 @@ class MainWindow(QWidget):
         if printed < total:
             caption += "（表格只装前 %d 行，其余没取回来）" % printed
         self.lbl_sql_run_caption.setText(caption)
+
+    def on_format_sql(self):
+        """把编辑区那段 SQL 排整齐：排了、没得排、不许排三种结局都留一句可见的话。
+
+        不改语句内容——只动大小写与换行，判据是用例里那条"切分前后逐条同形"。
+        排完把光标送回开头：长语句排完之后光标停在末尾，滚动位置还留在上一条的
+        尾巴上，看着像"排到一半被截了"。
+        """
+        text = self.sql_run_input.toPlainText()
+        why = format_refusal(text)
+        if why:
+            self._warn("没有格式化：" + why)
+            return
+        out = format_sql(text)
+        if out == text:
+            append_log(self.sql_run_log, "[提示] 这段 SQL 已经是排好的形状，一个字没动")
+            return
+        self.sql_run_input.setPlainText(out)
+        cur = self.sql_run_input.textCursor()
+        cur.movePosition(QTextCursor.Start)
+        self.sql_run_input.setTextCursor(cur)
+        append_log(self.sql_run_log,
+                   "[格式化] 已排齐 %d 行、%d 条语句：只改大小写与换行，"
+                   "语句内容不动；要跑再点「执行编辑区 SQL」"
+                   % (out.count("\n") + 1, len(split_sql_statements(out))))
 
     def on_sql_run(self):
         text = self.sql_run_input.toPlainText()
@@ -5204,7 +5273,11 @@ class SqlSamplesDialog(QDialog):
         # 内容仍是那五行，只是按角色上色：标题一档、字段名一档、关键词成一块
         paint_styled(self.intro, _intro, intro_spans(_intro),
                      intro_formats(self.intro), SAMPLE_INTRO_BLOCK_SPACING)
-        self.preview.setPlainText(SQL_SAMPLES[idx].sql)
+        # 语句正文按角色上色：与两个 DDL 预览同一套切分、同一组色，
+        # 内容一字不改（用例钉"读回来的纯文本 == 示例原文"）
+        _sql = SQL_SAMPLES[idx].sql
+        paint_styled(self.preview, _sql, ddl_spans(_sql),
+                     ddl_formats(self.preview), DDL_BLOCK_SPACING)
         # 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
         # 看着像"缺了上半截"（与 Java 侧 openSqlSamples 的复位同一处理）
         for view in (self.intro, self.preview):

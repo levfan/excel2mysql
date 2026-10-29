@@ -63,6 +63,13 @@ public final class SqlDiffer {
                 List<String> got = SqlScript.splitStatements(in);
                 List<Object> want = (List<Object>) rec.get("split");
                 report("split", in, got.equals(want), join(got), join(want));
+            } else if ("format".equals(op)) {
+                // 格式化：期望值是 Python 侧真函数产出的，Java 必须逐字节相同。
+                // 差一个空格（逗号后补不补、表选项的等号贴不贴）都会在这里露出来
+                checked++;
+                String got = SqlScript.formatSql(in);
+                String want = (String) rec.get("out");
+                report("format", in, got.equals(want), got, want);
             } else if ("ddl-parse".equals(op)) {
                 // 两条线各一份 CREATE TABLE 解析器：把结果拍成一行一格逐行对，
                 // 类型、注释、主键、可空、近似说明哪一格不同都会露出来

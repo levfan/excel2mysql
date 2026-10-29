@@ -1419,14 +1419,15 @@ check("F20c 结果集排成等宽表格：列宽按显示宽度补齐、NULL 显
 check("F20d 零行的表格只有表头那一框，不重复画收口线",
       _rt(["a"], []) == ["+---+", "| a |", "+---+"], _rt(["a"], []))
 _run_btns = {w.btn_sql_run_samples.text(): w.btn_sql_run_samples,
+             w.btn_sql_run_format.text(): w.btn_sql_run_format,
              w.btn_sql_run_exec.text(): w.btn_sql_run_exec,
              w.btn_sql_run_clear_input.text(): w.btn_sql_run_clear_input,
              w.btn_sql_run_clear_log.text(): w.btn_sql_run_clear_log,
              w.btn_run_clear.text(): w.btn_run_clear,
              w.btn_run_scripts.text(): w.btn_run_scripts}
-check("F21 六颗按钮齐备：示例、执行编辑区、两个清空、清单区的清空与批量执行",
-      len(_run_btns) == 6
-      and set(_run_btns) == {u"示例 (?)", u"执行编辑区 SQL", u"清空编辑区",
+check("F21 七颗按钮齐备：示例、格式化、执行编辑区、两个清空、清单区的清空与批量执行",
+      len(_run_btns) == 7
+      and set(_run_btns) == {u"示例 (?)", u"格式化 SQL", u"执行编辑区 SQL", u"清空编辑区",
                              u"清空结果区", u"清空待执行脚本", u"批量执行脚本文件"}
       and all(b.isEnabled() for n, b in _run_btns.items()
               if n != u"批量执行脚本文件")
@@ -1437,6 +1438,47 @@ check("F22 两个执行按钮的 tooltip 各说清自己的范围与事务语义
       and "每个文件一个事务" in w.btn_run_scripts.toolTip()
       and "只想跑其中一个" in w.btn_run_scripts.toolTip(),
       (w.btn_sql_run_exec.toolTip(), w.btn_run_scripts.toolTip()))
+check("F22c 「格式化 SQL」那颗的 tooltip 把做什么、何时拒绝、快捷键三件都写清",
+      u"格式化 SQL" in _run_btns
+      and "关键字与类型大写" in w.btn_sql_run_format.toolTip()
+      and "Ctrl+Alt+L" in w.btn_sql_run_format.toolTip()
+      and "整库 dump" in w.btn_sql_run_format.toolTip(),
+      w.btn_sql_run_format.toolTip()[:70])
+from PySide6.QtCore import Qt as _FQt
+from PySide6.QtCore import QEvent as _FQE
+from PySide6.QtGui import QKeyEvent as _FKE
+w.sql_run_input.setPlainText("select id,name from t_user where age>18 and status=1;")
+# 走真按键：合成一个 Ctrl+Alt+L 的 KeyPress 发给编辑区自己，验的是那个事件过滤
+# 认不认这串键，不是"我直接调处理函数"——处理函数对，键位挂错地方照样按不动
+_app.sendEvent(w.sql_run_input,
+               _FKE(_FQE.KeyPress, _FQt.Key_L,
+                    _FQt.ControlModifier | _FQt.AltModifier, "L"))
+check("F22d 真按 Ctrl+Alt+L 就把这段排开（编辑区身上的事件过滤收得到）",
+      w.sql_run_input.toPlainText()
+      == "SELECT id, name\nFROM t_user\nWHERE age > 18\nAND status = 1;",
+      w.sql_run_input.toPlainText())
+w.sql_run_input.setPlainText("select 1")
+# 不带字符的按键：真人按 Alt+L 不会往框里写字（Alt 那串是菜单助记键），
+# 合成事件如果带上 "L" 反而会被当成输入
+_app.sendEvent(w.sql_run_input, _FKE(_FQE.KeyPress, _FQt.Key_L, _FQt.AltModifier))
+check("F22e 少按 Ctrl 的那一串不该动手：只有 Ctrl+Alt+L 这一个组合算格式化",
+      w.sql_run_input.toPlainText() == "select 1", w.sql_run_input.toPlainText())
+POPUPS.clear()
+w.sql_run_input.setPlainText("DELIMITER ;;\nCREATE FUNCTION f() RETURNS INT BEGIN"
+                             " RETURN 1; END;;\nDELIMITER ;")
+w.btn_sql_run_format.click()
+check("F22f 整库 dump 那一段拒绝格式化：弹窗与日志双写理由，正文一个字不动",
+      any("整库 dump" in t for _, t in POPUPS)
+      and w.sql_run_input.toPlainText().startswith("DELIMITER")
+      and "已拦下：没有格式化" in w.log.toPlainText(),
+      (POPUPS[-1][1][:40] if POPUPS else None))
+w.sql_run_input.setPlainText("SELECT 1;")
+_before_fmt = w.sql_run_log.toPlainText()
+w.btn_sql_run_format.click()
+check("F22g 已经是排好的形状也要说一句『一个字没动』，不静默",
+      w.sql_run_log.toPlainText() != _before_fmt
+      and "一个字没动" in w.sql_run_log.toPlainText(),
+      w.sql_run_log.toPlainText().strip().splitlines()[-1][:60])
 from PySide6.QtWidgets import QGroupBox
 _run_group = w.sql_run_table.parentWidget()
 while _run_group is not None and not isinstance(_run_group, QGroupBox):
@@ -1505,6 +1547,7 @@ _real_connect = app_main.connect
 w.main_tabs.setCurrentIndex(2)
 POPUPS.clear()
 w.sql_run_input.setPlainText("SELECT 1 AS 连通检查;")
+w.sql_run_log.clear()        # 这一条只看"清左边不动右边"，前面用例写的日志先清掉
 w.sql_run_log.appendPlainText("上一次留下的结果")
 w.btn_sql_run_clear_input.click()
 check("F23 清空编辑区只清左边，结果区那行旧结果不动",
@@ -3295,6 +3338,81 @@ vw._run_modal = _orig_run_modal
 vw.close()
 
 # ---------------------------------------------------------------------------
+section("SF SQL 格式化（编辑区 Ctrl+Alt+L 与示例正文共用的那一个函数）")
+
+from core.sql_script import _sql_tokens, format_sql         # noqa: E402
+from core.mysql_io import build_ddl as _sf_ddl              # noqa: E402
+
+_SF_COLS = [{"field": "id", "type": "BIGINT UNSIGNED", "comment": "主键",
+             "nullable": False, "primary_key": True},
+            {"field": "student_name", "type": "VARCHAR(64)", "comment": "姓名",
+             "nullable": False},
+            {"field": "amount", "type": "DECIMAL(20,4)", "comment": "金额",
+             "nullable": True}]
+
+
+def _sf_sig(text):
+    """把一句 SQL 压成内容签名：丢掉空白、词一律大写。
+
+    判"格式化没改语义"用它，不用字符串比——`id,name` 排成 `id, name` 正是这条功能
+    要做的动作，按字符串比会把功能本身判成破功。
+    """
+    return "\n".join(t.upper() if k in ("word", "num", "var") else t
+                     for k, t in _sql_tokens(text) if k != "ws")
+
+
+def _sf_same_statements(text):
+    a = split_sql_statements(text)
+    b = split_sql_statements(format_sql(text))
+    return len(a) == len(b) and all(_sf_sig(x) == _sf_sig(y) for x, y in zip(a, b))
+
+
+_SF_INPUTS = [s.sql for s in app_main.SQL_SAMPLES] + [
+    "", "   \n  ", ";", "select 1 where a<=2 and b<>3 or c!=4",
+    "CREATE TABLE `t_a` (`id` bigint NOT NULL COMMENT '主键',"
+    " `amount` DECIMAL(20,4) DEFAULT NULL COMMENT '金额，含逗号',"
+    " PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表';",
+    "-- 头注\nselect 1; -- 尾注\n# 井号注\nselect 2;",
+    "select 'a;b' as x, `c;d` from t",
+    "select @@version, database(), count(1) from dual",
+    "SELECT " + ", ".join("c%d" % i for i in range(30)) + " FROM wide_table",
+]
+check("SF1 格式化幂等：全部输入排两次与排一次逐字相同",
+      all(format_sql(format_sql(t)) == format_sql(t) for t in _SF_INPUTS),
+      [i for i, t in enumerate(_SF_INPUTS)
+       if format_sql(format_sql(t)) != format_sql(t)][:6])
+check("SF2 格式化不改语义：切分条数相同、逐条内容签名相同",
+      all(_sf_same_statements(t) for t in _SF_INPUTS),
+      [i for i, t in enumerate(_SF_INPUTS) if not _sf_same_statements(t)][:6])
+check("SF2b 注释与引号里的分号不当语句结束",
+      len(split_sql_statements(format_sql("-- a;b\nselect 1;"))) == 1
+      and len(split_sql_statements(format_sql("select 'a;b' as x, `c;d` from t"))) == 1,
+      (split_sql_statements(format_sql("-- a;b\nselect 1;")),
+       split_sql_statements(format_sql("select 'a;b' as x, `c;d` from t"))))
+check("SF3 工具自己生成的 DDL 排完原样不动（DDL 预览与格式化后的脚本同形）",
+      all(_sf_ddl("ods_t_student", "学生基本信息", _SF_COLS, d)
+          == format_sql(_sf_ddl("ods_t_student", "学生基本信息", _SF_COLS, d))
+          for d in (False, True)),
+      format_sql(_sf_ddl("ods_t_student", "学生基本信息", _SF_COLS, True))[:120])
+_SF_RAW = ("create table `t_a` (id int not null comment '主键', primary key (id))"
+           " engine=InnoDB default charset=utf8mb4;")
+_SF_WANT = ("CREATE TABLE `t_a` (\n"
+            "  id INT NOT NULL COMMENT '主键',\n"
+            "  PRIMARY KEY (id)\n"
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;")
+check("SF4 写死的期望串：关键字与类型大写、反引号名与字符串原样、字段一行一个",
+      format_sql(_SF_RAW) == _SF_WANT, format_sql(_SF_RAW))
+check("SF5 空输入与只有注释的输入不炸，且结果可判读",
+      format_sql("") == "" and format_sql("   \n ") == ""
+      and format_sql("-- 只有一句注释") == "-- 只有一句注释",
+      (repr(format_sql("")), repr(format_sql("   \n ")),
+       repr(format_sql("-- 只有一句注释"))))
+check("SF6 示例库正文都已是格式化后的形状（改语料与改格式化器必须同批）",
+      all(format_sql(s.sql) == s.sql for s in app_main.SQL_SAMPLES),
+      [i for i, s in enumerate(app_main.SQL_SAMPLES)
+       if format_sql(s.sql) != s.sql][:8])
+
+# ---------------------------------------------------------------------------
 section("L 字段类型映射（金额语义 + 精度按数据校核）")
 
 from core.infer import _is_money
@@ -4552,7 +4670,7 @@ from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "开始导入", "清空待上传文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
-           "示例 (?)", "清空编辑区", "清空结果区", "设置数据源信息", "收起",
+           "示例 (?)", "格式化 SQL", "清空编辑区", "清空结果区", "设置数据源信息", "收起",
            "清空待执行脚本", "批量执行脚本文件"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
 _absent = [t for t in _labels if t not in _btns]

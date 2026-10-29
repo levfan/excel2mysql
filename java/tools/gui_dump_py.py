@@ -548,6 +548,16 @@ def main():
         "secondary" if _sheet == m.SECONDARY_BUTTON_QSS
         else ("primary" if _sheet == m.PRIMARY_BUTTON_QSS else "plain"))
     _rowcell.deleteLater()
+    # Ctrl+Alt+L 这条按键：两栈各自合成一次真按键发给编辑区，比"按下去有没有把这段排开"，
+    # 不比两边各自抄的快捷键常量——常量写对了而绑定没挂上，是这类改动最常见的假绿
+    from PySide6.QtGui import QKeyEvent as _FKE
+    win.sql_run_input.setPlainText("select 1")
+    app.sendEvent(win.sql_run_input,
+                  _FKE(m.QEvent.KeyPress, m.Qt.Key_L,
+                       m.Qt.ControlModifier | m.Qt.AltModifier, "L"))
+    put("sqlrun.format.key",
+        "formatted" if win.sql_run_input.toPlainText() == "SELECT 1;" else "dead")
+    put("sqlrun.format.tip", win.btn_sql_run_format.toolTip())
     put("sqlrun.noedit", "1" if win.sql_run_table.editTriggers()
         == m.QAbstractItemView.NoEditTriggers else "0")
     _run_bar = find_layout(win.main_tabs.widget(2), win.btn_run_scripts)

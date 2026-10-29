@@ -2340,6 +2340,64 @@ public final class GuiMain {
         if (execBtn != null && !execBtn.getToolTipText().contains("中途出错整批回滚")) {
             problems.add("「执行」按钮没把事务语义写在 tooltip 上：" + execBtn.getToolTipText());
         }
+        // 「格式化 SQL」那一颗：文案、tooltip 三件事、真按键、拒绝与"没得排"三种结局
+        javax.swing.JButton formatBtn = frame.sqlRunFormatButton();
+        if (formatBtn == null || !"格式化 SQL".equals(formatBtn.getText())
+                || !formatBtn.getToolTipText().contains("关键字与类型大写")
+                || !formatBtn.getToolTipText().contains("Ctrl+Alt+L")
+                || !formatBtn.getToolTipText().contains("整库 dump")) {
+            problems.add("少了那颗「格式化 SQL」或它的 tooltip 没写清："
+                    + (formatBtn == null ? "没有这颗按钮" : formatBtn.getToolTipText()));
+        }
+        if (!"e2mFormatSql".equals(frame.sqlRunFormatKeyBinding())) {
+            problems.add("Ctrl+Alt+L 没挂在编辑区自己的 WHEN_FOCUSED 输入表上："
+                    + frame.sqlRunFormatKeyBinding());
+        }
+        // 按键派发要窗口真被系统激活过，自检环境里拿不到那个焦点（实测事件被
+        // KeyboardFocusManager 发到别处，绑定查不到）。所以这一条钉"这串键位映射到一个
+        // 还活着的动作"，并把那个 Action 本身跑一遍——跑的是产品挂进去的那一个，不是抄的
+        // 副本。真按键有没有反应记进清单的"无自动化覆盖"，交付前手工按一次。
+        frame.setSqlRunInputText("select id,name from t_user where age>18 and status=1;");
+        javax.swing.Action fmtAction = frame.sqlRunInputAction("e2mFormatSql");
+        if (fmtAction == null) {
+            problems.add("Ctrl+Alt+L 映射到的动作取不到（绑定是空的）");
+        } else {
+            fmtAction.actionPerformed(null);
+            if (!"SELECT id, name\nFROM t_user\nWHERE age > 18\nAND status = 1;"
+                    .equals(frame.sqlRunInputText())) {
+                problems.add("按键映射的那个动作没把这段排开：" + frame.sqlRunInputText());
+            }
+        }
+        if (!"free".equals(frame.sqlRunAltLBinding())) {
+            problems.add("只按 Alt+L 也被占用了：" + frame.sqlRunAltLBinding());
+        }
+        frame.setSqlRunInputText("DELIMITER ;;\nCREATE FUNCTION f() RETURNS INT BEGIN"
+                + " RETURN 1; END;;\nDELIMITER ;");
+        clickNow(formatBtn);
+        if (!frame.lastDialogText().contains("整库 dump")
+                || !frame.sqlRunInputText().startsWith("DELIMITER")) {
+            problems.add("整库 dump 那段没被拒绝，或拒绝后正文被改了："
+                    + frame.lastDialogText());
+        }
+        frame.setSqlRunInputText("SELECT 1;");
+        clickNow(formatBtn);
+        if (!frame.sqlRunResultText().contains("一个字没动")) {
+            problems.add("已经是排好的形状时没说那句「一个字没动」："
+                    + frame.sqlRunResultText());
+        }
+        clickNow(formatBtn);
+        int _same = frame.sqlRunResultText().split("一个字没动", -1).length;
+        if (_same < 3) {
+            problems.add("再点一次也不该静默（日志里那句「一个字没动」应随点击累加）："
+                    + (_same - 1) + " 次");
+        }
+        frame.setSqlRunInputText("select id,name from t_user where age>18 and status=1;");
+        clickNow(formatBtn);
+        if (!"SELECT id, name\nFROM t_user\nWHERE age > 18\nAND status = 1;"
+                .equals(frame.sqlRunInputText())) {
+            problems.add("点那颗按钮没把这段排开：" + frame.sqlRunInputText());
+        }
+
         // 空输入必须当场拦下：既不连库也不起任务，日志与弹窗同一句
         frame.setSqlRunInputText("");
         frame.runSqlFromUi();
@@ -7041,6 +7099,20 @@ public final class GuiMain {
                 }
             }
         });
+    }
+
+    /**
+     * 立刻触发一颗按钮挂着的动作。
+     *
+     * JButton.doClick() 是把动作排到队列里稍后才发的，而自检体自己就站在事件分发线程上
+     * ——等队列等于等自己。这里直接按同一个 ActionListener 走一遍，跑的仍是产品挂上去
+     * 的那个监听器，不是另抄一份实现。
+     */
+    private static void clickNow(javax.swing.JButton button) {
+        for (java.awt.event.ActionListener l : button.getActionListeners()) {
+            l.actionPerformed(new java.awt.event.ActionEvent(
+                    button, java.awt.event.ActionEvent.ACTION_PERFORMED, button.getActionCommand()));
+        }
     }
 
     /** 在事件分发线程上跑一步，跑完才回来：起任务这类动作本来就该由"用户点按钮"那个线程做。 */

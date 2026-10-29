@@ -210,6 +210,18 @@ public final class GuiDump {
                         + norm(frame.sqlRunFilesTable().getColumnName(4)));
                 // 行内那颗【执行】的档位（与 Python 侧同一条：读渲染件自己身上的标记）
                 put("run.row.exec.style", frame.sqlRunRowExecRole());
+                // Ctrl+Alt+L：与 Python 侧同一条判法——"这串键位映射到的动作能不能把这段排开"。
+                // Swing 的真按键派发要窗口被系统激活，枚举进程里拿不到那个焦点（实测事件被
+                // 发到别处），所以这里跑绑定指向的那个 Action 对象；Qt 侧能合成真按键，
+                // 两边比的都是"绑定挂了且动作是产品那一个"。
+                frame.setSqlRunInputText("select 1");
+                javax.swing.Action fmtAct = frame.sqlRunInputAction("e2mFormatSql");
+                if (fmtAct != null) {
+                    fmtAct.actionPerformed(null);
+                }
+                put("sqlrun.format.key",
+                        "SELECT 1;".equals(frame.sqlRunInputText()) ? "formatted" : "dead");
+                put("sqlrun.format.tip", frame.sqlRunFormatButton().getToolTipText());
                 put("split.sql.order", frame.sqlPage().segmentOrder());
                 // 日志默认高度 = 它自己的最小高度（用户口径：默认压到最低，仍可拖）。
                 // 比的是真控件量出来的高度，不是各栈抄一份配置值。

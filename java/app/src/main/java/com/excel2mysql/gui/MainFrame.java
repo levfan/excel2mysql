@@ -57,6 +57,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      *  用户口径是"两页正文一样大"；按屏幕 DPI 折算成物理像素。 */
     private static final int SQL_RUN_FONT_SIZE = LogPanel.DEFAULT_FONT_SIZE;
 
+    /**
+     * 编辑区那段 SQL 的格式化入口：按钮文案、悬停那一句、快捷键写法。
+     * 与 Python 侧 main.py 的 SQL_FORMAT_* 同值（对撞比的是真控件上的 tooltip）。
+     * Swing 的 tooltip 要多行只能走 html，换行用 &lt;br&gt;——对撞器比文案时会把
+     * 两种换行都抹平成空格，所以两栈比的是同一句话，不是各自的排版标记。
+     */
+    private static final String SQL_FORMAT_LABEL = "格式化 SQL";
+    private static final String SQL_FORMAT_KEY = "Ctrl+Alt+L";
+    private static final String SQL_FORMAT_TIP =
+            "<html>排整齐左边这段 SQL：关键字与类型大写、从句各起一行、建表字段一行一个；"
+          + "整库 dump（带 DELIMITER 那种）会拒绝并说明原因。<br>快捷键 "
+          + SQL_FORMAT_KEY + "（焦点在这块编辑区里时按）</html>";
+
     private final FileRowModel fileModel = new FileRowModel();
     private final javax.swing.JTable table =
             new EmptyHintTable(fileModel, EmptyHintTable.FILE_HINT) {
@@ -157,6 +170,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             new java.util.ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
     private javax.swing.JButton sqlRunBtn;
     private javax.swing.JButton sqlRunClearInputBtn;
+    private javax.swing.JButton sqlRunFormatBtn;
     private javax.swing.JButton sqlRunClearLogBtn;
     private javax.swing.JButton sqlRunHelpBtn;
     private javax.swing.JLabel sqlRunHint;
@@ -2762,6 +2776,25 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunHelpBtn = new javax.swing.JButton("示例 (?)");
         sqlRunHelpBtn.setToolTipText("打开示例清单：选中一条可复制到剪贴板或插到编辑区");
         sqlRunHelpBtn.addActionListener(e -> openSqlSamples());
+        sqlRunFormatBtn = new javax.swing.JButton(SQL_FORMAT_LABEL);
+        Buttons.secondary(sqlRunFormatBtn);
+        sqlRunFormatBtn.setToolTipText(SQL_FORMAT_TIP);
+        sqlRunFormatBtn.addActionListener(e -> formatSqlInEditor());
+        // Ctrl+Alt+L 挂在编辑区自己身上（WHEN_FOCUSED）：焦点在这块里按才排这一段，
+        // 焦点在连接区那几个输入框里按这串不动任何东西。
+        // 与 Qt 侧装在控件上的事件过滤是同一作用域；不用窗口级绑定，是因为窗口级
+        // 会把按键从正在输入的框里抢走（Ctrl+V 那条踩过同一个坑）。
+        sqlRunInput.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).put(
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_L,
+                        java.awt.event.InputEvent.CTRL_DOWN_MASK
+                                | java.awt.event.InputEvent.ALT_DOWN_MASK),
+                "e2mFormatSql");
+        sqlRunInput.getActionMap().put("e2mFormatSql", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                formatSqlInEditor();
+            }
+        });
         sqlRunClearInputBtn = new javax.swing.JButton("清空编辑区");
         sqlRunClearInputBtn.setToolTipText("只清掉左边这段 SQL，右侧结果区不动");
         sqlRunClearInputBtn.addActionListener(e -> sqlRunInput.setText(""));
@@ -2778,6 +2811,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JPanel leftEast = new javax.swing.JPanel(
                 new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
         leftEast.add(sqlRunHelpBtn);
+        leftEast.add(sqlRunFormatBtn);
         leftEast.add(sqlRunClearInputBtn);
         leftEast.add(sqlRunBtn);
         leftHead.add(leftEast, java.awt.BorderLayout.EAST);
@@ -3160,6 +3194,32 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 执行编辑区里那段 SQL。事务与回滚语义走 SqlExecute，与「SQL 脚本改名」页同一套。 */
+    /**
+     * 把编辑区那段 SQL 排整齐：排了、没得排、不许排三种结局都要留一句可见的话。
+     *
+     * 不改语句内容——只动大小写与换行，判据是用例里那条"切分前后逐条同形"。
+     * 排完把光标送回开头：长语句排完之后光标停在末尾、滚动位置留在上一条的尾巴上，
+     * 看着像"排到一半被截了"。与 Python 侧 on_format_sql 同一处理。
+     */
+    private void formatSqlInEditor() {
+        String text = sqlRunInput.getText();
+        String why = com.excel2mysql.core.SqlScript.formatRefusal(text);
+        if (!why.isEmpty()) {
+            warn("没有格式化：" + why);
+            return;
+        }
+        String out = com.excel2mysql.core.SqlScript.formatSql(text);
+        if (out.equals(text)) {
+            sqlRunLog.log("[提示] 这段 SQL 已经是排好的形状，一个字没动");
+            return;
+        }
+        sqlRunInput.setText(out);
+        sqlRunInput.setCaretPosition(0);
+        sqlRunLog.log("[格式化] 已排齐 " + out.split("\n", -1).length + " 行、"
+                + com.excel2mysql.core.SqlScript.splitStatements(out).size()
+                + " 条语句：只改大小写与换行，语句内容不动；要跑再点「执行编辑区 SQL」");
+    }
+
     private void runSqlStatements() {
         final String text = sqlRunInput.getText();
         if (text == null || text.trim().isEmpty()) {
@@ -4189,6 +4249,39 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JButton sqlRunHelpButton() {
         return sqlRunHelpBtn;
+    }
+
+    /** 自检用：只按 Alt+L 这一串有没有被占用（应当是 free，只有加 Ctrl 才算格式化）。 */
+    public String sqlRunAltLBinding() {
+        if (sqlRunInput == null) {
+            return "-";
+        }
+        Object cmd = sqlRunInput.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).get(
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_L,
+                        java.awt.event.InputEvent.ALT_DOWN_MASK));
+        return cmd == null ? "free" : String.valueOf(cmd);
+    }
+
+    /** 自检用：Ctrl+Alt+L 这条按键映射到的那个动作（拿它自己跑一遍，不另抄实现）。 */
+    public javax.swing.Action sqlRunInputAction(Object key) {
+        return sqlRunInput == null ? null : sqlRunInput.getActionMap().get(key);
+    }
+
+    /** 自检与对撞用：那颗「格式化 SQL」。 */
+    public javax.swing.JButton sqlRunFormatButton() {
+        return sqlRunFormatBtn;
+    }
+
+    /** 自检用：Ctrl+Alt+L 这条绑定挂在编辑区自己身上，读的是真 InputMap。 */
+    public String sqlRunFormatKeyBinding() {
+        if (sqlRunInput == null) {
+            return "-";
+        }
+        javax.swing.KeyStroke key = javax.swing.KeyStroke.getKeyStroke(
+                java.awt.event.KeyEvent.VK_L,
+                java.awt.event.InputEvent.CTRL_DOWN_MASK | java.awt.event.InputEvent.ALT_DOWN_MASK);
+        Object cmd = sqlRunInput.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).get(key);
+        return cmd == null ? "none" : String.valueOf(cmd);
     }
 
     public int sqlSamplesCount() {

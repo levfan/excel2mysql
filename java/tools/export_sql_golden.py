@@ -27,10 +27,11 @@ from core.mysql_io import build_ddl, build_insert_sql, _convert  # noqa: E402
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment  # noqa: E402
 from core.sql_execute import render_table  # noqa: E402
 from core.sql_script import (  # noqa: E402
-    apply_table_prefix_sql, edit_column, extract_create_tables,
+    apply_table_prefix_sql, edit_column, extract_create_tables, format_sql,
     replace_first_segment_sql, parse_create_tables, set_table_comment,
     split_sql_statements,
 )
+from sql_samples import SAMPLES  # noqa: E402
 
 OUT_DIR = os.path.join(ROOT, "java", "verify", "golden")
 
@@ -109,6 +110,47 @@ COLUMN_EDITS = [
     ("id", None, None, "a;b"),
 ]
 
+# 格式化语料：每条都踩住一条规则，两栈输出必须逐字节相同
+FORMAT_INPUTS = [
+    "", "   \n  ", ";", "select 1;",
+    "SELECT 1",
+    "select 1 where a<=2 and b<>3 or c!=4",
+    "select a||b, c->'$.d' from t",
+    "CREATE TABLE `t_a` (`id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',"
+    " `amount` DECIMAL(20,4) DEFAULT NULL COMMENT '金额，含逗号',"
+    " PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='表';",
+    "CREATE TABLE IF NOT EXISTS db.`tbl` (id INT PRIMARY KEY) DEFAULT CHARACTER SET utf8mb4;",
+    "CREATE TEMPORARY TABLE tmp_x (cust_no VARCHAR(32) PRIMARY KEY);",
+    "alter table t add column c int comment '丙', modify column d varchar(10) after c",
+    "CREATE INDEX idx ON t (a, b)",
+    "INSERT INTO t VALUES (1),(2);",
+    "INSERT INTO t (a,b) VALUES ('x;1', 'y''2')",
+    "select 'a;b' as x, `c;d` from t",
+    "UPDATE t SET a=1, b=2 WHERE id=3",
+    "DELETE FROM t LIMIT 1",
+    "SELECT CASE WHEN a>1 THEN 'x' ELSE 'y' END AS c FROM t",
+    "select a from (select b as a from t) x where a in (1,2,3)",
+    "SELECT CONCAT(a, '-', b) AS k, GROUP_CONCAT(c ORDER BY d SEPARATOR ',') "
+    "FROM t GROUP BY k HAVING COUNT(*) > 1",
+    "SELECT * FROM t /* 块注释 */ WHERE a=1",
+    "-- 头注\nselect 1; -- 尾注\n# 井号注\nselect 2;",
+    "# 只有注释",
+    "select @@version, @@global.max_connections, database(), count(1) from dual",
+    "SELECT * FROM t_order o LEFT JOIN t_map m ON o.no = m.no AND o.k = 1 "
+    "WHERE o.a IS NOT NULL AND (o.b LIKE '%x%' OR o.b LIKE '%y%') ORDER BY o.id DESC LIMIT 10",
+    "select id, name from t_user where age > 18 and status = 1 order by id desc limit 10;",
+    "SELECT " + ", ".join("c%d" % i for i in range(30)) + " FROM wide_table",
+    "select a from t where " + " OR ".join("c%d = %d" % (i, i) for i in range(20)),
+    "CREATE TABLE `t_b` (" + ", ".join("`c%d` INT" % i for i in range(12)) + ") ENGINE=InnoDB;",
+]
+# 工具自己生成的那份 DDL：格式化它必须是零改动（两栈同判）
+FORMAT_INPUTS.append(build_ddl("ods_t_student", "学生基本信息", [
+    {"field": "id", "type": "BIGINT UNSIGNED", "comment": "主键",
+     "nullable": False, "primary_key": True},
+    {"field": "student_name", "type": "VARCHAR(64)", "comment": "姓名", "nullable": False},
+    {"field": "amount", "type": "DECIMAL(20,4)", "comment": "金额", "nullable": True},
+], True))
+
 CONVERT_TYPES = ["INT", "BIGINT", "DECIMAL(10,2)", "VARCHAR(64)", "TEXT", "DATE", "DATETIME"]
 CONVERT_VALUES = [None, "", "  ", "7", "7.0", "-007", "1,234", "abc", "2023-01-02",
                   "2023/1/2 3:4:5", "20230102", "2023-02-30", True, False,
@@ -180,6 +222,15 @@ def sql_cases():
         yield {"in": text,
                "extract": extract_create_tables(text),
                "split": split_sql_statements(text)}
+    # 格式化：期望值一律由 Python 侧真函数产出，Java 的 SqlScript.formatSql 必须
+    # 逐字节相同。语料取三处——脚本夹具、126 条示例正文、以及几条专门踩规则的输入
+    # （类型括号、表选项等号、条件链、注释与引号里的分号）。
+    # 幂等与"切分不变"这两条性质在 Python 用例集里钉（pack_test 的 Q 组），
+    # 这里只钉"两栈输出相同"——相同 + Python 侧正确，就传递出 Java 侧正确。
+    for text in FORMAT_INPUTS:
+        yield {"op": "format", "in": text, "out": format_sql(text)}
+    for s in SAMPLES:
+        yield {"op": "format", "in": s.sql, "out": format_sql(s.sql)}
     for text in DDL_SCRIPTS:
         yield {"op": "ddl-parse", "in": text, "out": ddl_parse_lines(text)}
     for cols, rows in TABLE_CASES:

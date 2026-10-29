@@ -1326,4 +1326,484 @@ public final class SqlScript {
         return s.substring(0, i);
     }
 
+    // -------------------------------------------------------------------------
+    // SQL 格式化：与 core/sql_script.py 的 format_sql 同一条规则，输出逐字节相同。
+    //
+    // 期望值不手写——`java/tools/export_sql_golden.py` 用 Python 侧真函数生成
+    // `verify/golden/sql.jsonl.gz` 里 op=format 那批记录，`SqlDiffer` 拿这一份比 Java
+    // 的实现。两栈只要有一处判据不同（比如逗号后补不补空格），这一步就红。
+    // 三条性质同样钉在那批记录里：幂等、切分不变、与 buildDdl 生成的 DDL 零差异。
+    // -------------------------------------------------------------------------
+
+    private static Set<String> wordSet(String... ws) {
+        return new HashSet<String>(java.util.Arrays.asList(ws));
+    }
+
+    /** 只有裸词才查这张表：字符串、反引号名、注释里的同名词一律不动。 */
+    private static final Set<String> FMT_KEYWORDS = wordSet(
+            "ADD", "AFTER", "ALL", "ALTER", "AND", "AS", "ASC", "AUTO_INCREMENT", "BEGIN",
+            "BETWEEN", "BY", "CALL",
+            "CASE", "CHANGE", "CHAR", "CHARACTER", "CHARSET", "COLLATE", "COLUMN",
+            "COMMENT", "COMMIT",
+            "CONCAT", "CONDITION", "CONSTRAINT", "CONTINUE", "CONVERT", "CREATE", "CROSS",
+            "DATABASE", "DEALLOCATE", "DEFAULT", "DELETE", "DESC", "DESCRIBE", "DISTINCT",
+            "DO", "DROP", "ELSE", "END", "ENGINE", "ESCAPE", "EXCEPT", "EXCLUDE",
+            "EXECUTE", "EXISTS", "EXPLAIN", "FETCH", "FIRST", "FOR", "FORCE", "FOREIGN",
+            "FROM", "FULL", "FUNCTION", "GRANT", "GROUP", "HAVING", "IF", "IGNORE", "IN",
+            "INDEX", "INHERITS", "INNER", "INSERT", "INTERSECT", "INTERVAL", "INTO",
+            "IS", "JOIN", "KEY", "LAST", "LEFT", "LIKE", "LIMIT", "MODE", "MODIFY",
+            "NAMES", "NATURAL", "NOT", "NULL", "NULLS", "OF", "OFFSET", "ON", "OPTION",
+            "OR", "ORDER", "OUTER", "PARTITION", "PRIMARY", "PROCEDURE", "RANGE", "READ",
+            "REFERENCES", "REGEXP", "RENAME", "REPEAT", "REPLACE", "RETURN", "REVOKE",
+            "RIGHT", "RLIKE", "ROLLBACK", "ROW", "ROWS", "SCHEMA", "SELECT", "SEPARATOR",
+            "SET", "SHARE", "SHOW", "STRAIGHT_JOIN", "TABLE", "TEMPORARY", "THEN", "TO",
+            "TRUNCATE", "UNION", "UNIQUE", "UNSIGNED", "UPDATE", "USING", "VALUES",
+            "WHEN", "WHERE", "WITH", "WRITE", "ZEROFILL");
+
+    /** 类型名一起大写；表里没有 utf8mb4 / InnoDB 那类"值"。 */
+    private static final Set<String> FMT_TYPES = wordSet(
+            "VARCHAR", "CHAR", "TEXT", "TINYTEXT", "MEDIUMTEXT", "LONGTEXT", "BLOB",
+            "TINYBLOB", "MEDIUMBLOB", "LONGBLOB", "BINARY", "VARBINARY", "DECIMAL",
+            "NUMERIC", "FLOAT", "DOUBLE", "REAL", "INT", "INTEGER", "TINYINT",
+            "SMALLINT", "MEDIUMINT", "BIGINT", "BIT", "BOOL", "BOOLEAN", "DATE",
+            "DATETIME", "TIMESTAMP", "TIME", "YEAR", "JSON");
+
+    private static final Set<String> FMT_FUNCS = wordSet(
+            "COUNT", "SUM", "AVG", "MIN", "MAX", "GROUP_CONCAT", "IFNULL", "NULLIF",
+            "COALESCE", "CONCAT", "CONCAT_WS", "DATE_FORMAT", "STR_TO_DATE", "NOW",
+            "CURDATE", "CURTIME", "SYSDATE", "UNIX_TIMESTAMP", "FROM_UNIXTIME", "DATE",
+            "TIMESTAMP", "YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "DATABASE",
+            "SCHEMA", "VERSION", "USER", "CURRENT_USER", "SESSION_USER", "LENGTH",
+            "CHAR_LENGTH", "BIT_LENGTH", "OCTET_LENGTH", "LEFT", "RIGHT", "SUBSTRING",
+            "SUBSTRING_INDEX", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM", "REPLACE",
+            "REVERSE", "SPACE", "LPAD", "RPAD", "ABS", "CEIL", "CEILING", "FLOOR",
+            "ROUND", "TRUNC", "MOD", "POW", "POWER", "SQRT", "RAND", "GREATEST",
+            "LEAST", "CAST", "CONVERT", "MD5", "SHA1", "SHA2", "UUID", "JSON_EXTRACT",
+            "JSON_UNQUOTE", "FOUND_ROWS", "ROW_COUNT", "LAST_INSERT_ID", "CONNECTION_ID",
+            "SLEEP", "BENCHMARK", "FIELD", "INET_ATON", "INET6_ATON");
+
+    private static final Set<String> FMT_UPPER = new HashSet<String>(FMT_KEYWORDS);
+    private static final Set<String> FMT_TIGHT_EQ = wordSet(
+            "ENGINE", "CHARSET", "COLLATE", "COMMENT", "AUTO_INCREMENT", "KEY_BLOCK_SIZE");
+
+    /** 深度 0 上这些词一起句就另起一行。 */
+    private static final Set<String> FMT_BREAK = wordSet(
+            "SELECT", "FROM", "WHERE", "HAVING", "LIMIT", "OFFSET", "UNION", "INTERSECT",
+            "EXCEPT", "INSERT", "UPDATE", "DELETE", "SET", "VALUES", "ON", "USING", "JOIN");
+    private static final Set<String> FMT_PAIR = wordSet("GROUP", "ORDER");
+    private static final Set<String> FMT_JOIN_HEADS = wordSet(
+            "LEFT", "RIGHT", "INNER", "FULL", "OUTER", "CROSS", "NATURAL", "STRAIGHT_JOIN");
+    private static final Set<String> FMT_COND = wordSet("WHERE", "ON", "HAVING");
+    private static final String FMT_INDENT = "  ";
+    private static final int FMT_WRAP_COL = 100;
+    private static final String FMT_OP_HEAD = "<>=!|-";
+    private static final String FMT_OP_TAIL = "=<>|";
+
+    static {
+        FMT_UPPER.addAll(FMT_TYPES);
+    }
+
+    /**
+     * 这段文本该不该拒绝格式化，返回拒绝的理由（空串表示可以排）。
+     *
+     * 整库 dump 不能排：{@code DELIMITER ;;} 里的分号是客户端指令的一部分，按普通
+     * 语句切就会把导出文件的收尾改坏。理由文案与 Python 侧 format_refusal 逐字相同，
+     * 调用方拿到非空理由要原话回给用户，不能静默什么都不做。
+     */
+    public static String formatRefusal(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return "这段是空的，没有可排的内容";
+        }
+        if (DELIMITER_DIRECTIVE.matcher(text).find()) {
+            return "这是整库 dump 的写法（带 DELIMITER 指令），格式化会改坏收尾";
+        }
+        if (isDumpScript(text)) {
+            return "这是整库 dump 文件，格式化会改坏导出工具写的收尾";
+        }
+        return "";
+    }
+
+    /** 一句 SQL 排整齐；与 Python 的 format_sql 同义，编辑区那颗 Ctrl+Alt+L 走这里。 */
+    public static String formatSql(String text) {
+        List<String[]> tokens = sqlTokens(text);
+        List<List<String>> blocks = new ArrayList<List<String>>();
+        List<String[]> buf = new ArrayList<String[]>();
+        for (String[] tk : tokens) {
+            if ("punct".equals(tk[0]) && ";".equals(tk[1])) {
+                List<String> block = formatOne(buf);
+                if (!block.isEmpty()) {
+                    int last = block.size() - 1;
+                    block.set(last, block.get(last) + ";");
+                    blocks.add(block);
+                }
+                buf = new ArrayList<String[]>();
+                continue;
+            }
+            buf.add(tk);
+        }
+        List<String> tail = formatOne(buf);
+        if (!tail.isEmpty()) {
+            blocks.add(tail);
+        }
+        if (blocks.isEmpty()) {
+            return text.trim();
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < blocks.size(); i++) {
+            if (i > 0) {
+                sb.append('\n');
+            }
+            List<String> block = blocks.get(i);
+            for (int j = 0; j < block.size(); j++) {
+                if (j > 0) {
+                    sb.append('\n');
+                }
+                sb.append(block.get(j));
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 切成 {种类, 原文} 的 token：word / num / var / str / cmt / punct / ws。
+     *
+     * 引号与注释的走法与 {@code splitStatements} 逐条对齐（反斜杠转义在反引号里不算、
+     * 双写引号算一个字符、行注释不吃行末那个换行）——两处词法一旦不一致，
+     * 格式化就会把语句切歪，而"切分不变"正是这条功能的判据。
+     */
+    private static List<String[]> sqlTokens(String text) {
+        List<String[]> out = new ArrayList<String[]>();
+        int i = 0;
+        int n = text.length();
+        while (i < n) {
+            char ch = text.charAt(i);
+            char nxt = i + 1 < n ? text.charAt(i + 1) : '\0';
+            if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+                int j = i;
+                while (j < n && (text.charAt(j) == ' ' || text.charAt(j) == '\t'
+                        || text.charAt(j) == '\r' || text.charAt(j) == '\n')) {
+                    j++;
+                }
+                out.add(new String[] {"ws", text.substring(i, j)});
+                i = j;
+                continue;
+            }
+            if (ch == '\'' || ch == '"' || ch == '`') {
+                char quote = ch;
+                int j = i + 1;
+                while (j < n) {
+                    if (text.charAt(j) == '\\' && quote != '`' && j + 1 < n) {
+                        j += 2;
+                        continue;
+                    }
+                    if (text.charAt(j) == quote) {
+                        if (j + 1 < n && text.charAt(j + 1) == quote) {
+                            j += 2;
+                            continue;
+                        }
+                        j++;
+                        break;
+                    }
+                    j++;
+                }
+                out.add(new String[] {"str", text.substring(i, j)});
+                i = j;
+                continue;
+            }
+            if ((ch == '-' && nxt == '-') || ch == '#') {
+                int j = text.indexOf('\n', i);
+                j = j == -1 ? n : j;
+                out.add(new String[] {"cmt", text.substring(i, j)});
+                i = j;
+                continue;
+            }
+            if (ch == '/' && nxt == '*') {
+                int j = text.indexOf("*/", i + 2);
+                j = j == -1 ? n : j + 2;
+                out.add(new String[] {"cmt", text.substring(i, j)});
+                i = j;
+                continue;
+            }
+            if (ch == '@') {
+                int j = i + 1;
+                if (j < n && text.charAt(j) == '@') {
+                    j++;
+                }
+                while (j < n && (Character.isLetterOrDigit(text.charAt(j))
+                        || "_$.".indexOf(text.charAt(j)) >= 0)) {
+                    j++;
+                }
+                out.add(new String[] {"var", text.substring(i, j)});
+                i = j;
+                continue;
+            }
+            if (Character.isLetter(ch) || ch == '_'
+                    || (Character.isLetterOrDigit(ch) && !Character.isDigit(ch))) {
+                int j = i;
+                while (j < n && (Character.isLetterOrDigit(text.charAt(j))
+                        || text.charAt(j) == '_' || text.charAt(j) == '$')) {
+                    j++;
+                }
+                out.add(new String[] {"word", text.substring(i, j)});
+                i = j;
+                continue;
+            }
+            if (Character.isDigit(ch)) {
+                int j = i;
+                while (j < n && (Character.isLetterOrDigit(text.charAt(j))
+                        || "_$.".indexOf(text.charAt(j)) >= 0)) {
+                    j++;
+                }
+                out.add(new String[] {"num", text.substring(i, j)});
+                i = j;
+                continue;
+            }
+            out.add(new String[] {"punct", String.valueOf(ch)});
+            i++;
+        }
+        return out;
+    }
+
+    /** 下一个 token 的大写原文（只认 word），用来判 GROUP BY / ORDER BY 这种两词从句。 */
+    private static String nextWord(List<String[]> sig, int at) {
+        for (int k = at + 1; k < sig.size(); k++) {
+            String kind = sig.get(k)[0];
+            if ("ws".equals(kind)) {
+                continue;
+            }
+            return "word".equals(kind) ? sig.get(k)[1].toUpperCase(Locale.ROOT) : "";
+        }
+        return "";
+    }
+
+    /** 从 at 往后是不是 `LEFT [OUTER] JOIN` 这一串：只有真接到 JOIN 才换行。 */
+    private static boolean joinAhead(List<String[]> sig, int at) {
+        for (int k = at + 1; k < sig.size(); k++) {
+            String up = sig.get(k)[1].toUpperCase(Locale.ROOT);
+            if ("ws".equals(sig.get(k)[0]) || "OUTER".equals(up) || "INNER".equals(up)) {
+                continue;
+            }
+            return "JOIN".equals(up);
+        }
+        return false;
+    }
+
+    /**
+     * 这个左括号之前，是不是只写过 `CREATE [TEMPORARY] TABLE [IF NOT EXISTS] 表名`
+     * 或 `ALTER TABLE 表名`。只认这一种开头，是为了不把 `VARCHAR(64)`、
+     * `ADD INDEX idx (col)` 里的括号当成字段清单的开头展开。
+     */
+    private static boolean headIsTableDef(List<String[]> seen) {
+        List<String> words = new ArrayList<String>();
+        for (String[] tk : seen) {
+            if (!"ws".equals(tk[0])) {
+                words.add(tk[1]);
+            }
+        }
+        if (words.isEmpty()) {
+            return false;
+        }
+        int i = 0;
+        String first = words.get(0).toUpperCase(Locale.ROOT);
+        if ("CREATE".equals(first)) {
+            i = 1;
+            if (i < words.size() && ("TEMPORARY".equals(words.get(i).toUpperCase(Locale.ROOT))
+                    || "UNLOGGED".equals(words.get(i).toUpperCase(Locale.ROOT)))) {
+                i++;
+            }
+            if (i >= words.size() || !"TABLE".equals(words.get(i).toUpperCase(Locale.ROOT))) {
+                return false;
+            }
+            i++;
+            if (i + 2 < words.size() && "IF".equals(words.get(i).toUpperCase(Locale.ROOT))
+                    && "NOT".equals(words.get(i + 1).toUpperCase(Locale.ROOT))
+                    && "EXISTS".equals(words.get(i + 2).toUpperCase(Locale.ROOT))) {
+                i += 3;
+            }
+        } else if ("ALTER".equals(first)) {
+            i = 1;
+            if (i >= words.size() || !"TABLE".equals(words.get(i).toUpperCase(Locale.ROOT))) {
+                return false;
+            }
+            i++;
+        } else {
+            return false;
+        }
+        if (i >= words.size()) {
+            return false;
+        }
+        return i + 1 >= words.size() || ".".equals(words.get(i + 1));
+    }
+
+    /** 当前这一行已排到的字符数（不含缩进）。 */
+    private static int lineLen(List<String> cur) {
+        int n = 0;
+        for (String piece : cur) {
+            n += piece.length();
+        }
+        return n;
+    }
+
+    /** 把当前这一行收进结果：缩进按"是否在展开的字段清单里"决定。 */
+    private static void flushLines(List<String> lines, List<String> cur,
+                                   boolean listed, int depth) {
+        if (cur.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String piece : cur) {
+            sb.append(piece);
+        }
+        String body = sb.toString().trim();
+        cur.clear();
+        lines.add((listed && depth >= 1 ? FMT_INDENT : "") + body);
+    }
+
+    /**
+     * 这个 token 前面要不要留空格。六条与 Python 侧的 {@code gap} 逐字对齐：
+     * 标点贴前；点号两边贴紧；函数与类型的左括号贴紧；类型参数表里的逗号后面不补空格；
+     * 表选项的等号两边贴紧；两个运算符字符合起来是一个符号（{@code <=} {@code <>}
+     * {@code !=} {@code ||} {@code ->}），中间不能插空格。
+     * {@code tableName} 表示"这个左括号前写的是表名"，那一格要留着。
+     */
+    private static String gap(List<String> cur, String text, String prevKind,
+                              String prevUp, boolean tightEq, boolean tightComma,
+                              String prevPunct, boolean tableName) {
+        if (cur.isEmpty()) {
+            return "";
+        }
+        if (tightEq || tightComma) {
+            return "";
+        }
+        String last = cur.get(cur.size() - 1).trim();
+        char head = last.isEmpty() ? '\0' : last.charAt(last.length() - 1);
+        if (text.startsWith(".") || head == '.' || ",);".indexOf(text.charAt(0)) >= 0
+                || head == '(') {
+            return "";
+        }
+        if (!prevPunct.isEmpty() && FMT_OP_HEAD.indexOf(prevPunct.charAt(0)) >= 0
+                && text.length() == 1 && FMT_OP_TAIL.indexOf(text.charAt(0)) >= 0) {
+            return "";
+        }
+        if ("=".equals(text) && "word".equals(prevKind) && FMT_TIGHT_EQ.contains(prevUp)) {
+            return "";
+        }
+        if ("(".equals(text) && "word".equals(prevKind) && !tableName) {
+            if (FMT_FUNCS.contains(prevUp) || FMT_TYPES.contains(prevUp)) {
+                return "";
+            }
+            if (!FMT_UPPER.contains(prevUp)) {
+                return "";
+            }
+        }
+        return " ";
+    }
+
+    /** 一句（不含结尾分号）排成若干行。 */
+    private static List<String> formatOne(List<String[]> tokens) {
+        List<String[]> sig = new ArrayList<String[]>();
+        for (String[] tk : tokens) {
+            if (!"ws".equals(tk[0])) {
+                sig.add(tk);
+            }
+        }
+        List<String> lines = new ArrayList<String>();
+        if (sig.isEmpty()) {
+            return lines;
+        }
+        List<String> cur = new ArrayList<String>();
+        List<Boolean> typeParen = new ArrayList<Boolean>();
+        int depth = 0;
+        String clause = "";
+        boolean listed = false;
+        for (int idx = 0; idx < sig.size(); idx++) {
+            String kind = sig.get(idx)[0];
+            String text = sig.get(idx)[1];
+            String up = "word".equals(kind) ? text.toUpperCase(Locale.ROOT) : "";
+            String prevKind = idx > 0 ? sig.get(idx - 1)[0] : "";
+            String prevText = idx > 0 ? sig.get(idx - 1)[1] : "";
+            String prevUp = "word".equals(prevKind)
+                    ? prevText.toUpperCase(Locale.ROOT) : "";
+            String prev2Text = idx >= 2 ? sig.get(idx - 2)[1] : "";
+            String prevPunct = "punct".equals(prevKind) ? prevText : "";
+            // 等号是 punct，prevUp 只对 word 有值，这里必须拿原文比
+            boolean tightEq = "=".equals(prevText)
+                    && FMT_TIGHT_EQ.contains(prev2Text.toUpperCase(Locale.ROOT));
+            boolean tightComma = ",".equals(prevText) && !typeParen.isEmpty()
+                    && typeParen.get(typeParen.size() - 1).booleanValue();
+            // 关键字与类型大写；字符串、反引号名、注释、变量一律原样
+            String emit = "word".equals(kind) && FMT_UPPER.contains(up) ? up : text;
+            if ("punct".equals(kind) && "(".equals(text)) {
+                boolean headTable = depth == 0 && !listed
+                        && headIsTableDef(new ArrayList<String[]>(sig.subList(0, idx)));
+                if (headTable) {
+                    listed = true;
+                    cur.add(gap(cur, text, prevKind, prevUp, tightEq, tightComma,
+                            prevPunct, true) + text);
+                    flushLines(lines, cur, listed, depth);
+                    depth++;
+                    typeParen.add(Boolean.FALSE);
+                    continue;
+                }
+                depth++;
+                typeParen.add(Boolean.valueOf("word".equals(prevKind)
+                        && FMT_TYPES.contains(prevUp)));
+            } else if ("punct".equals(kind) && ")".equals(text)) {
+                if (depth == 1 && listed) {
+                    flushLines(lines, cur, listed, depth);   // 最后一个字段先成行
+                }
+                depth = Math.max(0, depth - 1);
+                if (!typeParen.isEmpty()) {
+                    typeParen.remove(typeParen.size() - 1);
+                }
+            } else if ("punct".equals(kind) && ",".equals(text) && depth == 1 && listed) {
+                cur.add(gap(cur, emit, prevKind, prevUp, tightEq, tightComma,
+                        prevPunct, false) + emit);
+                flushLines(lines, cur, listed, depth);
+                continue;
+            }
+
+            boolean breakWord = false;
+            if ("word".equals(kind) && !cur.isEmpty()) {
+                boolean joinHead = (FMT_JOIN_HEADS.contains(up) && joinAhead(sig, idx))
+                        || ("JOIN".equals(up) && !FMT_JOIN_HEADS.contains(prevUp));
+                boolean condChain = ("AND".equals(up) || "OR".equals(up))
+                        && FMT_COND.contains(clause);
+                if (depth == 0) {
+                    breakWord = (FMT_BREAK.contains(up) && !"JOIN".equals(up)
+                                    && !("SET".equals(up) && "CHARACTER".equals(prevUp)))
+                            || ("JOIN".equals(up) && joinHead)
+                            || joinHead
+                            || (FMT_PAIR.contains(up) && "BY".equals(nextWord(sig, idx)))
+                            || condChain;
+                } else {
+                    // 括号里的条件链也拆开：编辑器不折行，一条 WHERE 里三四个 OR 挤
+                    // 在一行就要横向拖两百多列才看完
+                    breakWord = condChain;
+                }
+            }
+            if (breakWord) {
+                flushLines(lines, cur, listed, depth);
+            } else if (!cur.isEmpty() && ",".equals(prevText) && depth <= 1
+                    && lineLen(cur) > FMT_WRAP_COL) {
+                // 超过这一列就在下一个逗号处折行：只在已经够长时才折，短清单照旧一行
+                flushLines(lines, cur, listed, depth);
+            }
+            if ("word".equals(kind) && depth == 0 && FMT_BREAK.contains(up)) {
+                // 只在从句关键词上更新"现在在哪一段"，否则走到 AND 时 clause 已变成表名
+                clause = up;
+            }
+            if (!cur.isEmpty()) {
+                cur.add(gap(cur, emit, prevKind, prevUp, tightEq, tightComma,
+                        prevPunct, false) + emit);
+            } else {
+                cur.add(emit);
+            }
+            if ("cmt".equals(kind) && (text.startsWith("--") || text.startsWith("#"))) {
+                flushLines(lines, cur, listed, depth);
+            }
+        }
+        flushLines(lines, cur, listed, depth);
+        return lines;
+    }
 }
