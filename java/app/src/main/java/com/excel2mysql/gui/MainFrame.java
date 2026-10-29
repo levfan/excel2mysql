@@ -186,6 +186,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private HintTextField prefixField;
     private javax.swing.JCheckBox initialsBox;
     private javax.swing.JCheckBox upperBox;
+    private javax.swing.JCheckBox lowerBox;
     private javax.swing.JCheckBox dropExisting;
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
     private final Map<TableOps.Table, TableBuilder.Result> byTable =
@@ -559,16 +560,34 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         upperBox.setToolTipText("由中文或文件名转写出来的表名与字段名全部大写"
                 + "（ding_dan_jin_e → DING_DAN_JIN_E、水库基础信息 → SHUI_KU_JI_CHU_XIN_XI）；"
                 + "默认不勾选，勾上才转大写。文件名括号里写下的英文表名同样转大写；"
-                + "结构定义 Sheet 里人工写下的字段名也一起转大写，取消勾选则保持写下的原样；"
+                + "结构定义 Sheet 里人工写下的字段名也一起转大写，两颗大小写开关都不勾"
+                + "则保持写下的原样；与「表名与字段名转小写」互斥，勾这颗会取消那一颗；"
                 + "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。");
-        upperBox.addActionListener(e -> log("[提示] 表名与字段名大小写切换为："
-                + (upperBox.isSelected() ? "大写" : "小写")
-                + "（对之后添加的文件生效，结构定义 Sheet 里手写的字段名勾选时一起转大写、不勾时保持原样）"));
+        upperBox.addActionListener(e -> {
+            keepOneCaseSwitch(upperBox, lowerBox);
+            String[] st = caseState();
+            log("[提示] 表名与字段名大小写切换为：" + st[0]
+                    + "（对之后添加的文件生效，结构定义 Sheet 里手写的字段名" + st[1] + "）");
+        });
+        lowerBox = new javax.swing.JCheckBox("表名与字段名转小写");
+        lowerBox.setToolTipText("由中文转写出来的表名与字段名本来就落在小写（ding_dan_jin_e、skjcxx），"
+                + "这一档在转写那一路与不勾同结果；文件名括号里写下的英文表名本来也统一转小写。"
+                + "这颗真管到的是结构定义 Sheet 里人工手写的字段名：勾上才把它们转成小写"
+                + "（ITEM_CODE → item_code），两颗都不勾时一个字母都不动；"
+                + "与「表名与字段名转大写」互斥，勾这颗会取消那一颗；"
+                + "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。");
+        lowerBox.addActionListener(e -> {
+            keepOneCaseSwitch(lowerBox, upperBox);
+            String[] st = caseState();
+            log("[提示] 表名与字段名大小写切换为：" + st[0]
+                    + "（对之后添加的文件生效，结构定义 Sheet 里手写的字段名" + st[1] + "）");
+        });
         JPanel nameBar = new JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
         nameBar.add(new JLabel("命名规则："));
         nameBar.add(initialsBox);
         nameBar.add(upperBox);
+        nameBar.add(lowerBox);
         JPanel prefixEast = new JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
         prefixEast.add(prefixBtns);
@@ -1698,10 +1717,33 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         progress.open();
     }
 
-    /** 开关状态在主线程取好再进解析线程：解析线程不碰控件，只读 Names 上的两个布尔。 */
+    /** 开关状态在主线程取好再进解析线程：解析线程不碰控件，只读 Names 上的三个布尔。 */
     private void applyNamingSwitches() {
         names.setInitialsOnly(initialsBox != null && initialsBox.isSelected());
         names.setUpperOnly(upperBox != null && upperBox.isSelected());
+        names.setLowerOnly(lowerBox != null && lowerBox.isSelected());
+    }
+
+    /**
+     * 两颗大小写勾互斥：亮一颗就按掉另一颗。
+     * Swing 的 setSelected 不触发 ActionListener，所以按掉的那颗不会补一句切换日志，
+     * 与 Qt 侧 blockSignals 的做法同一效果（一次点击只留一条留痕）。
+     */
+    private void keepOneCaseSwitch(javax.swing.JCheckBox keep, javax.swing.JCheckBox other) {
+        if (keep.isSelected() && other.isSelected()) {
+            other.setSelected(false);
+        }
+    }
+
+    /** 当前生效的大小写档，第二个元素是结构定义手写字段名的口径，日志与解析共用一份判读。 */
+    private String[] caseState() {
+        if (upperBox != null && upperBox.isSelected()) {
+            return new String[]{"大写", "跟着转大写"};
+        }
+        if (lowerBox != null && lowerBox.isSelected()) {
+            return new String[]{"小写", "跟着转小写"};
+        }
+        return new String[]{"小写", "保持原样"};
     }
 
     /** 给测试和命令行用的同步入口：同一个解析函数，只是不挂进度框。 */
@@ -2253,6 +2295,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JCheckBox upperBox() {
         return upperBox;
+    }
+
+    public javax.swing.JCheckBox lowerBox() {
+        return lowerBox;
     }
 
     @Override

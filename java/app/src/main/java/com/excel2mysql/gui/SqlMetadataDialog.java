@@ -45,12 +45,8 @@ public final class SqlMetadataDialog extends JDialog {
     private final FillTable fieldTable;
 
     public SqlMetadataDialog(Frame owner, SqlScript.ParsedTable table,
-                             String displayName, boolean upper) {
-        this(owner, table, displayName, upper, null);
-    }
-
-    public SqlMetadataDialog(Frame owner, SqlScript.ParsedTable table,
-                             String displayName, boolean upper, FieldEdit edit) {
+                             String displayName, boolean upper, boolean lower,
+                             FieldEdit edit) {
         super(owner, "表元数据（" + displayName + "）", false);
         JPanel content = new JPanel(new java.awt.BorderLayout(0, UiScale.px(6)));
         content.setBorder(BorderFactory.createEmptyBorder(
@@ -67,10 +63,10 @@ public final class SqlMetadataDialog extends JDialog {
                 ? "（无）" : table.tableComment.trim()));
         JLabel scope = new JLabel(edit == null
                 ? "这里按脚本里的 CREATE TABLE 原样展示；"
-                        + "勾选「表名与字段名转大写」只切换显示，不回写脚本正文。"
+                        + "勾选「表名与字段名转大写」或「转小写」只切换显示，不回写脚本正文。"
                 : "字段名、字段注释、数据类型这三列可以直接改，改完就写进脚本正文（还没落盘）；"
                         + "主键与可空照脚本里的定义显示，不在这里改。"
-                        + "「表名与字段名转大写」只切换显示，不回写脚本正文。");
+                        + "「表名与字段名转大写」或「转小写」只切换显示，不回写脚本正文。");
         tableName.getAccessibleContext().setAccessibleName("表名");
         layout.setHorizontalGroup(layout.createParallelGroup(GroupLayout.Alignment.LEADING)
                 .addComponent(tableName)
@@ -116,14 +112,14 @@ public final class SqlMetadataDialog extends JDialog {
                     super.setValueAt(col == 1 ? after[1] : after[col], row, col);
                     return;
                 }
-                // 被拒绝：这一格填回原值（还是按大写开关显示），别留一个改不动的假象
-                super.setValueAt(display(before[col], upper), row, col);
+                // 被拒绝：这一格填回原值（仍按当前大小写档显示），别留一个改不动的假象
+                super.setValueAt(display(before[col], upper, lower), row, col);
             }
         };
         for (int i = 0; i < originals.size(); i++) {
             String[] one = originals.get(i);
             Infer.Column c = table.columns.get(i);
-            model.addRow(new Object[]{display(one[0], upper), one[1], one[2],
+            model.addRow(new Object[]{display(one[0], upper, lower), one[1], one[2],
                     Boolean.TRUE.equals(c.primaryKey) ? "是" : "",
                     Boolean.FALSE.equals(c.nullable) ? "否" : "是"});
         }
@@ -206,8 +202,8 @@ public final class SqlMetadataDialog extends JDialog {
     }
 
     /** 字段名那一列按大写开关显示，其余两列原样。 */
-    private static String display(String value, boolean upper) {
-        String v = value == null ? "" : value;
-        return upper ? v.toUpperCase(Locale.ROOT) : v;
+    private static String display(String value, boolean upper, boolean lower) {
+        // 大小写档只有一个落点，与生成物那条路共用 SqlPage.caseName
+        return SqlPage.caseName(value == null ? "" : value, upper, lower);
     }
 }

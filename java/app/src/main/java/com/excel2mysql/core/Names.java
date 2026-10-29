@@ -85,8 +85,27 @@ public final class Names {
         return upperOnly;
     }
 
+    // 用户开关「表名与字段名转小写」：与「转大写」互斥，由界面保证只亮一颗
+    private boolean lowerOnly;
+
+    public void setLowerOnly(boolean b) {
+        this.lowerOnly = b;
+    }
+
+    public boolean isLowerOnly() {
+        return lowerOnly;
+    }
+
+    /** 大小写档的唯一落点：两档同时给时按大写，与 Python 侧 core.infer.case_switch 同一条口径。 */
+    public String caseSwitch(String name) {
+        if (upperOnly) {
+            return name.toUpperCase(Locale.ROOT);
+        }
+        return lowerOnly ? name.toLowerCase(Locale.ROOT) : name;
+    }
+
     private String applyCase(String name) {
-        return upperOnly ? name.toUpperCase(Locale.ROOT) : name;
+        return caseSwitch(name);
     }
 
     /** 对齐 Python str.strip()：Java 的 trim() 只裁 &lt;= U+0020，会把全角空格漏在名字里。 */

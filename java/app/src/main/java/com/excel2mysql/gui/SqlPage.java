@@ -215,8 +215,9 @@ public final class SqlPage extends JPanel {
     private JButton saveButton;
     /** 这一页有没有任务在跑：只用来管两颗生成按钮，由主窗口每次改动任务清单时回来说一句。 */
     private boolean genBusy;
-    /** 大小写开关：清单、元数据弹窗和生成件同步按大写显示；脚本正文不回写。 */
+    /** 大小写开关：清单、元数据弹窗和生成件同步按那一档显示；脚本正文不回写。两颗互斥。 */
     private final JCheckBox upperBox = new JCheckBox("表名与字段名转大写");
+    private final JCheckBox lowerBox = new JCheckBox("表名与字段名转小写");
     /** 覆盖开关：勾选后执行副本先 DROP 脚本要建的表；只影响执行，不改正文。 */
     private final JCheckBox dropExisting = new JCheckBox("覆盖已存在表（先 DROP 再建）");
     private final List<String> rowPath = new ArrayList<String>();
@@ -364,14 +365,25 @@ public final class SqlPage extends JPanel {
         JButton clearLog = new JButton("清除日志");
         clearLog.addActionListener(e -> logPanel.clearLog());
 
-        // 默认不勾选；勾选后清单和元数据一起按大写显示，脚本正文仍不回写
+        // 默认不勾选；勾上哪一颗，清单、元数据与生成件就整体按那一档显示，脚本正文仍不回写
         upperBox.setToolTipText("勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的"
                 + "表名与字段名全部大写（t_order → T_ORDER、order_amount → ORDER_AMOUNT）；"
-                + "默认不勾选。脚本正文不改，手动改过的新表名会保留其输入内容。");
+                + "默认不勾选。脚本正文不改，手动改过的新表名会保留其输入内容；"
+                + "与「表名与字段名转小写」互斥，勾这颗会取消那一颗。");
         upperBox.addActionListener(e -> {
+            keepOneCaseSwitch(upperBox, lowerBox);
             refreshTable();
-            log("[提示] 表名与字段名大小写切换为："
-                    + (upperBox.isSelected() ? "大写" : "保持原样")
+            log("[提示] 表名与字段名大小写切换为：" + caseState()
+                    + "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）");
+        });
+        lowerBox.setToolTipText("勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的"
+                + "表名与字段名全部小写（T_ORDER → t_order、ORDER_AMOUNT → order_amount）；"
+                + "默认不勾选。脚本正文不改，手动改过的新表名会保留其输入内容；"
+                + "与「表名与字段名转大写」互斥，勾这颗会取消那一颗。");
+        lowerBox.addActionListener(e -> {
+            keepOneCaseSwitch(lowerBox, upperBox);
+            refreshTable();
+            log("[提示] 表名与字段名大小写切换为：" + caseState()
                     + "（当前表名清单、表元数据和生成的 Excel 一起变；脚本正文不改）");
         });
 
@@ -407,6 +419,7 @@ public final class SqlPage extends JPanel {
         JPanel nameBar = flow();
         nameBar.add(new JLabel("命名规则："));
         nameBar.add(upperBox);
+        nameBar.add(lowerBox);
 
         // 三颗按钮排在表格下方第一排（前缀行的下一行），与「Excel 导入」那页同一位置：
         // Qt 的 QHBoxLayout 把三颗等宽铺满整行，Swing 这边用 GridLayout(1,3) 对齐同一形状
@@ -787,6 +800,10 @@ public final class SqlPage extends JPanel {
 
     public JCheckBox upperBox() {
         return upperBox;
+    }
+
+    public JCheckBox lowerBox() {
+        return lowerBox;
     }
 
     /** 覆盖开关：默认不勾选；勾选后执行副本先 DROP 脚本要建的表。 */
@@ -1680,7 +1697,25 @@ public final class SqlPage extends JPanel {
     }
 
     private String displayName(String actual) {
-        return upperBox.isSelected() ? actual.toUpperCase(java.util.Locale.ROOT) : actual;
+        if (upperBox.isSelected()) {
+            return actual.toUpperCase(java.util.Locale.ROOT);
+        }
+        return lowerBox.isSelected() ? actual.toLowerCase(java.util.Locale.ROOT) : actual;
+    }
+
+    /** 两颗大小写勾互斥：setSelected 不触发 ActionListener，按掉的那颗不会补一句日志。 */
+    private void keepOneCaseSwitch(JCheckBox keep, JCheckBox other) {
+        if (keep.isSelected() && other.isSelected()) {
+            other.setSelected(false);
+        }
+    }
+
+    /** 当前生效的那一档，供切换日志说清楚；两颗都不勾就是照脚本里写的样子。 */
+    private String caseState() {
+        if (upperBox.isSelected()) {
+            return "大写";
+        }
+        return lowerBox.isSelected() ? "小写" : "保持原样";
     }
 
     /** 显示层：前缀按钮只改 displayMap，小写名原样存着，勾大写时再套一层。 */
@@ -1807,7 +1842,7 @@ public final class SqlPage extends JPanel {
             return;
         }
         new SqlMetadataDialog(host.owner(), parsed, metadataShownName(row),
-                upperBox.isSelected(),
+                upperBox.isSelected(), lowerBox.isSelected(),
                 new SqlMetadataDialog.FieldEdit() {
                     @Override
                     public boolean apply(String field, String newField,
@@ -1923,8 +1958,9 @@ public final class SqlPage extends JPanel {
         log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（脚本 " + items.size()
                 + " 个，输出根目录 " + outRoot + "）=====");
         final boolean upper = upperBox.isSelected();
+        final boolean lower = lowerBox.isSelected();
         host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
-                sink -> exportFromScripts(items, outRoot, withMeta, upper, sink),
+                sink -> exportFromScripts(items, outRoot, withMeta, upper, lower, sink),
                 out -> finishGenerate((GenResult) out));
     }
 
@@ -1945,7 +1981,7 @@ public final class SqlPage extends JPanel {
      * 只有表头——这些都是日志里要看得见的决定，不是静默近似。
      */
     static GenResult exportFromScripts(List<Src> items, String outRoot, boolean withMeta,
-                                       boolean upper,
+                                       boolean upper, boolean lower,
                                        ImportParse.Sink sink) {
         GenResult res = new GenResult();
         List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
@@ -1954,6 +1990,8 @@ public final class SqlPage extends JPanel {
         if (upper) {
             // 与 Python 的 sql_meta_export_task 同一句：生成物被改过名要能一眼看见
             sink.log("[命名] 生成物表名与字段名：转大写");
+        } else if (lower) {
+            sink.log("[命名] 生成物表名与字段名：转小写");
         }
         for (Src s : items) {
             if (sink.cancelled()) {
@@ -1977,7 +2015,7 @@ public final class SqlPage extends JPanel {
                 if (t.columns.isEmpty()) {
                     continue;      // 为什么不可导出，上面那条说明已经讲了
                 }
-                work.add(ofParsed(t, upper, usedTables));
+                work.add(ofParsed(t, upper, lower, usedTables));
             }
         }
         res.total = work.size();
@@ -2001,28 +2039,36 @@ public final class SqlPage extends JPanel {
 
     /** 解析结果 -> meta_export 的入参：脚本里没有数据行，rows 留空，数据 Sheet 只剩表头。 */
     static MetaExport.Source ofParsed(SqlScript.ParsedTable t) {
-        return ofParsed(t, false, null);
+        return ofParsed(t, false, false, null);
     }
 
-    /** 第二页的大小写开关只作用在生成物上；不勾选时脚本里的名字原样照搬。 */
-    static MetaExport.Source ofParsed(SqlScript.ParsedTable t, boolean upper,
+    /** 大小写档：两档同时给时按大写，与 Names.caseSwitch、Python 侧 case_switch 同一条口径。 */
+    static String caseName(String name, boolean upper, boolean lower) {
+        if (upper) {
+            return name.toUpperCase(java.util.Locale.ROOT);
+        }
+        return lower ? name.toLowerCase(java.util.Locale.ROOT) : name;
+    }
+
+    /** 第二页的大小写开关只作用在生成物上；两颗都不勾时脚本里的名字原样照搬。 */
+    static MetaExport.Source ofParsed(SqlScript.ParsedTable t, boolean upper, boolean lower,
                                       Map<String, Integer> usedTables) {
         TableOps.Table table = new TableOps.Table();
         table.tableComment = t.tableComment;
-        if (!upper) {
+        if (!upper && !lower) {
             table.tableName = t.tableName;
             table.baseTableName = t.tableName;
             table.columns = t.columns;
         } else {
             table.tableName = Names.dedupField(usedTables,
-                    t.tableName.toUpperCase(java.util.Locale.ROOT));
+                    caseName(t.tableName, upper, lower));
             table.baseTableName = table.tableName;
             Map<String, Integer> seen = new LinkedHashMap<String, Integer>();
             List<Infer.Column> cols = new ArrayList<Infer.Column>();
             for (Infer.Column c : t.columns) {
                 Infer.Column nc = new Infer.Column();
                 nc.field = Names.dedupField(seen,
-                        c.field.toUpperCase(java.util.Locale.ROOT));
+                        caseName(c.field, upper, lower));
                 nc.comment = c.comment;
                 nc.type = c.type;
                 nc.primaryKey = c.primaryKey;

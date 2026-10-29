@@ -293,10 +293,10 @@ public final class TableBuilder {
             }
             String field = WS_RUN.matcher(Names.pyStrip(nanToString(cell(row, metaFrame, roles, "field"))))
                     .replaceAll("_");
-            if (names.isUpperOnly()) {
-                // 开关写的是「表名与字段名转大写」，结构定义模式不能只转表名半句；
-                // 不勾时保持原样——不做大写转换不等于替使用者把手写的名字改成小写
-                field = field.toUpperCase(java.util.Locale.ROOT);
+            if (names.isUpperOnly() || names.isLowerOnly()) {
+                // 开关写的是「表名与字段名转大写／转小写」，结构定义模式不能只转表名半句；
+                // 两颗都不勾时保持原样——不做大小写转换不等于替使用者把手写的名字改档
+                field = names.caseSwitch(field);
             }
             String type = normMetaType(cell(row, metaFrame, roles, "type"),
                     cell(row, metaFrame, roles, "length"));
