@@ -886,6 +886,28 @@ def main():
     dlg2.deleteLater()
     win.chk_drop.setChecked(False)
 
+    # ---- 示例目录那一栏的观感：字号 + 分组格渲染出来的字重与配色 ----
+    # 只比分组行的颜色：条目行两边都不显式设色，一边报默认值一边报空就没法比
+    sdg = m.SqlSamplesDialog(None)
+    sdg.show()
+    app.processEvents()
+    _st = sdg.tree
+    put("sample.tree.font.pt", str(_st.font().pointSize()))
+
+    def _brush_hex(brush):
+        if brush is None or brush.style() == Qt.NoBrush:
+            return "-"
+        return brush.color().name()
+
+    _grp = _st.topLevelItem(0)
+    _leaf0 = _grp.child(0)
+    put("sample.tree.group", "%d|%s|%s" % (int(_grp.font(0).bold()),
+                                           _brush_hex(_grp.foreground(0)),
+                                           _brush_hex(_grp.background(0))))
+    put("sample.tree.leaf.bold", str(int(_leaf0.font(0).bold())))
+    sdg.close()
+    sdg.deleteLater()
+
     # ---- 结构弹窗 ----
     sd = m.StructureDialog(win.tables[:2], win)
     put("dlg.structure.title", sd.windowTitle())

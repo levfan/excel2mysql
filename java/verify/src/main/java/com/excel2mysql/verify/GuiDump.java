@@ -152,6 +152,16 @@ public final class GuiDump {
                         frame.fileTable().getFont().getSize())));
                 put("font.log.pt", String.valueOf(UiScale.fontPxToPt(
                         frame.logPanel().getFont().getSize())));
+                // 示例目录那一栏的观感：字号 + 分组格真正渲染出来的字重与配色。
+                // 只比分组行的颜色——条目行两边都不显式设色，一边报默认值一边报空没法比
+                frame.showSqlSamples();
+                put("sample.tree.font.pt", String.valueOf(frame.sampleTreeFontPt()));
+                String[] grpStyle = frame.sampleTreeCellStyle(true);
+                String[] leafStyle = frame.sampleTreeCellStyle(false);
+                put("sample.tree.group",
+                        grpStyle[0] + "|" + grpStyle[1] + "|" + grpStyle[2]);
+                put("sample.tree.leaf.bold", leafStyle[0]);
+                frame.closeSqlSamples();
                 // 连接区：跑业务时收起成一条状态栏，只报当前是哪个库（用户口径）
                 put("conn.state", frame.connStateText());
                 put("conn.expanded", frame.isConnExpanded() ? "展开" : "收起");

@@ -2196,6 +2196,26 @@ check("F33c 示例全文是日志档 10 号等宽字体（与左侧清单同观�
       and _dlg.preview.font().pointSize() == w.log.font().pointSize()
       and _dlg.preview.font().pointSize() == 10,
       (_dlg.preview.font().family(), _dlg.preview.font().pointSize()))
+# 目录那一栏原来吃界面基准 9 号、分组与条目除了缩进毫无差别（用户 2026-10-29 报"看着累、
+# 颜色单一"）。字号并入表格那一档，分组行按章节标题画——这几条钉的就是这两点
+_grp_item = _dlg.tree.topLevelItem(0)
+_leaf_item = _grp_item.child(0)
+check("F33d 目录字号并入表格那一档 11 号，行高按字高加留白（不是样式里写死的行高）",
+      _dlg.tree.font().pointSize() == app_main.TABLE_FONT_SIZE
+      and app_main.SAMPLE_TREE_ROW_PADDING > 0
+      and _dlg.tree.indentation() == app_main.SAMPLE_TREE_INDENT,
+      (_dlg.tree.font().pointSize(), _dlg.tree.indentation()))
+check("F33e 分组行按章节标题画：加粗 + 强调蓝 + 浅蓝底，条目行保持常规不加粗",
+      _grp_item.font(0).bold()
+      and _grp_item.foreground(0).color().name() == app_main.SAMPLE_GROUP_FG
+      and _grp_item.background(0).color().name() == app_main.SAMPLE_GROUP_BG
+      and not _leaf_item.font(0).bold()
+      and _leaf_item.background(0).style() == app_main.Qt.NoBrush,
+      (_grp_item.font(0).bold(), _grp_item.foreground(0).color().name(),
+       _grp_item.background(0).color().name(), _leaf_item.font(0).bold()))
+check("F33f 配色复用介绍条那一组冷色，不另造新色值（两栈同值由对撞键比出来）",
+      app_main.SAMPLE_GROUP_FG == "#1f5fd0" and app_main.SAMPLE_GROUP_BG == "#f4f8ff",
+      (app_main.SAMPLE_GROUP_FG, app_main.SAMPLE_GROUP_BG))
 check("F34 每条示例都能切成至少一句可执行语句",
       all(split_sql_statements(s.sql) for s in app_main.SQL_SAMPLES),
       [i for i, s in enumerate(app_main.SQL_SAMPLES) if not split_sql_statements(s.sql)])

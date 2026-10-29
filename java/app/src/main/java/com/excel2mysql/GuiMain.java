@@ -2355,6 +2355,25 @@ public final class GuiMain {
         if (!"SQL 示例（126 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
         }
+        // 目录那一栏的观感（用户 2026-10-29 报"字号与间距太小、颜色单一"）：
+        // 字号并入表格那一档，分组行按章节标题画——读的是真控件与真渲染路径
+        if (frame.sampleTreeFontPt() != com.excel2mysql.gui.Tables.SAMPLE_TREE_POINT_SIZE) {
+            problems.add("示例目录字号不是 "
+                    + com.excel2mysql.gui.Tables.SAMPLE_TREE_POINT_SIZE
+                    + " 号，实际 " + frame.sampleTreeFontPt() + " 号");
+        }
+        String[] grpStyle = frame.sampleTreeCellStyle(true);
+        String[] leafStyle = frame.sampleTreeCellStyle(false);
+        if (!"1".equals(grpStyle[0])) {
+            problems.add("示例目录的分组行没按章节标题加粗");
+        }
+        if (!"#1f5fd0".equals(grpStyle[1]) || !"#f4f8ff".equals(grpStyle[2])) {
+            problems.add("示例目录分组行的配色不对：字色=" + grpStyle[1]
+                    + " 底色=" + grpStyle[2] + "，应为 #1f5fd0 / #f4f8ff");
+        }
+        if (!"0".equals(leafStyle[0])) {
+            problems.add("示例目录的条目行不该加粗");
+        }
         // 这张清单要是 JDialog，最小化那颗按钮根本画不出来（AWT 的 Dialog 连
         // setExtendedState 都没有），所以窗口形态按"真按一次再量结果"查，判据对齐 Python 侧 F38h
         if (!frame.sqlSamplesResizable() || frame.sqlSamplesHasOwner()) {
