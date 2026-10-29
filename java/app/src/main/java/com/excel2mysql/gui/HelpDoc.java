@@ -128,7 +128,7 @@ public final class HelpDoc {
                     "<li>机器是 Windows 10/11，要改字段名和主键：图形版。</li>" + NL +
                     "<li>机器只有 Windows 7、又没法确认打过补丁：Java 版，它自带运行时。</li>" + NL +
                     "<li>要放进批处理或定时任务：两条命令行线都行，但它们的选项集不一样，" + NL +
-                    "见下一段和各自随包的 <code>README.txt</code>。</li>" + NL +
+                    "见下一段和包内那一份 <code>README.md</code>（项目里唯一的一份文档，三个包都原样带着它）。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
                     "<h3>命令行选项并不完全相同</h3>" + NL +
@@ -1035,7 +1035,7 @@ public final class HelpDoc {
                     "它只要<b>网络能连上目标 MySQL</b>，Excel 放共享目录一样能读；" + NL +
                     "② 只能在 Win7 上跑时，改用同源的<b>命令行版 <code>excel2mysql-cli.exe</code></b>" + NL +
                     "（解析、推断、建表、导入用的是同一套 core 逻辑，建出来的表结构一致），" + NL +
-                    "用法见《用户使用说明书》第 2 章「Windows 7 命令行版」</td></tr>" + NL +
+                    "用法见包内 <code>README.md</code> 的「Windows 7 命令行版」一章</td></tr>" + NL +
                     "<tr><td>提示 <code>1054 Unknown column</code></td>" + NL +
                     "<td>字段命名规则变更后列名与旧表不一致。勾「覆盖已存在表」重建，" + NL +
                     "或在表结构预览里改回旧列名</td></tr>" + NL +
