@@ -105,9 +105,10 @@ whenToUse: 完成任意一处改动需要提交代码；用户说"提交""推一
   也不要让用户按 `2.x` 理解一个语义已经变了的包
 
 改哪里：取值唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、《关于》、`--version`、随包 appinfo 都读它），
-但另有 **8 处写死的字符串**要跟着一起改——三个 `pom.xml`（根 pom 的 `<version>` 与 `<app.version>`、
+但另有 **9 处写死的字符串**要跟着一起改——四个 `pom.xml` 位置（根 pom 的 `<version>` 与 `<app.version>`、
 app/verify 的 `<parent><version>`）、`java/构建验证.bat` 里的 jar 名、`help_doc.py` 与
-`java/assets/conn.ini` 示例命令里的 jar 名、README 顶部那行与几处路径示例。
+`java/assets/conn.ini` 示例命令里的 jar 名、`RELEASE.md` 的两处产物名。
+`README.md` 不在此列：用户向文档不写版本号（`W29e` 反向核，写进去就红），改版本时不要动它。
 `pack_test.py` 的 `T15` 逐处把这些字符串与 `APP_VERSION` 核一遍：**改版本前先跑一次确认起点干净，
 改完再跑一次确认没漏**；产物目录名 `excel2mysql-java-<版本>-win64` 随 pom 自动变，不用手改。
 升过版本就要按"打包按需触发"的规矩等用户开口才重打交付包，但要在汇报里点明"包还是旧版本"。
