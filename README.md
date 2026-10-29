@@ -1,307 +1,239 @@
 # <img src="assets/app_icon.png" width="44" height="44" alt="excel2mysql 图标"> Excel → MySQL 批量导入工具
 
-把几十张从关系库导出的 Excel（中文表头）批量导入指定 MySQL 库：自动建表、字段注释取中文表头、表名与字段名由中文转拼音，导入前可逐字段改名字、类型与主键。同一套逻辑有三个交付形态（Windows 图形版、Windows 7 命令行版、Java 版），三条线跑出来的表结构由差分用例逐条对平。当前版本 v3.1.0，许可 MIT（见 `LICENSE`）。
+把从关系库导出的中文表头 Excel 批量导入 MySQL：表名与字段名由中文转拼音、字段注释保留中文表头、类型与宽度按全量数据实测推断、导入前可逐字段改名与改类型。同一套逻辑有三个交付形态（Windows 图形版、Windows 7 命令行版、Java 版），三条线跑出来的表结构由差分用例逐条对平。当前版本 v3.1.0，许可 MIT（见 `LICENSE`）。
 
 | 项 | 内容 |
 | --- | --- |
-| 适用对象 | 把 Excel 台账导入为 MySQL 库表的使用者；需要交付这批表结构、DDL 与数据治理体检脚本的人 |
-| 交互方式 | 界面操作；每个界面动作都有对应的命令行走法，脚本化与无人值守走命令行线 |
-| 文档关系 | 本文是项目唯一文档，每个交付包原样携带；程序内另有《使用说明》（图形版右上角「?」或 F1），面向界面操作者，写法与本文不同 |
+| 本文定位 | 面向实施与开发人员：背景、选型、环境、打包、启动、命令行参考、质量闸门。界面操作的完整口径在程序内《使用说明》（右上角「?」或 F1），唯一来源 `help_doc.py`，Java 侧由生成器导出 `HelpDoc.java` |
+| 共同内核 | `core/`：解析、命名、类型推断、DDL、导入、SQL 切句、ZIP 展开。Python 三线同源复用，Java 线按同一口径重写后用金标准差分对平 |
+| 交付形态 | 三个免安装包，目标机不需要安装任何东西（Java 包连运行时一起带），每个包原样携带本文 |
 
-## 1. 主要能力
+## 1. 背景与解决的痛点
 
-| 能力 | 说明 |
+来源是一次具体交付：几十张从治理库导出的 Excel 台账要落进同一个 MySQL 库，人工逐张写 `CREATE TABLE` 既慢又对不齐口径，而那批机器里最旧的一台只有 Windows 7。
+
+| 现场问题 | 本工具的处理 |
 | --- | --- |
-| 自动建表 | InnoDB + utf8mb4；字段注释即中文表头；表注释取文件名括号前的中文 |
-| 文件名解析 | `北京市水务局-水库基础信息（dim_reservoir_info）.xlsx` → 表名 `dim_reservoir_info`、注释 `北京市水务局-水库基础信息`；括号内不是合法英文标识符时整名转拼音 |
-| 命名规则 | 表名与字段名由中文逐音节转拼音、蛇形命名；超长自动降级为首字母；可勾选「首字母」「转大写」 |
-| 表名前缀 | 一键批量应用；另有「替换首个前缀」（`ods_t_order` → `change_t_order`） |
-| 类型推断 | 全量扫描所有数据行，不抽样；金额语义列给 `DECIMAL`，日期、整数、文本按实测定宽 |
-| 结构预览 | 逐字段改名字、数据类型与主键（支持组合主键），改完再导 |
-| DDL 预览 | 一张表一个页签，正文是脚本里属于这张表的那句 `CREATE TABLE`；要落成文件用「SQL 脚本改名」页的保存 |
-| 文件添加 | 拖拽、点击虚线区选择、复制文件后 `Ctrl+V`；剪贴板里有文件即按添加文件处理，与焦点无关 |
-| 压缩包 | 拖入 ZIP 自动展开包内多个 Excel 逐表导入 |
-| 格式支持 | `.xlsx` 与 `.xls`（97-2003 老格式，由 `xlrd` 解析） |
-| 合并表头 | 两行合并表头压成一行（`技术公司` + `小计` → `技术公司-小计`）；表头块以外的合并区拒绝导入 |
-| 三个页签 | Excel 导入；SQL 脚本改名（改表名/字段名/前缀、生成两份交付 Excel、预览与执行 DDL）；SQL 执行器（脚本清单逐文件执行、编辑区手写 SQL、126 条示例库带关键词搜索与两层目录） |
-| 交付与容错 | 导出标准/简易 Excel 交付件；长任务有非模态进度框；单表失败不阻断其余表 |
+| 表结构靠人工写 DDL，列名列法不统一 | 从数据实测推断类型与宽度，直接产出 `CREATE TABLE` |
+| 中文表头不能直接当列名 | 逐音节转拼音、蛇形命名，中文原文整句留作字段注释 |
+| 几十张表逐个配置逐个导 | 给目录或 ZIP，批量解析、批量建表、分批插入，单表失败不阻断其余表 |
+| 长度与精度靠猜，写入时才报 1264 / 1406 | `DECIMAL(p,s)` 按实测小数位与整数位定宽，`VARCHAR(n)` 按全量最大 UTF-8 字节加余量，整表共享 60000 字节行内预算 |
+| 最旧那台机器只有 Win7，装不了 Qt 6 与新 Python | 命令行版钉在 Python 3.8 旧栈，Java 版自带零 UCRT 依赖的 JRE 8 |
+| 落库前结构还要改（列名、类型、主键） | 结构预览逐字段改；主键保存时校验类型、非空与组合唯一 |
+| 治理交付另需表元数据与体检 SQL | 导出标准 / 简易 Excel 交付件；SQL 执行器内置 126 条示例与批量脚本执行 |
 
-## 2. 快速开始
+不解决的问题：不做增量同步与调度、不代替数据建模评审、不做清洗转换；默认表已存在即跳过建表，覆盖需显式勾选或加开关。
 
-### 2.1 图形版
+## 2. 三条交付线
 
-```bash
-python main.py                          # 开发态
-dist\excel2mysql\excel2mysql.exe        # 打包后双击
-```
-
-连上库之后把 Excel 拖进第一页的虚线区。界面右上角「?」（或 F1）是内置《使用说明》，与随包文档同源。
-
-### 2.2 命令行版（Windows 7）
-
-```bat
-excel2mysql-cli.exe D:\台账目录 --host 127.0.0.1 --port 3306 --user root --password 口令 -d ods_data
-excel2mysql-cli.exe D:\订单.xlsx --dry-run     :: 只看会建成什么样，不写库
-excel2mysql-cli.exe -c conn.ini --check       :: 只连接并列出可导入的库名
-```
-
-| 事项 | 说明 |
-| --- | --- |
-| 首次上机 | 先跑 `excel2mysql-cli.exe --version`，能打印 `excel2mysql-cli 3.1.0` 说明系统层面进程起得来，再谈导入 |
-| 连接信息 | 可放同级的 `conn.ini`、环境变量 `E2M_*` 或命令行参数；三处来源的优先级见 4.3 |
-| 口令字符 | 含中文的口令在两条 Python 线上都不支持（pymysql 按 latin-1 编码口令），需要中文口令时走 Java 版 |
-| 详细说明 | 全部开关、退出码与排错条目见第 4 章；发到现场的包里携带本文一份 |
-
-### 2.3 Java 版
-
-一个 jar 两种模式：给 `--gui` 起界面，不给就是命令行，不产生第二份包。
-
-```bat
-java\dist\excel2mysql-java-3.1.0-win64\启动.bat
-java\dist\excel2mysql-java-3.1.0-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-3.1.0-win64\excel2mysql-3.1.0.jar D:\台账目录 -c conn.ini
-```
-
-Java 线自身的取舍、硬约束与差分对平过程见第 26 章。
-
-## 3. 运行环境要求
-
-三条发布线共用同一套口径（解析、类型推断、DDL、导入逻辑）：Python 侧同源靠同一个 `core/` 包，Java 侧是把 `core/` 重写一遍后用金标准差分对平。
-
-| 项 | 图形版（GUI） | 命令行版（CLI，Windows 7 专用） | Java 版（GUI + CLI 同一个包） |
+| 维度 | 图形版（GUI） | 命令行版（CLI） | Java 版（GUI + CLI 同一个 jar） |
 | --- | --- | --- | --- |
-| 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` | `java/` → `启动.bat`（界面）／`jre\bin\java.exe -jar`（命令行） |
-| 支持系统 | 64 位 Windows 10 1809+ / Windows 11 | Windows 7 SP1 及以上，且系统 UCRT 补丁与系统文件完整 | 64 位 Windows 7 及以上；包内自带 Java 8 运行时，目标机器不用装任何东西 |
-| 语言与依赖 | Python 3.10+（本机 `.venv` 用 3.12.8）+ PySide6 | Python 3.8.10（本机 `.venv38`），不含任何 Qt | Java 8（本机 `jdk1.8.0_202`），依赖见 `java/pom.xml` |
-| 打包闸门 | `一键打包-图形版.bat` → `build_exe.py` | `一键打包-命令行版.bat` → `build_exe38.py` | `java/一键打包-Java版.bat` → `tools/build_java_dist.py` |
-| 用例与守卫 | `pack_test.py`（901 项，含 GUI 各组；本轮带真库凭据跑 896 通过 / 0 失败 / 5 项显式记为未覆盖） | `pack_test38.py`（257 项，含真库读写与 `.sql` 执行；同一份在旧栈与新栈各跑一遍，旧栈 243 通过 / 14 跳过） | `java/构建验证.bat` 十步闸门 + `java/界面双端对撞.bat` + `--gui --selftest` |
-| 交互方式 | 拖文件 / 点按钮 / 看进度框 | 给路径 / 看一行一条的日志与退出码 | 两种都有：同一个 jar，`--gui` 起界面，不给 `--gui` 就是命令行 |
+| 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` | `java/` → `启动.bat` 起界面，`-jar` 起命令行 |
+| 支持系统 | 64 位 Windows 10 1809+ / 11 | Windows 7 SP1+，且系统 UCRT 补丁完整 | 64 位 Windows 7+，运行时随包 |
+| 运行时 | Python 3.10+（本机 `.venv` = 3.12.8）+ PySide6 | Python 3.8.10（本机 `.venv38`），不含 Qt | JDK 8（本机 `jdk1.8.0_202`） |
+| 交互 | 拖文件 / 点按钮 / 进度框 | 给路径 / 看一行一条日志与退出码 | 两种都有，同一个 jar 按首个参数切模式 |
+| 产物体积 | 162 MB / 921 个文件 | 131 MB / 1405 个文件（含 42 MB 前置补丁） | 约 232 MB，绝大部分是随包 JRE |
+| 适合谁 | 日常在 Win10/11 上导入与调结构 | 老机器、批处理、无人值守 | 老机器上仍要界面，或口令含中文 |
 
-三条线各自的环境与产物互不影响，体积与构成如下：
+功能差异集中在四处：
 
-| 产物 | 体积 | 构成 |
-| --- | --- | --- |
-| 图形版 | 162 MB / 921 个文件 | Qt / pandas / numpy / pypinyin 词典等运行时 |
-| 命令行版 | 131 MB / 1405 个文件 | 不含任何 Qt；其中 42 MB 为随包的 Win7 前置补丁 |
-| Java 版 | 232 MB | 绝大部分为随包的 Java 8 运行时 |
-
-### 3.1 四条运行形态、三个构建产物
-
-「线」有两种计法：按运行形态为四条，按构建产物为三个包。
-
-| 运行形态 | 启动方式 | 属于哪个产物 | 构建脚本 |
-| --- | --- | --- | --- |
-| Python 3.12 图形界面 | 双击 `excel2mysql.exe` | `dist\excel2mysql\` | `一键打包-图形版.bat` |
-| Python 3.8 命令行 | `excel2mysql-cli.exe <路径>` | `dist\excel2mysql-cli\` | `一键打包-命令行版.bat` |
-| Java 图形界面 | 双击 `启动.bat`（内部就是 `--gui`） | `java\dist\excel2mysql-java-<版本>-win64\` | `java\一键打包-Java版.bat` |
-| Java 命令行 | `jre\bin\java.exe -jar excel2mysql-<版本>.jar <路径>` | 同一个包，不给 `--gui` 就是命令行 | 同上（不单独出第二个包） |
-
-| 事实 | 说明 |
+| 差异 | 内容 |
 | --- | --- |
-| Java 的界面与命令行是同一个 jar 的两种模式 | `Main-Class` 为 `com.excel2mysql.Main`，首个参数是 `--gui` 时转 `GuiMain`，因此不产生两份 232 MB 的包 |
-| Python 3.8 那条只有命令行 | `.venv38` 里没有 PySide6；`cli.py` 本身在 3.12 上也能跑（跨栈对跑用），交付出去的是 3.8 那个包 |
+| 逐字段改结构 | 只有两条图形线有「生成表结构预览」；命令行线用 `--dry-run` 看 DDL 后改源文件 |
+| 开关集 | `--run-sql` `--swap-prefix` `--drop-if-exists` `--log` 只在 Python 命令行版；`--no-sql` `--no-excel` `--gui` 只在 Java 版 |
+| 口令字符 | 两条 Python 线不支持含中文的口令（pymysql 按 latin-1 编码口令），Java 线走 JDBC 可以 |
+| 交付件与 SQL 工作台 | 标准 / 简易 Excel 交付件、DDL 改名、SQL 执行器只在两条图形线；命令行线只做「解析建表导入」与「整脚本执行」 |
 
-每个产物的随包必备件由打包脚本逐条硬校验，缺任一件即不出包：
-
-| 产物 | `conn.ini` | 随包文档 |
-| --- | --- | --- |
-| 图形版（Python） | 不需要（连接信息在界面上填） | `README.md`（项目根那一份原样复制进包里）+ `assets/app_icon.png` |
-| 命令行版（Python） | 有 | 同上 |
-| Java 版（界面 + 命令行） | 有 | 同上 |
-
-随包只带这一份文档，取舍如下：
-
-| 方面 | 内容 |
-| --- | --- |
-| 好处 | 仓库里写的与现场读的是同一个文件，不存在「打包时另渲染一遍、渲染那份没人核」的分叉 |
-| 代价 | 文档是 Markdown，用记事本打开看不到图标与表格渲染，只有排版器认 |
-| 配套 | 包内同时放 `assets/app_icon.png`，让标题图标在装了排版器的机器上也能显示 |
-
-图形版那份文档不是另写一遍，它的来源与校验如下：
-
-| 项 | 说明 |
-| --- | --- |
-| 来源 | 由内置《使用说明》的 `help_doc.py` 渲染出来 |
-| 闸门 | 核对每个章节标题都在手册里、没有残留 HTML 标签，界面说明与随包文本不会各说各话 |
-| 随包理由 | 现场拿到包的顺序是先查看文件、再决定是否双击 exe；只把说明放进程序内，等于在一台可能无法启动的机器上不提供任何说明 |
-
-### 3.2 三条线的功能区别
-
-选型取决于三项：是否需要界面、目标系统、是否需要脚本化调用。
-
-| 能力 | 图形版 | 命令行版 | Java 版 |
-| --- | --- | --- | --- |
-| 拖文件 / 点击虚线区选文件 / 复制后 Ctrl+V / ZIP 展开 / `.xlsx` 与 `.xls` | 有 | 有（给路径） | 三种输入都有，界面与命令行各一套入口 |
-| 表名拼音、批量应用前缀 | 有 | 有（`--prefix`） | 有（界面两个按钮 + `--prefix`） |
-| 替换首个前缀 | 有 | 有（`--swap-prefix`） | 只有界面有，命令行没有对应开关 |
-| 生成表结构预览（改字段名/数据类型/主键；表注释在清单里双击改） | 有 | 无 | 有 |
-| 预览 DDL | 有 | 有（`--dry-run` 打印） | 有（界面 + `--dry-run`） |
-| 生成标准 / 简易 Excel 交付件 | 有（Excel 导入页 + SQL 脚本改名页） | 无 | 只有界面有（同样两页各两颗） |
-| 执行 `.sql` 脚本 | 有（SQL 脚本改名页；SQL 执行器页的脚本清单） | 默认只登记，加 `--run-sql` 才执行 | 动作由路径类型决定：给 `.sql` 就执行，`--no-sql` / `--no-excel` 各自排除；没有 `--run-sql` |
-| 批量脚本清单（拖入多选、按顺序、每文件一个事务、可选先 DROP） | 有（SQL 执行器页；命令行没有这一步，直接执行） | 一批路径交给 `--run-sql`，没有界面清单 | 有（SQL 执行器页；命令行同样直接执行） |
-| 直接敲一段 SQL 执行（建库、建表、查元数据、治理体检） | 有（SQL 执行器页，带 126 条示例） | 没有界面，只能给 `.sql` 文件（`--run-sql`） | 有（SQL 执行器页，同一份示例） |
-| 连接信息来源 | 界面上填，或同级 `conn.ini` / `E2M_*`（启动后在后台自动连接并选库） | `--host/--port/--user/--password/-d` 或 `E2M_*` 或配置文件 | 同级 `conn.ini` 或 `E2M_*`（启动自动连接；命令行只认 `-c` 指定的配置文件） |
-| 口令里能否含中文 | 不能（pymysql 按 latin-1 编码口令） | 不能（同一个驱动） | 能（JDBC 支持 Unicode 口令） |
-| 随包文档 | 包内 `README.md`（项目根那一份） | 包内 `README.md` | 包内 `README.md` |
-| 其余命令行开关 | — | `--initials` `--upper` `--drop-if-exists` `--batch` `--no-recursive` `--keep-temp` `--log` `--quiet` `--check` `--dry-run` | `--initials` `--upper` `--check` `--dry-run` `--prefix` `-c/--conn` `--debug` `--version` `--gui` |
-
-图形版与 Java 版的界面是等价的，且这条等价由机器判定：
-
-| 项 | 说明 |
-| --- | --- |
-| 判定方式 | `java/界面双端对撞.bat` 把两条线的控件文案、按钮启用条件、弹窗文字、日志、写出的文件内容各自枚举成一份清单，逐键比对 |
-| 当前规模 | 340 项逐键一致，另有 6 项「现场实测尺寸」只留档不比 |
-| 判定效果 | 任何一项不一致即判红，界面上少一个按钮或改一句文案都会被发现 |
-
-两条命令行线的选项集并不相同：
-
-| 选项 | 适用线 |
-| --- | --- |
-| `--run-sql` `--swap-prefix` `--drop-if-exists` `--log` | 只在 Python 命令行版 |
-| `--no-sql` `--no-excel` `--gui` | 只在 Java 版 |
-| 准确清单 | 以各线 `--help` 输出与随包 `README.md` 为准 |
-
-Java 版面向只能运行在 Windows 7 上的机器：
-
-| 线 | 依赖 | 在未打补丁 Win7 上的表现 |
-| --- | --- | --- |
-| 图形版 | Qt 6 要求 Win10 1809+ | 起不来 |
-| 命令行版 | Python 3.8 打的包要求系统自带 UCRT（KB2999226） | 可能起不来 |
-| Java 版 | JDK 8 运行时链 `msvcr100.dll`，随包携带，不吃 UCRT | 能起 |
-
-Java 版「能起」的取证强度按依赖契约判定，不等同于在任意 Win7 上实测：
-
-| 核验项 | 判据 |
-| --- | --- |
-| class 版本 | 逐 jar 核主版本 ≤ 52 |
-| 转发桩 | 包内没有任何 `api-ms-win-*` 转发桩与 CRT 批文件 |
-| 不满足时 | 不出包 |
-| 真机起不来时 | 按包内 `README.md` 的排错条目查：`jre\bin\java.exe -version` 能否启动、包是否整目录复制完整 |
-
-### 3.3 为什么图形版跑不了 Windows 7
-
-这不是少装某个依赖能解决的，而是下面五条硬限制叠加（本机 venv 实测 + 官方文档）：
+图形版跑不了 Windows 7 的原因不是少装依赖，而是四条硬限制叠加：
 
 | 组件 | 最低要求 | 依据 |
 | --- | --- | --- |
-| Qt 6（`PySide6` 6.12） | Windows 10 1809+ | Qt 官方《Windows 版 Qt》支持矩阵，Win7/8.1 不在列表里 |
-| Python 3.9 ~ 3.13 | Win7 及更早明确不可用 | python.org 下载页逐版本标注 "cannot be used on Windows 7 or earlier"，最后支持 Win7 的是 3.8 |
-| `numpy` 2.5.3 | `Requires-Python >=3.12` | 已装包元数据 |
-| `pandas` 3.0.6 | `Requires-Python >=3.11` | 已装包元数据 |
-| `PyInstaller` 6.x | 文档写 "Windows 8 and newer" | 打包器官方 Requirements 页 |
+| Qt 6（`PySide6`） | Windows 10 1809+ | Qt 官方支持矩阵不含 Win7 / 8.1 |
+| Python 3.9+ | Win7 及更早不可用 | python.org 逐版本标注，最后支持 Win7 的是 3.8 |
+| `numpy` / `pandas` 新版 | `Requires-Python >=3.11` / `>=3.12` | 已装包元数据 |
+| PyInstaller 6.x | Windows 8 and newer | 打包器官方 Requirements 页 |
 
-在 Win7 上双击 GUI exe 的表现：
+Java 线选 JDK 8 的依据：CPython 3.8 的扩展模块与 PySide6 都挂在 UCRT（`api-ms-win-crt-*`）上，老机器缺它就在 DLL 加载期失败、程序没机会报错；JDK 8u202 的核心二进制实测零 `api-ms-win-crt-*` 导入，依赖的 `msvcr100.dll` 自带在 `jre\bin`。这是构建版本的性质而非 Java 8 这个版本号的性质，换成分支维护的发行版就可能把 UCRT 依赖带回来，所以出包时按文件名剔掉转发桩与 CRT 批文件，并用包内那个 `java.exe` 真跑一遍界面自检。拼音转写、类型推断等口径由 `java/构建验证.bat` 的金标准差分逐条对平，实测数字见第 6 章。
+
+## 3. 开发机环境与依赖
+
+| 线 | 目标系统 | 开发环境 | 依赖清单 |
+| --- | --- | --- | --- |
+| 图形版 | 64 位 Windows 10 1809+ / 11 | `.venv`（Python 3.12.8） | `requirements.txt` |
+| 命令行版 | Windows 7 SP1+ | `.venv38`（Python 3.8.10） | `requirements38.txt` |
+| Java 版 | 64 位 Windows 7+ | `jdk1.8.0_202` + Maven | `java/pom.xml`（`maven.compiler.source`/`target` = 1.8） |
+
+```bash
+# 图形版：运行依赖与打包工具一次装齐
+#   PySide6 pymysql pandas openpyxl xlrd pypinyin cryptography pyinstaller
+#   cryptography 不是可选：MySQL 8 的 caching_sha2_password 首次连接走这条路，缺它 pymysql 直接报错
+#   pyinstaller 也写在同一份清单里：重建 .venv 一条命令就得到「能跑也能打包」的环境
+pip install -r requirements.txt
+
+# 命令行版：版本必须钉在这一组上，3.8 装不了 numpy 1.25+ / pandas 2.1+ / PyInstaller 6.x
+"C:\Users\<你>\.pyenv\pyenv-win\versions\3.8.10\python.exe" -m venv .venv38
+.venv38\Scripts\python -m pip install -r requirements38.txt
+
+# Java 版：只需 JDK 8 与 Maven；拼音词典与金标准语料已入库，构建不要求装 Python
+```
+
+| 约束 | 内容与原因 |
+| --- | --- |
+| 两份 requirements 必须纯 ASCII | Python 3.8 自带的 pip 21.1.1 按系统首选码页（zh-CN 为 cp936）解析，文件里出现 UTF-8 中文注释直接 `UnicodeDecodeError`，一个依赖都装不上；守卫是 `pack_test38.py` 的 U18 / U19 |
+| 旧栈版本不许随手升 | 换新版即失去 Win7 支持；新增开关要同时落到 `cli.py`、Java 线与本文的选项表 |
+| 图形版可用 Essentials | 代码只用到 `QtCore` / `QtGui` / `QtWidgets`；装完整 PySide6 也不会把 WebEngine / Pdf 打进产物（spec 里显式排除） |
+| 凭据只走环境变量 | `PT_HOST` / `PT_PORT` / `PT_USER` / `PT_PASS` / `PT_DB` 供用例连真库，不落进任何被跟踪文件 |
+
+开发态直接跑源码：
+
+```bash
+.venv\Scripts\python main.py          # 图形版
+.venv38\Scripts\python cli.py --help  # 命令行版（不依赖 Qt，也可以在 3.12 上跑）
+```
+
+## 4. 打包
+
+三条线各一套闸门，跑在不同环境上，互不影响；任一步失败即以非 0 退出，不会产出「看起来成功」的包。
+
+| 产物 | 一键入口 | 实际执行 | 环境 |
+| --- | --- | --- | --- |
+| 图形版 `dist\excel2mysql\` | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
+| 命令行版 `dist\excel2mysql-cli\` | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
+| Java 版 `java\dist\excel2mysql-java-3.1.0-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
+| 三端一起 | `一键打包-三端.bat` | 按图形版 → 命令行版 → Java 版顺序调用，任一步非 0 即停住 | 不接受参数 |
+
+各线闸门的步骤：
+
+| 线 | 步骤 |
+| --- | --- |
+| 图形版（七步，实测约 2 分钟） | 查环境 → 确认产品 exe 未在运行 → 开发态全量用例 → 构建 → 冻结态用例 → 真启动验收（起窗口、核对标题、判界面是否卡死） → 清缓存 |
+| 命令行版（十步） | 查环境（必须 3.8 + PyInstaller 5.x） → 确认产品 exe 未运行 → 旧栈用例 → 新栈跑同一份用例做跨栈比对 → 构建 → 产物体检（无 Qt 文件、带 `python38.dll`、PE 头最低系统 ≤ 6.1、前置补丁逐文件 md5） → 冻结态用例 → 真跑产品 exe 核对退出码与落盘日志 → 脱离项目目录再跑一次证明自包含 → 汇总打勾 |
+| Java 版（十步，出包另有断言） | `java/构建验证.bat`：生成物与源逐字节一致 → Maven 编译打包 → 收集依赖 jar → class 主版本 ≤ 52 → 拼音、表名字段名、类型推断、读取层、SQL 与 DDL 五道金标准差分 → 产物逐格差分 → Swing 界面自检。`build_java_dist.py` 再验剔桩为零、随包件齐全、文档开关名与版本号对得上，并用包内 `java.exe` 跑冒烟 |
+
+可选参数：
+
+```bash
+python build_exe.py --app-only        # 跳过冻结态用例，仍做启动验收
+python build_exe.py --fast            # 只构建产品包
+python build_exe.py --keep-cache      # 保留 build/ 中间缓存，加速下一次构建
+.venv38\Scripts\python build_exe38.py --no-parity   # 跳过 3.12 那轮跨栈
+```
+
+要把 MySQL 真实读写纳入验收，先备好凭据：
+
+```bat
+set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& set PT_DB=测试库
+一键打包-图形版.bat
+```
+
+未设凭据时相关用例打印 `SKIP`，并在结尾汇总里显式记为「未覆盖」，不会被算成通过。
+
+## 5. 打包后怎么启动
+
+| 线 | 启动方式 | 备注 |
+| --- | --- | --- |
+| 图形版 | 双击 `dist\excel2mysql\excel2mysql.exe` | 目标机不装 Python；`excel2mysql.exe` 与 `_internal` 必须同级放在一起，只拷 exe 跑不起来 |
+| 命令行版 | `dist\excel2mysql-cli\excel2mysql-cli.exe <路径> -c conn.ini` | PyInstaller 5.x 的 onedir 是平铺布局，没有 `_internal`；整目录复制或压成 zip 分发 |
+| Java 图形界面 | 双击 `java\dist\excel2mysql-java-3.1.0-win64\启动.bat` | 内部就是包内运行时加 `--gui`，不依赖目标机装没装 Java |
+| Java 命令行 | `java\dist\excel2mysql-java-3.1.0-win64\jre\bin\java.exe -jar java\dist\excel2mysql-java-3.1.0-win64\excel2mysql-3.1.0.jar <路径> -c conn.ini` | 同一个 jar 的两种模式，不给 `--gui` 就是命令行；在别的工作目录下也能自动读到产物同级的 `conn.ini` |
+
+随包件（打包脚本逐条断言存在，缺一件不出包）：
+
+| 随包件 | 内容 |
+| --- | --- |
+| `conn.ini` | 命令行版与 Java 版各带一份空模板，改它即可，不用每次敲参数；来源与优先级见 7.4 |
+| `README.md` | 项目根这一份的原样副本，连标题图标 `assets/app_icon.png` 一起放进同名相对路径 |
+| `win7_sp1_patch\` | 仅命令行版：四个 `.msu` + `vc_redist.x64.exe` + 自检与安装脚本。缺 UCRT 的机器报 `ImportError: DLL load failed while importing _socket`，先跑 `3.check_win7.bat` 自检，再以管理员运行 `4.install_minimal.bat`（KB3063858 + KB2999226 + vc_redist 三件即可跑起本包），或 `5.install_win7_prereq.bat` 一次装全，重启后验 `--version`。这批二进制是微软按内部使用授权分发的，不入库（`.gitignore` 排除）；目录不在时构建照常通过，但日志会明写「本次没带补丁」 |
+
+## 6. 质量闸门
+
+改完代码按改动落在哪条线选跑：
+
+| 闸门 | 覆盖什么 | 命令 |
+| --- | --- | --- |
+| 全量功能用例 | 解析、推断、DDL、导入、界面控件与文案、弹窗、日志 | `.venv\Scripts\python pack_test.py` |
+| 旧栈用例 | 同一份 Win7 用例在 3.8 旧栈与 3.12 新栈各跑一遍，含真库读写与 `.sql` 执行 | `.venv38\Scripts\python pack_test38.py` |
+| Java 线十步闸门 | 生成物一致、class 版本、五道金标准差分、产物逐格差分、界面自检 | `java\构建验证.bat` |
+| 双界面对撞 | 两条 GUI 线的控件文案、按钮启用条件、弹窗文字、写出的文件内容逐键比对 | `java\界面双端对撞.bat` |
+| SQL 示例真库回归 | 126 条示例逐条打到真 MySQL 上跑一遍 | `.venv\Scripts\python check_sql_samples.py` |
+
+v3.1.0 这一轮的实测结果：
+
+| 项 | 结果 |
+| --- | --- |
+| `pack_test.py` | 通过 896 / 失败 0 / 显式记账未覆盖 5 |
+| `pack_test38.py` | 旧栈通过 243 / 失败 0 / 14 项显式 `SKIP` |
+| Java 线十步 | 全过；拼音差分 57228 条语料 0 条不一致；jpinyin 路线实测否决（注入同款词典后仍有 0.3% 结构性不等） |
+| 双端对撞 | 340 项界面事实逐键一致，另有 6 项「现场实测尺寸」只留档不比 |
+| SQL 示例真库回归 | 126 条，失败 0 条 |
+| 文档防漂移 | 本文由 `argparse` 与 `cli` 常量反向核（W29 / W29b / W29c / W30 / W31 / W31b / W31c / W31d），版本号四处与 `version.py` 同值（T15） |
+
+改了 `core/` 的解析或推断，四个金标准导出脚本要一起重跑：`java/tools/export_excel_golden.py` → `export_xls_golden.py` → `export_sql_golden.py` → `export_meta_golden.py`。后两个吃前两个的产物，只重跑第一个会把差异推到差分第 8 步才暴露。每一轮界面改动落到两栈的对照与取证记录在 `java/GUI-对齐清单.md`。
+
+## 7. Windows 7 命令行版（实施与无人值守）
+
+`cli.py` 是给同一份 `core/` 加的无界面入口：表名与字段名推断、类型与精度、主键选择、DDL 生成、分批插入、ZIP 展开、合并表头展开与其余合并区拒绝，全部走图形版同一批函数。
+
+### 7.1 前置条件
 
 | 项 | 内容 |
 | --- | --- |
-| 现象 | 弹出「找不到指定的程序 / 入口点」这类系统提示 |
-| 时机 | 进程在进入 Python 代码之前就被系统拦下（缺 UCRT / API set） |
-| 后果 | 程序自己没机会给出友好提示，只能靠本节与《使用说明》的常见问题提前说明 |
-| 现场处置 | 换 Win10/11 机器导入，或改用命令行版 / Java 版 |
+| 系统 | 64 位 Windows 7 SP1 及以上，且系统装有 UCRT（KB2999226 / KB4019990）；缺它时进程在进入 Python 之前就被系统拦下 |
+| 症状与修复 | 缺补丁报 `ImportError: DLL load failed while importing _socket`；用包内 `win7_sp1_patch\` 的 `3.check_win7.bat` 自检、`4.install_minimal.bat` 安装，详见第 5 章 |
+| 数据库 | 目标 MySQL 可达，账号有 `CREATE` 与 `INSERT` 权限；只做连通性校验用 `--check` |
+| 首次上机 | 先跑 `excel2mysql-cli.exe --version`，能打印 `excel2mysql-cli 3.1.0` 说明系统层面进程起得来，再谈导入 |
 
-### 3.4 必须 Win7 本机跑的时候怎么办
-
-| 场景 | 做法 | 理由 |
-| --- | --- | --- |
-| 只要求网络能连到目标 MySQL | 换任意一台 Win10/11 机器跑图形版，Excel 放共享目录 | 导入本身不必在 Win7 本机完成，目标机上不用装任何东西 |
-| 数据不能出那台机器，或只有它连着内网库 | 用命令行版 `excel2mysql-cli.exe` | 给同一份 `core/` 加一个无界面入口，比给 GUI 加 PySide2 双分支 shim 小，也不用维护两套 Qt 代码 |
-
-命令行线可行的依据：
-
-| 依据 | 内容 |
-| --- | --- |
-| Python 版本 | 3.8.10 是 python.org 明确支持 Win7 的最后一个版本；3.8 跑不了 PySide6/Qt6 |
-| 依赖可用性 | `core/` 只依赖 pandas/numpy/pymysql/openpyxl/xlrd/pypinyin，全部有 3.8 可用的版本 |
-| 打包器 | 界面换成命令行后不需要 Qt，绕开支持矩阵；`PyInstaller 5.13.2` 是仍支持旧系统的版本 |
-| 详细用法 | 见第 4 章「Windows 7 命令行版」 |
-
-验收状态：
-
-| 项 | 结论 |
-| --- | --- |
-| 旧栈实测 | 命令行版在 Python 3.8.10 + pandas 2.0.3 + numpy 1.24.4 上全绿：`pack_test38.py` 跑通 243 项、失败 0，14 项显式记 SKIP（G 组 13 项要真连 MySQL，本轮没设凭据；V25 需 `PT_XLS` 指向真实 `.xls` 样本，本机没有该格式文件） |
-| 跨栈一致 | 同一份用例在 3.12 新栈上逐条一致，作为「旧栈行为没变」的实测证据 |
-| 产物取证 | 产物里没有任何 Qt 文件、带的是 `python38.dll`、PE 头声明的最低系统版本不高于 6.1（Win7） |
-| 真机状态 | 暂无真 Win7 SP1 机器可实测；真机验收前按「已按官方支持矩阵与旧栈实测准备好，待真机确认」理解 |
-| 系统前提 | Win7 需 SP1 且装好 UCRT（KB2999226 / KB4019990），缺它同样是系统先拦下进程、程序没机会报错 |
-## 4. Windows 7 命令行版（`cli.py` → `excel2mysql-cli.exe`）
-
-给同一份 `core/` 加的无界面入口：表名与字段名推断、类型与精度、主键选择、DDL 生成、分批插入、ZIP 展开、合并表头展开与其余合并区拒绝，全部走 GUI 版同一批函数，两边建出来的表结构一致。
-
-### 4.1 怎么用最省事的四条
+### 7.2 怎么用最省事的四条
 
 ```bat
-:: 1) 先只看会建成什么样，不碰数据库（现场排障、给客户预览都用它）
-excel2mysql-cli.exe --dry-run 数据目录
-
-:: 2) 只测连接通不通，顺便把能导入的库列出来
-excel2mysql-cli.exe -c conn.ini --check
-
-:: 3) 真正导入：展开压缩包、给全部表名加 ods_ 前缀、日志另存一份
-excel2mysql-cli.exe -c conn.ini 数据包.zip --prefix ods_ --log 导入.log
-
-:: 4) 把现有的 .sql 脚本执行到目标库（改成 ads_ 前缀；已以 ads_ 开头的会跳过）
-excel2mysql-cli.exe -c conn.ini 脚本目录 --run-sql --prefix ads_ --log 脚本.log
+excel2mysql-cli.exe D:\台账目录 --host 127.0.0.1 --port 3306 --user root --password 口令 -d ods_data
+excel2mysql-cli.exe D:\订单.xlsx --dry-run      :: 只看会建成什么样，不写库
+excel2mysql-cli.exe -c conn.ini --check        :: 只连接并列出可导入的库名
+excel2mysql-cli.exe D:\脚本目录 --run-sql      :: 把目录里的 .sql 执行到目标库
 ```
 
-| 注意点 | 说明 |
+### 7.3 支持哪些输入与连接信息
+
+| 输入 | 行为 |
 | --- | --- |
-| `-c conn.ini` 可省 | 产物同级默认带一份 `conn.ini`，不带 `-c` 会自动读到 |
-| `--prefix` 是加一段 | `--prefix ads_` 把 `dim_region` 变成 `ads_dim_region` |
-| 已带前缀的表跳过 | 已经叫 `ads_t_order` 的表视为已带该前缀，重复跑是幂等的 |
-| 前缀取值 | 不要取与现有表名重复的前缀，那样等于没加 |
+| 单个 `.xlsx` / `.xls` 文件 | 一个文件一张表；任一 Sheet 的表头含「字段名、数据类型」等列即识别为结构定义表，字段以人工定义为准，位置不限 |
+| 目录 | 递归收集目录内的 Excel（`--no-recursive` 只取一层）；同目录里的 `.sql` 只登记，加 `--run-sql` 才执行 |
+| `.zip` | 展开包内 Excel 逐个导入，包本身不进列表（`--keep-temp` 保留解出来的临时文件） |
+| 文件名 | 以「`（英文表名）`」结尾且括号内是合法标识符时用它做表名、括号前中文做表注释；否则整名转拼音，表名最长 64 字符 |
+| 表头 | 顶部标准两行合并表头自动压成 `父-子` 一行；表头块以外的合并区一律拒绝导入，日志给出具体位置 |
 
-### 4.2 支持哪些输入
+连接信息三处来源，优先级从高到低：
 
-| 输入 | 处理方式 |
-| --- | --- |
-| `.xlsx` / `.xls` / `.zip` / `.sql` 文件，或装有它们的目录 | 可混着给；目录默认递归，`--no-recursive` 只取一层 |
-| 压缩包 | 按 GUI 同口径展开：只取包内 Excel、忽略非 Excel、嵌套 zip 不递归；带密码或损坏的包整条报失败；日志写成 `包名!包内路径`，可看出文件来自哪个包 |
-| 顶部两行合并表头 | 第一个 Sheet 顶部的两行合并表头自动压成一行 |
-| 表头块以外的合并区 | 直接拒绝，日志给出合并区位置与原因，不静默丢数据 |
-
-### 4.3 连接信息
-
-三处来源，优先级从高到低：
-
-| 优先级 | 来源 | 写法 |
+| 优先级 | 来源 | 说明 |
 | --- | --- | --- |
-| 1 | 命令行 | `--host --port --user --password -d/--database` |
-| 2 | 环境变量 | `E2M_HOST E2M_PORT E2M_USER E2M_PASS E2M_DB` |
-| 3 | 配置文件 | `-c conn.ini`；不给 `-c` 时自动读程序同级的 `conn.ini` |
+| 1 | 命令行参数 | `--host` `--port` `--user` `--password` `-d, --database` |
+| 2 | 环境变量 | `E2M_HOST` `E2M_PORT` `E2M_USER` `E2M_PASS` `E2M_DB`，日志只写「取自环境变量」，不回显值 |
+| 3 | 配置文件 | `-c FILE` 指定，或自动读程序同级的 `conn.ini`（日志标明「自动发现」） |
 
 ```ini
-; conn.ini —— 段名 [mysql]（也接受 [connection]）
 [mysql]
 host = 127.0.0.1
 port = 3306
 user = root
 password = 改成你的密码
-database = testdb
+database = ods_data
 ```
 
-| 事项 | 说明 |
-| --- | --- |
-| 随包自带 | 产物目录默认带一份（源文件 `assets/conn.ini`），复制整个文件夹即可直接运行，改那个文件即可，不用每次敲 `-c` |
-| 来源标注 | 日志写明来源是「配置文件 …（自动发现）」 |
-| 配置写坏 | 缺 `[mysql]` 段等情况打一条 `! [WARN] 默认配置忽略` 并退回内置默认值，不让整条命令起不来 |
-| 口令传递 | 建议走 `E2M_PASS`：命令行参数会留在 cmd 历史与任务管理器的进程列表里 |
-| 口令落盘 | 填了口令的 `conn.ini` 不外发；`.gitignore` 已排除根级 `/conn.ini`，只有 `assets/conn.ini` 那份空口令模板入库 |
-| 回显 | 日志与错误输出永不回显密码，只写「取自环境变量/配置文件」 |
+段名接受 `[mysql]` 与 `[connection]`；`database` 留空即不连库；配置文件读不了时告警并退回内置默认值，命令照常跑完。
 
-### 4.4 动作与选项
+### 7.4 动作与选项
 
 | 选项 | 作用 |
 | --- | --- |
-| `-c, --config FILE` | 指定连接配置文件（INI，段名 `[mysql]`，键 `host/port/user/password/database`）；不给就自动读程序同级的 `conn.ini` |
+| `-c, --config FILE` | 指定连接配置文件（INI，键 `host/port/user/password/database`）；不给就自动读程序同级的 `conn.ini` |
 | `--host` `--port` `--user` `--password` `-d, --database` | 命令行直接给出连接信息，优先级最高 |
-| `--dry-run` | 只解析并打印建表 DDL，完全不连库；脚本只报语句数与改写结果 |
+| `--dry-run` | 只解析并打印建表 DDL，完全不连库；`.sql` 只报语句数与改写结果 |
 | `--check` | 只连接并列出可导入的库名；指定的 `-d` 库不存在时报错退出 |
-| `--run-sql` | 把输入里的 `.sql` 执行到目标库：每个文件一个事务，全部语句成功才提交；不加这个开关时 `.sql` 只登记不执行 |
-| `--prefix ods_` | 给全部表名加前缀（基于原名重算，重复使用不叠加），与 GUI「批量应用前缀」同一口径；需要分隔符就自己写上下划线，末尾没写 `_` 时日志会警告一句；对 `.sql` 同样生效 |
-| `--swap-prefix change` | 替换表名第一个下划线之前的首段：`ods_t_order` → `change_t_order`；名里没有下划线或以 `_` 开头的不改并逐条列在日志里（拼音表名如 `shui_ku_...` 应改用 `--prefix`）；对 `.sql` 同样生效 |
-| `--drop-if-exists` | 建表前先 `DROP TABLE IF EXISTS`，会删掉目标库里的同名表及其数据，开启时日志额外警告一句；只作用于 Excel 建表那条路，脚本内容不改 |
-| `--initials` | 表名与字段名取拼音首字母 |
+| `--run-sql` | 把输入里的 `.sql` 执行到目标库：每个文件一个事务，全部语句成功才提交；不加时 `.sql` 只登记不执行 |
+| `--prefix ods_` | 给全部表名加前缀（基于基础表名重算，重复应用不叠加）；需要分隔符就自己写上下划线，末尾没写 `_` 时日志警告一句；对 `.sql` 同样生效 |
+| `--swap-prefix change` | 替换表名首段：`ods_t_order` → `change_t_order`；名里没有下划线或以 `_` 开头的不改并逐条列在日志里；对 `.sql` 同样生效 |
+| `--drop-if-exists` | 建表前先 `DROP TABLE IF EXISTS`，会删掉目标库里的同名表及其数据；只作用于 Excel 建表那条路，脚本内容不改 |
+| `--initials` | 表名与字段名取中文拼音首字母 |
 | `--upper` | 表名与字段名转大写 |
 | `--batch N` | 每批插入行数，默认 500 |
 | `--no-recursive` | 目录只取一层 |
@@ -310,7 +242,9 @@ database = testdb
 | `-q, --quiet` | 控制台只留警告、错误和汇总；日志文件仍记全量 |
 | `--version` | 打印版本号后退出 |
 
-### 4.5 日志形态与退出码
+同一批里两个文件算出同名表时自动加 `_2`、`_3`（与图形版共用 `make_unique_names`）。命名规则、主键自动选择、类型与精度推断的完整口径见程序内《使用说明》的「三条线与选型」「字段命名与类型推断」两节，两条图形线与命令行线共用同一套实现。
+
+### 7.5 日志形态与退出码
 
 一行读完整件事，行首是符号加分级标签，分段用 `|`，便于单独 `findstr` 出一档：
 
@@ -322,1209 +256,84 @@ x [ERROR] 建表失败 | `t` | 目标库 testdb | ProgrammingError（MySQL 错�
 
 | 行首 | 级别 | 使用场合 |
 | --- | --- | --- |
-| `+` | OK | 这件事做成了 |
-| `-` | INFO | 记一笔，不需要处理 |
-| `!` | WARN | 没做成但有原因：跳过、重复、取消、空包 |
+| `+` | OK | 完成 |
+| `-` | INFO | 记录，不需要处理 |
+| `!` | WARN | 未执行但有原因：跳过、重复、取消、空包 |
 | `x` | ERROR | 失败，需要处理 |
 
 | 项 | 口径 |
 | --- | --- |
-| 符号集 | 只用 `+ - ! x` 四种 ASCII：Win7 `cmd` 默认 cp936 码页，打勾打叉这类符号会显示成乱码或方块 |
-| MySQL 报错 | 统一展开成「异常类型 + MySQL 错误码 + 原文」，与 GUI 版一个口径 |
-| 建表失败 | 日志附上那条 DDL 原文，并提醒 `CREATE/DROP/ALTER` 属 DDL，MySQL 隐式提交、不随事务回滚 |
+| 符号集 | 只用 `+ - ! x` 四种 ASCII：Win7 `cmd` 默认 cp936 码页，打勾打叉类符号会显示成乱码或方块 |
+| MySQL 报错 | 统一展开成「异常类型 + MySQL 错误码 + 服务端原文」，与图形版同一口径 |
+| 建表失败 | 日志附完整 DDL，并提醒 `CREATE/DROP/ALTER` 属 DDL，MySQL 隐式提交、不随事务回滚 |
 
 | 退出码 | 含义 |
 | --- | --- |
 | 0 | 全部成功 |
-| 1 | 用法或配置错误（参数冲突/非法、配置文件缺失、未指定目标库、没有任何可解析的文件） |
-| 2 | 有输入文件解析失败（其余文件照常处理；动作本身是成功的） |
+| 1 | 用法或配置错误（参数冲突或非法、配置文件缺失、未指定目标库、没有任何可解析的文件） |
+| 2 | 有输入文件解析失败（其余文件照常处理） |
 | 3 | 无法连接 MySQL，或目标库不可用 |
 | 4 | 有表建表或导入失败（其余表照常处理） |
 | 5 | 有 SQL 脚本执行失败（该文件已回滚，其余文件照常处理） |
-| 130 | 按 Ctrl+C 中止 |
+| 130 | Ctrl+C 中止 |
 
-同时出现多种问题时取最严重的一档（解析失败 + 导入失败报 4；导入成功但脚本失败报 5），所以批处理脚本里 `if errorlevel 5 ... else if errorlevel 4 ...` 从大到小判即可。
+同时出现多种问题时取最严重的一档（解析失败 + 导入失败报 4；导入成功但脚本失败报 5），批处理脚本里按 `if errorlevel 5 ... else if errorlevel 4 ...` 从大到小判断。
 
-### 4.6 执行 .sql 脚本（`--run-sql`）
+### 7.6 最小验收
 
-与 GUI「SQL 脚本改名」页同一套逻辑，`core/sql_script.py` 一字未改：
-
-| 项 | 行为 |
-| --- | --- |
-| 建表语句计数 | 每个脚本先报一行载入记录，给出 `CREATE TABLE` 处数、表张数与各表出现次数 |
-| 语句切分 | 跳过字符串、反引号标识符、`--` / `#` 行注释与块注释里的分号；只有注释的脚本按 1 条语句发给 MySQL；完全空白的记为跳过 |
-| 事务 | 每个文件一个事务，全部语句成功才提交；中途某条被拒就整文件回滚，日志写明第几条 / 共几条与出错语句原文，并继续执行下一个文件 |
-| 前缀改写 | 与 GUI 两个按钮同源：`--prefix ads_` 同步改 `CREATE` / `DROP` / `INSERT` / `ALTER` / `TRUNCATE` 里的引用，已带该前缀的表自动跳过；`--swap-prefix dim` 换首段，名里没下划线的不改并列出 |
-| 编码回退 | 按 `utf-8-sig → utf-8 → gbk` 依次尝试，记事本「另存为 ANSI」的脚本照样读得开；dump 里夹着原样二进制字段、整份不再是合法 UTF-8 时按 UTF-8 替换坏字节，不会整份回落 GBK 把中文表名与注释变成乱码 |
-| 未加开关 | `.sql` 只登记并打一条 `! [WARN]`，不静默执行，也不静默忽略 |
-| 互斥关系 | `--check` 与 `--run-sql` 互斥：`--check` 到列出库名即返回，同时要求执行判为用法错误，不猜意图 |
-
-同一目录里既放 Excel 又放 `.sql` 时，两类动作分别执行：Excel 走推断建表导入，脚本走 `--run-sql`，日志里分别有「导入汇总」与「脚本汇总」两行汇总说明。
-
-### 4.7 表名撞了怎么办
-
-同一批里两个文件算出同名表时自动加 `_2`、`_3`（与 GUI 共用 `make_unique_names`），不会发生后一张表覆盖前一张。加前缀或换前缀之后同样再去重一次。
-
-### 4.8 拿到 Win7 真机后的最小验收
-
-三步按顺序走，先验进程与依赖，再验连接，最后才做真实导入：
-
-| 步骤 | 命令 | 通过判据 | 说明 |
-| --- | --- | --- | --- |
-| 1 | `excel2mysql-cli.exe --version` | 打印 `excel2mysql-cli 3.1.0` | 说明系统层面进程起得来；起不来（「找不到指定的程序/入口点」）基本是缺 UCRT（KB2999226）或系统是 32 位，与本工具无关，程序也没机会报错 |
-| 2 | `excel2mysql-cli.exe --dry-run 样例.xlsx --log 试跑.log` | 退出码 0，日志里出现 `CREATE TABLE ...` 与 `+ [OK] 解析成功` | 说明 pandas / openpyxl / xlrd / pypinyin 词典在包内齐备（冻结态最容易缺这类运行时按名字加载的东西） |
-| 3 | `excel2mysql-cli.exe -c conn.ini --check` | 列出库名 | 说明 pymysql、网络、凭据三件事都通 |
+| 步骤 | 命令 | 判据 |
+| --- | --- | --- |
+| 1 | `excel2mysql-cli.exe --version` | 打印版本号、退出码 0：系统层面进程与依赖可用 |
+| 2 | `excel2mysql-cli.exe -c conn.ini --check` | 列出库名、退出码 0：网络与凭据可用 |
+| 3 | `excel2mysql-cli.exe D:\台账目录 --dry-run --log 试跑.log` | 每张表一句 DDL，退出码 0 或 2：列名与类型符合预期 |
 
 三步通过后再做真实导入。任一步失败，把 `--log` 文件整份取出来看，`x [ERROR]` 行自带 MySQL 错误码。
 
-### 4.9 打这个包（Win7 线专用闸门）
-
-```bat
-:: 一次性准备旧栈环境（pyenv-win 已装好 3.8.10）
-"C:\Users\<你>\.pyenv\pyenv-win\versions\3.8.10\python.exe" -m venv .venv38
-.venv38\Scripts\python -m pip install --upgrade pip
-.venv38\Scripts\python -m pip install -r requirements38.txt
-
-:: 打包 + 全部验收
-一键打包-命令行版.bat
-```
-
-闸门顺序为任一步失败即非 0 退出：
-
-| 步骤 | 内容 |
-| --- | --- |
-| 1 | 检查环境：必须 3.8 加 PyInstaller 5.x，版本不对直接拦住 |
-| 2 | 确认 `excel2mysql-cli.exe` 没在运行 |
-| 3 | 旧栈开发态用例集 |
-| 4 | 新栈跑同一份用例集做跨栈比对 |
-| 5 | 构建 |
-| 6 | 产物体检：没有 Qt 文件、带 `python38.dll`、PE 头要求的系统版本 ≤ 6.1、带前置补丁时逐文件 md5 与仓库那份一致 |
-| 7 | 构建并运行冻结态用例集 |
-| 8 | 真跑产品 exe：`--version` / `--help` / `--dry-run`，核对退出码与落盘日志里的 DDL |
-| 9 | 脱离项目目录再跑一次，证明自包含 |
-| 10 | 汇总打勾表 |
-
-| 辅助开关 | 作用 |
-| --- | --- |
-| `--fast` | 只打产品包 |
-| `--no-parity` | 跳过 3.12 那轮跨栈 |
-| `--keep-cache` | 保留构建缓存 |
-
-产物形态与分发：
-
-| 项 | 内容 |
-| --- | --- |
-| 路径 | `dist\excel2mysql-cli\` |
-| 实测体积 | 131 MB / 1405 个文件；比不带补丁时多 10 个文件 / 42 MB，GUI 线那个包是 162 MB / 921 个文件 |
-| 布局 | 这条线用 PyInstaller 5.x，onedir 是平铺布局：`excel2mysql-cli.exe`、`python38.dll`、`*.pyd`、`base_library.zip`、默认配置 `conn.ini`、文档 `README.md` 全在同一层，没有 GUI 线的 `_internal` 目录（那是 6.x 才改的布局） |
-| 分发方式 | 整个目录一起复制或压成 zip；只拷 exe 跑不起来 |
-
-Win7 前置补丁随包走：
-
-| 项 | 内容 |
-| --- | --- |
-| 来源目录 | 仓库根的 `win7_sp1_patch\win7_prereq_files\`，含四个 `.msu`、`vc_redist.x64.exe` 与自检、安装脚本 |
-| 打包行为 | 原样复制到 `dist\excel2mysql-cli\win7_sp1_patch\` 并逐文件复核 md5 |
-| 对应症状 | 专业版那类机器报 `ImportError: DLL load failed while importing _socket` |
-| 修复顺序 | 先 `3.check_win7.bat` 自检，再以管理员运行 `4.install_minimal.bat`（KB3063858 + KB2999226 + vc_redist 三件即可让本包跑起来），或 `5.install_win7_prereq.bat` 一次装全，装完重启再验 `excel2mysql-cli.exe --version` |
-| 入库策略 | 这批文件是微软按内部使用授权分发的几十 MB 二进制，不入库（`.gitignore` 明确排除）；目录不在时构建照常通过，但日志与产物说明会明写「本次没带补丁」 |
-
-产物同级的 `README.md` 就是项目根这一份的原样副本（连同 `assets/app_icon.png`），面向现场使用方：
-
-| 覆盖内容 |
-| --- |
-| Win7 前置条件（SP1 + UCRT/KB2999226 与缺它时的症状）、四条最省事命令、`conn.ini` 怎么改 |
-| 支持哪些输入、表名与字段名规则、开关表、退出码、分发方式、跑不通时按退出码排查的项目 |
-
-| 守卫 | 校验内容 |
-| --- | --- |
-| W29 / W29b | 拿 `argparse` 的真实长选项清单反着核这份文件：写一个不存在的开关、或加了新开关忘补说明，当场变红 |
-| W30 | 退出码清单与代码常量一一对应 |
-| W31 | 说明里不带出口令或内网地址 |
-
-冻结态测试包（`packtest38.spec`）会把各依赖的 `*.dist-info` 元数据一起收进包里（`copy_metadata`），因此「旧栈装的到底是不是 `requirements38.txt` 钉的那几个版本」这组用例在 exe 里也能实际运行，而不是 SKIP。
-
-`requirements38.txt` 与 `requirements.txt` 都必须纯 ASCII：Python 3.8 出厂自带的 pip 21.1.1 按系统首选码页（zh-CN 是 cp936）解析 requirements，文件里出现 UTF-8 中文注释会直接 `UnicodeDecodeError: 'gbk' codec can't decode…`，依赖一个都装不上；新版 pip 只是碰巧容忍。`pack_test38.py` 的 U18/U19 两个用例是这条的守卫。
-
-### 4.10 跑不通时按退出码查
+### 7.7 跑不通时按退出码查
 
 | 退出码 | 先查什么 |
 | --- | --- |
 | `0` | 无异常；有表没进库时核对日志里的表名与目标库 |
 | `1` | 参数拼写与取值、配置文件是否存在、`-d` 是否给了、输入路径下有没有可解析文件 |
-| `2` | 日志里 `x [ERROR] 解析失败` 那一行给的文件路径与异常原因；单个文件失败不影响其余文件 |
-| `3` | 主机、端口、用户名、口令来源；`--check` 单独跑一次定位到底是网络还是凭据 |
-| `4` | 建表或导入失败的那张表：日志附了完整 DDL 与 MySQL 错误码；先判断是不是已知的拒绝（见 7.9） |
+| `2` | 日志里 `x [ERROR] 解析失败` 那行的文件路径与原因；单个文件失败不影响其余文件 |
+| `3` | 主机、端口、用户名、口令来源；单独跑一次 `--check` 区分网络还是凭据 |
+| `4` | 该表日志附了完整 DDL 与 MySQL 错误码；先判断是不是已知拒绝项（见第 9 章） |
 | `5` | 脚本失败：日志给出文件名、第几条语句与出错语句全文；该文件已回滚，其余文件不受影响 |
 | `130` | 人工中止；已完成的表与文件保留，未开始的不再执行 |
 
-## 5. 安装
-
-使用者拿到三条线的任一交付包都不需要在目标机上装东西（Java 包连 Java 运行时都带着）。以下是在开发机上重建三条线环境的方式，两个 Python 环境各装各的、互不干扰（本机分别是 `.venv` 与 `.venv38`），Java 线用本机 `jdk1.8.0_202`：
-
-```bash
-# 图形版：Windows 10 1809+ / 11，Python 3.10+（本机 .venv = 3.12.8）
-pip install -r requirements.txt
-# 即 PySide6 pymysql pandas openpyxl xlrd pypinyin pyinstaller
-# 前五个是运行期依赖，pyinstaller 是打包闸门要用的构建工具；
-# 有意一起列在这份清单里：重建 .venv 时一条命令就能得到「能跑也能打包」的环境，
-# 不会装完到闸门第 1 步才发现缺 PyInstaller
-# 只想要更小体积可把 PySide6 换成 PySide6-Essentials：代码只用到 QtCore/QtGui/QtWidgets，
-# 装成完整 PySide6 也不会被打进产物（打包时 WebEngine/Pdf 等已显式排除）
-
-# 命令行版：Windows 7 SP1+，Python 3.8.10（本机 .venv38）
-# 版本必须钉在 requirements38.txt 那一组上：
-# 3.8 上装不了 numpy 1.25+ / pandas 2.1+ / PyInstaller 6.x，替换后会失去 Win7 支持
-.venv38\Scripts\python -m pip install -r requirements38.txt
-```
-
-| 线 | 目标系统 | 开发机环境 | 依赖清单 |
-| --- | --- | --- | --- |
-| 图形版 | 64 位 Windows 10 1809+ / 11 | `.venv`（Python 3.12.8） | `requirements.txt` |
-| 命令行版 | Windows 7 SP1+ | `.venv38`（Python 3.8.10） | `requirements38.txt` |
-| Java 版 | 64 位 Windows 7+ | `jdk1.8.0_202` + Maven | `java/pom.xml` |
-
-## 6. 开发态直接跑源码
-
-```bash
-python main.py              # 图形版
-python cli.py --help        # 命令行版（Win7 线；不依赖 Qt，Python 3.8 上跑）
-
-java\dist\excel2mysql-java-3.1.0-win64\启动.bat              # Java 线的界面
-java\dist\excel2mysql-java-3.1.0-win64\jre\bin\java.exe -jar ^
-    java\dist\excel2mysql-java-3.1.0-win64\excel2mysql-3.1.0.jar --help   # Java 线的命令行
-```
-
-命令行版在开发态不依赖 Qt，可以在 3.12 上直接跑；交付以 3.8 产物为准。
-
-## 7. 打包为 Windows 免安装 exe
-
-三套打包闸门各产一条线的包，跑在不同环境上，互不影响：
-
-| 产物 | 双击入口 | 实际执行 | 使用环境 |
-| --- | --- | --- | --- |
-| 图形版 `dist\excel2mysql\`（162 MB，带 `_internal`） | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
-| 命令行版 `dist\excel2mysql-cli\`（131 MB，平铺无 `_internal`；内含 `win7_sp1_patch\`） | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
-| Java 版 `java\dist\excel2mysql-java-<版本>-win64\`（约 232 MB，含随包 JRE） | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py`（剔桩 + 逐 jar class 版本 + 冒烟 + README/启动.bat 内容校验） | 本机 `jdk1.8.0_202` + Maven |
-
-三端一起打用项目根目录的 `一键打包-三端.bat`：
-
-| 项 | 说明 |
-| --- | --- |
-| 顺序 | 图形版 → 命令行版 → Java 版，逐步打印 `[1/3]`…`[3/3]` |
-| 中止条件 | 任何一步非 0 退出就停住，不再往下出包（三份产物来自同一份源码，源码没过闸门时打出来的也是坏包） |
-| 参数 | 不接受参数；单端自己的选项仍直接调对应的那个 bat |
-
-7.1 至 7.9 说明图形版闸门；命令行版的完整步骤、产物体检项与分发说明见第 4 章。
-
-### 7.1 一键打包（推荐，改完代码就用它）
-
-双击项目根目录的 `一键打包-图形版.bat`，按顺序执行并逐项汇报：
-
-| 步骤 | 操作 | 失败表现 |
-| --- | --- | --- |
-| 1 检查打包环境 | venv / PyInstaller / spec / 用例脚本是否齐备 | 直接中止，并给出补齐命令 |
-| 2 确认产品 exe 未在运行 | 用 `tasklist` 查进程 | 中止并提示先关掉（否则文件被锁，构建必失败） |
-| 3 开发态功能用例集 | 跑 `pack_test.py` 全部用例 | 中止，不产出看起来成功的包 |
-| 4 构建产品包 | `pyinstaller excel2mysql.spec` | 中止 |
-| 5 冻结态用例集 | 打一个测试 exe 并运行它，在打包环境里再跑一遍全部用例 | 中止 |
-| 6 启动验收 | 真启动 `excel2mysql.exe`，等窗口出现、核对标题、用 `SendMessageTimeout` 判断界面是否卡死，关闭后确认无残留窗口 | 中止 |
-| 7 清理构建缓存 | 删掉 `build/` 与 `build_packtest/`；`--keep-cache` 可保留 | 不影响结果 |
-
-全部通过才打印打包成功与产物路径；任一步失败以非 0 退出码结束。第 3、5 两轮 Qt 用例由闸门自己钉 `QT_QPA_PLATFORM=offscreen`，不随调用方桌面屏变化：弹窗尺寸与滚动复位那几条量的是屏幕可用区，同一份产物在 1920×1080 的真桌面上会换一套数字，靠环境变量传进去等于让打包结果取决于本机屏幕（用例 T16 盯着这两处）。真实窗口弹出由第 6 步单独验证，不混入用例轮。实测耗时约 2 分钟（两次构建各约 30 秒 + 两轮用例）。
-
-```bash
-python build_exe.py              # 完整流程（等价于双击 bat）
-python build_exe.py --app-only   # 跳过冻结态用例集，但仍做启动验收
-python build_exe.py --fast       # 只构建产品包，跳过冻结态用例与启动验收
-python build_exe.py --keep-cache # 保留 build/ 中间缓存，加速下一次构建
-```
-
-要把 MySQL 真实读写（G 组）纳入验收，先备好凭据：
-
-```bat
-set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& set PT_DB=测试库
-一键打包-图形版.bat
-```
-
-未设凭据时 G 组打印 `SKIP`，并在结尾汇总里显式记为「未覆盖」，不会被算成通过。
-
-### 7.2 手动打包
-
-目标机器不需要装 Python，双击 exe 即可打开界面。
-
-### 7.3 打包机上的一次性准备
-
-不需要单独准备：`requirements.txt` 里已含 `pyinstaller`，`pip install -r requirements.txt` 就把运行依赖和打包工具一起装好；单独补装用 `pip install pyinstaller`。打包配置在 `excel2mysql.spec`，应用图标在 `assets/app_icon.ico`（多尺寸：16/20/24/32/40/48/64/128/256）。
-
-### 7.4 打包命令
-
-在项目根目录（`excel2mysql.spec` 所在处）执行：
-
-```bash
-.venv\Scripts\pyinstaller.exe --noconfirm excel2mysql.spec
-```
-
-约 1 分钟完成，产物：
+## 8. 项目结构
 
 ```
-dist\excel2mysql\
-├── excel2mysql.exe     8.4 MB  双击这个
-└── _internal\          145 MB  Qt / pandas / numpy / pypinyin 词典等运行时
+core/                       三条线共用的口径：解析、类型推断、命名、DDL、导入、SQL 切句、ZIP 展开
+main.py / ui_help.py        图形版入口与《使用说明》窗口（PySide6）
+cli.py                      命令行版入口（Win7 线）
+help_doc.py                 程序内《使用说明》的唯一来源（导出成 java 侧 HelpDoc.java）
+sql_samples.py              SQL 执行器页 126 条示例的唯一来源
+version.py / appinfo.py     版本号与随包构建信息
+build_exe.py / build_exe38.py / excel2mysql*.spec      两条 Python 线的打包闸门
+pack_test.py / pack_test38.py                          两条 Python 线的用例集
+check_sql_samples.py / check_sql_exec_parity.py        真库回归与 SQL 执行器对撞
+_pack_common.py             排除清单与共用件（两条 Python 线打包口径的唯一来源）
+assets/                   图标（.ico / .png）与 conn.ini 模板
+win7_sp1_patch/           Win7 前置补丁二进制（不入库，缺失时构建照常）
+java/                     Java 线：app（界面 + 命令行）、verify（差分与自检）、tools（生成器、对撞器、金标准导出）
+java/GUI-对齐清单.md       每一轮界面改动落到两栈的对照与取证记录
 ```
 
-合计 162 MB / 921 个文件。`excel2mysql.exe` 与 `_internal` 必须同级放在一起，不能只复制 exe。
+界面无独立模板文件，控件在 `main.py` 与 `java/app/src/main/java/com/excel2mysql/gui/` 里各搭一份，由第 6 章的双端对撞闸对平。
 
-### 7.5 分发方式
+## 9. 版本号与已知限制
 
-把整个 `dist\excel2mysql\` 文件夹复制给对方或压缩后分发，解压后双击 `excel2mysql.exe`。选 onedir 而不是 onefile 的原因：
-
-| 形态 | 冷启动 | 现象 |
-| --- | --- | --- |
-| onefile | 8-20 秒 | 每次启动都要把 145 MB 解压到临时目录，期间窗口完全不出现，容易被当成「双击没反应」 |
-| onedir | 1.6 秒出窗口 | 无解压开销 |
-
-### 7.6 spec 里的关键取舍
-
-| 配置 | 作用 |
-| --- | --- |
-| `console=False` | 界面程序，双击不弹黑色控制台窗口 |
-| `icon="assets/app_icon.ico"` | exe / 标题栏 / 任务栏图标 |
-| `datas=[("assets/app_icon.ico","assets")]` | 图标随包进 `_internal`，`main.py` 的 `resource_path()` 在冻结态从 `sys._MEIPASS` 读它 |
-| `QT_EXCLUDES`（30 项） | 代码只用到 QtCore/QtGui/QtWidgets；装成完整 PySide6 时会带进 WebEngine/Pdf/Addons 等数百 MB 模块，必须显式排除 |
-| `UNNEEDED_QT_BINARIES` + `_drop_unneeded_qt()` | PySide6 hook 会连带收集 QML/Quick/Pdf/VirtualKeyboard 这套 QtWidgets 用不到的 DLL 与 `qmodernwindowsstyle` 插件，共约 20 MB，在 COLLECT 前按文件名过滤掉 |
-| 保留 `opengl32sw.dll`（19.7 MB） | 软件 OpenGL 回退；远程桌面或无显卡驱动的虚拟机上缺了它 Qt 起不来 |
-| `hiddenimports` 补 `et_xmlfile` | openpyxl 运行时才 import，静态分析容易漏 |
-| `excludes` 补 `PIL` | Pillow 是打包工具链顺带装的，应用本身不读图，排掉省 11 MB |
-
-### 7.7 打包完整性与全功能用例集
-
-`pack_test.py` 是全量功能用例，覆盖应用全部用户可见行为；`packtest.spec` 把它冻结成控制台 exe 再跑一遍。同一份用例在开发态和冻结态都必须全绿，才能证明运行不依赖目标机是否安装 Python，也不会缺库、缺静态资源。
-
-```bash
-# 1. 开发态
-python pack_test.py
-
-# 2. 冻结态（用与产品包完全相同的口径重新打一个测试 exe，再运行）
-.venv\Scripts\pyinstaller.exe --noconfirm --distpath dist_packtest --workpath build_packtest packtest.spec
-dist_packtest\packtest\packtest.exe
-```
-
-退出码 0 表示全部通过；任一失败退出码 1 并列出失败用例名。未提供 MySQL 凭据时 G 段打印 `SKIP` 并在结尾显式记账为「未覆盖」，不会被算成通过。Q 段用假连接覆盖导入的主干副作用与事务调用，但不能替代 G 段的真实 MySQL 验收：假连接只能证明代码按预期调用了 execute/commit，只有真库能证明数据真的落库。
-
-守卫本身也须可被触发：改动关键断言后，按「改坏产品代码 → 运行用例 → 必须失败 → 逐字节还原」的方式抽查 7 处（加载库后可用性、导入后移除成功文件、按钮连槽、压缩包预扫数、取消标志、解压逐项进度、解析阶段回报），7 处全部按预期失败。
-
-用例分组：
-
-| 组 | 覆盖内容 |
-| --- | --- |
-| A 依赖与静态资源 | 全部三方库可导入、pypinyin 词典懒加载、pandas 时区（tzdata）、openpyxl 读写 xlsx、`app_icon.ico` 在包内且能被 Qt 解码、Qt 平台插件可建 QApplication |
-| B Excel 解析与类型推断 | 普通表 / 结构定义表 / `（英文表名）` 括号解析、元数据 Sheet 不在首位、INT/BIGINT 溢出/DECIMAL/DATE/DATETIME/VARCHAR/TEXT/MEDIUMTEXT 全分支、前导零保持文本、8 位数字不误判日期、VARCHAR 行内预算退化、全空行剔除、具名空列保留而 Unnamed 垃圾空列剔除、只有表头的空模板不被拒、表头整行没写字按列宽兜底成 `col`/`col_2`、必填星号不进字段名、多余列忽略、缺失列补 NULL、只有定义建空表、表名 64 字符截断、重名字段与重名表去重、前缀应用/切换/移除、GBK 与 UTF-8 BOM 脚本读取、夹二进制字段的 UTF-8 dump 读取 |
-| C 主键 | 自动选唯一且语义明确的列、无合适字段不设主键、组合值重复拒绝、含空值拒绝、TEXT 不能作主键、组合主键通过、全不勾选放行、空表手工指定合法主键放行且非法类型仍拒绝、空表不自动选主键 |
-| D DDL 生成 | DROP 开关、表与字段中文注释、主键与 NOT NULL 规则、InnoDB+utf8mb4+排序规则、组合主键单约束、注释内单引号转义、INSERT 模板列数与占位符数一致 |
-| E SQL 脚本处理 | `CREATE TABLE` 表名提取与计数、反引号与语句头裸名改写、schema 限定名不改写、字符串内分号不误伤、重复应用前缀不叠加、行注释/块注释/反引号内分号不切、空语句忽略 |
-| F GUI 与交互逻辑 | 主窗口与三个页签、目标库提示条三页联动与改主机端口实时刷新、三页页顶各有一句介绍条且同一块强调底板、表结构预览对话框与主键勾选框、DDL 预览对话框、拖拽区、错误日志整条标红且普通行不残留、异常展开错误码、超长语句截断、ImportWorker 信号齐备、SQL 页表格展示、保存改名脚本落在源文件旁且不覆盖原件 |
-| G MySQL 真实读写 | 连接、列库、建表、分批插入并回查确认落库、已提交数据不受后续 rollback 影响、超长值报错并回滚、表不存在错误码 1146、探针表清理 |
-| H ZIP 压缩包导入 | 展开包内 Excel、递归子目录并保留结构、非 Excel 忽略计数、嵌套 zip 不递归、GBK 中文条目名还原、无标记又不是 cp437 结果的中文名不折成问号、ZIP64 形状（合成 64 位 EOCD）的包照解且条目名不坏、加密条目点名是哪一条、同名不同目录不覆盖且表名去重、`~$` 锁文件跳过、zip slip 路径穿越拦截、非 zip / 加密 / 空包报错、GUI 层展开进列表、tooltip 标来源、日志汇总、关窗清理临时目录 |
-| I `.xls` 老格式 | `xlrd` 可导入、pandas 引擎分派含 xlrd、`.xls` 不再被判为不支持类型、真实 `.xls` 端到端解析（需 `PT_XLS=<路径>`，未设时显式记 SKIP） |
-| J 添加结果汇总 | 散文件行与 zip 行分别成文、混合输入两行、标题、全成功不出现「另有」、重复添加报跳过数且日志有 `[重复跳过]` 行、解析失败不虚报成功、打不开与空包分别报数、空包也汇总、无输入不汇总、`.xlsx` 不被重复计入 `.xls`、汇总同时进日志与弹窗且逐字一致、汇总行位于 `[已解析]` 之后 |
-| K 高度可拖拽（三个页签） | Excel 页：分隔条存在与方向、三段身份、不可折叠、手柄宽度、往下拖表格高于日志、反向拖日志高于表格、此消彼长但总和守恒、表格视口有效、清除按钮随面板缩放、固定件不在分隔条内、初始高度均非零、日志段默认压在自己的最小高度（四行，±4px 容差）且拖过把手后不回弹、命名规则工具条贴在表格上沿、两表都有斑马纹且序号列 44px、底部动作条前有一条 1px 分隔线且左列只有覆盖开关、右侧主按钮用 `#2f6feb`；SQL 页：两栏身份、正反向拖动、总和守恒、前缀行与表格下方三颗按钮跟表格一起缩放、提示条与底部固定条不在分隔条内、第二行四颗按钮与覆盖开关位于底部操作条（开关最左、按钮贴右）、表格下方三颗按钮（清空/生成表结构预览/预览DDL）跟着表格缩放、`清除日志` 在日志框上方、日志段默认同处最小高度、缩到最小仍可写日志、执行按钮强调色而保存为次级样式；SQL 执行器页：三段身份（拖拽区 / 脚本清单 / 编辑区与结果）、末段初始化压到自己的最小高度且清单拿余量、编辑区最小高度等于四行字高、空清单的图标与引导语放得下 |
-| L 字段类型映射 | 金额列样本为整数也不给 INT、金额统一 `DECIMAL(16,2)`、实测小数更多时放宽不截断、非金额小数按实测定宽、经纬度 7 位完整保住、数量列仍 INT、前导零仍 VARCHAR、英文金额名命中、`total_count` 不误判、`费县`/`评价` 不误判、`年利率`/`interest_rate` 被比率否决、`利息` 仍算金额、超大金额与科学计数法放宽、浮点整数溢出判 BIGINT、超 BIGINT 改 `DECIMAL(n,0)`、DECIMAL 65/30 上限与超限退文本、18 位金额字符串按字面值转换、千分位去逗号算位数、非数值不参与统计、DDL 金额列口径一致、`[类型修正]` 该出现时出现且无金额列时不出现、结构定义模式人工类型优先 |
-| M 字段命名规则 | 中文表头转蛇形全拼、短的不降级、30 字符内保留全拼、超 30 整列降级首字母、首字母紧凑无下划线、任意输入产出不超 30、40 汉字截断兜底、纯英文原样蛇形、英文空格斜杠切下划线、数字开头补 `f_`、空表头兜底 `col`、产出均为合法标识符、端到端字段名、注释不受影响、重名 `_2/_3`、相近列不被合并、表头括号注释整段不进名字（半角全角都剥、嵌套不留半个括号、整格是括号时不剥空、剥完同名靠 `_2`、注释仍留原文） |
-| N 合并表头展开与其余拒绝 | 两行表头压成「父-子」一行、纵向合并不重复、横向组名铺满、数据与主键照常、日志说明展开行数、zip 内同样展开；数据区合并、表头外溢、其他页合并、单行合并表头仍被拒；干净文件不误伤、坐标行优先排序、单格伪合不算、`_col_letter` 进位、损坏文件不炸 |
-| O 进度框与子线程（非模态） | 各页并行、按资源位互斥、回报接口计项/按块推进/note 不推进/总数只增不减/取消透传/未知总数不除零、进度框平滑逼近与当前项文字与 X 等同取消与取消后按钮失效、任务确实跑在子线程、工作期间主线程事件循环一直在转、逐项实时回报、结束自动关框并回调、取消拿到部分结果、工作函数抛异常时报错不挂框、各入口的进度项数与标签、SQL 页两个前缀按钮不弹进度框、前置校验不过时不弹框、连不上库时框照样收尾、用真进度框跑通端到端（非模态、用例自己泵事件循环，6s 看门狗兜底） |
-| P 使用说明 | 章节结构与锚点唯一、目录条数与章节一致、点目录逐节滚动位置严格递增、每节标题与表格内容真的渲染出来、Esc 关窗、「?」在右上角且提示写明 F1、点「?」与按 F1 都能打开、其他按键不被拦截、说明点名的按钮界面上真实存在且界面按钮说明全覆盖、进度框章节覆盖后台线程与取消语义 |
-| Q 入口全覆盖 | 假连接跑通「连接并加载库」成功与失败两条路径（下拉填充/提示条转绿/失败弹窗+红色详情+下拉保持不可用）、「开始导入」真实副作用（逐表 begin、写入行数、commit、成功文件移出列表、失败文件保留、按钮态回收）、「停止」的可见反馈与 abort 标志透传、清空待上传文件、两页日志各清各的、拖入非 Excel 明确告知已忽略、混合拖入只收合法、SQL 添加/去重/表名清单缓存/前缀后「当前表名」与「原表名」分别正确且正文未改、手动改回原名只撤显示、空清单再点也留痕、空列表时预览不弹空窗、压缩包预扫数与实解数一致、同一个包加两次不互相覆盖、三个同名压缩包跨批次拖入落点互不重叠、解析中途取消的部分结果与弹窗首行标注、进度框重入守卫、主键校验不过时拒绝保存且不污染数据、文件名与建模语句两表的序号与总数、主窗口每个按钮都连着槽函数（无死按钮）、两颗生成按钮的启用条件与产物落点（程序同级按日期建目录、逐文件日志、完成弹窗带目录名） |
-| R 替换首个前缀 | 首段切分口径（有/无下划线、以 `_` 开头、已是该首段）、末尾下划线不用写也不叠加、非法字符拒绝、撞名自动 `_2`、`base_table_name` 同步更新后再加前缀的正确结果、改名列表回报最终表名、SQL 脚本反引号与语句头裸名同步改写且改写处数准确、字符串字面量里的同名内容不误伤、「原表名/当前表名」两列各自正确、SQL 页前缀只改显示（正文与修改标记不动、不弹进度框）、空前缀再点恢复脚本原名、保存/执行时显示名才写进脚本并保留结果弹窗、Excel 页仍走进度框（跳过的表也计一项）、空输入/无文件只提示不报错、文件表首列序号连续且行数即待导入表数、建模语句表首列序号跨文件连续且末行即解析总数 |
-| S 文件名括号判定 | 括号内中文转拼音且表名不含汉字、表注释保留完整文件名、括号内纯数字加序号、年份括号、数字开头英文括号回退、合法英文括号仍取括号内（回归）、大写转小写、版本号括号回退（V2/v2/V2_1，首字母+大写得 DDBV2，order2/A1 仍直接采用）、空括号与纯符号括号回退、整个文件名只有数字时补 `t_` 兜底、不同中文括号得到不同表名而非 `_2`、端到端与纯解析一致、字段规则回归未被改动带偏 |
-| T 版本号与关于 | 版本号是 X.Y.Z 且取值只有一处来源、其余 8 处写死的字符串与它同值（三个 pom、构建脚本的 jar 名、随包说明与 conn.ini 注释、README）、appinfo 与 version.py 一致、窗口标题带版本、「i」按钮存在且点开关于框、三行标签齐备且值来自 appinfo 非写死、提交号可鼠标选中复制、来源如实标注 bundle/git/unknown、取不到时有占位不抛异常、打包前生成 build_stamp 且字段齐备时间完整、生成后改读 bundle、build_stamp.py 不入库、冻结态必须读到烧进去的提交号（开发态显式记 SKIP） |
-| Y 真并发（子线程 + 真进度框） | 起任务那两句立刻返回、两条真任务同时在跑且两边计项都在推进、两个真框同时在屏且都不是模态的、跑期间主线程事件循环一直在转、同页再点被挡下而另一页那条照常活着、一条先收尾另一条仍在推进、取消只掐被掐的那条并在它自己那一页留「已取消」、收尾台账无残留 |
-
-跑 G 段需要给凭据（只建 `packtest_probe` 前缀的探针表，跑完自动 DROP）；顺带可用 `PT_XLS` 指一个真实 `.xls` 让 I4 也跑起来：
-
-```bash
-set PT_HOST=127.0.0.1&& set PT_PORT=3306&& set PT_USER=root&& set PT_PASS=密码&& set PT_DB=测试库&& set PT_XLS=D:\样本.xls&& dist_packtest\packtest\packtest.exe
-```
-
-### 7.8 打包口径的唯一来源
-
-`_pack_common.py` 集中定义 `QT_EXCLUDES` / `OTHER_EXCLUDES` / `HIDDEN_IMPORTS` / `UNNEEDED_QT_BINARIES` / `drop_unneeded_qt()`，`excel2mysql.spec` 与 `packtest.spec` 都从这里导入，保证「测试包能跑」与「产品包内容」严格等价；两边各写一份排除清单时，用例集全绿就失去意义。加减依赖只改这一个文件。
-
-被过滤掉的多余 Qt 二进制（构建日志会打印实际剔除清单）：`Qt6Quick / Qt6Qml* / Qt6Pdf / Qt6VirtualKeyboard / qmodernwindowsstyle / qpdf / qtvirtualkeyboardplugin`。后两个是插件文件本身，它们依赖的 DLL 已被排除，保留它们只会留下无法加载的多余文件。
-
-### 7.9 已知限制
-
-| 项 | 内容 |
-| --- | --- |
-| 安全软件拦截 | 杀毒软件 / Windows SmartScreen 可能对未签名的 exe 弹拦截提示，选「仍要运行」即可；彻底消除需要代码签名证书 |
-| 打包机系统 | 图形版的打包机与目标机都需 64 位 Windows 10/11（PyInstaller 不做跨平台交叉打包，也不产出 32 位包）；命令行版目标系统是 Win7 SP1+，但打包机本身仍需一台 64 位 Windows |
-| Win7 真机 | 命令行版的证据是「旧栈 3.8 全绿 + 新栈同口径逐条一致 + 产物无任何 Qt + PE 头要求的系统版本 ≤ 6.1」，挡得住已知硬限制，但不等于在某一具体 Win7 SP1 上一键双击就能起（还取决于该机装没装 UCRT / KB2999226、是否 32 位、杀软配置）；拿到真机后按 4.8 的三步最小验证走一遍再交付 |
-| ZIP 临时文件 | 展开的文件落在系统临时目录（`%TEMP%\e2m_gui_*`），关闭窗口即清理；关掉程序后失败列表里来自 ZIP 的文件无法重试，需重新拖入压缩包 |
-| 超 BIGINT 整数 | 整数列超出 BIGINT 范围（±9223372036854775807）时整张表被拒绝并报 `MySQL 错误码 1264 Out of range value`，事务回滚，其余表继续。Excel 的数值单元格是 IEEE double，这种量级的数在 Excel 里存的就不是它自己（写成 2^63）；要落这种数，在结构定义 Sheet 里把该列写成 `DECIMAL(20,0)`，或当文本列导入 |
-| DDL 隐式提交 | 执行 `.sql` 时 `CREATE` / `DROP` / `ALTER` 由 MySQL 隐式提交，脚本中途失败时「本文件事务已回滚」只撤得掉后面的数据操作，已建出来的空表留在库里；两条线一样，日志会跟着打一行注意 |
-| 口令字符集 | Python 两条线的 MySQL 口令只能是 latin-1 可编码的字符（实测 pymysql 2.2.8：`connections.py:314` 在握手前就 `encode("latin1")`）。口令含中文时抛 `UnicodeEncodeError`，连不上库且报的不是数据库的错；日志会跟着给一句口令方向的指引（`core/log_text.py`）。同一条口令在 Java 版能用，现场改不了口令就选 Java 版 |
-| Java 的 zip 膨胀检查 | `.xlsx` 的 zip 膨胀检查在 Java 线被关掉（`ZipSecureFile.setMinInflateRatio(0)`）：POI 默认阈值 0.01 会把「一整列都是同一句重复文本」的正常业务表判成 zip bomb 拒读，而 Python 线（openpyxl/pandas）没有这道检查。读进来的都是操作员自己给的本机文件，所以宁可让膨胀极大的表多花几秒，也不留「读不进自己的数据」这种失败；代价是这道防线对真正的恶意包失效，需要挡外来压缩包时用 Python 线 |
-
-### 7.10 上线前的一次验收
-
-按顺序走，每一步都要在日志里看到对应的行；未出现则停止并排查。下面用命令行线写，图形版是同一批检查在界面上点一遍（连接并加载库 → 点击虚线区选文件 → 生成表结构预览 → 开始导入）。
-
-| 步骤 | 命令或动作 | 预期 | 核对点 |
-| --- | --- | --- | --- |
-| 1 | `--check` | `+ [OK]` 打出库清单，退出码 0 | 证明这台机器上的口令与前缀环境变量真的传进去了 |
-| 2 | `--dry-run` 指向正式目录 | 逐表打出 `- [INFO] TABLE` 行与建表语句；有 `.sql` 时再打脚本载入、脚本前缀、脚本预览三行 | 表名（前缀加没加上）、每列类型与长度、主键选的是哪一列 |
-| 3 | 小样本试导，带一个只在测试库上的前缀（如 `--prefix e2mtest_`） | `+ [OK] 汇总`，表 1/1 导入成功、写入 N 行，退出码 0 | 回库 `SELECT COUNT(*)` 与 `LIMIT 5` 抽查；日志的「写入 N 行」是程序自己数的，回查才是落库证据 |
-| 4 | 正式跑整个目录 | 看最后一行汇总与退出码 | 0 全成 / 1 用法 / 2 解析失败 / 3 连不上库 / 4 建表或导入失败 / 5 脚本失败；非 0 时日志写明哪张表、第几行、MySQL 错误码 |
-| 5 | 复盘留痕 | 命令行线的日志文件路径打在最后一行（`- [INFO] 日志文件`）；图形版窗口底部日志区可选中后 Ctrl+C 复制 | 重跑时注意「表已存在」的行为差异：Python 命令行线有 `--drop-if-exists`，Java 线没有这个开关；要覆盖重跑就用图形版的「覆盖已存在表」勾选，或先手工清那批表 |
-## 8. 使用流程
-
-| 步骤 | 操作 | 说明 |
-| --- | --- | --- |
-| 1 | 打开软件 | 两个图形界面启动时先找程序同级的 `conn.ini`（Java 交付包已带一份，图形版可从 `assets/conn.ini` 复制一份改），或读 `E2M_*` 环境变量 |
-| 1.1 | 配置存在且写了 `database` | 窗口显示后在后台自动连接，服务器上有这个库就直接选中（日志 `[连接中] 启动自动连接 …` → `[已加载] 目标库按 conn.ini 选中：…`） |
-| 1.2 | 配置存在但没写 `database` | 只预填表单、不自动连（随包空模板属于这种，新装机器上不会平白多一条失败日志） |
-| 1.3 | 两份配置都没有 | 不连，照常起界面，只提示预填方式 |
-| 1.4 | 自动连接的失败处理 | 不挡界面，失败只写日志、不弹窗，顶部状态栏保持红色告警；点「设置数据源信息」展开表单可手动重试 |
-| 1.5 | 手动连接 | 点「设置数据源信息」展开五行表单，填好后点「连接并加载库」，在下拉里选库；选定库之后表单自动收起 |
-| 1.6 | 配置优先级 | 环境变量 `E2M_HOST/E2M_PORT/E2M_USER/E2M_PASS/E2M_DB` > `conn.ini` > 内置默认值；界面上手填的最即时。启动日志写明本次配置来源：读到了报路径，文件写坏了报「找到了但读不了」并退回默认值，没有这个文件也照常起界面 |
-| 2 | 添加文件 | 拖入虚线区、点虚线区批量选择，或在资源管理器复制文件后回到程序按 `Ctrl+V` |
-| 2.1 | 剪贴板优先级 | 先看剪贴板再看焦点：剪贴板里是文件就一律按添加文件处理，焦点在输入框、编辑区里也一样；剪贴板是纯文本才交回那个控件自己粘 |
-| 2.2 | 粘贴落点 | 总是加到当前这一页：第一页 Excel 清单、第二页脚本改名清单、第三页脚本执行队列 |
-| 2.3 | 目录快捷方式 | 文件名框里输入或粘贴文件夹路径后回车，直接进入该目录，不会把目录当成文件加进来 |
-| 2.4 | 添加完成 | 弹窗汇总本次结果，详见第 20 章 |
-| 3 | 统一命名 | 在「表名前缀」框输入内容后二选一：点「批量应用前缀」在表名前加一段（填 `dim_`，留空再点则移除）；点「替换首个前缀」把表名第一个下划线之前那段换掉（填 `change` → `ods_t_order` 变 `change_t_order`、`adb_table2` 变 `change_table2`；表名里没有下划线的不动，末尾下划线不用写，重复点不叠加，撞名自动 `_2`） |
-| 3.1 | 改单张表名 | 双击「表名」单元格直接编辑、回车生效；空名、超过 64 字符、含非法字符或与其他表重名会被拦下并恢复原名，日志记一行 `[表名] 旧 → 新`。改过的名字成为新的基础表名，之后再加批量前缀基于它计算 |
-| 3.2 | 改表注释 | 双击「表注释」单元格，建表那句 `COMMENT='…'` 按新注释生成，日志记 `[表注释] …`；改法与第二个页签同一套 |
-| 4 | 确认表结构 | 表格中确认每张表的表名 / 字段名 / 字段注释 / 数据类型 / 主键；第一列「序号」从 1 连续编到最后一行，最后一个序号即当前待导入的表数量 |
-| 4.1 | 查看字段结构 | 双击文件、表注释、字段数、数据行数、主键任一列，查看这一行对应表的字段结构；每张表一页，页上方有「表注释」输入框可直接改 |
-| 4.2 | 删除待导入行 | 按 `Del` 把选中行从清单里删掉（多选即批量删，只出清单、不动磁盘上的原文件）；没选中时按 Del 会在日志里说一句，有任务在解析这批文件时按 Del 会被拦下 |
-| 4.3 | 字节长度列 | 结构预览最后一列「表内数据最大字节长度」按全量数据实测，只给看不给改；要放宽宽度改「数据类型」那一列 |
-| 5 | 生成预览 | 点「生成表结构预览」看 DDL，确认无误后点「开始导入」 |
-| 6 | 看结果 | 底部日志区看逐表结果与耗时 |
-| 7 | 收尾 | 导入成功的文件自动从待导入列表移除，失败文件保留在列表中，可调整后重新导入 |
-
-只需文件、不写入库的场景：列表解析好后点「开始导入」右侧的「生成标准excel文件」或「生成简易excel文件」，把当前这批表再写出一份 Excel 交付件（见第 13 章）。两者都不连库、不改动列表。
-
-界面上任何一步都可以点右上角的「?」（或按 F1）打开内置《使用说明》：左侧目录点章节即跳转，右侧是可整篇滚动的正文，覆盖三条交付线的功能区别、文件类型、命名与类型推断规则、主键、进度框与取消语义、日志读法、常见问题；无需安装 Python、无需联网即可查阅。Java 版的说明窗是同一份正文（由 `help_doc.py` 导出成 `HelpDoc.java`），两条线的《使用说明》不会各写各的。
-
-## 9. 连接区
-
-界面顶部的 `MySQL 连接信息`（主机 / 端口 / 用户名 / 密码 / 目标库）是三页共用的公共区，默认收起成一条状态栏，只在导数据、跑脚本时说明当前写进哪个库。
-
-| 形态 | 内容 |
-| --- | --- |
-| 收起态 | 一行 `● 目标库 testdb`（绿色），右侧一颗「设置数据源信息」；主机、端口、用户名收在鼠标悬停提示里（`testdb@127.0.0.1:3306（用户 root）`） |
-| 展开态 | 点「设置数据源信息」摊开五行表单，改完点「连接并加载库」测连接并列出库；行尾的「收起」随时可手动收回，「设置数据源信息」与「收起」不会同时出现 |
-| 三页联动 | 状态栏跟着库下拉与主机端口同源刷新，切页签、切库、改主机端口都一起变；页签里不再各写一条「目标库：」 |
-| 可复制 | 状态栏可按住拖选再 `Ctrl+C`（Python 是开了 `TextSelectableByMouse` 的 `QLabel`，Java 是不可编辑无边框的 `HintLabel`） |
-
-与库选择相关的行为：
-
-| 时机 | 行为 | 理由 |
-| --- | --- | --- |
-| 程序启动 | 收起状态，首屏只留一条状态栏 | 首屏不占地方 |
-| 配了 `conn.ini` 或 `E2M_*` 且写了 `database` | 窗口显示后后台自动连接一次，连上就按配置里的 `database` 选中，状态栏由红转绿 | 等于替用户点了「连接并加载库」并选好库 |
-| 配了但没写 `database` | 只预填表单、不自动连 | 空模板不制造失败日志 |
-| 自动连接失败 | 只写日志、不弹窗，状态栏保持红色，展开后手动点一次即可重试 | 不打断首屏 |
-| 点了「连接并加载库」 | 拉出库列表时不收起 | 下一步就是在下拉里挑库，这时收起等于把要用的东西藏起来 |
-| 选定一个库 | 自动收起 | 决策已完成 |
-| `conn.ini` 预填了 `database` | 加载完即视为已选定，随即收起；配置里的库名服务器上没有时留一行 `[跳过]` 让人手选，不静默落到第一个库 | 不让用户以为自己连错了库 |
-| 还没选库 | 只有状态栏这一条红色告警，页签里没有第二条重复的话 | 同一提示在三个页签重复三遍属冗余信息 |
-| 告警文案 | 展开时是「填好下面连接信息后点连接并加载库」，收起时才说「点右侧设置数据源信息展开后填写」 | 指的那颗按钮一定真的在界面上 |
-| 按钮文字 | 页签顶部各有一句加粗介绍，说的是这一页干什么：Excel 页 `中英表头建模，回写库`、SQL 页 `解析建表语句，回写库`、SQL 执行器页 `两种用法：把 .sql 脚本拖到下面清单里按顺序执行；或直接在编辑区写 SQL 临时执行（多条用分号分隔）` | 三句用同一块强调底板（细边 + 左侧 3px 强调条，强调色与主按钮同一支 `#2f6feb`） |
-
-两栈同一形状：Python `MainWindow.conn_bar` / `conn_form` / `set_conn_expanded`，Java `MainFrame.buildConnectionBar` / `setConnExpanded`；对撞键 `conn.state`（那条文字本体）、`conn.expanded`（展开/收起）、`conn.edit`（「设置数据源信息」显不显示）都从真控件上读，并非两侧各写一份常量。
-
-## 10. 程序内《使用说明》与随包的 README.md
-
-| 项 | 内容 |
-| --- | --- |
-| 入口 | 主窗口右上角「?」按钮（贴在标题栏下方最右侧）、F1；说明窗内 Esc 或「关闭」退出 |
-| 内容来源 | 全部写在 `help_doc.py` 的 `SECTIONS` 里，每节是 `(锚点 id, 目录标题, HTML 正文)`；`ui_help.py` 渲染成「左目录 + 右正文」，正文拼成一份带锚点的长文档，点目录即 `scrollToAnchor` |
-| Java 版 | 走同一份正文：`java/tools/export_help_java.py` 把 `SECTIONS` 原样导出成 `HelpDoc.java`（改文案改 `help_doc.py` 再重导，不手改那个 Java 文件） |
-| 防分叉 | Java 侧 `GuiMain` 核目录条数（当前 15 章，改了 `help_doc.py` 忘了重导就变红），并按标题而不是序号找章节做跳转断言；Python 侧 P 组的条数直接从 `SECTIONS` 取 |
-| 排版 | 只用 Qt Rich Text 认得的 CSS 子集（表格边框、代码块底色、`.tip` / `.warn` 提示条），不认的属性不写 |
-| 漂移守卫 | 用例 P 组检查说明里点名的每个按钮在界面上真实存在、每个界面按钮都被说明覆盖、每节标题确实渲染出来、点目录逐节滚动位置严格递增 |
-| 新增章节 | 只需往 `SECTIONS` 追加一项，目录与跳转自动跟上 |
-
-## 11. 弹窗尺寸与正文折行
-
-目标机里最窄的一种是 1024x768 的老屏，两条 GUI 线共用同一套摆位规则：
-
-| 规则 | 内容 |
-| --- | --- |
-| 正文即原文 | 不预先往文本里插换行，横向由正文控件按内容区右边界折行（Qt 的标签、Swing 的 `JTextArea` 都会自己折），窗口拉大就跟着重排；纵向装不下时出滚动条，30 行报错整份都在框里翻得到 |
-| 按正文定尺寸 | 宽 420~880、高 170~640（设计像素），再夹进当前屏幕的可用区 |
-| 高度算法 | 先定宽再问「按这个宽度折完有多高」；按原文行数估高时，长句在窄处多折的那几行刚好会把滚动条顶出来 |
-| 旧做法 | 原先两边各按「72 显示列 / 24 行」自己折好再显示，列预算与弹窗实际像素宽没有约束关系：同一句「执行完成」在 Java 弹窗里只排到 55% 的宽度（实测 691/1250 像素），Python 排到 75%；为压住高度还得按折出来的行截断，于是「其余 N 行见日志」把两栈显示的正文改成了不同的话 |
-| 进度框例外 | 进度框尺寸固定（480x140）、没有滚动条，折与截都自己算 |
-| 尺寸语义 | Qt 的 `resize` 说的是客户区，Swing 的 `setSize` 说的是整个外框；Java 侧统一走 `Windows.clientSize`，Python 侧统一走 `ui_help.fit_client`，避免内容区小掉一条标题栏 |
-| 打开前夹取 | 客户区不小于内容要求的最小尺寸、整窗落在可用区内并居中，底部按钮不会被任务栏吃掉 |
-| 取证分层 | 配置值（`window.want`、`dlg.*.want`、`popup.want.*`）跨线逐键比；实测尺寸受现场屏幕影响，记成 `env.*` 只留档不比；排版由 `popup.display.raw` 一把键钉住，两边显示的必须是同一份原文 |
-| 各线自检 | 核「整窗在可用区内、长句真的被折成多行、折点贴着右边界不小于 90%、一句话的提示框既小又不带滚动条」（`pack_test.py` 的 U 组 12 条、`GuiMain` 的弹窗段落） |
-| 样本取值 | `popup.want.short/tall/longwidth` 三把键取落在夹取边界上的样本（420x170、420x640、宽 880），两边字体度量差几个像素也不会假红；期望值是量出来的相对关系与契约数字，不是拿常量当期望值 |
-
-## 12. 长任务进度框
-
-所有可能跑久的操作都会弹一个非模态进度框，耗时工作都在子线程、主线程只刷新进度，所以框始终能重绘、能点、能取消。一个页在跑的时候，另外两个页照常能用。覆盖的入口与计项口径：
-
-| 入口 | 页签 | 进度项口径 |
-| --- | --- | --- |
-| 点击选文件 / 拖拽入文件 | Excel 导入 | 每个压缩包 1 项 + 包内每个 Excel 解出 1 项 + 每个待解析 Excel 按 5 个阶段各 1 项（合并检测 / 读取工作簿 / 识别格式 / 推断类型 / 选主键） |
-| 批量应用前缀 | Excel 导入 | 每张表 1 项 + 重名去重 1 项 |
-| 开始导入 | Excel 导入 | 每张表 1 项 + 每个数据行 1 项（几十万行也能看到连续推进） |
-| 生成标准excel文件 / 生成简易excel文件 | Excel 导入 | 每张表 1 项（一个文件一项），逐文件写日志 |
-| 拖拽区 / 点击选文件 | SQL 脚本改名 | 每个文件 1 项（读盘与扫描 `CREATE TABLE` 都在子线程） |
-| 保存修改后ddl脚本 | SQL 脚本改名 | 每个文件 1 项（先把显示名写进脚本） |
-| 执行修改后ddl脚本到当前库 | SQL 脚本改名 | 每条语句 1 项，按块推进（每个文件最多约 100 次刷新） |
-| 执行编辑区里那段 SQL | SQL 执行器 | 每条语句 1 项，逐条推进；每句开始之前查一次取消 |
-| 批量执行脚本文件 / 行内「执行」 | SQL 执行器 | 轮到哪个文件才读盘切句，再按语句 1 项推进（每个文件最多约 100 次刷新）；文件与文件之间查取消，取消后剩余文件不再执行 |
-
-SQL 页的两个前缀按钮只改页面显示、瞬间完成，不弹进度框；真正写脚本的动作都挂在保存、执行、生成这四颗按钮上。执行器页的清单在开工前还不知道总语句数（脚本是逐个读的），总量会边读边涨，进度框按「已完成项数不回退」处理：先按已切出的脚本报总数，后面的文件加入时只加分母。
-
-| 行为 | 说明 |
-| --- | --- |
-| 实时回报 | 进度条按「进度 i/N 项 · 当前文件：当前阶段」刷新，压缩包还显示解出的是包内哪个文件；单个几十万行的文件解析途中也随阶段推进；总项数在开工前一次算准（压缩包只读中央目录预扫），进度条单向不回退 |
-| 平滑推进 | 项数少时 `i/N` 只有几格，用 16ms 定时器把目标百分比逼近式补间，看起来连续走动而不是跳格 |
-| 取消 | 取消按钮在当前这一项做完时生效，不中途硬切留半截数据：解析取消后已解析出的表照常进入待导入列表，弹窗首行标注「已取消，只完成了部分解析」；SQL 执行取消时该文件事务回滚不提交（DDL 隐式提交的部分除外），后续文件不再执行；执行器取消后下一句就不执行，整批回滚，日志写「已取消 \| 第 46/121 条未执行，本批未提交（已回滚）」 |
-| 点 X | 等同取消：Java 那个框在 Windows 上去不掉标题栏的 X，所以 X 走的就是取消；Python 侧原先 X 直接关框、`exec()` 返回即放开任务位，留下「框没了、线程还在写同一份列表」的状态，现同样改为 X = 取消 |
-| 互斥判据 | 按占用的资源位判，不按页签判：三个资源位 `excel`（待导入列表）/ `sql`（脚本列表）/ `run`（执行器页的编辑区文本与脚本清单共用同一个结果区），任务登记它占哪一位，撞上才挡。所以 SQL 页在读几十兆脚本时，执行器照样能跑语句、Excel 页照样能解析文件 |
-| 被挡下时 | 同时弹窗和写日志，报出任务名、百分比、已完成项数、已跑时长、当前项，以及两个任务抢的是同一份什么东西 |
-| 两个框并排 | 两条任务同时跑各弹各的框，第二个往右下错开一格，竖直那一步比框自己还高，两颗「取消」都点得到 |
-| 结果弹窗 | 不占资源位：任务位在弹窗之前就已归还，不会出现「谁都没点确定，这一页就一直显示有任务在跑」 |
-| 日志归属 | 并行时各行跟着自己那条任务的面板走，不会被另一个还在跑的任务接走 |
-| 结束状态 | 导入完成、失败或被中止后进度框随即关闭，页面上不留 100% 的进度条（结果由弹窗与日志交代），Excel 页底部没有第二条进度条 |
-| 异常 | 工作函数整体抛异常时框照样关闭，日志红色打 `[任务异常]` 并弹窗提示 |
-
-实现上的取舍：进度和日志通过 `ProgressSink` 这一个接口回报（子线程里接到 `QThread` 的信号上，自动排队回主线程），解析、改写、执行逻辑都是只认这个接口、不碰控件的纯函数（`parse_import_files` / `sql_load_task` / `sql_save_task` / `sql_execute_task` / `table_prefix_task`），因此可以脱离 Qt 直接单测；SQL 页的显示名落脚本走 `core/sql_script.py` 的 `apply_display_renames`，也是纯函数。模块级开关 `MODAL_PROGRESS` 在用例里置 `False`，任务原地跑完（用例不起线程、也不等框渲染），用的仍是同一个工作函数与同一个回报接口。一个在跑的任务是一个对象（Python `TaskInfo` / Java `MainFrame.Task`）：标题、占的资源位、进度台账、日志写哪块面板、自己那个进度框都在它身上，窗口只拿一份任务清单，所以两个任务并行时各自的日志仍写回各自那一页。
-
-## 13. 导出标准/简易 Excel 交付件
-
-待导入列表里有表时，「开始导入」右侧的两颗按钮把这批已解析好的表再写出一份 Excel 交付件。两者都不连库、不改动列表，产物落在可执行程序同级目录，每次按日期建一个子目录。「SQL 脚本改名」页的同名两颗按钮共用这一套命名，只在目录名前加 `sql_`，所以两页各自生成时写进两个不同目录，同名表不会互相覆盖。
-
-| 按钮 | 输出目录 | 每个文件里有什么 |
-| --- | --- | --- |
-| 生成标准excel文件 | `meta_data_file_年月日` | 两个 Sheet：`元数据`（建表用的字段定义）+ `数据`（表头是英文字段名，下面是数据行） |
-| 生成简易excel文件 | `simple_meta_data_file_年月日` | 只有一个 `数据` Sheet，给只要数据、不要建模说明的下游 |
-
-文件名沿用解析输入时那套命名：`表注释（表名）.xlsx`，没有表注释时只留表名；注释里的 `\/:*?"<>|` 换成下划线。一张表一个文件，一次点击产出 N 张表就是 N 个文件。
-
-`元数据` Sheet 的七列与取值口径（与结构定义表同一套，所以标准件可以直接拖回本工具再导入，读回来与导出前一致）：
-
-| 列 | 写法 | 读取端识别方式 |
-| --- | --- | --- |
-| 序号 | 1 起递增 | 不参与识别 |
-| 字段名(英文) | 建表用的列名 | 数据 Sheet 按它对齐（大小写不敏感） |
-| 字段注释(中文) | 列注释 | 落到 `COMMENT` |
-| 数据类型 | 基础名，如 `VARCHAR`、`DECIMAL` | 与「长度」拼回 `VARCHAR(64)` |
-| 长度 | `64` 或 `10,2` | 留空表示该类型不带长度 |
-| 是否主键 | 主键列写 `是`，其余留空 | `是` → 主键（支持多字段组合） |
-| 是否可为空 | 主键列写 `否`，其余写 `是` | 留空或 `是` → `DEFAULT NULL`；`否` → `NOT NULL` |
-
-| 口径 | 说明 |
-| --- | --- |
-| 可空格必须显式写 | 读取端把「空」当成可空，要声明 `NOT NULL` 得写「否」；普通推断出来的表本来没有这个声明，导出时按建表实际会怎么做落成文字（主键列 `NOT NULL`，其余可空），回读能稳定还原 |
-| 日期写成文本 | 一律写成 `2008-05-19` 这样的文本而不是 Excel 序列号，避免同一份数据在两次读写之间被历元换算挪走一天 |
-| 数据 Sheet 取数顺序 | 先按英文字段名、再按中文注释去找数据里真实存在的列：普通推断出来的表，数据网格的列头还是中文注释（字段名是拼音），只按英文取会一列都取不到，写出的「数据」Sheet 全是空值 |
-
-过程与其他长任务同一套：进度按文件计项（一张表 1 项），逐文件写日志（`- [INFO] 导出 | 正在写 名称`、`+ [OK] 导出 | 名称（17 列 / 5 行）`），完成后弹窗把目录名原样报出来，日志同时打「生成完成：7/7 个文件」那一行（一个都没写成时按错误级标红）。按「停止」在当前这个文件写完后停下，剩下的不写，日志与弹窗都会写明「已取消，剩余文件未生成」。
-
-代码位置：Python 线 `core/meta_export.py`（命名、目录、七列口径只写这一处，`main.py` 的 `meta_export_task` 直接调），Java 线 `core/MetaExport.java`（POI `XSSFWorkbook`）。取证：
-
-| 层 | 内容 |
-| --- | --- |
-| 单测 | `test_meta_export.py`：标准件回读逐字段比对，15 份夹具（夹具目录里 16 份 Excel，有 1 份含合并单元按拒绝跳过）加取消用例 |
-| 旧栈 | `pack_test38.py` 的 V26-V34：3.8 冻结态同一套产物契约 |
-| 跨线 | Java 闸门第 9 步 `MetaDiffer`：Java 写出的文件与 Python 写出的逐格比对，30 条记录 / 2365 格 |
-| 界面 | `--gui --selftest` 的 `meta_export` 段：按钮位置、启用条件、落点、产物形状、日志与弹窗、取消 |
-
-## 14. SQL 脚本改名页
-
-处理现成的 `.sql` 建表脚本，三步按顺序走：提取脚本里的 `CREATE TABLE` 列出表名清单（序号 / 文件 / 原表名 / 当前表名 / 表注释，第一列序号从 1 连续编到最后一行，最后一个序号即这批脚本解析出的建模语句总数，多个文件共用一套编号）→ 按清单批量改表名 → 另存改好的副本或执行到当前库。
-
-| 能力 | 说明 |
-| --- | --- |
-| 加脚本 | 把 `.sql` 拖进虚线框，或点虚线框选文件（可多选）。自动统计所有 `CREATE TABLE [IF NOT EXISTS] \`表名\`` 语句并提取表名（兼容反引号/裸名/schema 限定名，按首次出现顺序展示；`INSERT INTO` 等其他语句不计入）。入口与「Excel 导入」页一致，这一页没有单独的「添加 SQL 文件」按钮 |
-| 非脚本输入 | 混着不是 `.sql` 的文件时逐个点名跳过；整批都不是时明说一句已忽略 |
-| 表格下三颗按钮 | `清空待上传文件` / `生成表结构预览` / `预览 DDL`，与「Excel 导入」页那三颗同位置、同宽度、同文案。清空只清清单、磁盘上的脚本不动；结构预览打开当前选中那一行那张表的字段清单（没选中时取第一行）；DDL 预览一张表一个页签，正文取脚本里属于这张表的那句 `CREATE TABLE`，应用了还没落地的改名与字段编辑，勾上「覆盖已存在表」时每页开头补上 `DROP TABLE IF EXISTS`；预览只算副本，不改脚本正文也不把显示名定死 |
-| 添加结果弹窗 | 每个成功读入的脚本一行（带表数），重复项与读不进来的文件按完整路径点名并写明原因，同名脚本放在不同目录时靠这一列分清 |
-| 前缀按钮 | 只改页面显示：「当前表名」列与双击打开的元数据标题同步变，脚本正文不动，也不弹进度框；点保存、执行或两颗生成按钮时才真正写进脚本；前缀框清空后再点，显示恢复为脚本原名 |
-| 批量应用前缀 | 给页面显示名加一段，已带该前缀的表自动跳过，重复应用不叠加 |
-| 替换首个前缀 | 同一个输入框，基于当前显示名把第一个下划线之前那段换成填入的内容（先加过显示前缀就接着换：`ods_t_order` → `change_t_order`、`adb_table2` → `change_table2`）；没有下划线（`users`）或以下划线开头（`_tmp`）的不改并在日志说明；末尾下划线不用写；已是该首段时重复点不叠加；只允许字母/数字/下划线，其他字符弹窗拒绝 |
-| 分工 | 加一段用前者，换掉已有的第一段用后者；换完的显示名再应用前缀会基于它计算（`dim_change_t_order`） |
-| 保存修改后ddl脚本 | 先把显示名写进内存脚本（带反引号的引用与语句头裸名一并同步改写），再另存为 `原名_prefix.sql`，不覆盖原文件；没有可保存的改动时也会弹窗说明；结果弹窗逐个列出写出的副本完整路径，写失败的按源文件路径点名原因 |
-| 执行修改后ddl脚本到当前库 | 点击时先把显示名写进脚本，再按公共连接区选定的目标库执行；每个文件一个事务，先开启事务、逐条执行，任一语句失败立即回滚整个事务并在日志报错（后续语句不再执行），全部成功才提交；`CREATE`/`DROP`/`ALTER` 会隐式提交，无法随事务回滚；语句切分跳过字符串、反引号、注释里的分号；不支持含 `DELIMITER` 的存储过程脚本；文件编码按 UTF-8（含 BOM）→ GBK 依次尝试，dump 里夹二进制字段时按 UTF-8 替换坏字节；结果弹窗先写成功/失败文件数，再列目标库与每个脚本的完整路径、结局与失败位置 |
-| 整库 dump 提示 | 读进来的脚本认得出是整库 dump 时，日志先写一行提示，说明这一页仍按每个文件一个事务执行，整库导入应改用第三个页签的脚本文件队列（那边对 dump 不开启事务、逐条提交、出错继续并在最后汇总）；这一页不改自己的事务口径 |
-| 覆盖已存在表 | 底部操作条最左边那颗勾选框，默认不勾选。勾上后只在执行副本的最前面按建表目标的出现顺序倒着补一段 `DROP TABLE IF EXISTS`（近似先删子表再删父表），DROP 完空一行再接原脚本；脚本正文、保存出来的副本与两份生成件都不受影响。只认整句以 `CREATE TABLE` 开头的语句，注释里写的建表、字符串里的建表都不删；schema 限定名（`db.tbl`）整段保留；同一个目标在脚本里出现多次只删一次，脚本自己已写了 `DROP TABLE` 的那张表不再补第二句；日志 `[覆盖]` 那一行逐一点名删了哪些表 |
-| 两颗生成按钮 | 排在「执行修改后ddl脚本到当前库」右侧，与「Excel 导入」页那两颗同名按钮产物形状一致（建 `sql_meta_data_file_年月日` / `sql_simple_meta_data_file_年月日` 目录，一张表一个 xlsx），区别只在数据源：只看脚本正文里的 `CREATE TABLE` 列定义，不连库、也不看 `INSERT` |
-| 生成件取值 | 取改名之后的当前正文，所以「先批量改前缀、再生成交付件」这条路是通的；脚本里只有结构没有数据，「数据」Sheet 只剩英文字段名那一行表头；元数据 Sheet 只能装「一个类型关键字 + 纯数字长度」，`UNSIGNED` / `ZEROFILL` / `CHARACTER SET` / `COLLATE` 会被丢掉，`ENUM('a','b')` 这类括号里不是数字的按 `TEXT` 导出，每一处都在日志里逐列点名（`! [WARN] 说明`）；同名表被定义多次只按第一处导出；`CREATE TABLE x LIKE y` 与 `... AS SELECT` 没有列定义，日志点名后跳过 |
-| 清单列 | 从左到右是 序号 / 文件 / 原表名 / 当前表名 / 表注释。表注释取脚本里 `CREATE TABLE ... COMMENT='…'` 那句，与第一页的「表注释」同一含义，脚本里没写就留空 |
-| 双击表格行 | 双击「文件 / 原表名」任一列，打开该表从 `CREATE TABLE` 解析出的元数据，五列是 字段名 / 字段注释 / 数据类型 / 主键 / 可空。数据类型是一整列，按 `VARCHAR(64)`、`DECIMAL(10,2)` 这种完整写法显示 |
-| 就地编辑 | 前三列可以改：改哪一格就只重写那句 `CREATE TABLE` 里那一行的那一段（字段名换标识符、数据类型换类型词、`UNSIGNED` / `ZEROFILL` / `NOT NULL` / `DEFAULT` / `AUTO_INCREMENT` 等修饰原样保留、字段注释换 `COMMENT` 的字面量，原本没写就补在这一行末尾，里面的单引号按 MySQL 口径翻倍写出）；主键与可空两列只读，要改得动脚本正文 |
-| 拒绝改名 | 被 `PRIMARY KEY` 或索引列名单引用的字段拒绝改名：索引行里还写旧名，放过去就是一句引用不存在列的 DDL，等建表时才炸比当场拒绝难查，弹窗会说明为什么没落盘 |
-| 改表名与表注释 | 双击「当前表名」或「表注释」进入单元格编辑；改表名同步改写脚本里的 `CREATE` / `DROP` / `INSERT` / `ALTER` / `TRUNCATE` 引用；改表注释写进那句 `CREATE TABLE` 的表选项 `COMMENT='…'`（原本没写就在列定义右括号后补一句，注释里的单引号按 MySQL 口径翻倍，清空写成 `COMMENT=''`），`LIKE` / `AS SELECT` 不带表选项、改不动会当场说明原因 |
-| 改动落点 | 这些改动只改内存里的脚本正文，点「保存修改后ddl脚本」才落副本；清单、元数据弹窗、DDL 预览与两份生成件立刻跟着变（标准件文件名就是「表注释（表名）.xlsx」） |
-| 字段缓存 | 字段定义在读入脚本那一刻就按表解析好并缓存，几十万行的脚本双击立刻弹出（实测 10.9MB / 32612 行 / 124 张表：整份重解析 1.8 秒 → 只取一张 0 毫秒）；改过表名后缓存按新名重挂；改成与另一张表同名时两行并成一行，缓存与生成都按「同名表只取第一处」走 |
-| 大小写开关 | 这一页只保留「表名与字段名转大写」开关，默认不勾选。勾选后当前表名清单、表元数据与两份生成件一起按大写显示，脚本正文不回写；拼音首字母开关已删除 |
-| 结果弹窗 | 两份 Excel 生成完成后弹窗至少 820×420，正文可用鼠标选中并 `Ctrl+C` 复制 |
-| 事务语义 | Excel 导入同样是事务语义：每张表先开启事务，数据插入成功后提交，失败整体回滚并记录日志 |
-
-## 15. SQL 执行器页
-
-这一页有两种用法，共用一个结果区：有单份或整套 `.sql` 脚本要按顺序打进库时，把文件拖进脚本清单（或复制文件后按 `Ctrl+V` 加进这一页的清单）点「批量执行脚本文件」（只想跑其中一个，就在它那一行点「执行」）；只需临时执行一条语句或临时调整结构时，把 SQL 写在编辑区点「执行编辑区 SQL」。两路都打到上方公共连接区选定的库，输出都写进右侧「执行结果」区；两路共用同一个结果区，所以同一页同时只跑一个任务。这一页没有底部动作条，「SQL 文本」与「执行结果」两段一直铺到窗口底部。
-
-| 能力 | 说明 |
-| --- | --- |
-| 页顶提示 | 第二行常驻 `两种用法：把 .sql 脚本拖到下面清单里按顺序执行；或直接在编辑区写 SQL 临时执行（多条用分号分隔）`，与另两页的介绍用同一块强调底板 |
-| 拖拽区与清单 | 与「Excel 导入」页同一形状：虚线区可点击多选，也可直接拖入；只收 `.sql`，混着别的文件时日志点名 `[跳过] 不是 SQL 脚本，未读入：说明.txt`，一个 `.sql` 都没有时写 `[提示] 拖入或粘贴的不是 SQL 脚本文件，已忽略。` |
-| 清单五列 | 序号 / 文件 / 大小 / 状态 / 操作，只读、带斑马纹，文件名单元格悬停显示完整路径；大小按 B / KB / MB / GB 折算一位小数；最后一列「执行」只跑这一行的脚本文件，跑法与主按钮同一套；清单空着或有任务占着这一页时它跟着主按钮一起灰 |
-| 加入即回执 | 弹「添加结果」，正文逐条给 `[已加入] 完整路径`、`[跳过] …：已在列表`、`[未加入] …：<读盘失败原因>`，日志同步写一行添加完成汇总；重复拖同一份不会进第二行，读不到的脚本不会静默消失，弹窗用警告级 |
-| 登记方式 | 只记路径与大小，正文等轮到它执行时才读盘，导入一份大 dump 不必先把所有文件读进内存 |
-| 清空待执行脚本 | 整份清出清单，磁盘上的脚本一个字节不动；清单空着时点它写 `[清空] 清单里没有脚本文件，无需清空` |
-| 按钮位置 | 清单下面一排：左边 `清空待执行脚本`、最右边主按钮 `批量执行脚本文件`，两颗都在清单那个组框里，跟着清单一起缩放；`执行编辑区 SQL`（次要按钮）排在编辑区栏头的 `清空编辑区` 右侧，只管编辑区那段 SQL |
-| 无覆盖开关 | 这一页不再有「覆盖已存在表」开关，脚本正文按原样执行；要覆盖重跑就用「SQL 脚本改名」页那颗开关 |
-| 按 Del | 把选中行从待执行清单里去掉，多选即批量删，只出清单、磁盘上的脚本不动；没选中时按 Del 也在日志说一句 |
-| 执行顺序与状态 | 按清单顺序执行，每个文件单独连接；执行期间清单状态逐行刷新为 成功 / 失败 / 跳过 / 已取消（分色显示） |
-| 手写脚本 | 一个文件一个事务，全部语句成功才提交；中途出错本文件回滚、报出第几条出错语句与「前面 N 条已随事务回滚」，然后继续下一个文件 |
-| dump 识别 | 按开头或结尾的导出标记认出来（`-- MySQL dump`、`-- MariaDB dump`、`-- MySQL Shell dump`、`-- phpMyAdmin SQL Dump`，或结尾的 `-- Dump completed`），改为不开事务、逐条提交、出错继续：dump 里的 `CREATE/DROP/ALTER` 与 `LOCK TABLES` 本来就会隐式提交，整文件回滚在那里兑现不了。识别到先写一行 `[dump] 文件名：识别为整库 dump，按 dump 方式执行（不开启事务，逐条提交；出错继续，最后汇总）` |
-| dump 的切句 | 认 `DELIMITER` 指令，触发器与存储过程的整句不会被函数体里的分号切碎；`/*!40101 SET … */` 这类版本注释语句照常发给服务端；只有识别成 dump 的文件才这样切句，手写脚本与编辑区仍按分号切 |
-| dump 的建库与切库 | `CREATE DATABASE` 与 `USE` 照常执行，跳过它们等于把要导的库抹掉、表散进界面随手选中的库；切库后日志写 `[切库] 文件名：目标库换成 demo`，报错行与收尾都按切后的库说，收尾写 `[提交] 文件名：N 条语句已提交，目标库 demo，跳过 M 条删库语句`；界面选中的库与库列表不受影响 |
-| 删库语句 | 只有 `DROP DATABASE`（含 `/*!40000 DROP DATABASE … */` 写法）不执行，每跳一条日志写 `[跳过] 文件名 第 i/n 条：DROP DATABASE（删库语句不执行）` |
-| dump 出错 | 有语句报错时继续执行后面的语句，清单写「已执行 4/7 条，1 条语句报错（逐条提交，已成功的已落库）」，日志逐条给出错语句与原因（最多详细列 20 条，超出只报还有几条）；连接断开时剩余语句不再执行 |
-| 纯注释脚本 | 切句后剔掉没有可执行内容的片段，整份只剩注释的脚本记 `[跳过] …：没有可执行的语句`，不占连接、也不推进度条；版本注释 `/*!NNNNN … */;` 不在剔除之列（`SET NAMES`、`SET TIME_ZONE`、整库导入关外键检查那句都在这里头，当注释丢掉等于悄悄改了这次导入的规则） |
-| 取消与断连 | 手写脚本取消后回滚当前文件；dump 通道已逐条提交的语句留在库里，清单写「已执行 46/121 条（逐条提交，已执行的已落库）」，两路都把剩余文件标「已取消：未执行」；连不上目标库时立刻停手，日志写清目标库、用户与原因，剩余脚本都不执行 |
-| 完成回执 | 日志一行执行完成汇总，弹窗正文逐文件给 `[成功] / [失败] / [跳过] / [已取消] 完整路径：结局`，并写目标库与「详见日志。」；有失败时弹窗用警告级 |
-| 编辑区 | 不折行（一句 SQL 一行看到底），开场预置 `SELECT 1 AS 连通检查;` |
-| 清空按钮 | `清空编辑区` 与 `清空结果区` 分别放在「SQL 文本」与「执行结果」两栏的头一行，各管自己那一边：清结果区不会带走敲了一半的语句，清编辑区不会抹掉上次的结果；清结果区把表格、结果集下拉、上方说明与逐条回执一起清 |
-| 切句 | 与「SQL 脚本改名」页同一个 `split_sql_statements`，字符串、反引号、注释里的分号同样不会误切；执行器在此之上再剔掉「整句只剩注释」的片段（`has_executable_content`），否则会出现切出来一条、界面上说「已提交 1 条」，而该句实际未执行任何语句 |
-| 提交口径 | 一批之内不做逐句提交：中途失败时前面已执行的 DML 能整批回滚，与「执行」按钮 tooltip 说的「全部成功才提交」对齐 |
-| 危险语句 | 这一页执行的就是提交的语句本身，`DROP` / `TRUNCATE` 不另设确认弹窗，删东西前先在结果区核对那句是不是要执行的 |
-
-示例库：
-
-| 项 | 内容 |
-| --- | --- |
-| 入口 | 页内「示例 (?)」按钮 |
-| 规模 | 126 条，分 13 组，其中数据治理主题占 95 条 |
-| 分组明细 | 建库与选库 4 条、建表与改表 12 条、元数据与治理体检 12 条、数据质量检查 22 条、数据标准化与清洗 14 条、主数据与重复数据 9 条、编码映射与关联 12 条、数据血缘与影响分析 7 条、安全与权限治理 6 条、生命周期与归档 6 条、性能与容量治理 7 条、查询与执行计划 3 条、数据修正 12 条 |
-| 左侧布局 | 最上面一行是关键词过滤，下面是两层目录（分组 → 短标题）；一条示例的短标题控制在 12 字内，长的说明挪到右侧 |
-| 过滤口径 | 按短标题、说明、场景、解决的问题、关键词与语句正文一起匹配（子串包含，不做分词）；目录下面一句写清「命中 N 条（共 126 条）」，整组没命中就不摆出来，全部无命中时明确提示清除搜索的方式 |
-| 右侧布局 | 分上下两块：上方是这条示例的介绍（说明 / 场景 / 解决的问题 / 关键词），下方是语句全文，中间一条可拖的分隔条；「复制到剪贴板」与「插入到编辑区」两种出口，对话框不锁界面 |
-| 唯一来源 | 根目录 `sql_samples.py`（一条七个字段：分组、短标题、说明、场景、解决的问题、关键词、语句），Java 侧由 `java/tools/export_sql_samples.py` 导出成 `SqlSamples.java`，连搜索用的 `haystack` / `matches` 也一起生成 |
-| 回归 | 示例集带 `check_sql_samples.py`，可逐条打到真库上验证可执行（需先起 MySQL；互相依赖的示例按 `PREREQ` 表先建前置）；没连库时不算验证通过，脚本会逐条报出失败项与错误原因 |
-
-执行结果展示：
-
-| 项 | 说明 |
-| --- | --- |
-| 执行 | 按分号切句逐条执行，结果区逐条给 `第 i/n 条：<语句>`、`影响 N 行` 或结果集；全部成功才提交，中途出错整批回滚，失败那句标红并附 DDL 隐式提交的提醒 |
-| 真表格 | 查询结果画成真表格（不是把表格文字打进结果区）：表头一行是列名、一行一条数据，隔行底色、只读；列宽按内容排，列名或取值长就把表格撑宽、用横向滚动条看全；空格子写 `NULL`，取值里的换行与制表符写成可见转义 `\n` / `\t`，单格超过 40 列截断补省略号 |
-| 表头注释 | 鼠标停在列名上出现 `字段注释：订单金额`。注释由执行器在拿到结果集之后按真表真列回查 `information_schema.COLUMNS` 得到（`core/sql_execute.py` 的 `column_comments` / Java 侧 `SqlExecute.columnComments`，两栈逐值一致）：表别名与列别名按原表原列查得到，表达式列（`amt+0`、`1 AS lit`）与库里没写注释的列留空，不乱猜；反查失败只是没有提示，不影响结果展示，且只在图形界面这条通道做，命令行的逐字输出不变 |
-| 说明行 | 表格上方那句说明写清看的是哪一条、有多少行（`第 2 条 · 共 37 行`）；结果集超过 200 行只装前 200 行，句子跟着变成「共 205 行（表格只装前 200 行，其余没取回来）」 |
-| 多结果集 | 一批里有多条查出结果时上方出现下拉（`第 N 条 · 语句前 60 字`），默认停在最近那条，只有一条时不摆；一批多于 50 个结果集只留最近 50 个，更早的丢弃并在结果区写明丢了几个 |
-| 回执与分隔条 | 表格下面还是逐条回执（`第 i/n 条`、`影响 N 行`、出错那条标红），两者之间一条可拖的分隔条；跑出结果集时这一段自动抬高，不用先拖一次才看得见数据；命令行版仍是等宽文本表格 |
-| 跨线对撞 | 两份执行器本体（`core/sql_execute.py` 与 Java `core/SqlExecute.java`）用同四段输入打到同一个真库上跑，发出的每一行逐行比对、落库行数各自回查（`check_sql_exec_parity.py`，Java 侧探针是 `java/verify/.../SqlExecCli.java`；口令只走 `PT_USER`/`PT_PASS`/`PT_DB` 环境变量，未设时该脚本显式跳过并说明原因） |
-
-## 16. 日志与报错展示
-
-三个页签各有一个独立日志区（`Excel 导入` 页底部、`SQL 脚本改名` 页底部、`SQL 执行器` 页右半边的结果区），互不串台，各自保留最近 2000 条记录，超出后自动丢弃最早的。
-
-| 项 | 内容 |
-| --- | --- |
-| 最小高度 | `LOG_MIN_LINES = 4` 行，按各自字体量出来换算成像素；没有这个下限时，三段分栏按比例一缩，默认窗口里日志只剩两行，往上滚就看不到上一条 |
-| 按行数而非像素 | 同一档字号在 Qt 与 Swing 里量出来的行高不同，写同一个像素数会变成「两边都满足同一个数、实际看到的行数不一样」 |
-| 下限上限 | 主窗口自身最小高 717px，按 8 行给会顶到 847px，1024x768 的现场机与「整窗落在屏幕可用区内」那条断言都撑不住 |
-| 默认分配 | 两个三段分栏页：拖拽区按窗口高的 110/670 给，表格拿其余高度，日志段正好压在自己的最小高度上（四行）；第三个页签同样按 110/670 摆拖拽区，脚本清单拿其余高度，末段「编辑区与结果」压在自己的最小高度上（编辑区四行），空清单的图标与引导语才看得全 |
-| 何时不再自动摆 | 只在用户亲手拖过把手之前成立：程序在窗口每次 Resize 时按绝对高度重摆一次（Qt `QSplitter` 在尺寸总和不等时会再分一次，Swing `JSplitPane` 用 `ComponentListener` 每轮重摆）；一旦检测到用户拖动分隔条（Qt `splitterMoved`、Swing 给 Divider 挂 MouseListener），日志高度就归用户，程序不再抢 |
-| 旧默认的问题 | Excel 110 : 200 : 330、SQL 110 : 230 : 330 时，默认窗口里文件表视口实测只剩 37px，不到两行；现在日志压到四行下限，表格拿回剩下的高度 |
-
-每条记录写成 `[年-月-日 时:分:秒] 符号 [级别] 正文`，四档级别与命令行版同一套标签，时间戳也跟命令行日志文件同一形状：
-
-| 级别 | 行首 | 颜色 | 使用场合 |
-| --- | --- | --- | --- |
-| OK | `+ [OK]` | 绿色 | 这件事做成了：解析、加载、保存、提交、改名 |
-| INFO | `- [INFO]` | 默认色 | 记一笔，不需要处理：开关切换、移除文件、清理临时目录 |
-| WARN | `! [WARN]` | 琥珀加粗 | 这次没做成但有原因：跳过、重复、取消、空包、被拦下的点击 |
-| ERROR | `x [ERROR]` | 红色加粗 | 失败，需要处理：解析失败、建表失败、连不上库、任务异常 |
-
-级别由正文行首的中文标签定（`core/log_text.py` 的 `LOG_TAG_LEVEL`，Java 侧 `core/LogText.java` 同名表逐条对齐），调用方给的 `error=True` 优先。颜色与级别都由这一处决定，三个页签的日志框不会出现「这一页有时间戳、那一页没有」。上色写进控件的字符格式（`append_log()` 用 `QTextCursor.mergeCharFormat` 覆盖本条记录的所有块，Swing 侧是 `LogPanel.render()` 按级别加 `StyleConstants`），复制日志时文本内容不受影响。
-
-正文里并列的事实用 `|` 分段，补充说明缩进挂在下一行：
-
-```
-[2026-10-23 14:05:12] + [OK] [已解析] 水库基础信息.xlsx → 表名预置 dim_reservoir_info | 字段 18 列 | 数据 5 行 | 主键 `BH`（整数类型，全列非空且唯一）
-    说明 | 整列为空的字段照旧保留：备注
-[2026-10-23 14:05:20] ! [WARN] [跳过] 已在列表：人员信息表.xlsx
-```
-
-时间戳只打在每条记录的第一行；本身带缩进的续行（结果表格、驱动原文）属于上一条记录。
-
-报错不只打 `str(e)`（pymysql 会打成 `(1064, '...')` 这种元组，错误码和正文混在一起），而由 `describe_db_error()` 展开为异常类型 + MySQL 错误码 + 服务端原始报错全文：
-
-```
-[2026-10-23 14:07:02] x [ERROR] [执行失败] a.sql 第 2/3 条语句报错，目标库 testdb@127.0.0.1:3306，本文件事务已回滚
-    ProgrammingError（MySQL 错误码 1064）：You have an error in your SQL syntax; ...
-    出错语句：
-        INSERT INTO t_bad VALUE (1)
-    前面 1 条语句已随事务回滚。注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；回滚仅对其后的数据操作生效。
-```
-
-各场景的详细内容口径：
-
-| 场景 | 日志里给出的信息 |
-| --- | --- |
-| SQL 脚本执行失败 | 文件名、第几条 / 共几条、目标库 `库名@主机:端口`、错误码与原始报错、出错语句全文、已回滚条数与 DDL 隐式提交提示 |
-| SQL 脚本连接失败 | `库名@主机:端口`、用户名、错误码与原始报错，并注明剩余脚本均未执行 |
-| SQL 文件读取失败 | 文件名、异常类型与原因，并注明该文件已跳过 |
-| Excel 建表失败 | 表名、目标库、错误码与原始报错、失败的完整建表 DDL |
-| Excel 导入失败 | 表名、目标库、已尝试写入的数据行数、错误码与原始报错、回滚说明 |
-| 加载库列表失败 | `主机:端口`、用户名、错误码与原始报错 |
-| Excel 解析失败 | 文件路径、异常类型与原因，并注明该文件已跳过 |
-| 结尾汇总行 | 执行完成汇总或「全部完成：成功 X 张表，失败 Y 张表」，只要 Y>0 整行按错误级标红 |
-
-出错语句全文默认完整展示，超过 2000 字符会截断并标注 `原文共 N 字符`，避免超长批量 `INSERT` 占满日志。
-
-## 17. ZIP 压缩包导入
-
-拖入或选中 `.zip` 后，包内的 Excel 被展开成一条条普通的待导入记录，之后的表名与字段编辑、结构预览、导入、失败重试流程与直接拖文件完全一致。展开规则实现在 `core/zip_import.py`：
-
-| 规则 | 行为 |
-| --- | --- |
-| 递归子目录 | `北京/河道水文站.xlsx` 这类嵌套目录里的文件同样收，解压保留包内目录结构，`北京/水库.xlsx` 与 `河北/水库.xlsx` 不会互相覆盖，表名由去重逻辑给出 `shui_ku` / `shui_ku_2` |
-| 嵌套 zip | 一律跳过并报「跳过 N 个嵌套 zip」；需要导入就把内层包单独拖进来 |
-| 非 Excel | `.txt` / `.csv` 等不进列表，日志汇总忽略了几个 |
-| Excel 锁文件 | `~$xxx.xlsx` 这类 Office 打开文件时留下的锁文件不是合法工作簿，直接跳过 |
-| 中文文件名 | Windows 自带「发送到压缩文件夹」存中文条目名用 GBK 且不打 UTF-8 标记，标准库会按 cp437 解成乱码。`decode_name()` 依据通用位标记 bit11 判断：带标记直接用，不带则 `cp437 → gbk` 回退解码；只在名字确实能原样往返 cp437 时才折回，汉字不在 cp437 取值范围内，硬折会把每个字变成问号，落点随即被 Windows 判成「文件名、目录名或卷标语法不正确」 |
-| Java 侧编码 | `String.getBytes(CP437)` 不像 Python 那样抛异常，而是静默替换；JDK 8 的 `ZipFile` 默认按 UTF-8 严格解条目名，GBK 命名的包连枚举第一条都会抛 `IllegalArgumentException: MALFORMED`，所以 Java 侧打开压缩包时显式指定 GBK（带 UTF-8 标记的条目仍按 UTF-8 解，见 `core/ZipImport.java::open`） |
-| ZIP64 | 条目数超 65535 或中央目录超 4GB 时，这三个数改写在 64 位 ZIP64 EOCD 里，旧的 16/32 位 EOCD 只剩 `0xFFFF` / `0xFFFFFFFF` 占位；Java 线要自己扫中央目录拿位标记（JDK 的 `ZipEntry` 不暴露通用位标记），扫描器必须一并读 ZIP64 EOCD 与它的定位块 |
-| 加密包 | JDK 在打开阶段就整包拒绝带 bit0 的压缩包，回英文那句 `invalid CEN header (encrypted entry)`；Java 线先按自己扫到的 bit0 报「压缩包已加密（哪一条），请先解密后再导入」，与 Python 线同一句 |
-| 解压落点 | 按「会话内已解出的文件数」编号，包名同名（不同目录下的两个 `B.zip`）时目录号也必须一路向前。按批次 +1 而批内按已解文件数跳号过几批就会拐回用过的号，覆盖前一批解出来的文件，同名文件还会被判成「已在待导入列表」而静默少一张表 |
-| zip slip | 包内出现 `../` 或绝对路径的条目会被剥掉越界部分再解压，不会写到目标目录之外 |
-| 失败隔离 | 加密、损坏、空包分别给出明确报错，整条标红；单个包失败只跳过该包，不影响同批其他文件 |
-
-日志示例：
-
-```
-[2026-10-23 14:05:12] - [INFO] [压缩包] 数据打包.zip：展开 12 个 Excel，忽略 3 个非 Excel 文件，跳过 1 个嵌套 zip（不支持递归展开）
-[2026-10-23 14:05:12] + [OK] [已解析] 水库基础信息.xlsx → 表名预置 shui_ku_ji_chu_xin_xi | 字段 5 列 | 数据 81 行 | 主键 `bian_hao`（...）
-[2026-10-23 14:05:13] x [ERROR] [压缩包为空] 报告.zip：包内没有找到 .xlsx / .xls 文件
-```
-
-「文件」列显示包内文件名，鼠标悬停的 tooltip 标出完整来源，形如 `数据打包.zip!北京/水库基础信息.xlsx`。
-
-展开出的文件放在系统临时目录 `%TEMP%\e2m_gui_*`，关闭窗口时自动清理；关掉程序后来自 ZIP 的失败文件不能直接重试，需重新拖一次压缩包。
-## 18. 表格标识
-
-界面上每张表格左上角都写着一句标识，标题同时说明该表的操作方式：
-
-| 位置 | 标题 |
-| --- | --- |
-| 第一页主表格 | 待导入文件（双击表名或表注释编辑，双击其他列改字段） |
-| 第二页主表格 | 待处理的脚本表（双击表名或表注释编辑，双击其他列看元数据） |
-| 第二页双击一行打开的元数据弹窗 | 字段清单（共 N 列） |
-
-| 项 | 说明 |
-| --- | --- |
-| 列宽铺满 | 第一页的结构预览与第二页的表元数据弹窗里，字段清单列宽铺满弹窗宽：每列先按「设计下限与内容需要」的大者打底，视口还有富余就摊给文字列，右侧不留白条；内容比弹窗宽时一列都不压，表格下方出横向滚动条把超长的尾巴带出来。富余按底宽等比分，整除的零头落在最后一个文字列上，两栈同一算法（Qt `fill_widths` / Swing `Tables.fillWidths`），由对撞键 `dlg.structure.hscroll` 与两栈各自的断言钉住 |
-| 列数标注 | 元数据弹窗那句带列数，免于滚动到表格末尾计数；`LIKE` / `AS SELECT` 那种没有列定义的写法开不出这个弹窗（日志点名「未找到表 X 的定义」），不会出现「共 0 列」 |
-| 不重复加标题 | 结构预览弹窗每个 tab 上写的就是表名，已贴在表格正上方，不再加一层标题 |
-| 字号 | 两栈同一组数：表格内容与表头 11 号、日志 10 号，行高按字体量出来不写死像素；由对撞键 `font.table.pt` / `font.log.pt` 跨线核同值，各线再断一次「表格 > 日志」 |
-| 第三页字号 | SQL 文本与执行结果也用日志那一档（10 号），同源到日志常量（Python `LOG_FONT_SIZE` / Java `LogPanel.DEFAULT_FONT_SIZE`），字族仍是等宽体 |
-| 实现 | 套一层带标题的容器（Qt `QGroupBox`、Swing `TitledBorder`），两条线同一句文案；对撞器比的是从真控件上读回来的标题（`table.file.title` / `table.sql.title`） |
-
-## 19. 高度可拖拽
-
-### 19.1 「Excel 导入」页：三段
-
-拖拽区、待导入文件表、日志区之间有一条 6px 宽的横向分隔条，按住即可上下拖动，此消彼长地重新分配高度。
-
-| 项 | 内容 |
-| --- | --- |
-| 不可折叠 | 三段都不允许被拖到 0 高（`setChildrenCollapsible(False)`） |
-| 表格区自上而下 | 命名规则工具条（「表名和字段名取中文拼音首字母」「表名与字段名转大写」两颗开关）→ 待导入文件表 → 「表名前缀」输入框与两颗前缀按钮 → 「清空待上传文件」「生成表结构预览」「预览 DDL」三颗次级按钮等宽一行 |
-| 开关位置 | 两颗开关控制「表名/字段名命名方式」，贴在表格上沿、与前缀输入分开摆放，底部执行区不再堆这一排选项 |
-| 默认勾选 | 启动时只勾「首字母」，「转大写」默认不勾，新加文件按首字母 + 小写起名 |
-| 表格样式 | 两张主表格按行交替底色（斑马纹，`#f4f8fc`），第一列「序号」收窄到 44px，宽度让给文件、表名与注释 |
-| 固定件 | 提示条与底部动作条不在分隔条内，不参与挤压；动作条与上方内容的交界处有一条 1px 细分隔线 |
-| 动作条布局 | 分左右两列：左列只有「覆盖已存在表（先 DROP 再建）」勾选框（进度由任务自己的进度框与日志交代，页底不摆第二条进度条）；右侧依次是「停止」「开始导入」「生成标准excel文件」「生成简易excel文件」 |
-| 强调色 | 「开始导入」用 `#2f6feb` 实底白字，作为一屏里的唯一视觉重点；「停止」与两颗生成按钮保持普通样式 |
-| 清除日志 | 按钮在日志框上方，跟着日志面板一起缩放，始终可见 |
-| 初始分配 | 拖拽区按窗口高的 110/670 给，表格拿走其余高度，日志段正好压在自己的最小高度（四行）；用户拖过把手之后日志高度归用户 |
-
-### 19.2 「SQL 脚本改名」页：待处理文件表格 ↔ 日志
-
-| 项 | 内容 |
-| --- | --- |
-| 分隔条 | 表格区与日志区之间一条 6px 分隔条，拖动即两边此消彼长 |
-| 三段形状 | 拖拽区 / 表格与它下面两行操作条 / 日志与它上方的 `清除日志`；「表名前缀」行与 `清空待上传文件` 跟着表格一起缩放 |
-| 表格区自上而下 | 命名规则工具条 → 待处理的脚本表 → 「表名前缀」输入框与批量应用/替换两颗按钮 → `清空待上传文件` |
-| 命名工具条 | 「表名与字段名转大写」开关提到表格上沿，与前缀输入分开摆放（它控制名字显示形式，与加前缀无关） |
-| 底部固定操作条 | `保存修改后ddl脚本` / `执行修改后ddl脚本到当前库` / `生成标准excel文件` / `生成简易excel文件` 四颗按钮与「覆盖已存在表」开关一起放在分隔条之外的固定操作条：开关在左，按钮贴右，「执行修改后ddl脚本到当前库」用强调色，「保存修改后ddl脚本」用次级样式；与表格区之间有一条 1px 细分隔线 |
-| 窄屏处理 | 按钮总宽比第一页多两颗，套了一层横向滚动区，正常宽度贴右排开，窄屏才出滚动条，整窗仍能缩回屏幕内 |
-| 空清单 | 四颗按钮按各自已有的禁用样式置灰，读入第一个脚本后自动恢复；第一页两颗生成按钮同一口径 |
-| 表格样式 | 带斑马纹，第一列「序号」收窄到 44px |
-| 固定件 | 只有最上面的提示条是固定件；拖拽区本身是三段中的第一段，会一起被拉高拉矮 |
-| 初始分配 | 三段都不允许拖到 0 高；默认分配与「Excel 导入」页同一算法 |
-
-### 19.3 「SQL 执行器」页：三段高度 + 末段左右分栏
-
-上下分三段：拖拽区 / 脚本清单 / 编辑区与结果，段与段之间各一条 6px 横向分隔条；拖拽区按 110/670 给固定一份，清单与末段同权。末段里再左右分栏，编辑区与结果区之间一条 6px 竖向分隔条。
-
-| 项 | 内容 |
-| --- | --- |
-| 初始状态 | 末段压到自己的最小高度（编辑区四行），脚本清单拿剩余高度，空清单中央的图标与引导语才看得全；拖过下面那条分隔条后才展开，程序不再改回 |
-| 无底部动作条 | `清空待执行脚本` 与主按钮 `批量执行脚本文件`（强调色 `#2f6feb`）排在脚本清单组框里的最后一行（一左一右），跟着清单段一起缩放 |
-| 头部按钮 | `示例 (?)`、`清空编辑区` 与次要按钮 `执行编辑区 SQL` 排在「SQL 文本」栏的头一行，`清空结果区` 排在「执行结果」栏的头一行；头一行都是固定件，不在分隔条内 |
-| 底部铺满 | 动作条撤掉后，「SQL 文本」与「执行结果」两段直接铺到窗口底部 |
-| 左右分配 | 两边都不允许拖到 0 宽，初始约 45 : 55 |
-| 提示与按钮分行 | 提示单独占一行、按钮另起一行；合成一行时这一行的最小宽度是「整句提示 + 三颗按钮」，会把整窗最小宽度顶到 830 以上，1024x768 的现场机放不下（用例 U7 抓的就是这个） |
-
-三个页签的尺寸分配都不写入配置，重开程序回到初始比例。
-
-### 19.4 交互引导（三个页签一致）
-
-| 项 | 内容 |
-| --- | --- |
-| 拖拽区常态 | 淡蓝底 `#eaf2fd` 与虚线描边；鼠标进入换成更深的 `#d8e8ff`、描边转强调蓝 `#2f6feb`，离开恢复 |
-| 空清单引导语 | 表格视口中央画「托盘 + 下箭头」图标与一句引导语：Excel 页「请把 Excel 文件或 ZIP 压缩包拖到上方虚线区」，SQL 脚本页「请把 SQL 脚本拖到上方虚线区」，SQL 执行器页「请把 SQL 文件拖到上方虚线区，按清单顺序执行」；加入第一行后自动消失；提示画在视口上而不是叠一层控件，滚轮、右键与空表的原有行为不受影响 |
-| 动作条底板 | 前两页底部的动作条包在同一块浅色圆角底板（底色 `#f4f7fc`、边框 `#dce5f2`）里，「覆盖已存在表」与执行按钮同处一块，读作「执行前确认」的一组；第三页把这条动作板整行撤掉，覆盖开关删掉，两颗执行按钮各归脚本清单与编辑区那两段 |
-
-## 20. 添加结果弹窗
-
-无论点虚线区选文件、直接拖拽，还是复制文件后按 `Ctrl+V`，添加完成后都会把汇总同时打进日志区并弹窗：日志可回溯、弹窗防止遗漏。弹窗那份不带行首标记，日志这一条多了 `[添加结果]` 标签与时间戳/级别前缀，续行缩进 4 格挂在同一条记录下面。散文件与压缩包各占一行，只输出本次实际用到的行：
-
-```
-[2026-10-23 14:05:12] - [INFO] [压缩包] 数据打包.zip：展开 12 个 Excel，忽略 3 个非 Excel 文件
-[2026-10-23 14:05:12] + [OK] [已解析] 人员信息表.xlsx → 表名预置 ren_yuan_xin_xi_biao | 字段 8 列 | 数据 5 行 | 主键 ...
-[2026-10-23 14:05:12] + [OK] [已解析] 人员信息表（t_user）.xlsx → 表名预置 t_user | 字段 8 列 | 数据 5 行 | 主键 ...
-[2026-10-23 14:05:12] ! [WARN] [添加结果] 添加 3 项文件，包含 2 项 xlsx 文件、1 项 xls 文件
-    添加 1 项 zip 文件，包含 12 项 xlsx 文件、0 项 xls 文件
-    另有 2 项解析失败、1 项重复已跳过，详见日志
-```
-
-`[添加结果]` 这一条在真有「另有 …」时按告警级上色，全部成功时是成功级。
-
-| 口径 | 说明 |
-| --- | --- |
-| 数量口径 | xlsx / xls 的数量只统计真正进入待导入列表的，解析失败与重复跳过的不计入，弹窗数字与列表行数始终对得上 |
-| zip 计数 | 「添加 N 项 zip 文件」的 N 指投入了几个包（压缩包本身不进列表，只是被展开） |
-| 第三行 | 只在真有异常时出现，四类按 `、` 拼接，为 0 的不写：`N 项含合并单元格已拒绝`、`N 项解析失败`、`N 项重复已跳过`、`N 个压缩包无法展开`、`N 个压缩包内没有 Excel` |
-| 全部成功 | 只有前两行，不出现「另有」 |
-| 空压缩包 | 只拖了空压缩包（包内没有 Excel）时也会弹窗，否则界面表现为无响应 |
-| 无输入 | 完全没有任何输入时不弹空窗 |
-| 失败细节 | 具体原因（错误码、出错语句）始终在日志里标红，汇总只报数量不塞细节 |
-| 汇总行位置 | 始终出现在逐条 `[已解析]` / `[解析失败]` 之后，便于顺着往下看 |
-
-重复文件在日志里也有对应行（`[重复跳过] xxx.xlsx 已在待导入列表`），便于核对弹窗上的数字。
-
-## 21. 合并表头与合并单元格
-
-### 21.1 顶部两行表头：自动压成一行
-
-原始表常见这种形状：第一行是分组名（`技术公司` 横跨 4 列），第二行是子项（`小计 / 高层 / 中层 / 普通员工`），左侧字段（`序号`、`单位名称`…）纵向合并两行。导入时按列把上下两行拼成「父-子」表头，再照常推断类型、选主键：
-
-| 原始表头 | 展开后的表头 |
-| --- | --- |
-| 第一行 `技术公司` 横跨 4 列，第二行 `小计 / 高层 / 中层 / 普通员工` | `技术公司-小计`、`技术公司-高层`、`技术公司-中层`、`技术公司-普通员工` |
-| 第一行 `序号` 纵向合并两行，第二行没有字 | `序号`（只留一份，不会变成 `序号-序号`） |
-
-展开后仍走原来的表头规则：空表头按列宽兜底为 `col`、`col_2`…，重名追加 `.1`、`.2`，字段名由「父-子」整串转拼音。日志会在 `[已解析]` 行说明表头是几行压出来的：
-
-```
-[2026-10-23 14:05:12] + [OK] [已解析] 原始表.xlsx → 表名预置 yuan_shi_biao | 字段 17 列 | 数据 3 行 | 合并表头按 2 行展开 | 主键 `xu_hao`（…）
-```
-
-只认标准两行表头，必须同时满足四条（`core/merge_check.py` 的 `header_merge_plan`）：
-
-| 条件 | 内容 |
-| --- | --- |
-| 1 | 只有第一个 Sheet 有合并区（第二个 Sheet 有合并区，整个文件仍拒绝） |
-| 2 | 每一处合并区都从第 1 行开始 |
-| 3 | 合并区只能是两种：跨两行的单列纵向合并（`A1:A2`），或只横跨第 1 行的多列合并（`J1:M1`） |
-| 4 | 至少一处跨两行（表头深度因此固定为 2） |
-
-### 21.2 其余合并单元格：直接拒绝导入
-
-不满足上述任一条的文件一律不导入，也不进入「待导入文件」列表。原因是合并区只有左上角那一格有值，其余格被 pandas 读进来是空值：数据行被合并会静默丢值，表头形状对不上时字段名与列会错位。拒绝只针对该文件，不会中断整批。
-
-| 情形 | 行为 |
-| --- | --- |
-| 数据行里有合并区 | 整个文件拒绝 |
-| 第二个及以后的 Sheet 有合并区 | 整个文件拒绝 |
-| 只有一个 Sheet、且合并区只在单行表头里（表头深度 = 1） | 整个文件拒绝 |
-| 表头块之外的合并区（含跨出表头块、伸进数据行） | 整个文件拒绝 |
-| 三行表头（如 `A1:A3`） | 整个文件拒绝 |
-| 第 2 行里的子合并（如 `B2:C2`） | 整个文件拒绝 |
-| 2x2 合并块（如 `B1:C2`） | 整个文件拒绝 |
-| ZIP 压缩包里的某个 Excel 被拒 | 只拒绝那一个文件，同包内其他干净文件正常导入 |
-
-日志逐条标红并给出具体位置便于回源文件修改：
-
-```
-[合并单元格] 两页都合并.xlsx 含 3 处合并区，已拒绝导入，未进入待导入列表
-    检测到合并单元格：「字段定义」1 处（A1:G1）；「数据」2 处（A1:B1、A2:B2）
-    原因：合并区只有左上角有值，其余格读进来是空值，字段名与数据会错位。请先在 Excel 中取消合并后重新添加。
-```
-
-添加结果汇总里单列一类（顺序排在「解析失败」之前）：
-
-```
-添加 1 项文件，包含 1 项 xlsx 文件、0 项 xls 文件
-另有 3 项含合并单元格已拒绝，详见日志
-```
-
-实现要点（`core/merge_check.py` 与 `core/infer.py` 的 `_flatten_merged_header`）：
-
-| 要点 | 内容 |
-| --- | --- |
-| 检测时机 | 在 `pd.read_excel` 之前判，被拒的文件不用付读数据的代价。实测 20 万行的表：流式扫描 116 ms，`openpyxl` 全量加载 8.7 秒、`pd.read_excel` 6.4 秒 |
-| 不做命中即停 | `.xlsx` 用流式扫描 sheet XML 里的 `<mergeCell>`，必须扫到底：早停省不下时间，却会让「含 N 处合并区」的 N 恒等于 1，报出假数字 |
-| Sheet 映射 | sheet 名到 XML 部件走 `workbook.xml` + `workbook.xml.rels` 的 `r:id` 关系，不能假定 `sheet1.xml` 就是第一个 Sheet；`Relationship` 标签的 `Id`/`Target` 属性顺序在不同生成器下不一样，必须逐个属性取 |
-| 排序 | 合并区按左上角坐标行优先排序输出（列名不能按字符串排，否则 `A10` 会跑到 `A2` 前面） |
-| 伪合并 | `A1:A1` 这类只跨一格的伪合并不算合并区 |
-| `.xls` 解析 | 走 `xlrd`，且必须 `formatting_info=True` 才会填 `merged_cells`；默认参数下恒为空，会把满是合并区的真实表单（实测某份有 19 处）当成干净文件放过去 |
-| 展开算法 | 先把每个合并区左上角的值铺满整个矩形（纵向合并只留一份标签，横向合并把组名铺到组内每列），再逐列把非空、且与上一行不同的标签用 `-` 连接；铺值和拼接都只在表头深度内进行 |
-| Java 线 | 同一套规则，金标准夹具 `两行合并表头（ods_t_merged_header）.xlsx` 带「原始表」与「结构化参考」两页，展开结果与参考页逐字比对 |
-
-## 22. 支持的 Excel 类型
-
-| 类型 | 识别方式 | 处理 |
-| --- | --- | --- |
-| 普通数据表 | 单个数据 Sheet | 表名与注释来自文件名，字段从数据推断；表头可以是单行，也可以是顶部两行合并表头（自动压成 `父-子` 一行） |
-| 结构定义表 | 元数据 Sheet + 数据 Sheet；任一 Sheet 的表头含「字段名、数据类型」及以下任一列即识别：`序号 / 字段名(英文) / 字段注释(中文) / 数据类型 / 长度 / 是否主键 / 是否可为空` | 字段以定义为准，不再推断 |
-
-结构定义表的取值规则：
-
-| 项 | 写法与行为 |
-| --- | --- |
-| 长度 | 填 `20` 或 `10,2`（→ `DECIMAL(10,2)`）；类型列也可直接写 `VARCHAR(50)`，中文括号与逗号均可识别；类型无长度时写 `DATETIME` / `TEXT` 等即可 |
-| 主键与可空 | `是否主键=是` → 主键（支持多字段组合）；`是否可为空=否` → `NOT NULL`，否则 `DEFAULT NULL` |
-| 数据对齐 | 数据 Sheet 按字段名对齐（大小写不敏感）：多余列忽略并在日志提示，缺失列补 NULL |
-| 位置与空表 | 元数据 Sheet 位置不限（自动识别），只有定义没有数据时建空表 |
-| 后续修改 | 字段名与数据类型仍可在「表结构预览」中修改，主键可重新勾选 |
-
-## 23. 命名、主键与类型推断规则
-
-### 23.1 文件名与表名
-
-文件名（去扩展名）以「`（表名）`」结尾、且括号内为纯英文（字母/数字/下划线）时，括号内英文作表名、括号前中文作表注释；中英文括号均可：
-
-`北京市水务局-水库基础信息（dim_reservoir_info）.xlsx` → 表名 `dim_reservoir_info`、注释 `北京市水务局-水库基础信息`。
-
-括号内容必须是能直接当表名用的英文标识符（以字母或下划线开头、只含字母/数字/下划线、至少含一个字母）才采用，并统一转小写；否则按下表回退：
-
-| 括号内容 | 例子 | 结果 |
-| --- | --- | --- |
-| 中文 | `人员信息表（人事处人员）.xlsx` | `ren_yuan_xin_xi_biao_ren_shi_chu_ren_yuan`，括号内外的中文一起转拼音，绝不产出汉字表名 |
-| 纯数字序号 | `人员信息表（7）.xlsx` | `ren_yuan_xin_xi_biao_7`，不产出 `t_7` 这种只含数字的表名；`（2026）` 同理 |
-| 版本号 | `订单表（V2）.xlsx` | `ding_dan_biao_v2`（`v2`、`V2_1` 同理）。版本号不是表名，回退时版本段留在末尾做区分；勾首字母为 `ddbv2`，再勾转大写为 `DDBV2`。只认「单个 V + 数字」，`order2`、`A1` 这类仍直接采用 |
-| 数字开头 | `7_dim` | 回退 |
-| 空括号或纯符号 | `（）`、`（--）` | 回退 |
-
-回退时表注释保留完整文件名（含括号内容），所以 `人员信息表（人事处）` 与 `人员信息表（财务部）` 得到两个不同且可辨识的表名，而不是同名加 `_2`。
-
-回退默认规则：表名 = 文件名汉字转拼音（每个音节用下划线分隔；小写字母/数字/下划线，不以数字开头，最长 64 字符）。超长处理与字段名规则完全一致：全拼不超过 64 用全拼，超过则整名降级为各音节首字母（数字/英文音节整段保留），如 `北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表.xlsx` → `bjshdqswjxsdxsksngcjcxxhzb`。表注释 = 文件名；同名文件重复添加自动加序号。
-
-### 23.2 主键
-
-主键约束至多一个，可由一个或多个字段组成组合主键。添加文件时自动分析挑选（类型为 INT/BIGINT 或 ≤255 的 VARCHAR、全列非空唯一、注释或字段名带 ID/编号/代码 等语义，同分取更短者），无合适字段则不设主键。「生成表结构预览」中每行有主键勾选框，可自由勾选或取消一个或多个字段，保存时自动校验类型、非空与组合唯一，不通过会提示且不生效。只有表头的空表不自动选主键（没数据判不了唯一与非空），但可以手工勾选：空集天然满足非空与唯一，此时只校验字段类型。
-
-表名前缀批量应用到全部表名；新添加的文件自动带上当前前缀；换前缀重复应用不会叠加（基于基础表名重算）；留空并点「批量应用前缀」可移除前缀。
-
-### 23.3 字段命名
-
-| 规则 | 内容 |
-| --- | --- |
-| 基本形态 | 中文表头逐音节转拼音、下划线连接成蛇形（`订单金额` → `ding_dan_jin_e`） |
-| 长度上限 | 全拼不超过 30 字符用全拼，超过则整列强制降级为各音节首字母且不加下划线（`北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表` → `bjshdqswjxsdxsksngcjcxxhzb`，单字母之间加分隔符不增加可读性却把长度翻倍）；首字母仍超 30 时截断 |
-| 纯英文 | 原样蛇形化，不做拼音转换（`station_code` 保持不变） |
-| 数字开头 | 首字符为数字补 `f_` 前缀 |
-| 重名 | 自动加 `_2`、`_3`；产出保证是合法 MySQL 标识符 |
-| 统一实现 | 表名与字段名共用同一套拼音切分与超长降级逻辑（`core/infer.py` 的 `_syllables` 加 `_fit_name`），只是长度上限不同（表名 64 / 字段名 30） |
-| 降级触发 | 上限是唯一的降级触发条件，不按中文字数另设阈值 |
-| 降级碰撞 | 降级只在全拼超 30 字符时发生，也就是表头至少 7~8 个汉字，缩写串本身有长度，碰撞概率很低：拿 310 条真实中文列注释实测，碰撞 0 组（`时间`/`实际` 这类短表头全拼只有 6~8 字符，不会走到降级分支） |
-| 数字与单位 | 降级时整段保留，不跟着取首字母，否则 `降水量≥1.0mm` / `≥10.0mm` / `≥100.0mm` 会被压成同一个串，而这类数字恰是列名的区分点；保留后是 `lnyrjsl10mmpjrs` / `...100mm...` / `...1000mm...` |
-| 撞名兜底 | 万一仍然撞名，靠 `_2`、`_3` 保证建表合法，含义可在「生成表结构预览」里改 |
-
-括号注释与格式掩码不进名字：
-
-| 规则 | 例子 |
-| --- | --- |
-| 成对括号里的注释整段不进名字（`_strip_header_annotations`，在 `_col_to_field` 里先剥再转写） | `发布日期（yyyy-MM-dd）` → `fa_bu_ri_qi`、`金额（元）` → `jin_e`、`是否已婚【是/否】` → `shi_fou_yi_hun`、`★（必填）联系电话` → `lian_xi_dian_hua` |
-| 括号按码位清单认 | 半角 `()`、全角 `（）`、`[]［］【】〔〕〖〗〈《「『{}｛` 各配对，两侧同一份清单 |
-| 嵌套与孤立 | 嵌套最多剥三轮，配不对的孤立括号符最后删掉 |
-| 左括号没配右半边 | 从它起整段丢（`发布日期（yyyy-MM-dd` → `fa_bu_ri_qi`） |
-| 整格就是括号 | 不剥空（`（备注说明）` → `bei_zhu_shuo_ming`），否则退化成 `col` |
-| 列注释 | 仍是原始表头，口径信息不丢；表名那条不受影响（文件名的 `（英文表名）` 另有规则） |
-| 日期时间格式掩码即使不带括号也不进名字（`_MASK_SEG_RE`） | `发布日期：yyyy-MM-dd` / `发布日期 yyyy-MM-dd` / `发布日期/yyyy/MM/dd` / `填表日期 yyyymmdd` 都只剩名字部分 |
-| 掩码判定 | 只认「首段是 `[yYmMdDhHsS]{2,}`、两头不贴字母数字、后续段可以是纯数字」的串 |
-| 反向守卫 | `1.0mm` 里的 `mm` 前有数字不被吃；纯英文表头（`station_code` / `MM-dd` / `qty`）整条不参与掩码判断；真日期 `2020-01-01` 这类首位是数字的串不是掩码 |
-
-命名开关（图形版「Excel 导入」页前缀输入框右侧两颗勾选框，命令行 `--initials` / `--upper`，两条 Python 线与 Java 线都有）：
-
-| 项 | 内容 |
-| --- | --- |
-| 默认值 | 图形版启动时只勾「首字母」，「转大写」默认不勾选，新加文件按「首字母 + 小写」起名；命令行不加 `--initials` / `--upper` 时是全拼、小写 |
-| 首字母 | 整名取各音节首字母（`订单金额` → `ddje`、`水库基础信息` → `skjcxx`） |
-| 转大写 | 输出全大写（`ding_dan_jin_e` → `DING_DAN_JIN_E`，空表兜底 `T_IMPORT_DATA` / `COL`） |
-| 作用范围 | 也作用于文件名括号里显式写下的英文表名（`（dim_reservoir_info）` → `DIM_RESERVOIR_INFO`）以及结构定义 Sheet 里手写的字段名：勾上时一起转大写，取消勾选时保持原样；数据 Sheet 按字段名对齐大小写不敏感，转完照样对得上；手动输入的表名前缀不跟着转 |
-| 生效时机 | 两颗开关都对之后添加的文件生效，切换时日志各留一行提示；重复跑同一开关结果不变 |
-| SQL 页 | 只保留「表名与字段名转大写」开关，默认不勾选；勾选后清单、表元数据与两份 Excel 一起大写显示，脚本正文不回写；拼音首字母开关已删除 |
-
-对已有库重新导入的影响：字段命名规则变更后，同一张表生成的列名与旧版不同（旧 `dingdanjine` → 新 `ding_dan_jin_e`）。若目标库里表已存在，默认行为是跳过建表，随后 `INSERT` 会报 1054 Unknown column。要么勾「覆盖已存在表（先 DROP 再建）」重建，要么在表结构预览里把字段名改回旧列名；老数据表先备份再重导。
-
-### 23.4 类型推断
-
-全量扫描所有数据行，不做抽样，最长行与异常行不会漏判：
-
-| 数据形态 | 类型 |
-| --- | --- |
-| 日期时间对象或含时间的字符串 | `DATETIME` |
-| 金额语义列 | `DECIMAL(16,2)`，不走整数分支（见 23.5） |
-| 纯整数 | `INT`，溢出则 `BIGINT`；连 BIGINT 都装不下的改 `DECIMAL(n,0)`，超过 MySQL 65 位精度的退为文本并在日志说明（8 位纯数字如 `20230101` 按数值处理，编码列不会误判为日期） |
-| 日期对象或带分隔符的日期串 | `DATE` |
-| 含小数 | `DECIMAL(p,s)` 按实测数据定宽：`s` 取实测最大小数位（下限 2、不截断），`p` 取 `max(实测最大整数位 + 2, 4) + s`；上限取 MySQL 真实上限（总精度 65、小数 30），超限退文本并在日志说明 |
-| 文本 | 按「全量最大 UTF-8 字节 + 20% 余量」向上取整到常用档位（64 ~ 16383）→ `VARCHAR(n)`；超过 16383 字节 → `TEXT`，超过 65535 字节 → `MEDIUMTEXT` |
-| 行内预算 | 全表 VARCHAR 共享 60000 字节行内预算，预算不足的大文本自动退为 `TEXT`，保证建表不报 Row size too large |
-| 前导零 | 带前导零的整数字符串（如 `007`）保持文本 |
-
-旧版一律给 `DECIMAL(20,6)` 的做法已废弃：那会让 2 位小数的普通列占用不必要的宽度，又不足以表达 7 位小数的经纬度列；旧上限（总精度 30）会把 14 位整数 + 18 位小数压成 `DECIMAL(30,18)`，实测到的整数位被挤掉，写入时报 `1264 Out of range value`。
-
-### 23.5 整列为空时按字段名定类型
-
-只在这一列一个值都没有时生效，二十类按优先级排：
-
-| 语义 | 关键词 | 类型 |
-| --- | --- | --- |
-| 时长 | 工期/周期/时长/间隔/时延/工时/机时/台时 | `INT`；时长与金额同时命中时看结尾：`付款周期` 是天数，`工时费` 是钱 |
-| 金额 | 金额/单价/价格/费用/租金/水电费/增值税/净利润/总资产/应收款/违约金/本金/造价/客单价/伙食费/取暖费/被装费/油料费/维修费/值班费/过路费/养路费等 | `DECIMAL(16,2)` |
-| 合计 | 总计/小计/合计/共计/累计/汇总/总量/总值 | `DECIMAL(18,4)`（合计既可能是钱也可能是数量，给一位小数都装得下的档；猜 INT 会在写进 12.5 时静默取整） |
-| 日期 | 日期/有效期/到期日 | `DATE` |
-| 日期时间 | 时间/日期时间 | `DATETIME` |
-| 时刻 | 打卡时刻/发车时点 | `TIME` |
-| 布尔 | 是否/有无/开关/标志/可否/能否 | `TINYINT(1)` |
-| 比率 | 率/比例/百分比/占比/系数/倍数/权重/概率/配比 | `DECIMAL(18,6)` |
-| 评分 | 得分/评分/分数/成绩/满意度/星级/扣分/考核分/理论分/实操分/体能分/技能分/综合分/总评 | `DECIMAL(10,2)` |
-| 坐标 | 经度/纬度/坐标 | `DECIMAL(18,8)` |
-| 计量 | 长度/面积/体积/重量/温度/频率/强度/硬度/能耗/吨位/跨度/含沙量/壁厚/振幅/挠度/沉降/位移/噪声/分贝/总磷/开间/进深/航程/航速/转速/亩产/血糖/视力/剂量/用药量/射程/射高/射速/仰角/炮径/弹径/装药量/自重等 | `DECIMAL(18,4)` |
-| 大计数 | 播放量/阅读量/曝光量/点击量/访问量/下载量/转发量/浏览量/粉丝数/关注数/收藏数/评论数/点赞数 | `BIGINT`（只涨不减的大计数，会超过 INT 的 21 亿上限） |
-| 计数 | 数量/个数/人数/次数/库存/户数、票数/名额/课时/学分/场次/销量/产量/人次/班次/车次/行数/站点数/订单数、出库数/入库数/在库数/在册数/在位数/配发数/消耗数/报废数/维修数/领用数/盘盈数/盘亏数/官兵数/兵员数/装备数/台套数/辆数/参与数、心率/脉搏/剂次/环数/圈数、发数/航次、年龄/工龄/年限、序号/排名/位次/座次/顺位、年份/月份/季度/月数/旬 | `INT` |
-| 网址 | 网址/网站/链接/路径/域名/短链 | `VARCHAR(512)` |
-| 长文本 | 备注/说明/描述/详情/内容/摘要/评价/意见/经营范围/注意事项/留言/反馈/条款/笔录/诉求/处置情况/主要做法/工作纪要/事由/成效 | `TEXT` |
-| 名称类 | 名称/姓名/标题/类别/类型/品牌/型号/规格/材质/部门/机构/项目/地址/联系人/职称/岗位/科室/楼盘/街道/线路/品名/语种/币种、创建人/修改人/更新人/删除人/录入人/制单人/复核人/审核人/经办人/负责人/批准人/填报人/申请人/受理人/移交人/接收人、密级/级别/层级/建制/番号/部队、课目/驾驶员/附件/状态/标记 | `VARCHAR(255)` |
-| 其余 | — | `VARCHAR(64)` |
-
-判定细则：
-
-| 项 | 内容 |
-| --- | --- |
-| 英文匹配 | 按成词匹配：`create_date`、`qty`、`is_deleted`、`longitude`、`sub_total`、`home_url`、`remark_text`、`page_views`、`impressions`、`principal`、`premium`、`latency_ms`、`ordinal`、`message_body` 命中，`update`、`birthday`、`phone_number` 不误中 |
-| 优先级 | 时长优先于金额与时间（`付款周期`、`结算周期` 存的是天/月数）；金额优先于其他数值语义；显式比率词优先于计量词；裸「率」排在所有显式词条之后（频率、功率按计量，容积率按比率，点名过的「心率」不会被一个字的启发式抢成小数档） |
-| 文本放最后 | 文本三档放最后，不让「描述」「名称」抢掉带数字语义的复合表头（`数量说明` 仍按计数） |
-| 只放宽不收紧 | 文本档不给编码、电话这类列收窄到 `VARCHAR(32)`：空列看不出真实长度，收窄会让后来填进来的长值变成截断报错 |
-| 钱味词根位置 | 词根在中间不算金额：`付款单位`、`缴费方式`、`工资名单`、`收费标准` 按结尾判定否决，落回名称档；`支付金额`、`应收款` 这类钱在尾巴上照旧 `DECIMAL(16,2)` |
-| 故意不收的词 | 血压（`120/80` 这种写法）、血型（`A 型 Rh 阴性`）、过敏史（「青霉素过敏」）判成数值档会让写入直接报错，留默认 `VARCHAR(64)`；「期限」「时限」同理（「3 年」「6 个月」是时长甚至是一段文本），只收「有效期」「到期」；「口径」不收：它在治理类表里是「统计口径」（一段文本），在装备表里才是炮管口径（毫米数），一个词两种含义 |
-| 英文词根与拼音的冲突 | 英文词根要过一遍拼音音节表：字段名是同一批中文表头转出来的，`参考率` 转拼音就是 `can_kao_lv`，所以 `can` 这类「既是英文词又是拼音」的不能当词根用；`is`/`has`/`bool`/`flag` 这些不是拼音音节的保留 |
-| 词表守卫 | 覆盖面由夹具 `空列词表全量（ods_t_name_words）.xlsx` 机器判定：表头直接从 Python 词表导出（1085 列，中文 768 + 英文词根 317），Java 线逐列必须给出同一个类型词，少抄一条词、顺序错位、两侧不一致都会在类型推断金标准差分那一步露出来 |
-| 优先级总则 | 有值的列照旧按数据判定；结构定义 Sheet 里人工写的类型优先；每条按名定类型都写进 `[类型修正] … 按表头语义调整` 日志行 |
-
-### 23.6 金额语义识别
-
-纯值判定会把「订单金额」这类列在样本恰好为整数时判成 INT，金额被砍掉小数位（Excel 里 `100` 常以 `100.0` 存储，整数值浮点也会被认成整数）。因此在值判定之上加一层表头语义修正：中文表头或英文字段名命中金额关键词的数值列，一律用 `DECIMAL(16,2)`。
-
-| 项 | 内容 |
-| --- | --- |
-| 命中示例 | 金额 / 单价 / 价格 / 均价 / 报价 / 成交价 / 结算价 / 总价 / 费用 / 成本 / 余额 / 工资 / 补贴 / 收入 / 支出 / 付款 / 预算 / 税额 / 利息 / 保费 / 市值 / 销售额 / 利润 / 欠款 / 贷款 / 保证金 / 押金 / 电价 / 水价 / 运价 / 票价；英文 `amount amt money price cost fee salary wage income expense balance budget revenue profit payment charge fund tax interest capital` |
-| 只认成词 | 不认裸「费」「价」二字：`费县`（地名）、`评价` 不会被误判成金额 |
-| 比率否决 | 表头含 率 / 比例 / 百分比 / 占比 / 增速，或名字含 `rate ratio percent pct share` 的列不算金额；`年利率`、`interest_rate` 按实测小数位定宽（否则 4 位小数被压成 2 位，数据就改了） |
-| 不截断精度 | `结算金额` 若实测有 4 位小数，给 `DECIMAL(18,4)` 而不是 16,2；`总金额` 大到 16 位整数时自动放宽为 `DECIMAL(18,2)` |
-| 日志留痕 | 语义层改变了纯值结论时单独打一行说明，不偷偷改：`[类型修正] 订单表.xlsx 共 1 列按表头语义调整` 加缩进说明「表头含金额语义，样本值虽为整数，仍按 DECIMAL(16,2) 而非整数类型」 |
-| 结构定义模式 | 不受影响：人工写了 `INT` 就还是 `INT`，语义层只服务「从数据推断」 |
-| 可改 | 推断结果都可以在「生成表结构预览」里逐列改；那一页的「表内数据最大字节长度」是按全量数据实测的读数，只读，要放宽就改「数据类型」，字节上限由程序重算 |
-
-### 23.7 其余数据形态
-
-| 项 | 行为 |
-| --- | --- |
-| 无法转换的数值 | 按 NULL 写入，并在日志中汇总告警（含列名、数量与行号示例） |
-| 全空行 | 自动剔除，不导入整行 NULL 的垃圾数据 |
-| 整列没值 | 表头写了字（含 `*标准名称` 这类必填标记）就照旧保留并在日志点名；表头空着的 `Unnamed` 列才丢 |
-| 表头整行没写字 | 照样导入：pandas 遇到这种行会把列宽一起丢掉（实测 `columns` 只剩 0 个），所以判「一列都没有」之前要回原始工作簿问一次第一行有几个格（`_first_row_width`：xlsx 用 openpyxl `read_only` 取首行，`.xls` 用 xlrd 的 `ncols`）。问得到宽度就按它兜底出同样数量的空表头列，字段名走 `col` / `col_2` / `col_3`，列注释为空、没有数据可插，`[已解析]` 下面的缩进 `说明 \|` 行点名兜底出来的列名（名单随表定义的 `blank_headers` 带出去，Java 侧是 `TableBuilder.Result.blankHeaders`）。问不到就是真的空表，按解析失败拒绝，那种表建出来是 `CREATE TABLE x ( )`，MySQL 直接报语法错误 |
-| Java 侧宽度 | `trimAndPad` 与 pandas 一样会把行尾空格裁掉，所以宽度必须在裁剪前记下来（`rawHeadWidth`）；两侧对齐的是「列数与字段名一致」 |
-| 表已存在 | 默认跳过建表；勾选「覆盖已存在表」会先 DROP 再建 |
-| 分批 | 导入分批 500 行/批，单批失败会回滚该表并继续下一张 |
-
-## 24. 从源码构建
-
-| 产物 | 双击入口 | 实际执行 |
-| --- | --- | --- |
-| 图形版 | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` |
-| 命令行版 | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` |
-| Java 版 | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` |
-| 三端一起 | `一键打包-三端.bat` | 按图形版 → 命令行版 → Java 版顺序调用，任一步非 0 就停住 |
-
-图形版闸门七步：查环境 → 确认产品 exe 未在运行 → 开发态全量用例 → 构建 → 冻结态用例 → 真启动验收 → 清缓存。全部通过才打印产物路径，任一步失败以非 0 退出码结束；实测耗时约 2 分钟。可选参数：
-
-```bash
-python build_exe.py --app-only      # 跳过冻结态用例，仍做启动验收
-python build_exe.py --fast          # 只构建产品包
-python build_exe.py --keep-cache    # 保留 build/ 中间缓存，加速下一次构建
-```
-
-三套打包口径的唯一来源、spec 里的取舍与分发说明见第 7 章。
-
-## 25. 测试与质量闸门
-
-改代码之后的验证口径，按改动落在哪条线选跑哪几个：
-
-| 闸门 | 覆盖什么 | 命令 |
-| --- | --- | --- |
-| 全量功能用例 | 解析、推断、DDL、导入、界面控件与文案、弹窗、日志 | `.venv\Scripts\python pack_test.py` |
-| 旧栈用例 | 同一份 Win7 用例在 Python 3.8 旧栈与新栈各跑一遍，含真库读写与 `.sql` 执行 | `.venv38\Scripts\python pack_test38.py` |
-| Java 线十步闸门 | 生成物一致、编译打包、class 主版本 ≤52、拼音/命名/推断/读取/SQL 五道金标准差分、产物逐格差分、Swing 界面自检 | `java\构建验证.bat` |
-| 双界面对撞 | 两条 GUI 线的控件文案、按钮启用条件、弹窗文字、写出的文件内容逐键比对 | `java\界面双端对撞.bat` |
-| SQL 示例真库回归 | 126 条示例逐条打到真 MySQL 上跑一遍 | `.venv\Scripts\python check_sql_samples.py` |
-
-v3.1.0 这一轮的实测数字：
-
-| 项 | 结果 |
-| --- | --- |
-| `pack_test.py` | 通过 896 / 失败 0 / 显式记账未覆盖 5 |
-| Java 线十步闸门 | 全过 |
-| 双端对撞 | 340 项界面事实逐键一致，另有 6 项「现场实测尺寸」只留档不比 |
-| SQL 示例真库回归 | 126 条，失败 0 条 |
-
-要真实 MySQL 读写（`pack_test.py` 的 G 组、`check_sql_samples.py`）先备好凭据：
-
-```bat
-set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& set PT_DB=测试库
-```
-
-未设凭据时相关用例打印 `SKIP`，并在汇总里显式记为「未覆盖」；凭据只从环境变量读，不落进任何被跟踪文件。
-
-三条线共用同一套口径：Python 侧同源靠同一个 `core/` 包，Java 侧是把 `core/` 重写一遍后用金标准差分对平。`java/tools/check_generated.py` 会重跑生成器，把 `HelpDoc.java`、`SqlSamples.java` 与各自的 Python 源逐字节比对——改了源却忘了重导，Java 界面会照旧显示旧文案，这种漂移跟到交付物里都看不出来，所以这道闸放在构建第一步。
-
-## 26. Java 线：JDK 8、硬约束与差分对平
-
-为了在没有 Windows 更新保障的老 64 位机器上跑同一套导入逻辑开的并行线。Python 两条线继续维护，两条线在差分对齐前不互相替换。
-
-### 26.1 为什么是 Java 8
-
-CPython 3.8 的扩展模块和 PySide6 都挂在 UCRT（`api-ms-win-crt-*`）上，而 UCRT 要靠 KB2999226 或系统自带；老机器缺它就在 DLL 加载期失败，程序没机会报错。JDK 8u202 的核心二进制实测零 `api-ms-win-crt-*` 导入，它依赖的 `msvcr100.dll` 自带在 `jre\bin` 里，所以不向操作系统要 UCRT。
-
-这是构建版本的性质，不是 Java 8 这个版本号的性质：本机 JDK 17 与 25 的 `java.exe`/`java.dll`/`jvm.dll` 各导入 6–10 个 `api-ms-win-crt-*`，换成分支维护的发行版就可能把 UCRT 依赖带回来。
-
-出包侧目前实际拦的是两件事，不是「PE 导入表检查」：
-
-| 措施 | 内容 |
-| --- | --- |
-| 剔桩 | 按文件名剔掉 `api-ms-win-*` 转发桩与 `ucrtbase/vcruntime140/concrt140/msvcp140` 这批（它们的 PE 头声明最低系统 10.0） |
-| 真跑 | 用包内那个 java.exe 真跑一遍界面自检，剔错了运行时这一步就起不来 |
-| 边界 | 逐个 PE 读导入表的离线扫描没有做，现在的等价保证来自「跑一次」而不是「扫一遍」 |
-
-### 26.2 硬约束
-
-| 约束 | 内容 |
-| --- | --- |
-| 界面技术 | 只用 Swing/AWT，不用 JavaFX。原先「JavaFX 那批 dll 导入 UCRT」的说法实测不成立（扫遍本机 JRE 8u202 的 130 个 dll/exe，`api-ms-win-crt-*` 导入数为 0）；真实理由有两条：JavaFX 会额外拖进 `glass`/`glib-lite`/`fxplugins`/`decora_sse` 等 16 个原生 dll（PE 头声明的最低系统是 Vista 6.0，比 Swing 那批的 5.2 高一档），而本工具的界面是表单加表格，Swing 完全够用 |
-| 字节码版本 | major version 必须是 52；依赖 jar 逐个校验，否则在 JRE 8 上是 `UnsupportedClassVersionError`，而在本机构建时完全不暴露。由 `com.excel2mysql.verify.ClassVersionAudit` 把关，多版本 jar 的 `META-INF/versions/**` 不计入（JDK 8 不读它，计入会让守卫永久假红） |
-| JRE 随包 | 随包 JRE 与产物一起发布，`启动.bat` 点名用包内 `jre\bin\java.exe`，不依赖目标机装没装 Java |
-| 不能整目录照抄 | 实测本机两个 8u202（`jdk1.8.0_202\jre` 与 `jre1.8.0_202`）的 `bin` 里都有 40 个 `api-ms-win-core-*.dll` 加 `ucrtbase.dll`/`concrt140.dll`/`vcruntime140.dll`，这批桩 PE 头声明的最低系统是 10.0，而 JVM 自己的二进制零 crt 导入、只链 `msvcr100.dll`。打包时要把它们剔掉，闸门要断言「包内没有任何 `api-ms-win-*.dll`」 |
-
-### 26.3 拼音转写等价性
-
-表名与字段名由 `core/infer.py` 的 `lazy_pinyin` 生成，是用户要拿去建库的产物，所以移植的第一道闸门是逐条对撞，不是「看起来一样」。
-
-```bat
-:: 1) 重新导出词典与金标准语料（需要 .venv38，即打包同款的 pypinyin 0.55.0）
-.venv38\Scripts\python.exe java\tools\export_pinyin_data.py
-
-:: 2) 编译并跑差分（只需 JDK 8）
-"%JAVA_HOME%\bin\javac" -encoding UTF-8 -d java\out ^
-  java\app\src\main\java\com\excel2mysql\pinyin\PinyinConverter.java ^
-  java\verify\src\main\java\com\excel2mysql\verify\PinyinDiffer.java
-"%JAVA_HOME%\bin\java" -cp java\out com.excel2mysql.verify.PinyinDiffer ^
-  java\app\src\main\resources\pinyin java\verify\golden\cases.jsonl.gz
-```
-
-| 项 | 值 |
-| --- | --- |
-| 词典 | `single.txt` 41923 条 / `phrase.txt` 47111 条 |
-| 金标准语料 | 57228 条，全量单字 + 全量词组 + 对抗样本 + 混排串 + 68 个无拼音条目的汉字 |
-| 差分结果 | 0 条不一致，退出码 0 |
-| 分支命中 | A 4016、B 41975、C 51120、D 4212；B2 与 E 在严格模式下结构性不可达 |
-| 变异抽查 | 把 `ü→v` 故意改成 `ü→u` 后差分报 804 条不一致、退出码 1，还原后回绿 |
-
-语料的期望值全部由真实 pypinyin 产出；`export_pinyin_data.py` 里的 `replica_*` 是对库内「严格模式正向最大匹配 + 整词优先取首读音 + NORMAL 去声调」的 Python 复刻，先与库对撞归零，Java 侧才算拿到读准了的规格。词典与语料一起入库（约 2.4 MB），目的是让 jar 构建只依赖 JDK，不要求构建机装 Python。
-
-### 26.4 换 jpinyin 做拼音引擎：已实测否决
-
-`com.excel2mysql.verify.JpinyinDiffer` 拿 P1 那 57228 条金标准撞 `com.github.stuxuhai:jpinyin:1.1.8`。只算 core 的 `_syllables` 真正会喂进拼音的输入域（`\u4e00-\u9fff`，计入 52169 条、跳过域外 5059 条）：
-
-| 词典 | 不一致 | 说明 |
-| --- | --- | --- |
-| jpinyin 自带 | 5110 / 52169（9.8%） | 单字表只有 20902 条，pypinyin 是 41923 |
-| jpinyin 引擎 + 注入 pypinyin 词典 | 154 / 52169（0.3%） | 已把 41923 单字 + 47111 词组按它的格式导出注入 |
-
-注入后仍不平的 0.3% 是结构问题而不是数据问题：`PinyinHelper.convertToPinyinString` 第一行无条件做繁转简，而 `chinese.dict` 的 2533 个键全部落在输入域内且都映射成别的字（`著 U+8457 → 着 U+7740`）。键先被换掉，注入的词组必然查不中，单字也取成了着的首读音 `zhe`。外部没有开关能关掉它；要绕开只能自行调用 `convertToPinyinArray` 重新分词，而这正是换库想要避免的部分。所以 jpinyin 只作为 verify 依赖保留（可一键复测），不进 app 的依赖树，产物 jar 里没有它。
-
-### 26.5 当前状态
-
-| 项 | 状态 |
-| --- | --- |
-| P1 拼音等价性 | 绿 |
-| P2 `core/` 移植 | 绿：流式 Excel 推断、精度规则、双跑差分。十步闸门 `构建验证.bat` 覆盖 class 版本、拼音、表名/字段名、类型推断、读取层逐格、SQL 线与 DDL、生成标准/简易 Excel 的产物逐格、界面自检；其中三步差分各跑两份语料（`.xlsx` 与 `.xls` 老格式） |
-| 两行合并表头 | Python 与 Java 同语义展开，只放行第一个 Sheet 顶部的标准两行表头；三行表头、第 2 行子合并、2x2 块与其余合并区照旧拒绝。金标准夹具 `两行合并表头（ods_t_merged_header）.xlsx` 带「原始表」与「结构化参考」两页，表名/字段名与类型推断两步差分、Swing 自检都覆盖 |
-| P3 CLI 与交付包 | 绿：`一键打包-Java版.bat` 先跑十步闸门再组装，产物 `dist/excel2mysql-java-<版本>-win64/` 含 `启动.bat`、程序 jar、随包 `conn.ini`、`jre\`、`README.md`（项目根那一份原样复制进来）与 `assets\app_icon.png`；出包时断言剔桩为零、class 主版本 ≤ 52，并用包内那个 java.exe 跑界面自检与「在别的工作目录里自动读到产物同级 conn.ini」 |
-| 双 GUI 一致性 | `界面双端对撞.bat` 一键跑：Qt 侧（`tools/gui_dump_py.py`）与 Swing 侧（`verify/.../GuiDump.java`）各跑同一套脚本（建窗、加载夹具、加/换前缀、开五个弹窗、真点两颗生成按钮读回产物、SQL 页改前缀、清空待上传文件），把控件类别、文案、tooltip、占位、启用态、表格列与行、日志、弹窗落成同名 key，再由 `tools/gui_parity.py` 逐键比。当前 340 个键逐键一致（其中 6 个 `env.*` 是实测尺寸，只留档不跨线比，真正比的是 334 个）。这一轮它查出四处真差距（「开始导入」启用条件、清空后按钮没置灰、进度条不印百分比、空点「停止」静默），详见 `GUI-对齐清单.md` 第 15 节 |
-| 改了 `core/` 之后 | 四个金标准导出脚本要一起重跑：`tools/export_excel_golden.py` → `export_xls_golden.py` → `export_sql_golden.py` → `export_meta_golden.py`。后两个吃前两个的产物（SQL 线要拿 Excel 侧算出的表定义去生成 DDL），只重跑第一个的话差异会推到第 8 步才露出来，而且报的是「DDL 与期望不符」这种看着不相关的话。金标准是入库的派生物，没有「过期」状态可查，只能靠重跑闸门失败来提醒 |
-| 未闭合 | 模态进度框那一支的自动化覆盖（EDT 上开模态框必自锁，交付前手工点一次）。真库端到端已闭合：`SqlRunCli` 的正向用例 2026-10-28 在本机测试库上跑通（见 `GUI-对齐清单.md` §97.5）；真进度框加子线程那一支在 Python 侧改成非模态后由用例自己泵事件循环，已覆盖到 |
-
-## 27. 项目结构
-
-```
-core/                        三条线共用的口径：解析、类型推断、命名、DDL、导入、SQL 切句、ZIP 展开
-main.py                      图形版入口（PySide6）
-cli.py                       命令行版入口（Win7 线）
-help_doc.py                  内置《使用说明》的唯一来源
-sql_samples.py               SQL 执行器页 126 条示例的唯一来源（一条七个字段）
-version.py / appinfo.py      版本号与随包构建信息
-build_exe.py / build_exe38.py / excel2mysql*.spec     两条 Python 线的打包闸门
-pack_test.py / pack_test38.py                        两条 Python 线的用例集
-check_sql_samples.py / check_sql_exec_parity.py      真库回归与 SQL 执行器对撞
-assets/                      图标与 conn.ini（随包 README.md 就是本文这一份）
-java/                        Java 线：app（界面 + 命令行）、verify（差分与自检）、
-                             tools（生成器与对撞器）、assets（随包件）
-java/GUI-对齐清单.md          每一轮界面改动落到两栈的对照与取证记录
-```
-
-界面无独立模板文件：图形版的每一块控件都在 `main.py` 与 `java/app/src/main/java/com/excel2mysql/gui/` 里直接搭，两条线各一份，靠第 25 章的闸门对平。
-
-## 28. 版本号
-
-版本号取值唯一来自 `version.py` 的 `APP_VERSION`（窗口标题、程序内《关于》、`--version`、随包 appinfo 都从它读）。另有 8 处写死的字符串必须跟着一起改：
-
-| 位置 | 内容 |
-| --- | --- |
-| 根 pom | `<version>` 与 `<app.version>` |
-| app / verify pom | `<parent><version>` |
-| `java/构建验证.bat` | jar 名 |
-| 随包说明 | 示例命令里的版本号 |
-| `java/assets/conn.ini` | 注释里的示例命令 |
-| README | 上面的路径示例 |
-
-漏一处就是「关于框已是新版本、jar 还叫旧版本」这种交付事故，所以用例 `T15` 逐处把这些字符串与 `APP_VERSION` 核一遍（改版本前先跑，改完再跑一次）。版本号可以带开发阶段后缀（`1.1.0-alpha.1` / `-beta.1` / `-rc.1`），后缀同样只写在 `version.py` 一处，上面那 8 处与产物名会自动带过去；默认不带后缀。
-
-## 29. 已知限制
+版本号唯一来自 `version.py` 的 `APP_VERSION`；另有 8 处写死字符串必须同步改（三个 pom、`java/构建验证.bat` 的 jar 名、`help_doc.py`、`java/assets/conn.ini` 与本文的路径示例），漏一处就是「关于框已是新版本、jar 还叫旧版本」这种交付事故，用例 `T15` 逐处核对。版本可带 `-alpha.N` / `-beta.N` / `-rc.N` 后缀，后缀同样只写一处。
 
 | 项 | 内容 |
 | --- | --- |
 | 系统支持 | 图形版跑不了 Windows 7 / 8.1（Qt 6 与 Python 3.9+ 的硬限制），Win7 上用命令行版或 Java 版 |
-| 口令字符 | 两条 Python 线的口令不能有中文（pymysql 按 latin-1 编码口令） |
-| 合并单元格 | 表头块以外的合并单元格直接拒绝导入，日志列出具体位置，需要人工把表拆开 |
-| 重新导入 | 字段命名规则变更后同一张表生成的列名与旧版不同；默认行为是跳过建表，随后 `INSERT` 报 1054 Unknown column。要么勾「覆盖已存在表」重建，要么在结构预览里把字段名改回旧列名，老数据表先备份 |
-| 其余条目 | 逐条限制、排错项与现场处置办法见 7.9 与第 16 章 |
+| 口令字符 | 两条 Python 线的口令不能含中文 |
+| 合并单元格 | 表头块以外的合并单元格直接拒绝导入，日志列出具体位置，需要人工拆表 |
+| 重新导入 | 字段命名规则变更后同一张表生成的列名与旧版不同；默认跳过建表，随后 `INSERT` 报 1054 Unknown column。要么勾「覆盖已存在表」重建，要么在结构预览里改回旧列名，老数据表先备份 |
+| 真机验收 | 命令行版暂无真 Win7 SP1 机器实测，其就绪状态按「官方支持矩阵 + 旧栈全量用例 + 产物 PE 头取证」判定 |
 
-## 30. 许可
+## 10. 许可
 
 MIT，见 `LICENSE`。
