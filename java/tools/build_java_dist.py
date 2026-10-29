@@ -36,6 +36,11 @@ CRT_BATCH = ("ucrtbase.dll", "vcruntime140.dll", "vcruntime140_1.dll",
              "concrt140.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll")
 JAR_NAME_TMPL = "excel2mysql-%s.jar"
 
+# 随包文档的小节与篇幅档位与两条 Python 线共用一个来源：这一轮 README 收成用户向八节，
+# 只有 build_exe.py 挂了断言，出包侧没人核，直到打包才炸。三条线都读同一份常量才不会漏。
+sys.path.insert(0, ROOT)
+from _pack_common import README_LEN_RANGE, README_SECTIONS  # noqa: E402
+
 
 def fail(msg):
     print("x [ERROR] DIST | " + msg)
@@ -189,7 +194,7 @@ def launcher_text(version):
     return ("\r\n".join(lines)).replace("__JAR__", jar).encode("utf-8")
 
 
-def copy_project_doc(dist, version):
+def copy_project_doc(dist):
     """把项目根那份 README.md 原样拷进包里，连标题用的图标一起。
 
     以前随包的是打包时渲染的 README.txt（正文在项目侧 java/assets/README.txt）与
@@ -206,6 +211,12 @@ def copy_project_doc(dist, version):
         text = fh.read()
     if 'src="assets/app_icon.png"' not in text:
         fail("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.png")
+    if not README_LEN_RANGE[0] < len(text) < README_LEN_RANGE[1]:
+        fail("README.md %d 字符，不在 %d–%d 这一档：短了是被砍成空壳，长了是构建细节又长回用户向文档"
+             % ((len(text),) + README_LEN_RANGE))
+    _miss = [s for s in README_SECTIONS if s not in text]
+    if _miss:
+        fail("README.md 缺了现场要用的小节：%s" % "、".join(_miss))
     dst = os.path.join(dist, "README.md")
     with open(dst, "wb") as fh:
         fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
@@ -352,7 +363,7 @@ def main():
         fh.write(bat)
     ok("启动.bat：走图形界面、纯 ASCII、CRLF 行尾")
     size = human(dir_size(dist))
-    doc = copy_project_doc(dist, version)
+    doc = copy_project_doc(dist)
 
     for want in ("conn.ini", "README.md", os.path.join("assets", "app_icon.png")):
         if not os.path.isfile(os.path.join(dist, want)):

@@ -900,6 +900,7 @@ if not os.path.isfile(doc_path):
     for _lbl in W_DOC_LABELS:
         skip(_lbl, "冻结态包内没有仓库根的 README.md，只在开发态核")
 else:
+    from _pack_common import README_LEN_RANGE, README_SECTIONS
     doc = open(doc_path, encoding="utf-8").read()
     _long_opts = sorted({o for a in cli_mod.build_parser()._actions
                          for o in a.option_strings if o.startswith("--")})
@@ -930,12 +931,11 @@ else:
         r"|excel2mysql[\w.\-]*\.jar"
         r"|-win64", doc)))
     check(W_DOC_LABELS[2], not _ver_hits, _ver_hits or "全文没有版本号形态的串")
-    _secs = ("选哪个包", "上手", "连接信息", "会踩的坑", "退出码",
-             "Win7 上起不来", "再往深", "许可")
+    _secs = README_SECTIONS
     # 上下限一起核：下限防用户向文档被砍成空壳，上限防构建与测试内容一点点长回来。
-    # 上限从 6000 收到 3200：正文这一轮压到两千多字，留两百多字余量，
-    # 再有人往用户向文档里塞构建细节会撞上限，而不是悄悄过掉
-    check(W_DOC_LABELS[3], 2000 < len(doc) < 3200 and all(s in doc for s in _secs),
+    # 这一档与打包闸门共用 _pack_common 里同一个常量，改一处两边同时生效
+    check(W_DOC_LABELS[3], README_LEN_RANGE[0] < len(doc) < README_LEN_RANGE[1]
+          and all(s in doc for s in _secs),
           (len(doc), [s for s in _secs if s not in doc]))
     # 退出码只从「退出码」那一节取：整篇扫会把别的表格首列数字当成退出码。
     # 这一节从四列表格改成一句话讲完，取法跟着改成认反引号包住的数字；

@@ -97,3 +97,11 @@ ALL_EXCLUDES = QT_EXCLUDES + OTHER_EXCLUDES
 GUI_MODULES = ["PySide6", "PySide2", "main", "ui_help", "help_doc"]
 
 CLI_EXCLUDES = ALL_EXCLUDES + GUI_MODULES
+
+# 随包的用户向文档（README.md）该有的小节与篇幅区间。两处共用同一份：
+# 打包闸门拿它核产物里那一份（build_exe.py 的随包文档步骤），
+# 功能用例集拿它核仓库里这一份（pack_test38.py 的 W29c），改一处两边同时生效。
+# 上限是防构建与测试内容又一点点长回用户向文档，不是防写得多。
+README_SECTIONS = ("选哪个包", "上手", "连接信息", "会踩的坑", "退出码",
+                   "Win7 上起不来", "再往深", "许可")
+README_LEN_RANGE = (2000, 3200)

@@ -22,6 +22,8 @@ import time
 import time
 from ctypes import wintypes
 
+from _pack_common import README_LEN_RANGE, README_SECTIONS
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 VENV_PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
 PYINSTALLER = os.path.join(ROOT, ".venv", "Scripts", "pyinstaller.exe")
@@ -216,8 +218,13 @@ def copy_project_doc():
         text = fh.read()
     if 'src="assets/app_icon.png"' not in text:
         raise RuntimeError("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.png")
-    if len(text) < 9000:
-        raise RuntimeError("README.md 只有 %d 字符，命令参考那几节不像齐备（现场只带这一份文档）" % len(text))
+    if not README_LEN_RANGE[0] < len(text) < README_LEN_RANGE[1]:
+        raise RuntimeError("README.md %d 字符，不在 %d–%d 这一档：短了是被砍成空壳，"
+                           "长了是构建细节又长回用户向文档"
+                           % ((len(text),) + README_LEN_RANGE))
+    _miss = [s for s in README_SECTIONS if s not in text]
+    if _miss:
+        raise RuntimeError("README.md 缺了现场要用的小节：%s" % "、".join(_miss))
     out = os.path.join(APP_DIST, "README.md")
     with open(out, "wb") as fh:
         fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
