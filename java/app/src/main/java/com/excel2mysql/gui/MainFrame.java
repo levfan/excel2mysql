@@ -3522,6 +3522,20 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunSamplesTree = new javax.swing.JTree();
         sqlRunSamplesTree.setRootVisible(false);
         sqlRunSamplesTree.setShowsRootHandles(true);
+        // 目录是这框里逐条读的地方：字号并入表格那一档、行高按字高加留白、
+        // 左右缩进合起来与 Qt 的 indentation 同一个设计值（原来吃 9 号 + 默认行高，
+        // 分组与条目除了缩进毫无差别，扫一眼分不出层级）
+        sqlRunSamplesTree.setFont(Tables.font());
+        sqlRunSamplesTree.setRowHeight(sqlRunSamplesTree.getFontMetrics(Tables.font())
+                .getHeight() + UiScale.px(Tables.SAMPLE_TREE_ROW_PADDING));
+        javax.swing.plaf.TreeUI samplesUi = sqlRunSamplesTree.getUI();
+        if (samplesUi instanceof javax.swing.plaf.basic.BasicTreeUI) {
+            javax.swing.plaf.basic.BasicTreeUI btui =
+                    (javax.swing.plaf.basic.BasicTreeUI) samplesUi;
+            btui.setLeftChildIndent(UiScale.px(Tables.SAMPLE_TREE_INDENT) / 2);
+            btui.setRightChildIndent(UiScale.px(Tables.SAMPLE_TREE_INDENT) / 2);
+        }
+        sqlRunSamplesTree.setCellRenderer(new SampleTreeRenderer());
         // JTree 默认就是单选（SINGLE_TREE_SELECTION），与 Python 侧的目录同一行为
         sqlRunSamplesSearch = new javax.swing.JTextField();
         sqlRunSamplesSearch.setToolTipText("关键词过滤：短标题、说明、场景、解决的问题、"
@@ -3628,6 +3642,82 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunSamples = dlg;
         filterSqlSamples();       // 建好目录并选中第一条：一开框右侧不是空白
         dlg.setVisible(true);
+    }
+
+    /**
+     * 取目录渲染出来的那一格长什么样：{是否加粗, 字色, 底色}。
+     *
+     * 走的是真 cellRenderer 的返回值，不是在 Java 侧另抄一份常量——自检与对撞要判的
+     * 就是"画出来的那一格"，抄常量会让改错渲染器仍然判绿。group 传 true 取分组行。
+     */
+    public String[] sampleTreeCellStyle(boolean group) {
+        javax.swing.tree.DefaultTreeCellRenderer r = null;
+        if (sqlRunSamplesTree != null
+                && sqlRunSamplesTree.getCellRenderer()
+                instanceof javax.swing.tree.DefaultTreeCellRenderer) {
+            r = (javax.swing.tree.DefaultTreeCellRenderer)
+                    sqlRunSamplesTree.getCellRenderer();
+        }
+        if (r == null) {
+            return new String[]{"-", "-", "-"};
+        }
+        javax.swing.tree.DefaultMutableTreeNode node =
+                new javax.swing.tree.DefaultMutableTreeNode("样例格");
+        if (group) {
+            node.add(new javax.swing.tree.DefaultMutableTreeNode("子"));
+        }
+        javax.swing.JComponent c = (javax.swing.JComponent) r.getTreeCellRendererComponent(
+                sqlRunSamplesTree, node, false, true, !group, 0, false);
+        java.awt.Color fg = c.getForeground();
+        java.awt.Color bg = c.getBackground();
+        return new String[]{c.getFont().isBold() ? "1" : "0",
+                fg == null ? "-" : String.format("#%02x%02x%02x",
+                        fg.getRed(), fg.getGreen(), fg.getBlue()),
+                bg == null ? "-" : String.format("#%02x%02x%02x",
+                        bg.getRed(), bg.getGreen(), bg.getBlue())};
+    }
+
+    /** 目录那一栏真控件上的字号（折回设计档，与 Qt 的 pointSize 同口径才可比）。 */
+    public int sampleTreeFontPt() {
+        return sqlRunSamplesTree == null ? -1
+                : UiScale.fontPxToPt(sqlRunSamplesTree.getFont().getSize());
+    }
+
+    /**
+     * 示例目录的两态渲染：分组行按章节标题那一档画（加粗 + 强调蓝 + 浅蓝底），
+     * 条目行保持常规黑。图标一律不画——Qt 那侧本来就只有展开三角，
+     * Swing 默认的文件夹/文件图标会让两层看着更像并列。
+     */
+    private static final class SampleTreeRenderer
+            extends javax.swing.tree.DefaultTreeCellRenderer {
+
+        SampleTreeRenderer() {
+            setLeafIcon(null);
+            setClosedIcon(null);
+            setOpenIcon(null);
+        }
+
+        @Override
+        public java.awt.Component getTreeCellRendererComponent(
+                javax.swing.JTree tree, Object value, boolean selected, boolean expanded,
+                boolean leaf, int row, boolean hasFocus) {
+            super.getTreeCellRendererComponent(tree, value, selected, expanded, leaf,
+                    row, hasFocus);
+            boolean group = value instanceof javax.swing.tree.DefaultMutableTreeNode
+                    && !((javax.swing.tree.DefaultMutableTreeNode) value).isLeaf();
+            setFont(Tables.font().deriveFont(group ? java.awt.Font.BOLD
+                    : java.awt.Font.PLAIN));
+            if (!selected) {
+                setForeground(group ? Tables.SAMPLE_GROUP_FG : tree.getForeground());
+                setBackground(group ? Tables.SAMPLE_GROUP_BG : null);
+                // JLabel 默认不透明，不显式打开这行底色就画不出来：
+                // 渲染器返回了 #f4f8ff 而对撞键只比返回值，键绿了屏上却没有那条带
+                setOpaque(group);
+            } else {
+                setOpaque(false);
+            }
+            return this;
+        }
     }
 
     /** 目录里的一个节点：分组节点只带名字，叶子带短标题与示例序号。 */

@@ -37,10 +37,10 @@ warnings.filterwarnings("ignore", message=".*no longer supported by the Python c
 import functools
 import re
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent, QSize
 from PySide6.QtGui import (
     QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat,
-    QPainter, QPen, QPainterPath,
+    QPainter, QPen, QPainterPath, QBrush,
 )
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QGroupBox,
     QMessageBox, QHeaderView, QCheckBox, QAbstractItemView, QScrollArea, QStyle,
     QDialog, QDialogButtonBox, QTabWidget, QSplitter,
-    QTreeWidget, QTreeWidgetItem,
+    QTreeWidget, QTreeWidgetItem, QStyledItemDelegate,
     QFrame, QSizePolicy,
 )
 
@@ -148,6 +148,16 @@ TABLE_FONT_SIZE = 11
 # 表格行高按字高加一点留白算出来，不写死像素：写死 30px 会让 18 号字顶满一行，
 # 换成 11 号又显得空，字号与行距就对不上了。
 TABLE_ROW_PADDING = 6
+
+# 「SQL 示例」目录那一栏：它是这框里唯一要逐条读的东西，原先吃界面基准 9 号、
+# 分组与条目除了缩进毫无差别，读起来累。字号并入表格那一档，行高同一条算法。
+SAMPLE_TREE_FONT_SIZE = TABLE_FONT_SIZE
+SAMPLE_TREE_ROW_PADDING = 6
+SAMPLE_TREE_INDENT = 26
+# 配色复用介绍条与主按钮那一组冷色（Java 侧 PageIntro / Tables 同值），不另造色值：
+# 分组行像章节标题、条目像正文，层次靠这个出来，不靠装饰
+SAMPLE_GROUP_FG = "#1f5fd0"
+SAMPLE_GROUP_BG = "#f4f8ff"
 
 # 每张表格左上角那一句标识（组框标题）。用户口径：每个表格都要有标识，
 # 第一页的「待导入文件」就是样子——标题里顺带写明这一张表怎么操作。
@@ -4731,6 +4741,18 @@ class SqlScriptDdlDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+class _TreeRowDelegate(QStyledItemDelegate):
+    """目录的行高跟着字高走：Qt 的树默认行高是样式里写死的，字号抬到 11 号就顶行。
+
+    与 `style_table_font` 里 `fontMetrics().height() + 留白` 同一条算法，
+    Java 侧对应 `JTree.setRowHeight(字高 + 留白)`。
+    """
+
+    def sizeHint(self, option, index):
+        base = super().sizeHint(option, index)
+        return QSize(base.width(), base.height() + SAMPLE_TREE_ROW_PADDING)
+
+
 class SqlSamplesDialog(QDialog):
     """「示例 (?)」打开的那个独立窗口：左边搜关键词 + 目录，右边上方介绍、下方语句。
 
@@ -4766,6 +4788,11 @@ class SqlSamplesDialog(QDialog):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setUniformRowHeights(True)
+        # 字号并入表格那一档、行高按字高算、缩进抬到与 11 号相配：
+        # 这栏是逐条读的清单，9 号加 20px 缩进读起来眼睛要自己找层级
+        self.tree.setFont(QFont("", SAMPLE_TREE_FONT_SIZE))
+        self.tree.setIndentation(SAMPLE_TREE_INDENT)
+        self.tree.setItemDelegate(_TreeRowDelegate(self.tree))
         self.lbl_hits = QLabel()
         self._groups = []                         # [(分组项, [叶子项])]，按来源顺序
         self._build_tree()
@@ -4784,7 +4811,8 @@ class SqlSamplesDialog(QDialog):
         self.preview.setReadOnly(True)
         # 与编辑区同一条口径：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
         self.preview.setLineWrapMode(QPlainTextEdit.NoWrap)
-        # 目录与介绍是界面基准 9 号那一档，只有语句正文按日志档 10 号：
+        # 介绍条跟着界面基准，目录已经抬到表格那一档（见 SAMPLE_TREE_FONT_SIZE），
+        # 只有语句正文按日志档 10 号：
         # 这是照着挑的阅读弹窗，不吃编辑区那档 16 号（16 号在并排清单旁显得突兀）
         self.preview.setFont(QFont("Consolas", LOG_FONT_SIZE))
         btns = QHBoxLayout()
@@ -4843,6 +4871,12 @@ class SqlSamplesDialog(QDialog):
                 current = (sample.group, QTreeWidgetItem([sample.group]))
                 self.tree.addTopLevelItem(current[1])
                 self._groups.append((current[1], []))
+                # 分组行按章节标题那一档画：加粗 + 强调蓝 + 浅蓝底，
+                # 条目行保持常规黑——两层原来只差缩进，扫一眼分不出谁是谁
+                grp = current[1]
+                grp.setFont(0, QFont("", SAMPLE_TREE_FONT_SIZE, QFont.Bold))
+                grp.setForeground(0, QBrush(QColor(SAMPLE_GROUP_FG)))
+                grp.setBackground(0, QBrush(QColor(SAMPLE_GROUP_BG)))
             leaf = QTreeWidgetItem([sample.title])
             leaf.setData(0, Qt.UserRole, idx)
             leaf.setToolTip(0, sample.desc)

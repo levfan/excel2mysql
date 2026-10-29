@@ -23,6 +23,17 @@ public final class Tables {
     public static final int POINT_SIZE = 11;
 
     /**
+     * 「SQL 示例」目录那一栏的字号、行距与缩进——都是设计值，与 Python 侧
+     * main.py 的 SAMPLE_TREE_* 同数（摆窗时再经 UiScale 折成物理像素）。
+     * 配色复用介绍条那一组冷色，分组行像章节标题、条目行像正文。
+     */
+    public static final int SAMPLE_TREE_POINT_SIZE = POINT_SIZE;
+    public static final int SAMPLE_TREE_ROW_PADDING = 6;
+    public static final int SAMPLE_TREE_INDENT = 26;
+    public static final java.awt.Color SAMPLE_GROUP_FG = new java.awt.Color(0x1f, 0x5f, 0xd0);
+    public static final java.awt.Color SAMPLE_GROUP_BG = new java.awt.Color(0xf4, 0xf8, 0xff);
+
+    /**
      * 每张表格左上角那一句标识（标题边框）。用户口径：每个表格都要有标识，
      * 第一页的「待导入文件」就是样子——标题里顺带写明这一张表怎么操作。
      * 与 Python 侧 main.py 的 FILE_TABLE_TITLE / SQL_TABLE_TITLE / COLUMN_TABLE_TITLE 同句，
