@@ -1,6 +1,6 @@
 # <img src="assets/app_icon.png" width="44" height="44" alt="excel2mysql 图标"> Excel → MySQL 批量导入工具
 
-把一叠中文表头的 Excel 直接变成 MySQL 里的表：表名与字段名由中文自动转拼音，中文表头整句留作字段注释，类型与长度按全量数据实测推断，然后批量建表、分批插入。当前版本 v3.2.0，许可 MIT（见 `LICENSE`）。
+把一叠中文表头的 Excel 直接变成 MySQL 里的表：表名与字段名由中文自动转拼音，中文表头整句留作字段注释，类型与长度按全量数据实测推断，然后批量建表、分批插入。当前版本 v3.3.0，许可 MIT（见 `LICENSE`）。
 
 丢一个目录或 ZIP 进去就行，这些判断它替你做完：
 
@@ -19,13 +19,13 @@
 | --- | --- | --- |
 | 日常在 Win10 / Win11 上导入，要边看边改表结构 | `excel2mysql.exe` | 64 位 Windows 10 1809 及以上 |
 | 机器只有 Windows 7，或要放进批处理无人值守跑 | `excel2mysql-cli.exe` | 64 位 Windows 7 SP1 及以上，且系统有 UCRT 补丁 |
-| Windows 7 上仍要图形界面，或数据库口令含中文 | `excel2mysql-java-3.2.0-win64\启动.bat` | 64 位 Windows 7 及以上，Java 运行时随包 |
+| Windows 7 上仍要图形界面，或数据库口令含中文 | `excel2mysql-java-3.3.0-win64\启动.bat` | 64 位 Windows 7 及以上，Java 运行时随包 |
 
 解压即用，目标机不需要装 Python、Java 或数据库驱动。**图形版与 Java 版界面功能等价**，选哪个只看系统新旧、以及口令里有没有中文。
 
 三条线的产物都是整目录，**只拷 exe 出去跑不起来**，分发时整个文件夹一起给。
 
-Java 包也能命令行跑，老机器上要用批处理又不想装 Python 就走这条：`jre\bin\java.exe -jar excel2mysql-3.2.0.jar <路径> -c conn.ini`。
+Java 包也能命令行跑，老机器上要用批处理又不想装 Python 就走这条：`jre\bin\java.exe -jar excel2mysql-3.3.0.jar <路径> -c conn.ini`。
 
 这条线另有 `--no-sql`（跳过 `.sql`）与 `--no-excel`（跳过 Excel 建表导入）：给一个目录时两件都做，要排除哪一件就点哪个开关；首个参数给 `--gui` 就是起界面。Windows 命令行版独有的 `--run-sql`、`--swap-prefix`、`--drop-if-exists` 在这里不认，敲了会报未知选项。
 
@@ -41,7 +41,7 @@ Java 包也能命令行跑，老机器上要用批处理又不想装 Python 就�
 
 ```bat
 excel2mysql-cli.exe --version
-rem 先看能不能打印 excel2mysql-cli 3.2.0：能，说明系统层面进程与依赖都起得来
+rem 先看能不能打印 excel2mysql-cli 3.3.0：能，说明系统层面进程与依赖都起得来
 
 excel2mysql-cli.exe D:\台账目录 --dry-run
 rem 只看会建成什么样，完全不连库，逐张表输出一句 CREATE TABLE

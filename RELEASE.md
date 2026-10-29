@@ -76,7 +76,7 @@ pip install -r requirements.txt
 | --- | --- | --- | --- |
 | 图形版 `dist\excel2mysql\` | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
 | 命令行版 `dist\excel2mysql-cli\` | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
-| Java 版 `java\dist\excel2mysql-java-3.2.0-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
+| Java 版 `java\dist\excel2mysql-java-3.3.0-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
 | 三端一起 | `一键打包-三端.bat` | 按图形版 → 命令行版 → Java 版顺序调用，任一步非 0 即停住 | 不接受参数 |
 
 各线闸门的步骤：
@@ -111,7 +111,7 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 | --- | --- | --- |
 | 图形版 | PyInstaller 6.x onedir：`excel2mysql.exe` + `_internal\` | 两者必须同级放在一起，只拷 exe 跑不起来 |
 | 命令行版 | PyInstaller 5.x onedir：平铺，没有 `_internal` | 整目录复制或压成 zip 分发 |
-| Java 版 | `启动.bat` + `excel2mysql-3.2.0.jar` + `jre\` | 内部就是包内 `jre\bin\java.exe -jar … --gui`，不依赖目标机装没装 Java |
+| Java 版 | `启动.bat` + `excel2mysql-3.3.0.jar` + `jre\` | 内部就是包内 `jre\bin\java.exe -jar … --gui`，不依赖目标机装没装 Java |
 
 随包件（打包脚本逐条断言存在，缺一件不出包）：
 
@@ -133,16 +133,16 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 | 双界面对撞 | 两条 GUI 线的控件文案、按钮启用条件、弹窗文字、写出的文件内容逐键比对 | `java\界面双端对撞.bat` |
 | SQL 示例真库回归 | 126 条示例逐条打到真 MySQL 上跑一遍 | `.venv\Scripts\python check_sql_samples.py` |
 
-v3.2.0 这一轮的实测结果：
+v3.3.0 这一轮的实测结果：
 
 | 项 | 结果 |
 | --- | --- |
-| `pack_test.py` | 通过 904 / 失败 0 / 显式记账未覆盖 5 |
+| `pack_test.py` | 通过 921 / 失败 0 / 显式记账未覆盖 5（带真库凭据，G1–G8 真跑） |
 | `pack_test38.py` | 3.8 旧栈通过 261 / 失败 0 / 1 项显式 `SKIP`；3.12 新栈通过 252 / 失败 0 / 4 项显式 `SKIP` |
-| Java 线十步 | 全过；拼音差分 57228 条语料 0 条不一致；jpinyin 路线实测否决（注入同款词典后仍有 0.3% 结构性不等） |
-| 双端对撞 | 340 项界面事实逐键一致，另有 6 项「现场实测尺寸」只留档不比 |
+| Java 线十步 | 全过；拼音差分 57228 条语料 0 条不一致。另记既有结论：jpinyin 路线实测否决（注入同款词典后仍有 0.3% 结构性不等），本轮未重做该实验 |
+| 双端对撞 | 353 项界面事实逐键一致（本版本起把「表名与字段名转小写」两颗勾的文案与切换日志也纳入键表，此前是 340），另有 6 项「现场实测尺寸」只留档不比 |
 | SQL 示例真库回归 | 126 条，失败 0 条 |
-| 文档防漂移 | README 由 `argparse` 与 `cli` 常量反向核（W29 / W29b / W29c / W30 / W31 / W31b / W31c / W31d），版本号四处与 `version.py` 同值（T15） |
+| 文档防漂移 | README 由 `argparse` 与 `cli` 常量反向核（W29 / W29b / W29c / W30 / W31 / W31b / W31c / W31d）；写死的版本号共 13 处与 `version.py` 同值（T15，本版本起把本文的两处也纳入） |
 
 改了 `core/` 的解析或推断，四个金标准导出脚本要一起重跑：`java/tools/export_excel_golden.py` → `export_xls_golden.py` → `export_sql_golden.py` → `export_meta_golden.py`。后两个吃前两个的产物，只重跑第一个会把差异推到差分第 8 步才暴露。每一轮界面改动落到两栈的对照与取证记录在 `java/GUI-对齐清单.md`。
 

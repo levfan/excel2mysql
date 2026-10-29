@@ -6975,6 +6975,10 @@ _VERSION_SITES = [
     ("README.md", r"excel2mysql-cli ([0-9][0-9A-Za-z.\-]*)"),
     ("README.md", r"excel2mysql-java-([0-9][0-9A-Za-z.\-]*)-win64"),
     ("README.md", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
+    # RELEASE.md 是这一轮新拆出去的构建向文档，里面也写死了产物目录名与 jar 名：
+    # 不进这张表，它就会在几次改版本之后变成一份没人核的旧数
+    ("RELEASE.md", r"excel2mysql-java-([0-9][0-9A-Za-z.\-]*)-win64"),
+    ("RELEASE.md", r"excel2mysql-([0-9][0-9A-Za-z.\-]*)\.jar"),
 ]
 _drift = []
 _missing_site = []
