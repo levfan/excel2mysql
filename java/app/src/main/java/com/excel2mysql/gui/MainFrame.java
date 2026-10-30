@@ -2620,9 +2620,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 提示单独占一行：与按钮同排会把整窗最小宽度顶到 830 以上，
         // 1024x768 的现场机和 800 宽的离屏用例都放不下
         javax.swing.JPanel north = new javax.swing.JPanel(new java.awt.BorderLayout());
-        sqlRunHint = PageIntro.of(
-                "两种用法：把 .sql 脚本拖到下面清单里按顺序执行；"
-                        + "或直接在编辑区写 SQL 临时执行（多条用分号分隔）");
+        sqlRunHint = PageIntro.of("执行脚本与临时语句");
         north.add(sqlRunHint, java.awt.BorderLayout.CENTER);
         page.add(north, java.awt.BorderLayout.NORTH);
 

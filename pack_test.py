@@ -1000,8 +1000,8 @@ check("F4 页内介绍条：Excel 页说自己按中英表头建模回写库",
       w.imp_intro.text() == "中英表头建模，回写库", w.imp_intro.text())
 check("F4d 页内介绍条：SQL 页说自己解析建表语句回写库",
       w.sql_intro.text() == "解析建表语句，回写库", w.sql_intro.text())
-check("F4e 页内介绍条：SQL 执行器页那句介绍没被搬走",
-      w.sql_run_hint.text().startswith("两种用法"), w.sql_run_hint.text())
+check("F4e 页内介绍条：SQL 执行器页说自己执行脚本与临时语句",
+      w.sql_run_hint.text() == "执行脚本与临时语句", w.sql_run_hint.text())
 check("F4f 三页介绍条用的是同一块醒目底板（样式必须逐字符相同且加粗）",
       w.imp_intro.styleSheet() == w.sql_intro.styleSheet()
       and w.sql_intro.styleSheet() == w.sql_run_hint.styleSheet()

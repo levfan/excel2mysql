@@ -2040,8 +2040,8 @@ public final class GuiMain {
         if (!"解析建表语句，回写库".equals(frame.sqlPage().introText())) {
             problems.add("SQL 页顶部那句介绍不对：" + frame.sqlPage().introText());
         }
-        if (!frame.sqlRunHintText().startsWith("两种用法")) {
-            problems.add("SQL 执行器页那句介绍不见了：" + frame.sqlRunHintText());
+        if (!"执行脚本与临时语句".equals(frame.sqlRunHintText())) {
+            problems.add("SQL 执行器页顶部那句介绍不对：" + frame.sqlRunHintText());
         }
         javax.swing.JLabel intro1 = frame.excelIntro();
         javax.swing.JLabel intro2 = frame.sqlPage().introField();
@@ -2286,8 +2286,7 @@ public final class GuiMain {
         if (titles.size() != 3 || !"SQL 执行器".equals(titles.get(2))) {
             problems.add("第三个页签不对：" + titles);
         }
-        if (!"两种用法：把 .sql 脚本拖到下面清单里按顺序执行；或直接在编辑区写 SQL 临时执行（多条用分号分隔）"
-                .equals(frame.sqlRunHintText())) {
+        if (!"执行脚本与临时语句".equals(frame.sqlRunHintText())) {
             problems.add("「SQL 执行器」的提示文案不对：" + frame.sqlRunHintText());
         }
         if (!"nowrap".equals(frame.sqlRunWrap())) {

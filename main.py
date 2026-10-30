@@ -3349,9 +3349,7 @@ class MainWindow(QWidget):
 
         # 提示单独占一行：QLabel 不折行，它的最小宽度就是整句的宽度，
         # 和按钮排在同一行会把整个窗口的最小宽度顶出小屏
-        self.sql_run_hint = page_intro(
-            "两种用法：把 .sql 脚本拖到下面清单里按顺序执行；"
-            "或直接在编辑区写 SQL 临时执行（多条用分号分隔）")
+        self.sql_run_hint = page_intro("执行脚本与临时语句")
         lay.addWidget(self.sql_run_hint)
 
         # 文件这一路与第一页同一形状：拖拽区在上，清单表套在组框里
