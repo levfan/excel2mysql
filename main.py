@@ -3071,6 +3071,9 @@ class MainWindow(QWidget):
 
         还没落地的改名与字段编辑先算进正文（与保存/执行同一道 `_materialize` 的结果），
         但只算在这份副本上，页面的 `display_map` 一个字不改——预览不该把改动定死。
+
+        整份脚本只切一遍：以前每张表都重扫并切分一次整份文件，500 张表的整库 dump
+        点一次「预览 DDL」要 8.7 秒，界面看起来就是卡死（用户 2026-11-02 报）。
         """
         pages = []
         for s in self.sql_files:
@@ -3078,20 +3081,19 @@ class MainWindow(QWidget):
             if plan:
                 text, renamed, _nohit = apply_display_renames(text, plan)
                 plan.update({r["old"]: r["new"] for r in renamed})
+            bodies = {}
+            for st in split_sql_statements(text):
+                names = [t["name"] for t in extract_create_tables(st)]
+                if not names:
+                    continue
+                one = st.strip().rstrip(";") + ";"
+                for name in names:
+                    bodies.setdefault(name, []).append(one)
             for t in extract_create_tables(text):
-                name = t["name"]
-                body = self._sql_create_body(text, name)
+                body = "\n\n".join(bodies.get(t["name"], ()))
                 if body:
-                    pages.append((self._sql_display_name(name), body))
+                    pages.append((self._sql_display_name(t["name"]), body))
         return pages
-
-    @staticmethod
-    def _sql_create_body(text, table_name):
-        """这份正文里写着这张表列定义的那几句 CREATE TABLE，逐句之间空一行。"""
-        stmts = [st.strip().rstrip(";") + ";"
-                 for st in split_sql_statements(text)
-                 if table_name in [t["name"] for t in extract_create_tables(st)]]
-        return "\n\n".join(stmts)
 
     def on_sql_preview_ddl(self):
         """「预览 DDL」：按表分页看将要写出的建表语句，勾了覆盖开关就补上 DROP 那句。"""

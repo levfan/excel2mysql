@@ -1096,7 +1096,13 @@ public final class SqlPage extends JPanel {
         new SqlScriptDdlDialog(host.owner(), pages).setVisible(true);
     }
 
-    /** 一页一项：{页签上的表名, 那句建表正文}。 */
+    /**
+     * 一页一项：{页签上的表名, 那句建表正文}。
+     *
+     * <p>整份脚本只切一遍：以前每张表都调 {@code createBodyOf} 重扫并切分一次整份文件，
+     * 500 张表的整库 dump 点一次「预览 DDL」要十几秒，界面看起来就是卡死
+     * （与 Python 侧 {@code _sql_ddl_pages} 同一次修正）。
+     */
     public List<String[]> ddlPages() {
         List<String[]> pages = new ArrayList<String[]>();
         for (Entry e : entries) {
@@ -1106,41 +1112,40 @@ public final class SqlPage extends JPanel {
                 // 预览不该把改动定死（与 Python 侧 _sql_ddl_pages 同一口径）
                 text = SqlScript.applyDisplayRenames(e.text, e.displayMap).text;
             }
+            Map<String, StringBuilder> bodies = new java.util.LinkedHashMap<String, StringBuilder>();
+            for (String stmt : SqlScript.splitStatements(text)) {
+                List<Map<String, Object>> inStmt = SqlScript.extractCreateTables(stmt);
+                if (inStmt.isEmpty()) {
+                    continue;
+                }
+                String one = stmt.trim();
+                while (one.endsWith(";")) {
+                    one = one.substring(0, one.length() - 1).trim();
+                }
+                one = one + ";";
+                for (Map<String, Object> t : inStmt) {
+                    String name = String.valueOf(t.get("name"));
+                    StringBuilder sb = bodies.get(name);
+                    if (sb == null) {
+                        sb = new StringBuilder();
+                        bodies.put(name, sb);
+                    }
+                    if (sb.length() > 0) {
+                        sb.append("\n\n");
+                    }
+                    sb.append(one);
+                }
+            }
             for (Map<String, Object> t : SqlScript.extractCreateTables(text)) {
                 String name = String.valueOf(t.get("name"));
-                String body = createBodyOf(text, name);
+                StringBuilder sb = bodies.get(name);
+                String body = sb == null ? "" : sb.toString();
                 if (!body.isEmpty()) {
                     pages.add(new String[]{displayName(name), body});
                 }
             }
         }
         return pages;
-    }
-
-    /** 这份正文里写着这张表列定义的那几句 CREATE TABLE，逐句之间空一行。 */
-    private static String createBodyOf(String text, String tableName) {
-        StringBuilder sb = new StringBuilder();
-        for (String stmt : SqlScript.splitStatements(text)) {
-            boolean hit = false;
-            for (Map<String, Object> t : SqlScript.extractCreateTables(stmt)) {
-                if (tableName.equals(String.valueOf(t.get("name")))) {
-                    hit = true;
-                    break;
-                }
-            }
-            if (!hit) {
-                continue;
-            }
-            String one = stmt.trim();
-            while (one.endsWith(";")) {
-                one = one.substring(0, one.length() - 1).trim();
-            }
-            if (sb.length() > 0) {
-                sb.append("\n\n");
-            }
-            sb.append(one).append(";");
-        }
-        return sb.toString();
     }
 
     /** 两颗前缀按钮的共同前置检查：没有可处理的表就返回一句说明，让按钮走 warn 弹窗。 */
