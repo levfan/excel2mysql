@@ -4048,6 +4048,44 @@ public final class GuiMain {
         if (page.sqlRowCount() != beforeRows || !beforeText.equals(page.entryTextAt(0))) {
             problems.add("两颗预览按钮把清单或脚本正文改了：预览应当只读不算");
         }
+        sqlDdlPagesScale(frame, problems);
+    }
+
+    /**
+     * 「预览 DDL」算页的算法成本：整份脚本只能切一遍。
+     * 200 张表的整库 dump 以前按表数重扫整份文件，点一次界面卡十几秒
+     * （用户 2026-11-02 报"页面卡死"，与 Python 侧 R45s3 同一条）。
+     */
+    private static void sqlDdlPagesScale(MainFrame frame, List<String> problems) {
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-ddlscale").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建预览成本检查的临时目录失败：" + e);
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 600; i++) {
+            sb.append("CREATE TABLE `t_scale_").append(String.format("%03d", i))
+                    .append("` (`id` INT NOT NULL, `code` VARCHAR(64), PRIMARY KEY (`id`));\n");
+        }
+        java.io.File script = new java.io.File(dir, "整库脚本.sql");
+        writeText(script.getPath(), sb.toString());
+        com.excel2mysql.gui.SqlPage spage = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> paths = new ArrayList<String>();
+        paths.add(script.getPath());
+        spage.addFiles(paths);
+        long t0 = System.currentTimeMillis();
+        int pages = spage.ddlPages().size();
+        long cost = System.currentTimeMillis() - t0;
+        System.out.println("- [INFO] GUI-SELFTEST | 预览DDL 算页 600 表耗时 " + cost + " 毫秒");
+        if (pages != 600) {
+            problems.add("预览成本检查这一页只算出 " + pages + " 页，应有 600 页");
+        }
+        if (cost > 2000) {
+            problems.add("600 张表的整库脚本算页要 " + cost
+                    + " 毫秒（上限 2000）：整份脚本被按表数重扫了，点「预览 DDL」界面就是卡死");
+        }
     }
 
     /** 关掉自检期间弹出的元数据框：不关掉会攒出一堆隐藏窗口，后面的截图就不是现场。 */

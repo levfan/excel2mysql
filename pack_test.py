@@ -6319,6 +6319,48 @@ check("R45s 预览把还没落地的改名算进正文，但脚本正文与页�
       and "CREATE TABLE `ods_t_a`" in pv.sql_files[0]["text"]
       and pv.sql_files[0]["display_map"],
       ([t for t, _ in _pages2], pv.sql_files[0]["text"].splitlines()[0][:40]))
+
+# 算页的算法成本：整份脚本只能切一遍。原先每张表都重扫并切分整份文件，
+# 500 张表的整库 dump 点一次「预览 DDL」要 8.7 秒，用户看到的就是"页面卡死"。
+_psql_many = os.path.join(_tmpdir, "多表脚本.sql")
+with io.open(_psql_many, "w", encoding="utf-8", newline="") as _tfh:
+    _tfh.write("\n".join("CREATE TABLE `t_%03d` (`id` INT NOT NULL);" % i
+                         for i in range(30)))
+pv30 = app_main.MainWindow()
+pv30.on_sql_files_dropped([_psql_many])
+_app.processEvents()
+_split_calls = []
+_real_split = app_main.split_sql_statements
+
+
+def _spy_split(text):
+    _split_calls.append(len(text))
+    return _real_split(text)
+
+
+app_main.split_sql_statements = _spy_split
+try:
+    _pages30 = pv30._sql_ddl_pages()
+finally:
+    app_main.split_sql_statements = _real_split
+check("R45s3 预览DDL 算页时整份脚本只切一遍（每张表重扫一遍会把大 dump 拖成假死）",
+      len(_pages30) == 30 and len(_split_calls) == len(pv30.sql_files),
+      (len(_split_calls), len(_pages30), len(pv30.sql_files)))
+# 同名表建两次：两页都带着那两句，逐字与重扫版一致——重构不许改用户看得见的内容
+_psql_dup = os.path.join(_tmpdir, "同名两遍.sql")
+with io.open(_psql_dup, "w", encoding="utf-8", newline="") as _tfh:
+    _tfh.write("CREATE TABLE `dup_t` (`id` INT);  \n"
+               "CREATE TABLE `other_t` (`id` INT);\n"
+               "CREATE TABLE `dup_t` (`id` INT, `x` INT);\n")
+pvdup = app_main.MainWindow()
+pvdup.on_sql_files_dropped([_psql_dup])
+_app.processEvents()
+_pagesdup = pvdup._sql_ddl_pages()
+check("R45s4 同名表建两次只出一页，正文把那两句都收进来（与表名统计同口径）",
+      [t for t, _ in _pagesdup] == ["dup_t", "other_t"]
+      and _pagesdup[0][1].count("CREATE TABLE `dup_t`") == 2
+      and "`x` INT" in _pagesdup[0][1] and "other_t" not in _pagesdup[0][1],
+      ([t for t, _ in _pagesdup], _pagesdup[0][1]))
 _seen_ddl = []
 
 
