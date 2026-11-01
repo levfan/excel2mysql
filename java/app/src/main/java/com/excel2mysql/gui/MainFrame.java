@@ -234,6 +234,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         add(north, BorderLayout.NORTH);
         // 三个页签共用上方那条连接栏：口令只有一份，写在页签里会出现"这页连的是哪个库"的歧义
         tabs = new javax.swing.JTabbedPane();
+        TabScrollers.apply(tabs);
         sqlPage = new SqlPage(this);
         impIntro = PageIntro.of("中英表头建模，回写库");
         tabs.addTab("Excel 导入", buildCenter());

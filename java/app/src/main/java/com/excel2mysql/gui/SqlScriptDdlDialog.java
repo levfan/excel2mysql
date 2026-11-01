@@ -28,6 +28,7 @@ public final class SqlScriptDdlDialog extends JDialog {
         JTabbedPane tabs = new JTabbedPane();
         // 与结构弹窗同理：Qt 的 QTabWidget 默认单行滚动，Swing 默认换行
         tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+        TabScrollers.apply(tabs);
         for (String[] page : pages) {
             // 与第一页那个弹窗同件同法：正文本来就是脚本自己的那句，一个字不改，
             // 只按角色上色（字段名与注释两支蓝、类型加粗、关键字退灰、DROP 走告警橙）

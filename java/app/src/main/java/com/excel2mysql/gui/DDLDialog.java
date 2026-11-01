@@ -28,6 +28,7 @@ public final class DDLDialog extends JDialog {
         JTabbedPane tabs = new JTabbedPane();
         // 与结构弹窗同理：Qt 的 QTabWidget 默认单行滚动，Swing 默认换行
         tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+        TabScrollers.apply(tabs);
         for (TableOps.Table t : tables) {
             // JTextPane 而不是 JTextArea：一段一种样式只有富文本件做得到。
             // 顺带把折行对齐 Python 侧——QPlainTextEdit 默认按控件宽折行，
@@ -76,6 +77,12 @@ public final class DDLDialog extends JDialog {
     public int tabCount() {
         JTabbedPane tabs = findTabs(getContentPane());
         return tabs == null ? -1 : tabs.getTabCount();
+    }
+
+    /** 自检与对撞用：那条页签上翻页钮的宽度（物理像素，-1 = 没有翻页钮）。 */
+    public int tabScrollerWidth() {
+        JTabbedPane tabs = findTabs(getContentPane());
+        return tabs == null ? -1 : TabScrollers.widthOf(tabs);
     }
 
     /** 标签页标题（表名）：双端界面枚举对撞器要按标题比，正文另有 tabText。 */

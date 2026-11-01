@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QSpinBox, QPushButton, QComboBox, QFileDialog, QTableWidget,
     QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QGroupBox,
     QMessageBox, QHeaderView, QCheckBox, QAbstractItemView, QScrollArea, QStyle,
-    QDialog, QDialogButtonBox, QTabWidget, QSplitter,
+    QDialog, QDialogButtonBox, QTabWidget, QSplitter, QProxyStyle, QToolButton,
     QTreeWidget, QTreeWidgetItem, QStyledItemDelegate,
     QFrame, QSizePolicy,
 )
@@ -280,6 +280,44 @@ def style_table_font(view):
     view.setAlternatingRowColors(True)
     view.setStyleSheet("QTableView { alternate-background-color: %s; }" % ZEBRA_ALT_BG)
     return view
+
+
+TAB_SCROLL_BUTTON_WIDTH = 28
+
+
+class _TabScrollStyle(QProxyStyle):
+    """页签条左右翻页那两颗按钮：Qt 默认只给 16px 宽，点起来是指甲盖大小。
+
+    QTabBar 摆这两颗钮时读样式的 PM_TabBarScrollButtonWidth，QSS 的 width 改不动它
+    （实测只改到 sizeHint，真尺寸照旧 16），只能换样式。每个页签件各持一份实例：
+    setStyle 之后样式归控件所有，共用一份会在析构时重复释放。
+    """
+
+    def pixelMetric(self, metric, option=None, widget=None):
+        if metric == QStyle.PM_TabBarScrollButtonWidth:
+            return TAB_SCROLL_BUTTON_WIDTH
+        return QProxyStyle.pixelMetric(self, metric, option, widget)
+
+
+def style_tab_scroll(tabs):
+    """给一条页签条换上放大过的翻页按钮（Java 侧同一件事见 gui.TabScrollers）。"""
+    style = _TabScrollStyle()
+    tabs.tabBar().setStyle(style)
+    tabs.e2m_tab_scroll_style = style      # 控件不持有 Python 引用，挂着防回收
+    return tabs
+
+
+def tab_scroller_width(tabs):
+    """这条页签上翻页钮的宽度（Qt 逻辑像素）；没有翻页钮时回 -1。
+
+    读样式口径而不是 QToolButton.sizeHint：QTabBar 摆这两颗钮时用的是样式的
+    PM_TabBarScrollButtonWidth，而 sizeHint 不管样式怎么改都回 24，读它会误判。
+    Java 侧同一个入口是 gui.TabScrollers.widthOf（那边给物理像素，对撞前折回设计档）。
+    """
+    bar = tabs.tabBar()
+    if not any(isinstance(c, QToolButton) for c in bar.children()):
+        return -1
+    return bar.style().pixelMetric(QStyle.PM_TabBarScrollButtonWidth, None, bar)
 
 
 def fill_widths(bases, avail, stretch):
@@ -2098,7 +2136,7 @@ class MainWindow(QWidget):
         root.addWidget(conn)
 
         # 2. 功能页签：Excel 导入 / SQL 脚本改名 / SQL 执行器（位于数据库信息下方）
-        self.main_tabs = QTabWidget()
+        self.main_tabs = style_tab_scroll(QTabWidget())
         excel_page = QWidget()
         excel_lay = QVBoxLayout(excel_page)
 
@@ -4590,7 +4628,7 @@ class StructureDialog(QDialog):
                      "主键需全列非空且组合唯一，全部不勾选则不设主键")
         tip.setStyleSheet("color: #666;")
         lay.addWidget(tip)
-        self.tabs = QTabWidget()
+        self.tabs = style_tab_scroll(QTabWidget())
         for t in tables:
             # 主键列 46、最大字节列 96 与 Swing 侧同一组设计下限；
             # 富余宽度只摊给三列文字，主键勾选框与字节数那两列不动
@@ -4800,7 +4838,7 @@ class DDLDialog(QDialog):
         self.setWindowTitle("DDL 预览")
         fit_client(self, 900, 600)
         lay = QVBoxLayout(self)
-        self.tabs = QTabWidget()
+        self.tabs = style_tab_scroll(QTabWidget())
         for t in tables:
             ddl = build_ddl(t["table_name"], t["table_comment"], t["columns"], drop_if_exists)
             te = QPlainTextEdit()
@@ -4831,7 +4869,7 @@ class SqlScriptDdlDialog(QDialog):
         self.setWindowTitle("DDL 预览")
         fit_client(self, 900, 600)
         lay = QVBoxLayout(self)
-        self.tabs = QTabWidget()
+        self.tabs = style_tab_scroll(QTabWidget())
         for name, ddl in pages:
             te = QPlainTextEdit()
             te.setReadOnly(True)
