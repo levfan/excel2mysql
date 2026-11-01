@@ -1159,6 +1159,22 @@ check("F51b 弹窗点确定只写字段与主键，表注释原样不动",
       (w.tables[0]["columns"][0]["field"], w.tables[0]["table_comment"]))
 ddl_dlg = app_main.DDLDialog(w.tables, True, w)
 check("F9 DDL 预览对话框可构造", ddl_dlg.tabs.count() == 1)
+# 页签挤不下时那两颗左右翻页钮：用户 2026-11-02 点名"太小了"（Qt 原生只给 16px 宽）。
+# 判据取下限 24 而不是等于常量，并把真摆出来的宽度一起量——只读 sizeHint 的话，
+# 布局没跑到也照样绿。
+from PySide6.QtWidgets import QToolButton as _ToolBtn  # noqa: E402
+_sc_cols = w.tables[0]["columns"]
+_sc_ddl = app_main.DDLDialog(
+    [{"table_name": "t_%02d_很长的表名用来把页签条挤爆" % i,
+      "table_comment": "注释", "columns": _sc_cols} for i in range(14)], False, None)
+_sc_ddl.resize(520, 400)
+_sc_ddl.show()
+_app.processEvents()
+_sc_btns = [c for c in _sc_ddl.tabs.tabBar().children() if isinstance(c, _ToolBtn)]
+check("F9b 页签挤不下时那两颗翻页钮够点（实测宽 ≥24，Qt 逻辑像素）",
+      len(_sc_btns) == 2 and all(b.width() >= 24 and b.isVisible() for b in _sc_btns),
+      [(b.width(), b.height(), b.isVisible()) for b in _sc_btns])
+_sc_ddl.deleteLater()
 check("F10 拖拽区已启用拖放", w.drop.acceptDrops())
 check("F10b 三个日志框的最小高度都至少装得下 4 行（截图复核抓到的：没最小高度时实测只剩两行）",
       all(v.minimumHeight() >= 4 * v.fontMetrics().height()

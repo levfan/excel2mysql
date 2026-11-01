@@ -900,6 +900,9 @@ def main():
     # 角色分布从真文档按颜色读回来：正文这条键已经比过一字不差，这一条比的就是
     # "两栈把同一句 DDL 切成同样的段没有"（切分规则改一侧必红）
     put("ddl.rich", m.styled_signature(dlg.tabs.widget(0)))
+    # 翻页钮的宽度：两侧都读真控件给的值（Qt 的 sizeHint / Swing 的 preferredSize
+    # 折回设计档），用户点名"太小了"这一条靠它跨栈对平
+    put("tabs.scroller.width", str(m.tab_scroller_width(dlg.tabs)))
     dlg.deleteLater()
     win.chk_drop.setChecked(True)
     dlg2 = m.DDLDialog(win.tables, True, win)

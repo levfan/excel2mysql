@@ -6158,6 +6158,13 @@ public final class GuiMain {
             if (plain.tabCount() != n) {
                 problems.add("DDL 弹窗应一张表一页：" + plain.tabCount() + " / " + n + " 张表");
             }
+            // 页签放不下时那两颗翻页钮：用户 2026-11-02 点名"太小了"，两栈一起从 16 抬到 28。
+            // 读的是布局真正取用的 preferredSize，不是自己写的常量
+            int scroller = plain.tabScrollerWidth();
+            if (scroller < UiScale.px(24)) {
+                problems.add("DDL 预览的翻页钮太小：宽 " + scroller
+                        + " 物理像素，下限 " + UiScale.px(24) + "（Qt 逻辑 28 那一档）");
+            }
             String first = plain.tabText(0);
             if (!first.contains("CREATE TABLE")) {
                 problems.add("DDL 弹窗第一页没有建表语句");

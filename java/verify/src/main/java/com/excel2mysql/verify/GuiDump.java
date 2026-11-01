@@ -748,6 +748,9 @@ public final class GuiDump {
                     put("ddl.first", plain.tabCount() == 0 ? "" : plain.tabText(0));
                     // 与 Python 侧同一条：正文已比过一字不差，这条比的是两栈切分是否同形
                     put("ddl.rich", plain.tabCount() == 0 ? "" : plain.tabSignature(0));
+                    // 与 Python 侧同一条：读真控件给出来的翻页钮宽度，折回设计档再比
+                    put("tabs.scroller.width", String.valueOf(Math.round(
+                            plain.tabScrollerWidth() / UiScale.factor())));
                 } finally {
                     plain.dispose();
                 }
