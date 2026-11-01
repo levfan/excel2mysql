@@ -8,6 +8,7 @@
 | 纯外观改动（字号 / 颜色 / 间距 / 纯文案，不改行为） | 只跑直接咬住它的那几条：读真控件的探针、对应自检或单条断言、`py_compile`；改到 Java 就再编译那一个模块 | 探针/自检退出码 0；断言改过就做变异抽查 |
 | 只改测试用例 `pack_test.py` | 同上（用例自己就是被测对象） | 退出码 0 |
 | 打包口径（`*.spec` / `_pack_common.py` / `build_exe.py` / `一键打包-图形版.bat`） | 先 `pack_test.py`，再 `build_exe.py` 全闸门 | 闸门九步全过、产物能起窗 |
+| Java 出包口径（`java/tools/build_java_dist.py` / `一键打包-Java版.bat`） | 实跑 `一键打包-Java版.bat`（十步闸门 → 组装 → 包内运行时冒烟） | 退出码 0，产物落在 `dist\excel2mysql-java-<版本>-win64\` |
 | 纯文档（`README.md` / `help_doc.py` 文案 / `.agents/**`） | 自检：frontmatter 合法、路径存在、无待办占位；`help_doc.py` 改动要能 `import` 且 `pack_test.py` 的 P 组不红；改 README 还要跑 `build_exe.py --fast` | 上述检查通过 |
 
 ## 为什么外观改动不跑全量
@@ -32,3 +33,6 @@ DDL、导入、命名、脚本改写这类数据路径 → 才按全量闸门跑
 PyInstaller 打包（`一键打包-三端.bat` 等）只在用户明说"打包"时才做，与提交规则互不覆盖：
 提交是每次改动的收尾动作，打包是单独指令。打包跑完要报三条产物的路径、体积与各自
 闸门的退出码；`build_stamp.py` 记录的提交号与 `DIRTY` 要报出来，包必须是从干净提交出的。
+
+例外一条：改的正是出包链路本身（产物落点、入口脚本、`build_*.py` / `build_java_dist.py`）时，
+实跑被改的那一条入口就是验证本身，不算越界自动打包——但仍只跑被改的那一端，别顺手把另两端重打。

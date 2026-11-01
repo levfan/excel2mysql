@@ -71,12 +71,13 @@ pip install -r requirements.txt
 ## 4. 打包
 
 三条线各一套闸门，跑在不同环境上，互不影响；任一步失败即以非 0 退出，不会产出「看起来成功」的包。
+三个一键入口都在仓库根，三份产物也都落在仓库根的 `dist\` 下，取包只看这一个地方。
 
 | 产物 | 一键入口 | 实际执行 | 环境 |
 | --- | --- | --- | --- |
 | 图形版 `dist\excel2mysql\` | `一键打包-图形版.bat` | `build_exe.py` → `excel2mysql.spec` | `.venv`（3.12 + PyInstaller 6.x） |
 | 命令行版 `dist\excel2mysql-cli\` | `一键打包-命令行版.bat` | `build_exe38.py` → `excel2mysql_cli38.spec` | `.venv38`（3.8.10 + PyInstaller 5.x） |
-| Java 版 `java\dist\excel2mysql-java-3.4.1-win64\` | `java\一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
+| Java 版 `dist\excel2mysql-java-3.4.1-win64\` | `一键打包-Java版.bat` | `java/tools/build_java_dist.py` | `jdk1.8.0_202` + Maven |
 | 三端一起 | `一键打包-三端.bat` | 按图形版 → 命令行版 → Java 版顺序调用，任一步非 0 即停住 | 不接受参数 |
 
 各线闸门的步骤：
