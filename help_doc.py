@@ -565,6 +565,10 @@ budget / revenue / profit / payment / charge / fund / tax / interest / capital�
 <td><code>ods_t_order</code> → <code>change_t_order</code><br>
 <code>adb_table2</code> → <code>change_table2</code></td></tr>
 </table>
+<p>两页的「表名前缀」输入框与这两颗按钮同名同义，占位句也是同一句；差别只在生效时机：
+<b>「Excel 导入」页填在这里之后，新添加的文件自动带上</b>，要改当前清单上的表再点一次按钮；
+<b>「SQL 脚本改名」页不会自动带上</b>，点了按钮才改，且只改「当前表名」列的显示，
+保存或执行时才写进脚本。</p>
 <h3>「替换首个前缀」的细节</h3>
 <ul>
 <li>按<b>第一个下划线</b>切分，因此 <code>ods_a_b</code> 只换掉 <code>ods</code>，得到
