@@ -6087,3 +6087,63 @@ Java 那条线一直单独落在 `java\dist\`，脚本也在 `java\` 里：取�
 
 不动，仍记 `3.4.1`。改的是构建机上的落点与入口位置，交付包内容一字未变——
 按"只改构建脚本且不影响交付物则不升"这一档处理。
+## 113. 页签放不下时那两颗翻页钮：两栈一起从 16 抬到 28
+
+### 113.1 口径
+
+用户原话："DDL预览，左翻右翻的按钮，太小了，请排查其余翻页按钮大小，一并修复"。
+改动前先量现状：Qt 侧那两颗钮 16x24，Swing 侧 16x16（在真机 Windows 外观下量的，
+不是 Metal 默认外观——第一次量错在没调 `UiScale.apply()`，读回来的是另一套外观的数）。
+定档 28x24（Qt 逻辑像素），判据取下限 24 而不是"等于常量"：要判的是"够不够点"。
+
+四处页签条一起改：主窗口三个页签、第一页的 DDL 预览、脚本页的 DDL 预览、表结构预览。
+
+### 113.2 两栈都不是"改个尺寸"那么直白
+
+Qt：`QTabBar` 摆这两颗钮时读样式的 `PM_TabBarScrollButtonWidth`，QSS 的 `width`
+改不动它（实测只改到 `sizeHint`，真尺寸照旧 16），所以用 `QProxyStyle` 只覆写这一个
+metric。每个页签件各持一份样式实例——`setStyle` 之后样式归控件所有，共用一份会在析构时
+重复释放。同一个坑还在读口径上：`QToolButton.sizeHint()` 恒为 24，只有样式口径给得出 28，
+对撞键因此读 `bar.style().pixelMetric(...)`。
+
+Swing：那两颗钮是 `BasicTabbedPaneUI` 的私有内部类，继承 `BasicArrowButton`，
+后者把 `getPreferredSize` 写死 16x16，`setPreferredSize` 会被这层覆写吃掉（实测无效）。
+只能走官方扩展点 `createScrollButton`：`WideScrollUI extends WindowsTabbedPaneUI`
+（保住主题化的页签画法），钮自己画箭头（`BasicArrowButton` 的三角形固定 7x4，
+钮放大后箭头不会跟着长）。只在当前 UI 确实是 `WindowsTabbedPaneUI` 时装，
+换别的外观就退回系统默认——交付包只有 Windows 版，这条边界写在这里。
+
+还踩到一条值得记的：`Arrow` 里裸写 `WIDTH` / `HEIGHT` 会命中 `JButton` 一路继承来的
+`ImageObserver.WIDTH=1` / `HEIGHT=2`，把外层同名常量盖掉，实测把钮摆成 2x3。
+常量改名 `BUTTON_WIDTH` / `BUTTON_HEIGHT`，嵌套类里写全限定名。
+
+### 113.3 落点与守卫
+
+| 位置 | 内容 |
+| --- | --- |
+| `main.py` | `TAB_SCROLL_BUTTON_WIDTH`、`_TabScrollStyle`、`style_tab_scroll`、`tab_scroller_width`；四处 `QTabWidget` 套上 |
+| `gui/TabScrollers.java` | 新文件：`apply` 装 UI、`widthOf` 读回宽度；四处页签调用 |
+| `gui/DDLDialog.java` | `tabScrollerWidth()` 给自检与对撞用 |
+| 对撞键 | 新增 `tabs.scroller.width`，366 → 367 键 |
+| `pack_test.py` | 新增 F9b：14 个长表名 + 520 宽把页签挤爆，量真摆出来的宽度 |
+| `GuiMain.java` | 自检读 DDL 预览那条页签的 `preferredSize`，低于 24 逻辑档就报 |
+
+### 113.4 闸门与变异
+
+| 闸门 | 结果 |
+| --- | --- |
+| `pack_test.py`（带真库凭据） | 通过 957 / 失败 0 / 跳过 5，退出码 0 |
+| `构建验证.bat` 十步 | 全过，退出码 0 |
+| `界面双端对撞.bat` | 367 键逐键一致，退出码 0 |
+| `check_generated.py` | 绿 |
+
+变异抽查两头各一次：Qt 那一档改回 16 → F9b 是唯一红项，实测
+`[(16, 24, True), (16, 24, True)]`；Swing 那一档改回 16 → 自检报"DDL 预览的翻页钮太小：
+宽 24 物理像素，下限 36"。两侧还原后都复绿。读图对比 `assets/shots/scroller_qt.png`
+与 `assets/shots/scroller_java.png`：两栈的箭头都明显变大、都在页签条右端，观感一致。
+
+### 113.5 版本号
+
+按 patch 记：`3.4.1 → 3.4.2`。同一件事做得更好用，没有新增能力，也不废任何老做法。
+`dist\` 里 Java 线已有 3.4.1 那一份（上一轮改完出包脚本时实跑出来的），
+Python 两条仍是 3.3.2；三端要对齐等用户开口重打。
