@@ -46,9 +46,9 @@ import java.util.Map;
 public final class MainFrame extends JFrame implements SqlPage.Host {
 
     private static final String NO_FILE_HINT = LogText.NO_FILE_HINT;
-    private static final String PREFIX_HINT =
-            "可选，如 dim_（新添加的文件自动带上，留空点按钮可移除）；"
-            + "填 change 再点「替换首个前缀」则换掉已有首段";
+    private static final String APPLY_PREFIX_TIP =
+            "在清单里每张表名前面加上这一段（重复点不会叠加）；填在这里之后，"
+            + "新添加的文件也自动带上。\n留空再点一次即移除前缀。";
     private static final String REPLACE_HEAD_TIP =
             "把表名第一个下划线之前的部分换成上面填的内容："
             + "ods_t_order → change_t_order、adb_table2 → change_table2；"
@@ -549,8 +549,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
         // 「待导入文件」组框里是三样东西：表格、前缀行、四个操作按钮（main.py:893-946）。
         // 这些控件原先全被塞在顶部连接栏里，等于把"改表名的输入框"和"连接数据库"混在一处。
-        prefixField = new HintTextField(18, PREFIX_HINT);
+        prefixField = new HintTextField(18, PrefixHint.PLACEHOLDER);
         JButton applyPrefix = new JButton("批量应用前缀");
+        applyPrefix.setToolTipText(APPLY_PREFIX_TIP);
         applyPrefix.addActionListener(e -> applyPrefix());
         JButton replacePrefix = new JButton("替换首个前缀");
         replacePrefix.setToolTipText(REPLACE_HEAD_TIP);

@@ -197,6 +197,12 @@ SQL_TABLE_TITLE = "待处理的脚本表（双击表名或表注释编辑，双�
 RUN_TABLE_TITLE = "待执行脚本（按清单顺序执行）"
 COLUMN_TABLE_TITLE = "字段清单"
 
+# 「表名前缀」输入框的占位句：两页共用这一个常量（Java 侧同一句在 gui.PrefixHint），
+# 两页做的是同一件事，措辞就该逐字相同。哪一页对新添加的文件自动生效，这条页签差异
+# 写在两颗按钮的 tooltip 里，不塞进占位句。
+PREFIX_PLACEHOLDER = ("可选，如 dim_：点「批量应用前缀」加上这段，"
+                      "点「替换首个前缀」换掉第一个下划线前的内容")
+
 # 日志框的最小高度按"看得见的行数"约定，不按像素：同一档字号在 Qt 与 Swing 里
 # 量出来的行高本就不同（界面基准也不同），写同一个像素数会变成"两边各自满足同一个数、
 # 实际能看到的行数却不同"。像素数由各自的字体量出来，跨线比的是这个 4。
@@ -2221,10 +2227,11 @@ class MainWindow(QWidget):
         prefix_row = QHBoxLayout()
         prefix_row.addWidget(QLabel("表名前缀："))
         self.ed_prefix = QLineEdit()
-        self.ed_prefix.setPlaceholderText(
-            "可选，如 dim_（新添加的文件自动带上，留空点按钮可移除）；"
-            "填 change 再点「替换首个前缀」则换掉已有首段")
+        self.ed_prefix.setPlaceholderText(PREFIX_PLACEHOLDER)
         self.btn_apply_prefix = QPushButton("批量应用前缀")
+        self.btn_apply_prefix.setToolTip(
+            "在清单里每张表名前面加上这一段（重复点不会叠加）；填在这里之后，"
+            "新添加的文件也自动带上。\n留空再点一次即移除前缀。")
         self.btn_apply_prefix.clicked.connect(self.on_apply_prefix)
         self.btn_replace_prefix = QPushButton("替换首个前缀")
         self.btn_replace_prefix.setToolTip(
@@ -2601,14 +2608,12 @@ class MainWindow(QWidget):
         prefix_row = QHBoxLayout()
         prefix_row.addWidget(QLabel("表名前缀："))
         self.ed_sql_prefix = QLineEdit()
-        self.ed_sql_prefix.setPlaceholderText(
-            "如 dim_（加前缀，已带该前缀的表自动跳过）；填 change 再点"
-            "「替换首个前缀」则把 ods_t_order 换成 change_t_order。"
-            "清空后再点一次可恢复原表名")
+        self.ed_sql_prefix.setPlaceholderText(PREFIX_PLACEHOLDER)
         self.btn_sql_prefix = QPushButton("批量应用前缀")
         self.btn_sql_prefix.setToolTip(
             "只改「当前表名」列的显示（双击看的元数据表名同步），脚本正文不动；\n"
-            "点保存/执行/生成时才把显示名写进脚本。前缀留空再点一次，显示恢复为脚本原名。")
+            "点保存/执行/生成时才把显示名写进脚本。前缀留空再点一次，显示恢复为脚本原名。\n"
+            "新添加的脚本不会自动带上这一段，要点了这颗按钮才改。")
         self.btn_sql_prefix.clicked.connect(self.on_sql_apply_prefix)
         self.btn_sql_replace = QPushButton("替换首个前缀")
         self.btn_sql_replace.setToolTip(

@@ -187,9 +187,10 @@ public final class SqlPage extends JPanel {
         }
     }
 
-    private static final String PREFIX_HINT =
-            "如 dim_（加前缀，已带该前缀的表自动跳过）；填 change 再点「替换首个前缀」"
-            + "则把 ods_t_order 换成 change_t_order。清空后再点一次可恢复原表名";
+    private static final String APPLY_PREFIX_TIP =
+            "只改「当前表名」列的显示（双击看的元数据表名同步），脚本正文不动；\n"
+            + "点保存/执行/生成时才把显示名写进脚本。前缀留空再点一次，显示恢复为脚本原名。\n"
+            + "新添加的脚本不会自动带上这一段，要点了这颗按钮才改。";
     private static final String REPLACE_TIP =
             "把每个表名第一个下划线之前的部分换成上面填的内容，只改页面显示；\n"
             + "点保存/执行/生成时才写进脚本并把 CREATE/DROP/INSERT/ALTER/TRUNCATE 的引用一起改掉；\n"
@@ -323,10 +324,9 @@ public final class SqlPage extends JPanel {
                 + "将要写出的那句 CREATE TABLE（含还没落地的改名与字段编辑）；<br>"
                 + "勾选「覆盖已存在表」时，页签开头会补上执行前那句 DROP TABLE IF EXISTS。</html>");
         previewDdl.addActionListener(e -> previewDdl());
-        prefixField = new HintTextField(18, PREFIX_HINT);
+        prefixField = new HintTextField(18, PrefixHint.PLACEHOLDER);
         JButton apply = new JButton("批量应用前缀");
-        apply.setToolTipText("只改「当前表名」列的显示（双击看的元数据表名同步），脚本正文不动；"
-                + "点保存/执行/生成时才把显示名写进脚本。前缀留空再点一次，显示恢复为脚本原名。");
+        apply.setToolTipText(APPLY_PREFIX_TIP);
         apply.addActionListener(e -> {
             String hint = applyPrefix();
             if (hint != null) {
