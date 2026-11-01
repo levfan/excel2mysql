@@ -7236,6 +7236,24 @@ if _missing_site:
 else:
     check("T15 各处写死的版本号与 version.py 同值（漏改一处就是交付事故）",
           not _drift, _drift)
+
+# 出包时人要去的两个地方：产物目录与一键入口。文档写一套、脚本做一套，下一次打包就会找不到包，
+# 所以按字面串把两边钉住（Java 那条原先单独落在 java\dist，与另两端不同目录）。
+_BAT_AT_ROOT = ("一键打包-图形版.bat", "一键打包-命令行版.bat", "一键打包-Java版.bat")
+_bjd_p = os.path.join(_ROOT, "java", "tools", "build_java_dist.py")
+_rel_p = os.path.join(_ROOT, "RELEASE.md")
+if not (os.path.isfile(_bjd_p) and os.path.isfile(_rel_p)):
+    skip("T17 三条线的产物都落仓库根 dist、入口脚本都在仓库根", "冻结态不含出包脚本与 RELEASE.md")
+else:
+    _bjd = open(_bjd_p, encoding="utf-8").read()
+    _rel = open(_rel_p, encoding="utf-8").read()
+    check("T17 三条线的产物都落仓库根 dist、入口脚本都在仓库根（文档与脚本同口径）",
+          'os.path.join(ROOT, "dist", "excel2mysql-java-%s-win64"' in _bjd
+          and "java\\dist" not in _rel and "java/一键打包" not in _rel
+          and all(os.path.isfile(os.path.join(_ROOT, b)) for b in _BAT_AT_ROOT)
+          and not any(os.path.exists(os.path.join(_ROOT, "java", b)) for b in _BAT_AT_ROOT),
+          [_bjd.count('os.path.join(ROOT, "dist"'), "java\\dist" in _rel,
+           [b for b in _BAT_AT_ROOT if not os.path.isfile(os.path.join(_ROOT, b))]])
 tw = app_main.MainWindow()
 check("T3 窗口标题带版本号", APP_VERSION in tw.windowTitle(), tw.windowTitle())
 check("T4 「i」按钮存在且提示写明是关于",
