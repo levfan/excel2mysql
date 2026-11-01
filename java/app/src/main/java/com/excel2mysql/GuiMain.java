@@ -1978,8 +1978,8 @@ public final class GuiMain {
 
         // 占位提示必须是空态就能看见的灰字，不是只有悬停才出的 tooltip
         String excelHint = frame.prefixField().hintText();
-        if (!excelHint.contains("可选，如 dim_") || !excelHint.contains("替换首个前缀")) {
-            problems.add("Excel 页前缀框没有占位提示：" + excelHint);
+        if (!com.excel2mysql.gui.PrefixHint.PLACEHOLDER.equals(excelHint)) {
+            problems.add("Excel 页前缀框的占位句不是共用那一条：" + excelHint);
         }
         frame.prefixField().setText("");
         if (!frame.prefixField().shouldPaintHint()) {
@@ -1991,8 +1991,10 @@ public final class GuiMain {
         }
         frame.prefixField().setText("");
         String sqlHint = frame.sqlPage().prefixField().hintText();
-        if (!sqlHint.contains("如 dim_") || !sqlHint.contains("change_t_order")) {
-            problems.add("SQL 页前缀框没有占位提示：" + sqlHint);
+        if (!com.excel2mysql.gui.PrefixHint.PLACEHOLDER.equals(sqlHint)
+                || !excelHint.equals(sqlHint)) {
+            problems.add("两页前缀框的占位句没统一：Excel 页「" + excelHint
+                    + "」/ SQL 页「" + sqlHint + "」");
         }
         if (frame.databaseChooserEnabled()) {
             problems.add("还没连接就能选库，库名只能靠猜");

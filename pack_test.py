@@ -1182,6 +1182,18 @@ check("F10b 三个日志框的最小高度都至少装得下 4 行（截图复�
       [(v.minimumHeight(), v.fontMetrics().height())
        for v in (w.log, w.sql_log, w.sql_run_log)])
 
+# 两页「表名前缀」框的占位句：同一件事就该逐字相同（用户 2026-11-02 点名统一）。
+# 读的是活控件上的 placeholderText，不是 main.py 里那个常量抄一遍。
+check("F10a2 两页前缀框的占位句一字不差，且就是共用那一条",
+      w.ed_prefix.placeholderText() == w.ed_sql_prefix.placeholderText()
+      and w.ed_prefix.placeholderText() == app_main.PREFIX_PLACEHOLDER
+      and len(w.ed_prefix.placeholderText()) > 10,
+      (w.ed_prefix.placeholderText(), w.ed_sql_prefix.placeholderText()))
+check("F10a3 「批量应用前缀」两颗都有 tooltip，页签差异写在这里而不是占位句里",
+      "新添加的文件也自动带上" in w.btn_apply_prefix.toolTip()
+      and "新添加的脚本不会自动带上" in w.btn_sql_prefix.toolTip(),
+      (w.btn_apply_prefix.toolTip(), w.btn_sql_prefix.toolTip()))
+
 # 三处交互引导：拖拽区底色/hover、空表提示、覆盖开关与执行按钮同底板。
 # 色值与分组都从活控件上取，改坏了哪一处都会在这里变红。
 check("F10c 三个拖拽区跑起来就是淡蓝底，悬停色更深一层",
