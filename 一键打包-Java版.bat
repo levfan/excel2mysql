@@ -3,17 +3,17 @@ chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 
-rem Java 线交付包：程序 jar + 随包 JRE + 启动脚本。
-rem 先跑 构建验证.bat（九步闸门），过了才组装——验证没过就出包，出的就是坏包。
+rem Java 线交付包：程序 jar + 随包 JRE + 启动脚本，产物落在仓库根 dist\ 下，与另两端同目录。
+rem 先跑 java\构建验证.bat（十步闸门），过了才组装——验证没过就出包，出的就是坏包。
 
-set "PY=..\.venv\Scripts\python.exe"
+set "PY=.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
-call ".\构建验证.bat"
+call ".\java\构建验证.bat"
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto :report
 
-"%PY%" tools\build_java_dist.py %*
+"%PY%" java\tools\build_java_dist.py %*
 set "RC=%ERRORLEVEL%"
 
 :report

@@ -30,9 +30,9 @@ if not "%RC%"=="0" (
 
 echo.
 echo ============================================================
-echo [3/3] java\一键打包-Java版.bat    Java 图形 + 命令行同一个 jar（64 位 Win7 及以上）
+echo [3/3] 一键打包-Java版.bat    Java 图形 + 命令行同一个 jar（64 位 Win7 及以上）
 echo ============================================================
-call "%~dp0java\一键打包-Java版.bat"
+call "%~dp0一键打包-Java版.bat"
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
     set "FAILED=第 3 端（Java 版）"

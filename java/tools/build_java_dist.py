@@ -331,7 +331,9 @@ def main():
     if not os.path.isfile(os.path.join(src_jre, "bin", "java.exe")):
         fail("JDK 8 里没有可用的 jre\\bin\\java.exe：%s" % src_jre)
 
-    dist = os.path.join(JAVA_DIR, "dist", "excel2mysql-java-%s-win64" % version)
+    # 三条线的产物集中在仓库根 dist\ 下：图形版与命令行版一直在这儿，
+    # Java 版原先落在 java\dist，取包要跑两个地方
+    dist = os.path.join(ROOT, "dist", "excel2mysql-java-%s-win64" % version)
     rmtree_writable(dist)
     info("输出目录 %s" % dist)
     os.makedirs(dist)
