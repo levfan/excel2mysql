@@ -34,6 +34,9 @@ public final class HelpDoc {
                     "环境变量，且其中写了 <code>database</code> 时，启动后自动连接并选中该库，无需先点按钮</td></tr>" + NL +
                     "<tr><td>2</td><td>没有配置、自动连接失败或需要换库时：点<b>「设置数据源信息」</b>展开连接区，" + NL +
                     "填主机、端口、用户名、密码，点<b>「连接并加载库」</b>，在「目标库」下拉里选库。" + NL +
+                    "点下去会挂出一张<b>「正在连接并加载库…」</b>的进度框：这一趟连得上只有几十毫秒，" + NL +
+                    "连不上要等满五秒连接超时，框里写明在连哪台、已经过了几秒，随时可点「取消」；" + NL +
+                    "进度框不挡窗口，挂着的时候另外两页照常能点，跑完自己收起。" + NL +
                     "「目标库」在清单加载出来之前是灰的（库列表要连上服务器才拿得到），不是不给换：" + NL +
                     "加载成功后这里才可点选；改过主机、端口、用户名或口令，那一行会提示清单来自上一次连接，" + NL +
                     "需重新加载。选定后连接区自动收起，上方只留一条<b>「● 目标库 xxx」</b>，主机端口用户名收在鼠标悬停里</td></tr>" + NL +
@@ -90,7 +93,7 @@ public final class HelpDoc {
                     "<code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到" + NL +
                     "<code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.5.1.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.6.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
