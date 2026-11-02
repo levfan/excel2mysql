@@ -946,6 +946,19 @@ def main():
     dlg2.deleteLater()
     win.chk_drop.setChecked(False)
 
+    # 第二页那个「DDL 预览」从前没有任何对撞键：只在第一页那扇比过，这一页改了 nobody 会红。
+    # 这里不重跑脚本解析那条链（枚举器从不加载 .sql），而是两边喂同一条一行到底的建表语句，
+    # 比"显示排成了什么形状、那句说明写了什么、角色段切在哪里"——这三件正是本轮改的东西。
+    _sqlddl_pages = [("ods_t_demo",
+                      "CREATE TABLE `ods_t_demo` (`id` BIGINT NOT NULL AUTO_INCREMENT"
+                      " COMMENT '主键', `amount` DECIMAL(20,4) DEFAULT NULL COMMENT '金额',"
+                      " PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;")]
+    sqldlg = m.SqlScriptDdlDialog(_sqlddl_pages, win)
+    put("sqlddl.first", sqldlg.tabs.widget(0).toPlainText())
+    put("sqlddl.rich", m.styled_signature(sqldlg.tabs.widget(0)))
+    put("sqlddl.note", norm(sqldlg.note.text()))
+    sqldlg.deleteLater()
+
     # ---- 示例目录那一栏的观感：字号 + 分组格渲染出来的字重与配色 ----
     # 只比分组行的颜色：条目行两边都不显式设色，一边报默认值一边报空就没法比
     sdg = m.SqlSamplesDialog(None)
@@ -1043,6 +1056,8 @@ def main():
             if wd is not None and norm(wd.text()):
                 captions.append(norm(wd.text()))
     put("dlg.about.rows", "|".join(captions))
+    # 底下那两行小字也是界面事实：两栈各写一份就会漂移，逐字比
+    put("dlg.about.footnote", norm(ad.foot.text()))
     ad.deleteLater()
 
     # ---- 进度框文案 ----

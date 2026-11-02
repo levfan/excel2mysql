@@ -126,6 +126,18 @@ public final class UiShot {
         });
         snapDialog(pdBox[0], dir, "10_progress", 480, 140);
 
+        // 脚本页那扇 DDL 预览与【SQL 示例】窗口：这两屏的可读性就是本轮改的东西，
+        // 只靠断言判不出"看着清楚没有"，必须渲染出来逐张看。夹具与 py_shot.py 逐字同一条。
+        String flat = "CREATE TABLE `ods_t_order` (`id` BIGINT NOT NULL AUTO_INCREMENT"
+                + " COMMENT '编号', `amount` DECIMAL(20,4) DEFAULT NULL COMMENT '金额',"
+                + " PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+        List<String[]> flatPages = new ArrayList<String[]>();
+        flatPages.add(new String[] {"ods_t_order", flat});
+        snapDialog(new com.excel2mysql.gui.SqlScriptDdlDialog(frame, flatPages),
+                dir, "11_script_ddl", 900, 600);
+        ui(() -> frame.showSqlSamples());
+        snapWindow(frame.sqlSamplesWindow(), dir, "12_samples", 980, 620);
+
         ui(() -> frame.dispose());
         sql.delete();
     }
@@ -168,6 +180,23 @@ public final class UiShot {
         });
         snapClient((javax.swing.RootPaneContainer) dialog, dir, name);
         ui(() -> dialog.dispose());
+    }
+
+    /** 顶层窗口那一类（示例清单是 JFrame，不是 JDialog）：同样的拍法，只换窗口接口。 */
+    private static void snapWindow(final javax.swing.RootPaneContainer win, String dir,
+                                   String name, final int w, final int h) throws Exception {
+        ui(() -> {
+            java.awt.Window asWindow = (java.awt.Window) win;
+            if (w > 0 && h > 0) {
+                win.getContentPane().setPreferredSize(
+                        new Dimension(UiScale.px(w), UiScale.px(h)));
+            }
+            asWindow.pack();
+            asWindow.setVisible(true);
+            asWindow.validate();
+        });
+        snapClient(win, dir, name);
+        ui(() -> ((java.awt.Window) win).dispose());
     }
 
     private static void writeSql(File sql) throws Exception {

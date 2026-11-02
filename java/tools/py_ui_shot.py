@@ -10,6 +10,7 @@ Qt 的 QWidget.grab() 走离屏平台，画的就是线上那套控件。
     .venv/Scripts/python.exe java/tools/py_ui_shot.py [输出目录] [夹具目录]
 屏序与 UiShot 一一对应：01_empty 02_excel_loaded 03_sql_empty 04_sql_loaded
 05_sql_prefixed 06_structure 07_ddl 08_help 09_about 10_progress
+11_script_ddl 12_samples
 """
 import os
 import sys
@@ -110,6 +111,23 @@ pd.show()
 app.processEvents()
 snap(pd, "10_progress")
 pd.close()
+
+# 脚本页那扇 DDL 预览与【SQL 示例】窗口：这两屏的可读性就是本轮改的东西，
+# 只靠断言判不出"看着清楚没有"，必须渲染出来逐张看。夹具与 UiShot.java 逐字同一条。
+_flat = ("CREATE TABLE `ods_t_order` (`id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '编号',"
+         " `amount` DECIMAL(20,4) DEFAULT NULL COMMENT '金额',"
+         " PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;")
+sddl = m.SqlScriptDdlDialog([("ods_t_order", _flat)], win)
+sddl.show()
+app.processEvents()
+snap(sddl, "11_script_ddl")
+sddl.close()
+
+samples = m.SqlSamplesDialog(win.sql_run_input)
+samples.show()
+app.processEvents()
+snap(samples, "12_samples")
+samples.close()
 
 os.remove(sql_file)
 print("输出目录", OUT, "夹具", [os.path.basename(f) for f in files])

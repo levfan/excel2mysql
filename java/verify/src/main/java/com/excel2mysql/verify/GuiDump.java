@@ -792,6 +792,24 @@ public final class GuiDump {
                 frame.dropExistingBox().setSelected(false);
                 frame.refreshPreview();
 
+                // 第二页那个「DDL 预览」从前没有任何对撞键：只在第一页那扇比过，这一页改了没人会红。
+                // 这里不重跑脚本解析那条链（枚举器从不加载 .sql），两边喂同一条一行到底的建表语句，
+                // 比显示排成了什么形状、那句说明写了什么、角色段切在哪里——正是本轮改的三件。
+                List<String[]> sqlddlPages = new ArrayList<String[]>();
+                sqlddlPages.add(new String[] {"ods_t_demo",
+                        "CREATE TABLE `ods_t_demo` (`id` BIGINT NOT NULL AUTO_INCREMENT"
+                        + " COMMENT '主键', `amount` DECIMAL(20,4) DEFAULT NULL COMMENT '金额',"
+                        + " PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"});
+                com.excel2mysql.gui.SqlScriptDdlDialog sqlddl =
+                        new com.excel2mysql.gui.SqlScriptDdlDialog(frame, sqlddlPages);
+                try {
+                    put("sqlddl.first", sqlddl.tabText(0));
+                    put("sqlddl.rich", sqlddl.tabSignature(0));
+                    put("sqlddl.note", norm(sqlddl.noteText()));
+                } finally {
+                    sqlddl.dispose();
+                }
+
                 List<com.excel2mysql.core.TableBuilder.Result> two =
                         new ArrayList<com.excel2mysql.core.TableBuilder.Result>(
                                 frame.results());
@@ -866,6 +884,8 @@ public final class GuiDump {
                     put("dlg.about.want", want(ad));
                     put("env.dlg.about.size", clientSize(ad));
                     put("dlg.about.rows", join(ad.rowCaptions(), "|"));
+                    // 底下那两行小字也是界面事实：两栈各写一份就会漂移，逐字比
+                    put("dlg.about.footnote", norm(ad.footnoteText()));
                 } finally {
                     ad.dispose();
                 }

@@ -931,6 +931,19 @@ public final class GuiMain {
      * （非白会把控件自己的边线与反锯齿的灰边一起算成墨）。
      * 弹窗里的正文块常常还没被布局，量之前先给它一个够看的尺寸。
      */
+    /** 容器里（含嵌套）有没有那条分隔线：排版这一档只能看真组件在不在。 */
+    private static boolean hasRule(java.awt.Container c) {
+        for (java.awt.Component k : c.getComponents()) {
+            if (k instanceof javax.swing.JSeparator) {
+                return true;
+            }
+            if (k instanceof java.awt.Container && hasRule((java.awt.Container) k)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static int inkOf(java.awt.Component c, java.awt.Color want) {
         if (c == null) {
             return -1;
@@ -2400,7 +2413,7 @@ public final class GuiMain {
             problems.add("Ctrl+Alt+L 映射到的动作取不到（绑定是空的）");
         } else {
             fmtAction.actionPerformed(null);
-            if (!"SELECT id, name\nFROM t_user\nWHERE age > 18\nAND status = 1;"
+            if (!"SELECT\n  id,\n  name\nFROM t_user\nWHERE age > 18\n  AND status = 1;"
                     .equals(frame.sqlRunInputText())) {
                 problems.add("按键映射的那个动作没把这段排开：" + frame.sqlRunInputText());
             }
@@ -2430,7 +2443,7 @@ public final class GuiMain {
         }
         frame.setSqlRunInputText("select id,name from t_user where age>18 and status=1;");
         clickNow(formatBtn);
-        if (!"SELECT id, name\nFROM t_user\nWHERE age > 18\nAND status = 1;"
+        if (!"SELECT\n  id,\n  name\nFROM t_user\nWHERE age > 18\n  AND status = 1;"
                 .equals(frame.sqlRunInputText())) {
             problems.add("点那颗按钮没把这段排开：" + frame.sqlRunInputText());
         }
@@ -2565,19 +2578,57 @@ public final class GuiMain {
         }
         // 介绍块按角色上色（用户 2026-10-30 报"样式太单一"）：内容一字不许改，
         // 上色读真文档的角色串 + 数像素，不读"有没有设过属性"
-        frame.setSqlSamplesRow(0);
+        // 挑一条关键词≥3 的示例：一条词的示例验不出"底色有没有连成整块"这件事
+        int multiRow = 0;
+        for (int i = 0; i < SqlSamples.ALL.length; i++) {
+            if (SqlSamples.ALL[i].keywords.split(" ").length >= 3) {
+                multiRow = i;
+                break;
+            }
+        }
+        frame.setSqlSamplesRow(multiRow);
         String introSig = frame.sqlSamplesIntroSignature();
         if (!introSig.startsWith("T") || !introSig.contains("L")
                 || !introSig.substring(introSig.lastIndexOf('|') + 1).startsWith("K")) {
             problems.add("介绍块的角色分布不对（标题与字段名在前，最后一段应是关键词那块）："
                     + introSig);
         }
-        if (!SqlSamples.introText(SqlSamples.ALL[0]).equals(frame.sqlSamplesIntroText())) {
+        if (!SqlSamples.introText(SqlSamples.ALL[multiRow]).equals(frame.sqlSamplesIntroText())) {
             problems.add("介绍块上色时把纯文本也改了");
         }
         if (frame.sqlSamplesIntroInk(0) <= 0 || frame.sqlSamplesIntroInk(1) <= 0) {
             problems.add("介绍块没真上到色：标题蓝 " + frame.sqlSamplesIntroInk(0)
                     + " 个像素，分组蓝与关键词块 " + frame.sqlSamplesIntroInk(1) + " 个");
+        }
+        // 关键词一颗一小块底（用户 2026-11-03 报"关键词是多个，你却用了一个底色，人字都看不清"）：
+        // 块数等于词数，且没有任何一块长过最长的词——连成整块就是从前那个毛病
+        int kSegs = 0;
+        int kMax = 0;
+        for (String part : introSig.split("\\|")) {
+            if (part.startsWith("K")) {
+                kSegs++;
+                kMax = Math.max(kMax, Integer.parseInt(part.substring(1)));
+            }
+        }
+        int words = 0;
+        int wMax = 0;
+        for (String word : SqlSamples.ALL[multiRow].keywords.split(" ", -1)) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            words++;
+            wMax = Math.max(wMax, word.length());
+        }
+        if (kSegs != words || kMax > wMax) {
+            problems.add("关键词的底色连成整块了：应 " + words + " 块，实际 " + kSegs
+                    + " 块，最长的一块 " + kMax + " 字（最长的词 " + wMax + " 字）");
+        }
+        if (introSig.indexOf('S') < 0 || frame.sqlSamplesIntroInk(2) <= 0
+                || frame.sqlSamplesIntroInk(3) <= 0 || frame.sqlSamplesIntroInk(4) <= 0) {
+            problems.add("「解决的问题」那一档提示绿、关键词那颗紫或它自己的浅底没画到屏上：签名 S="
+                    + (introSig.indexOf('S') >= 0) + "，提示绿 " + frame.sqlSamplesIntroInk(2)
+                    + " 像素，关键词紫 " + frame.sqlSamplesIntroInk(3)
+                    + " 像素，关键词浅底 " + frame.sqlSamplesIntroInk(4) + " 像素");
         }
         // 语句全文这一栏也按角色上色（用户："看着太枯燥"）：读真文档的串 + 数渲染出来的墨，
         // 与介绍块同一套判据，正文那条"一字未改"已由上面两条钉住
@@ -2588,7 +2639,7 @@ public final class GuiMain {
         }
         if (inkOf(frame.sqlSamplesPreviewPane(),
                 com.excel2mysql.gui.RichText.KEYWORD_FG) <= 0) {
-            problems.add("语句全文的关键字那一档灰没真画到屏上");
+            problems.add("语句全文的关键字那一档紫没真画到屏上");
         }
         // 关键词过滤：命中集合必须与 SqlSamples.matches 判的同一批，命中数要说出来
         frame.typeSqlSamplesFilter("注释");
@@ -4069,16 +4120,30 @@ public final class GuiMain {
         }
         int beforeRows = page.sqlRowCount();
         String beforeText = page.entryTextAt(0);
+        // 一行到底的建表语句排在预览里应当缩进成"一个字段一行"：这条先按纯函数定住形状，
+        // 再比弹窗显示的正文确实就是格式化器那一份（不新建窗口，多起一个 JFrame 曾把 JVM 顶到 native OOM）
+        String flatDdl = com.excel2mysql.core.SqlScript.formatSql(
+                "CREATE TABLE `t_a` (`id` BIGINT NOT NULL COMMENT '主键',"
+                        + " PRIMARY KEY (`id`)) ENGINE=InnoDB;");
+        if (!flatDdl.contains("\n  `id` BIGINT")) {
+            problems.add("一行到底的建表语句排完没缩进成一个字段一行：" + flatDdl);
+        }
         com.excel2mysql.gui.SqlScriptDdlDialog ddlDlg =
                 new com.excel2mysql.gui.SqlScriptDdlDialog(null, previewPages);
         ddlDlg.pack();
         if (ddlDlg.tabCount() != previewPages.size()
                 || !ddlDlg.tabText(0).equals(
-                        com.excel2mysql.gui.RichText.normalizeNewlines(
-                                previewPages.get(0)[1]))
+                        com.excel2mysql.core.SqlScript.formatSql(
+                                com.excel2mysql.gui.RichText.normalizeNewlines(
+                                        previewPages.get(0)[1])))
                 || !ddlDlg.tabTitleAt(0).equals(previewPages.get(0)[0])) {
-            problems.add("预览DDL 弹窗的页数、标题或正文与数据对不上："
+            problems.add("预览DDL 弹窗的页数、标题或正文与数据对不上（正文应是格式化器排出来的那一份）："
                     + ddlDlg.tabCount() + " 页 / 应有 " + previewPages.size() + " 页");
+        }
+        // 排的是显示，脚本正文一个字没动——这件事界面上必须当面写出来
+        if (!com.excel2mysql.gui.SqlScriptDdlDialog.NOTE.equals(ddlDlg.noteText())) {
+            problems.add("脚本页的 DDL 预览没写明「排的是显示、脚本正文没改」："
+                    + ddlDlg.noteText());
         }
         // 这一页的正文本来就是脚本自己那句，上色只许改字重与颜色，不许动内容
         String scriptSig = ddlDlg.tabSignature(0);
@@ -4865,6 +4930,21 @@ public final class GuiMain {
             if ("未知".equals(ad.valueOf("built")) && "unknown".equals(
                     com.excel2mysql.core.AppInfo.load().source)) {
                 problems.add("关于框既没有构建日期也没有声明来源，用户无从判断可信度");
+            }
+            // 底下那两行小字：来源、取不到写什么、自己核跑哪条命令，都要当面写清
+            // （两栈逐字同形由对撞键 dlg.about.footnote 比，这里只判内容在不在）
+            String foot = ad.footnoteText();
+            if (!foot.contains("构建戳") || !foot.contains("无 git 信息")
+                    || !foot.contains("git rev-parse --short HEAD")) {
+                problems.add("关于框没把提交号与构建日期的来源说清：" + foot);
+            }
+            if (!hasRule(ad.getContentPane())) {
+                problems.add("关于框标题与四行之间少了那条分隔线（信息层次那一档）");
+            }
+            // 那两行小字必须真画得出来：折行的 JTextArea 在光标被抽掉时，
+            // WrappedPlainView 取选区起点会空指针——不画一次永远看不见（拍图环节就是这么抓到的）
+            if (inkOf(ad.footnoteView(), new java.awt.Color(0x66, 0x66, 0x66)) <= 0) {
+                problems.add("关于框那两行小字没画出来（灰字像素为 0）");
             }
             // 构建时间戳：Maven 打的是 UTC，Python 打的是本机时间，显示前必须换成时区
             String shifted = com.excel2mysql.core.AppInfo.toLocal("2026-10-13 02:22:08");

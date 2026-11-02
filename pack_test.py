@@ -1485,7 +1485,7 @@ _app.sendEvent(w.sql_run_input,
                     _FQt.ControlModifier | _FQt.AltModifier, "L"))
 check("F22d 真按 Ctrl+Alt+L 就把这段排开（编辑区身上的事件过滤收得到）",
       w.sql_run_input.toPlainText()
-      == "SELECT id, name\nFROM t_user\nWHERE age > 18\nAND status = 1;",
+      == "SELECT\n  id,\n  name\nFROM t_user\nWHERE age > 18\n  AND status = 1;",
       w.sql_run_input.toPlainText())
 w.sql_run_input.setPlainText("select 1")
 # 不带字符的按键：真人按 Alt+L 不会往框里写字（Alt 那串是菜单助记键），
@@ -2350,6 +2350,17 @@ check("F33i 长说明退回 tooltip，与 Java 侧同一句（同值由对撞键
       _dlg.search.toolTip()[:20])
 # 介绍块按角色上色（用户 2026-10-30 报"样式太单一"）：内容一字不许改，
 # 角色串与像素都从真文档 / 真渲染里读，不读"有没有设过属性"
+# 挑一条关键词≥3 的示例来看：一条词的示例验不出"底色有没有连成整块"这件事
+_multi_kw = next(i for i, s in enumerate(app_main.SQL_SAMPLES)
+                 if len([w for w in s.keywords.split(" ") if w]) >= 3)
+_pick_item = None
+for _g in range(_dlg.tree.topLevelItemCount()):
+    for _c in range(_dlg.tree.topLevelItem(_g).childCount()):
+        _cand = _dlg.tree.topLevelItem(_g).child(_c)
+        if _cand.data(0, app_main.Qt.UserRole) == _multi_kw:
+            _pick_item = _cand
+_dlg.tree.setCurrentItem(_pick_item)
+_app.processEvents()
 _sig = app_main.styled_signature(_dlg.intro)
 _iimg = _dlg.intro.grab().toImage()
 check("F33j 介绍块上色后纯文本一字未改，标题/字段名两档在前、最后一档是关键词那块",
@@ -2360,6 +2371,22 @@ check("F33j 介绍块上色后纯文本一字未改，标题/字段名两档在�
 check("F33k 那三档颜色真上到屏：标题蓝与分组蓝各自数像素",
       _accent_ink(_iimg, target=(0x2f, 0x6f, 0xeb)) > 0 and _accent_ink(_iimg) > 0,
       (_accent_ink(_iimg, target=(0x2f, 0x6f, 0xeb)), _accent_ink(_iimg)))
+# 关键词一颗一小块底（用户 2026-11-03 报"关键词是多个，你却用了一个底色，人字都看不清"）：
+# 块数必须等于词数，而且没有任何一块长过最长的词——连成整块就是从前那个毛病
+_ksegs = [int(s[1:]) for s in _sig.split("|") if s.startswith("K")]
+_words = [w for w in app_main.SQL_SAMPLES[_dlg._sample_index()].keywords.split(" ") if w]
+check("F33k2 底色一颗关键词一块：块数等于词数，且没有一块长过最长的词",
+      len(_words) >= 3 and len(_ksegs) == len(_words)
+      and max(_ksegs) <= max(len(w) for w in _words),
+      (len(_words), _ksegs, [len(w) for w in _words]))
+check("F33k3「解决的问题」单开一档提示绿，关键词那一颗紫与它自己的浅底都画到屏上",
+      "S" in _sig and _accent_ink(_iimg, target=(0x1a, 0x7f, 0x37)) > 0
+      and _accent_ink(_iimg, target=(0x82, 0x50, 0xdf)) > 0
+      # 浅底要按精确色数：白与 #f0f2f4 只差 15/13/11，容差一放就把整片白底算成关键词块
+      and _accent_ink(_iimg, target=(0xf0, 0xf2, 0xf4), tol=2) > 0,
+      (_sig[:70], _accent_ink(_iimg, target=(0x1a, 0x7f, 0x37)),
+       _accent_ink(_iimg, target=(0x82, 0x50, 0xdf)),
+       _accent_ink(_iimg, target=(0xf0, 0xf2, 0xf4), tol=2)))
 # 两个 DDL 预览弹窗按角色上色（用户 2026-10-30 报"色调太单一，能不能来点高亮"）：
 # 正文一字不许改；角色串从真文档读、颜色从真渲染里数，两栈切得同不同形由对撞键 ddl.rich 判
 _ddl_cols = [{"field": "id", "type": "BIGINT UNSIGNED", "comment": "主键",
@@ -2367,20 +2394,28 @@ _ddl_cols = [{"field": "id", "type": "BIGINT UNSIGNED", "comment": "主键",
              {"field": "student_name", "type": "VARCHAR(64)", "comment": "姓名",
               "nullable": False}]
 _ddl_body = build_ddl("ods_t_student", "学生基本信息", _ddl_cols, True)
-for _where, _ddlg in (("第一页", app_main.DDLDialog(
-                           [{"table_name": "ods_t_student",
-                             "table_comment": "学生基本信息",
-                             "columns": _ddl_cols}], True, None)),
-                      ("脚本页", app_main.SqlScriptDdlDialog(
-                           [("ods_t_student", _ddl_body)], None))):
+# 脚本页那一扇给一条"一行到底"的脚本正文：从前预览照原文贴，这种语句在框里就是一根长条，
+# 只能横向拖。现在显示前按格式化器排版，脚本本身不动，界面上那句话当面写清。
+_script_body = ("DROP TABLE IF EXISTS `ods_t_student`;\n\nCREATE TABLE `ods_t_student` "
+                "(`id` BIGINT UNSIGNED NOT NULL COMMENT '主键',"
+                " `student_name` VARCHAR(64) NOT NULL COMMENT '姓名',"
+                " PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;")
+for _where, _ddlg, _expect in (
+        ("第一页", app_main.DDLDialog(
+            [{"table_name": "ods_t_student", "table_comment": "学生基本信息",
+              "columns": _ddl_cols}], True, None), _ddl_body),
+        ("脚本页", app_main.SqlScriptDdlDialog(
+            [("ods_t_student", _script_body)], None),
+         app_main.format_sql(_script_body))):
     _ddlg.show()
     _app.processEvents()
     _pane = _ddlg.tabs.widget(0)
     _dsig = app_main.styled_signature(_pane)
     _dimg = _pane.grab().toImage()
-    check("F33l %s的 DDL 预览上色后正文一字未改，五档角色都在" % _where,
-          _pane.toPlainText() == _ddl_body
-          and _dsig.startswith("D") and "L" in _dsig and "T" in _dsig
+    check("F33l %s的 DDL 预览上色后显示的就是预期那份正文，五档角色都在" % _where,
+          _pane.toPlainText() == _expect
+          and _dsig.startswith("D") == _expect.startswith("DROP")
+          and "L" in _dsig and "T" in _dsig
           and "B" in _dsig and "W" in _dsig,
           _dsig[:70])
     check("F33m %s那几档颜色真上到屏：DROP 的橙、注释的亮蓝、字段的分组蓝各自数到像素" % _where,
@@ -2389,6 +2424,11 @@ for _where, _ddlg in (("第一页", app_main.DDLDialog(
           and _accent_ink(_dimg) > 0,
           (_accent_ink(_dimg, target=(0xb2, 0x6a, 0x00)),
            _accent_ink(_dimg, target=(0x2f, 0x6f, 0xeb)), _accent_ink(_dimg)))
+    if _where == "脚本页":
+        check("F33n 脚本页那扇确实排过版（一行到底的正文缩进成列），并当面写明脚本正文没动",
+              "\n  `id` BIGINT" in _pane.toPlainText()
+              and _ddlg.note.text() == app_main.SCRIPT_DDL_NOTE,
+              (_pane.toPlainText()[:48], _ddlg.note.text()[:24]))
     _ddlg.deleteLater()
 # 编辑区的关键字高亮（用户："sql 文本里有关键字应该高亮，参照 DDL 预览的文字格式"）与
 # 示例语句全文同一套色。角色挂在叠加层而不是文档里：整篇重挂文档格式会往撤销栈塞一层
@@ -2406,9 +2446,9 @@ w.sql_run_input.show()
 _app.processEvents()
 _hl_img = w.sql_run_input.grab().toImage()
 check("F67c 编辑区那两档颜色真画到屏上",
-      _accent_ink(_hl_img, target=(0x9a, 0xa7, 0xb8)) > 0
+      _accent_ink(_hl_img, target=(0x82, 0x50, 0xdf)) > 0
       and _accent_ink(_hl_img, target=(0xb2, 0x6a, 0x00)) > 0,
-      (_accent_ink(_hl_img, target=(0x9a, 0xa7, 0xb8)),
+      (_accent_ink(_hl_img, target=(0x82, 0x50, 0xdf)),
        _accent_ink(_hl_img, target=(0xb2, 0x6a, 0x00))))
 from PySide6.QtCore import QEvent as _HLE, Qt as _HLQt
 from PySide6.QtGui import QKeyEvent as _HLKE
@@ -2432,9 +2472,9 @@ check("F67e 示例的语句全文挂上了角色色，正文一字未改",
 _dlg.show()
 _app.processEvents()
 _hl_pimg = _dlg.preview.grab().toImage()
-check("F67f 语句全文的关键字那一档灰真画到屏上",
-      _accent_ink(_hl_pimg, target=(0x9a, 0xa7, 0xb8)) > 0,
-      _accent_ink(_hl_pimg, target=(0x9a, 0xa7, 0xb8)))
+check("F67f 语句全文的关键字那一档紫真画到屏上",
+      _accent_ink(_hl_pimg, target=(0x82, 0x50, 0xdf)) > 0,
+      _accent_ink(_hl_pimg, target=(0x82, 0x50, 0xdf)))
 # 每个顶层窗口都要挂着同一颗图标：标题栏与任务栏不一致，同一个程序看着像两个。
 # Qt 这一侧由应用级 setWindowIcon 天然覆盖，判据仍逐窗读窗口自己那份 windowIcon——
 # 再问一次 QApplication 就只是把设置抄了一遍，接没接上窗口它照不出来。
@@ -4671,7 +4711,8 @@ section("P 使用说明（? 按钮 / F1 / 排版 / 文档不漂移）")
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtCore import QEvent
 from help_doc import SECTIONS as HELP_SECTIONS
-from ui_help import HelpDialog, build_html, AUTHOR
+from ui_help import (HelpDialog, AboutDialog, build_html, AUTHOR,
+                     ABOUT_FOOT_1, ABOUT_FOOT_2)
 
 import re as _re
 
@@ -7523,6 +7564,11 @@ check("T7b 作者这一行有署名，取的是 ui_help.AUTHOR（Java 侧同一�
       (ad.rows["author"].text(), AUTHOR))
 check("T8 提交号可鼠标选中复制（要贴给别人时不用手抄）",
       bool(ad.rows["commit"].textInteractionFlags()))
+check("T8c 底下那两行小字把提交号与构建日期的来源说清（含自己核该跑哪条命令）",
+      ad.foot.text() == ABOUT_FOOT_1 + "\n" + ABOUT_FOOT_2
+      and "构建戳" in ad.foot.text() and "git rev-parse --short HEAD" in ad.foot.text()
+      and bool(ad.foot.textInteractionFlags()),
+      ad.foot.text()[:40])
 ad.deleteLater()
 check("T8b 构建的 dirty 判定只看已跟踪文件的改动（未跟踪遗留不算）",
       _i["dirty"] == _run_git_probe(),
@@ -7636,7 +7682,7 @@ _app.processEvents()
 _geo = _app.primaryScreen().availableGeometry()
 _suites = [("主窗口", app_main.MainWindow(), "1100x780"),
            ("使用说明", app_main.HelpDialog(), "960x700"),
-           ("关于", app_main.AboutDialog(), "380x190"),
+           ("关于", app_main.AboutDialog(), "380x250"),
            ("进度框", REAL_PROGRESS("正在解析文件…"), "480x140"),
            ("表结构预览", app_main.StructureDialog([]), "980x640"),
            ("DDL 预览", app_main.DDLDialog([], False), "900x600")]
