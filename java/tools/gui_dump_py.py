@@ -711,6 +711,23 @@ def main():
     put("guard.conn.popup", "%s|%s" % (POPUPS[-1][0], POPUPS[-1][1]) if POPUPS else "")
     put("guard.conn.log", win.log.toPlainText()[len(mark):].strip().split("\n")[0])
     put("guard.conn.db_enabled", int(bool(win.cb_db.isEnabled())))
+    # 目标库那一行的三态：加载好（空提示）→ 改过连接信息（清单过期）→ 加载失败（清场）。
+    # 两栈都走各自的生产方法灌清单，读的是那一行当前的文字，不是把常量抄一遍
+    win._apply_databases(["alpha", "beta"])
+    app.processEvents()
+    put("conn.db.hint.loaded", win.lbl_db_hint.text())
+    put("conn.db.size.loaded", str(win.cb_db.count()))
+    win.ed_host.setText("10.9.9.9")
+    app.processEvents()
+    put("conn.db.hint.stale", win.lbl_db_hint.text())
+    put("conn.db.dirty", "1" if win._conn_dirty else "0")
+    win.ed_port.setValue(1)
+    POPUPS.clear()
+    win.on_load_databases()
+    put("conn.db.hint.failed", win.lbl_db_hint.text())
+    put("conn.db.size.failed", str(win.cb_db.count()))
+    put("conn.db.enabled.failed", "1" if win.cb_db.isEnabled() else "0")
+    put("conn.db.selected.failed", win.cb_db.currentText())
 
     # ---- 加载夹具 ----
     files = sorted(os.path.join(FIX, f) for f in os.listdir(FIX)

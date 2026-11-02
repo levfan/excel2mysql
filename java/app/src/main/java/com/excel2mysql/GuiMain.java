@@ -6588,6 +6588,12 @@ public final class GuiMain {
                 problems.add("有 conn.ini 时启动自动连接没连上/没选中目标库："
                         + tail(autoLog));
             }
+            // 清单在手，那一行就不该再说"还没加载"；预填也不算"改过连接信息"
+            if (!f1.dbRowHint().isEmpty() || f1.isConnDirty() || f1.dbListSize() != 2) {
+                problems.add("加载成功后目标库那一行仍写着提示或清单条数不对："
+                        + f1.dbRowHint() + " 脏=" + f1.isConnDirty()
+                        + " 条目=" + f1.dbListSize());
+            }
             // 配置的库不在服务器上：要解释，不能让人以为配置没生效
             f1.applyDatabases(f1.currentConfig(), Arrays.asList("beta", "gamma"));
             if (!f1.logPanel().text().contains("[跳过] conn.ini 指定的目标库 alpha 不在服务器上")) {
@@ -6641,6 +6647,16 @@ public final class GuiMain {
                 problems.add("空模板 conn.ini 仍然触发了自动连接："
                         + tail(f2b.logPanel().text()));
             }
+            // 这一态正是新装用户看到的：没自动连、目标库灰着。日志要说清下一步点哪颗，
+            // 那一行也要就地写着"要点「连接并加载库」"，否则读起来就是"目标库不给换"
+            String blankLog = f2b.logPanel().text();
+            if (!blankLog.contains("[提示] 配置里没写目标库，启动不自动连接")) {
+                problems.add("配置里没点目标库时只写了\"(未填库)\"，没说下一步："
+                        + tail(blankLog));
+            }
+            if (!MainFrame.DB_HINT_UNLOADED.equals(f2b.dbRowHint())) {
+                problems.add("清单没加载时目标库那一行没给就地提示：" + f2b.dbRowHint());
+            }
             f2b.dispose();
 
             // 自动连接失败只写日志、不弹模态框：弹出会让人以为软件打不开。
@@ -6659,7 +6675,44 @@ public final class GuiMain {
                 problems.add("自动连接失败没有写清原因/重试入口，或把下拉框留成了可用："
                         + tail(failLog));
             }
+            if (!failLog.contains("再点「连接并加载库」重试")) {
+                problems.add("失败那句只指到「设置数据源信息」（那颗只管展开），"
+                        + "没说到真正重试的那颗按钮：" + tail(failLog));
+            }
+            if (!MainFrame.DB_HINT_UNLOADED.equals(f3.dbRowHint()) || f3.dbListSize() != 0) {
+                problems.add("自动连接失败后那一行没写就地提示，或清单没清干净："
+                        + f3.dbRowHint() + " 条目=" + f3.dbListSize());
+            }
             f3.dispose();
+
+            // 用户现场那一条：先连上一台、拿到清单，再改主机想换数据源，新那台连不上。
+            // 这时旧清单来自上一台机器：改过就要说出来，加载失败就得清场——
+            // 留着旧库名会一边显示"● 目标库 旧库"一边把写入指向另一台机器
+            MainFrame.connCandidates = java.util.Collections.singletonList(good.getPath());
+            MainFrame.fetchOverride = () -> Arrays.asList("alpha", "beta");
+            MainFrame f4 = new MainFrame();
+            f4.autoConnect();
+            f4.hostField().setText("10.9.9.9");
+            String staleHint = f4.dbRowHint();
+            if (!MainFrame.DB_HINT_STALE.equals(staleHint) || !f4.isConnDirty()) {
+                problems.add("改过主机后没说清清单已过期：" + staleHint
+                        + " 脏=" + f4.isConnDirty());
+            }
+            MainFrame.fetchOverride = () -> {
+                throw new java.sql.SQLException("(2003) 模拟连不上");
+            };
+            String failure = f4.loadDatabases();
+            if (failure == null || f4.databaseChooserEnabled() || f4.dbListSize() != 0
+                    || !f4.selectedDatabase().isEmpty()
+                    || !MainFrame.DB_HINT_UNLOADED.equals(f4.dbRowHint())) {
+                problems.add("手动加载失败没清掉上一台的清单/没回到未加载那句："
+                        + f4.dbListSize() + " 当前库=" + f4.selectedDatabase()
+                        + " 提示=" + f4.dbRowHint());
+            }
+            if (f4.connStateText().contains("●")) {
+                problems.add("清单已清空，状态栏却还报着绿字当前库：" + f4.connStateText());
+            }
+            f4.dispose();
 
             // 没有配置文件那一条看主窗口的启动句：它就是在没有 conn.ini 的目录下建起来的
             String log0 = startupLog;

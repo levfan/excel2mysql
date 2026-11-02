@@ -4940,6 +4940,36 @@ check("Q6 连不上库的详情进日志并写明库列表未加载",
 check("Q7 失败后下拉框保持不可用，不留半个可用状态", qw2.cb_db.isEnabled() is False)
 app_main.connect = _fake_connect
 
+# ---- 目标库那一行的就地说明：灰着与过期是两件事，各写一句（用户现场报"目标库不给换"）----
+hw = app_main.MainWindow()
+check("Q7b 清单没加载时，那一行就写着要点哪颗按钮",
+      not hw.cb_db.isEnabled() and hw.lbl_db_hint.text() == app_main.DB_HINT_UNLOADED,
+      (hw.cb_db.isEnabled(), hw.lbl_db_hint.text()))
+hw.btn_conn_edit.click()
+hw.on_load_databases()
+check("Q7c 加载好之后那句提示收掉：清单就是当前这台机器给的",
+      hw.cb_db.isEnabled() and hw.lbl_db_hint.text() == ""
+      and hw._conn_dirty is False,
+      (hw.lbl_db_hint.text(), hw._conn_dirty))
+hw.ed_host.setText("10.9.9.9")
+check("Q7d 改过主机就当场说一句「清单来自上一次连接」，不清空也不禁用（填表途中不该被反复打断）",
+      hw.lbl_db_hint.text() == app_main.DB_HINT_STALE and hw._conn_dirty
+      and hw.cb_db.isEnabled() and hw.cb_db.count() == 2,
+      (hw.lbl_db_hint.text(), hw._conn_dirty, hw.cb_db.count()))
+app_main.connect = _orig_connect
+hw.ed_port.setValue(1)
+POPUPS.clear()
+hw.on_load_databases()
+check("Q7e 换过去的那台连不上时上一台的清单要清场：不留旧库名顶着「当前库」",
+      hw.cb_db.count() == 0 and not hw.cb_db.isEnabled()
+      and hw.cb_db.currentText() == ""
+      and hw.lbl_db_hint.text() == app_main.DB_HINT_UNLOADED
+      and "●" not in hw.lbl_conn_state.text(),
+      (hw.cb_db.count(), hw.cb_db.currentText(), hw.lbl_db_hint.text(),
+       hw.lbl_conn_state.text()))
+app_main.connect = _fake_connect
+hw.deleteLater()
+
 # ---- 程序同级 conn.ini 预填连接信息：现场配一次，不用每次手填 ----
 _cdir = os.path.join(_tmpdir, "conn预填")
 os.makedirs(_cdir, exist_ok=True)
@@ -5054,6 +5084,13 @@ check("Q53n 配置里没点名目标库就不自动连（随包空模板不该�
       and "[连接中] 启动自动连接" not in tw.log.toPlainText()
       and tw.ed_host.text() == "10.0.0.8",
       (tw._conn_auto, [l for l in tw.log.toPlainText().splitlines() if "连接" in l][:2]))
+# 这一态就是新装用户看到的：没自动连、目标库灰着。只写"(未填库)"他会以为已经连上，
+# 然后盯着点不开的下拉读成"目标库不给换"，所以日志与那一行都要说出下一步点哪颗
+check("Q53o 没点库那一态要把下一步说出口（日志一句 + 那一行就地一句）",
+      "[提示] 配置里没写目标库，启动不自动连接" in tw.log.toPlainText()
+      and tw.lbl_db_hint.text() == app_main.DB_HINT_UNLOADED,
+      ([l for l in tw.log.toPlainText().splitlines() if "没写目标库" in l][:1],
+       tw.lbl_db_hint.text()))
 tw.close()
 
 # 自动连接还在路上时用户自己点了「连接并加载库」：迟到的自动结果不许覆盖手动结果

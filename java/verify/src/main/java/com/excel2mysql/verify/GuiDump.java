@@ -398,6 +398,20 @@ public final class GuiDump {
                 int nl = connLog.indexOf('\n');
                 put("guard.conn.log", nl < 0 ? connLog : connLog.substring(0, nl));
                 put("guard.conn.db_enabled", frame.databaseChooserEnabled() ? "1" : "0");
+                // 目标库那一行的三态，与 Python 侧同一条流：加载好 → 改过连接信息 → 加载失败
+                frame.applyDatabases(frame.currentConfig(), Arrays.asList("alpha", "beta"));
+                put("conn.db.hint.loaded", frame.dbRowHint());
+                put("conn.db.size.loaded", String.valueOf(frame.dbListSize()));
+                frame.hostField().setText("10.9.9.9");
+                put("conn.db.hint.stale", frame.dbRowHint());
+                put("conn.db.dirty", frame.isConnDirty() ? "1" : "0");
+                ((javax.swing.SpinnerNumberModel) frame.portSpinner().getModel())
+                        .setValue(Integer.valueOf(1));
+                frame.loadDatabases();
+                put("conn.db.hint.failed", frame.dbRowHint());
+                put("conn.db.size.failed", String.valueOf(frame.dbListSize()));
+                put("conn.db.enabled.failed", frame.databaseChooserEnabled() ? "1" : "0");
+                put("conn.db.selected.failed", frame.selectedDatabase());
             }
         });
         load(files);
