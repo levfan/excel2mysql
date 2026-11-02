@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (QApplication, QAbstractItemView, QCheckBox, QComb
                                QGridLayout, QGroupBox,
                                QLabel, QLineEdit, QListWidget, QPlainTextEdit, QProgressBar,
                                QPushButton, QHeaderView, QScrollArea, QSpinBox, QSplitter,
+                               QTextEdit,
                                QTableWidget)                                                # noqa: E402
 import main as m  # noqa: E402
 
@@ -576,7 +577,13 @@ def main():
         if norm(l.text()) and not win.sql_run_drop.isAncestorOf(l))))
     put("sqlrun.default", win.sql_run_input.toPlainText())
     put("sqlrun.wrap", "wrap" if win.sql_run_input.lineWrapMode()
-        == QPlainTextEdit.WidgetWidth else "nowrap")
+        == QTextEdit.WidgetWidth else "nowrap")
+    # 编辑区的关键字高亮：两栈用同一句夹具，读各自控件上真挂着的角色段
+    # （Qt 在叠加层里、Swing 在文档属性里，读法同名同形才有可比性）
+    win.sql_run_input.setPlainText("SELECT `学生编号`, 姓名 FROM t_student"
+                                   " WHERE id>1; -- 备注\nDROP TABLE t_x;")
+    put("sqlrun.rich", m.applied_signature(win.sql_run_input))
+    win.sql_run_input.setPlainText(m.SQL_RUN_DEFAULT)
     # ---- 执行结果那张真表格（用户 2026-10-28：中英文混排时文本表格读不出来）----
     # 先量空态，再喂一份两边同一夹具量填上的样子：这一组键逐值比，
     # 表头/逐格取值/说明行/下拉可见性都必须两边同形，不然只是两套界面各自像自己。
@@ -633,6 +640,8 @@ def main():
     # 长行不折行：两边都得靠横向滚动，不能一边把 SQL 折三行、一边拖滚动条
     put("samples.preview.wrap", "nowrap" if _sd.preview.lineWrapMode()
         == type(_sd.preview).NoWrap else "wrap")
+    # 语句全文的角色分布：正文这条键已经比过一字不差，这一条比的是两栈切得同不同形
+    put("samples.preview.rich", m.styled_signature(_sd.preview))
     _sd.tree.setCurrentItem(_sd_leaves(_sd)[7])
     put("samples.preview.7", _sd.preview.toPlainText())
     # 关键词过滤：两边同一个词必须命中同一批条目，命中数与剩下的分组都按键比

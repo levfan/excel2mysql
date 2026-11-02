@@ -282,6 +282,12 @@ public final class GuiDump {
                 put("sqlrun.labels", lbSb.toString());
                 put("sqlrun.default", frame.sqlRunInputText());
                 put("sqlrun.wrap", frame.sqlRunWrap());
+                // 与 Python 侧同一句夹具：读的是真文档上的角色分布，不是 core 那张表抄一遍
+                frame.setSqlRunInputText("SELECT `学生编号`, 姓名 FROM t_student"
+                        + " WHERE id>1; -- 备注\nDROP TABLE t_x;");
+                put("sqlrun.rich", com.excel2mysql.gui.RichText.roleSignature(
+                        (javax.swing.JTextPane) frame.sqlRunInputComponent()));
+                frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
                 // 执行结果那张真表格：先量空态，再喂一份两边同一夹具量填上的样子。
                 // 表头/逐格取值/说明行/下拉可见性都逐值比，两边必须是同一张表。
                 javax.swing.JTable rt = frame.sqlRunResultTable();
@@ -325,6 +331,9 @@ public final class GuiDump {
                         frame.sqlRunPreviewFont().getSize())));
                 // 长行不折行：两边都得靠横向滚动，不能一边把 SQL 折三行、一边拖滚动条
                 put("samples.preview.wrap", frame.sqlSamplesPreviewWraps() ? "wrap" : "nowrap");
+                // 与 Python 侧同一条：正文一字不差已由 samples.preview.* 钉住，这条比切分同形不同形
+                put("samples.preview.rich", com.excel2mysql.gui.RichText.roleSignature(
+                        frame.sqlSamplesPreviewPane()));
                 frame.setSqlSamplesRow(7);
                 put("samples.preview.7", frame.sqlSamplesPreviewText());
                 // 关键词过滤：两边同一个词必须命中同一批条目，命中数与剩下的分组都按键比

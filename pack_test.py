@@ -1427,9 +1427,9 @@ check("F19 页签顺序为 Excel 导入 / SQL 脚本改名 / SQL 执行器",
       [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())]
       == ["Excel 导入", "SQL 脚本改名", "SQL 执行器"],
       [w.main_tabs.tabText(i) for i in range(w.main_tabs.count())])
-check("F20 编辑区开场就是那句连通检查且不折行",
+check("F20 编辑区开场就是那句连通检查，长句按词折行",
       w.sql_run_input.toPlainText() == app_main.SQL_RUN_DEFAULT
-      and w.sql_run_input.lineWrapMode() == QPlainTextEdit.NoWrap,
+      and w.sql_run_input.lineWrapMode() == app_main.QTextEdit.WidgetWidth,
       w.sql_run_input.toPlainText())
 check("F20b 编辑区与结果区同一支等宽字体、字号与第一页日志同档",
       w.sql_run_log.font().family() == w.sql_run_input.font().family()
@@ -2390,6 +2390,51 @@ for _where, _ddlg in (("第一页", app_main.DDLDialog(
           (_accent_ink(_dimg, target=(0xb2, 0x6a, 0x00)),
            _accent_ink(_dimg, target=(0x2f, 0x6f, 0xeb)), _accent_ink(_dimg)))
     _ddlg.deleteLater()
+# 编辑区的关键字高亮（用户："sql 文本里有关键字应该高亮，参照 DDL 预览的文字格式"）与
+# 示例语句全文同一套色。角色挂在叠加层而不是文档里：整篇重挂文档格式会往撤销栈塞一层
+# "看不见的编辑"，Ctrl+Z 第一下只把颜色撤掉、字还在，用户读作撤销没反应——
+# 所以"颜色真上到屏上"与"敲一个字只加一步撤销"各钉一条。
+_HL_FIXTURE = ("SELECT `学生编号`, 姓名 FROM t_student WHERE id>1; -- 备注\n"
+               "DROP TABLE t_x;")
+w.sql_run_input.setPlainText(_HL_FIXTURE)
+_hl_sig = app_main.applied_signature(w.sql_run_input)
+check("F67 编辑区上色一个字没改正文",
+      w.sql_run_input.toPlainText() == _HL_FIXTURE, w.sql_run_input.toPlainText())
+check("F67b 编辑区四档角色都挂上了（关键字灰/反引号名蓝/注释亮蓝/警示橙）",
+      all(c in _hl_sig for c in ("W", "L", "T", "D")), _hl_sig[:70])
+w.sql_run_input.show()
+_app.processEvents()
+_hl_img = w.sql_run_input.grab().toImage()
+check("F67c 编辑区那两档颜色真画到屏上",
+      _accent_ink(_hl_img, target=(0x9a, 0xa7, 0xb8)) > 0
+      and _accent_ink(_hl_img, target=(0xb2, 0x6a, 0x00)) > 0,
+      (_accent_ink(_hl_img, target=(0x9a, 0xa7, 0xb8)),
+       _accent_ink(_hl_img, target=(0xb2, 0x6a, 0x00))))
+from PySide6.QtCore import QEvent as _HLE, Qt as _HLQt
+from PySide6.QtGui import QKeyEvent as _HLKE
+w.sql_run_input.setFocus()
+_app.processEvents()
+_steps0 = w.sql_run_input.document().availableUndoSteps()
+_app.sendEvent(w.sql_run_input,
+               _HLKE(_HLE.KeyPress, _HLQt.Key_A, _HLQt.NoModifier, "a"))
+check("F67d 真按一个键只加一步撤销（重挂不许往撤销栈里塞看不见的编辑）",
+      w.sql_run_input.document().availableUndoSteps() == _steps0 + 1
+      and "a" in w.sql_run_input.toPlainText(),
+      (w.sql_run_input.document().availableUndoSteps(), _steps0))
+w.sql_run_input.setPlainText(app_main.SQL_RUN_DEFAULT)
+# 语句全文这一栏也按角色上色（用户："示例中的语句全文必须也要有关键字高亮，要不然看着太枯燥"）：
+# 读真文档的角色串，再数渲染出来的墨——两边都只认画出来的那一份
+_hl_prev = app_main.styled_signature(_dlg.preview)
+check("F67e 示例的语句全文挂上了角色色，正文一字未改",
+      "W" in _hl_prev
+      and _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[0].sql,
+      _hl_prev[:70])
+_dlg.show()
+_app.processEvents()
+_hl_pimg = _dlg.preview.grab().toImage()
+check("F67f 语句全文的关键字那一档灰真画到屏上",
+      _accent_ink(_hl_pimg, target=(0x9a, 0xa7, 0xb8)) > 0,
+      _accent_ink(_hl_pimg, target=(0x9a, 0xa7, 0xb8)))
 # 每个顶层窗口都要挂着同一颗图标：标题栏与任务栏不一致，同一个程序看着像两个。
 # Qt 这一侧由应用级 setWindowIcon 天然覆盖，判据仍逐窗读窗口自己那份 windowIcon——
 # 再问一次 QApplication 就只是把设置抄了一遍，接没接上窗口它照不出来。
@@ -2422,35 +2467,29 @@ check("F35 切换选中的条目，右侧介绍与语句都跟着换",
       _dlg.preview.toPlainText() == app_main.SQL_SAMPLES[7].sql
       and app_main.SQL_SAMPLES[7].scenario in _dlg.intro.toPlainText(),
       _dlg.tree.currentIndex().row())
-# 换一条要把右侧滚回开头，这条断言的前提是"预览真的宽到要横向滚动"：
-# 挑单行最宽那条（撑出横向滚动条的是行宽，不是全文长度），并且切过去的那条也要同样宽——
-# 否则"回到 0"可能只是新内容本来就放得下被自动夹回去，量到的不是复位那一步。
-_byLineWidth = sorted(range(len(app_main.SQL_SAMPLES)),
-                      key=lambda i: max(len(l)
-                                        for l in app_main.SQL_SAMPLES[i].sql.split("\n")),
-                      reverse=True)
-# 量之前得先把框摆出来：没 show 过的控件不参与布局，可视区宽度还是初值，
-# 横向滚动条的 max 恒为 0，这条会假红（offscreen 下实测 (h0=0, v0=3)）。
+# 换一条要把右侧滚回开头。折行之后顶出可视区的是行数不是行宽，所以挑"全文最长"那条，
+# 再把右半边拖窄（拖窄＝同样的字多折几行＝纵向更容易溢出），前提就不取决于
+# 这台机器给对话框留了多宽。切过去的那条也要同样长——否则"回到 0"可能只是新内容
+# 本来就放得下被自动夹回去，量到的不是复位那一步。
+_byLongest = sorted(range(len(app_main.SQL_SAMPLES)),
+                    key=lambda i: len(app_main.SQL_SAMPLES[i].sql), reverse=True)
+# 量之前得先把框摆出来：没 show 过的控件不参与布局，可视区还是初值，
+# 纵向滚动条的 max 恒为 0，这条会假红（offscreen 下实测过）。
 _dlg.show()
 _app.processEvents()
-_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[_byLineWidth[0]])
-check("F35a 语句全文不折行（长行交给横向滚动，不把一句 SQL 拆成三行）",
-      _dlg.preview.lineWrapMode() == type(_dlg.preview).NoWrap,
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[_byLongest[0]])
+check("F35a 语句全文按词折行（不折行那条契约作废，两栈一起换成富文本件）",
+      _dlg.preview.lineWrapMode() == app_main.QTextEdit.WidgetWidth,
       _dlg.preview.lineWrapMode())
-# 再把右半边拖窄（用户拖分隔条就是这个动作），让前提不取决于这台机器给对话框留了多宽。
 _sizes0 = _dlg.split.sizes()
 _dlg.split.setSizes([_dlg.width() // 4, _dlg.width() // 4])
 _app.processEvents()
 _dlg.preview.verticalScrollBar().setValue(9999)
-_dlg.preview.horizontalScrollBar().setValue(9999)
 _v0 = _dlg.preview.verticalScrollBar().value()
-_h0 = _dlg.preview.horizontalScrollBar().value()
-_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[_byLineWidth[1]])
-check("F35b 换一条时右侧滚回开头，上一行留下的滚动位置不许留着",
-      _h0 > 0 and _dlg.preview.horizontalScrollBar().value() == 0
-      and _dlg.preview.verticalScrollBar().value() == 0,
-      (_h0, _v0, _dlg.preview.horizontalScrollBar().value(),
-       _dlg.preview.verticalScrollBar().value()))
+_dlg.tree.setCurrentItem(_visible_leaves(_dlg)[_byLongest[1]])
+check("F35b 换一条时右侧纵向滚回开头，上一条留下的滚动位置不许留着",
+      _v0 > 0 and _dlg.preview.verticalScrollBar().value() == 0,
+      (_v0, _dlg.preview.verticalScrollBar().value()))
 _dlg.split.setSizes(_sizes0)
 _dlg.show()
 w.sql_run_input.setPlainText(app_main.SQL_RUN_DEFAULT)

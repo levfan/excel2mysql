@@ -2285,9 +2285,45 @@ public final class GuiMain {
         if (!"执行脚本与临时语句".equals(frame.sqlRunHintText())) {
             problems.add("「SQL 执行器」的提示文案不对：" + frame.sqlRunHintText());
         }
-        if (!"nowrap".equals(frame.sqlRunWrap())) {
-            problems.add("SQL 编辑区应不折行（折行后分号要数着看），实际 " + frame.sqlRunWrap());
+        if (!"wrap".equals(frame.sqlRunWrap())) {
+            problems.add("SQL 编辑区应按词折行（换成富文本件才能按角色上色，"
+                    + "不折行那条契约已由用户作废），实际 " + frame.sqlRunWrap());
         }
+        // 编辑区的关键字高亮：读的是真文档上的角色分布，不是 core 那张表抄一遍。
+        // 同一句夹具也钉住"上色不许改正文"——\n 是 JTextPane 的段界，getText 会展开成 \r\n，
+        // 所以比的是归一之后的那份（paneText 走的同一条读法）。
+        frame.setSqlRunInputText("SELECT `学生编号`, 姓名 FROM t_student WHERE id>1; -- 备注\n"
+                + "DROP TABLE t_x;");
+        String runSig = com.excel2mysql.gui.RichText.roleSignature(
+                (javax.swing.JTextPane) frame.sqlRunInputComponent());
+        if (runSig.indexOf('W') < 0 || runSig.indexOf('L') < 0
+                || runSig.indexOf('D') < 0 || runSig.indexOf('T') < 0) {
+            problems.add("编辑区没按角色挂上颜色（关键字/反引号名/警示/注释缺档）：" + runSig);
+        }
+        String runFixture = "SELECT `学生编号`, 姓名 FROM t_student WHERE id>1; -- 备注\n"
+                + "DROP TABLE t_x;";
+        if (!runFixture.equals(frame.sqlRunInputText())) {
+            problems.add("编辑区上色把正文改了：" + frame.sqlRunInputText());
+        }
+        // 夹具留在编辑区会让后面那些"开场就是那句连通检查"的判据读到上一场景的文本
+        frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+        // 整篇重挂的代价钉住：编辑区每改一次正文就重挂一遍，长脚本不能把界面拖住。
+        // 阈值按"粘一大段进来界面还跟手"定：600 条夹具实测远小于这一档（差一个数量级）
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 600; i++) {
+            big.append("INSERT INTO t_").append(i)
+                    .append(" (id, name) VALUES (").append(i).append(", 'x');\n");
+        }
+        long restyle0 = System.currentTimeMillis();
+        frame.setSqlRunInputText(big.toString());
+        long restyleMs = System.currentTimeMillis() - restyle0;
+        frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
+        if (restyleMs > 400) {
+            problems.add("600 条语句整篇上色要 " + restyleMs
+                    + " 毫秒（编辑区粘大脚本会卡住界面）");
+        }
+        System.out.println("- [INFO] GUI-SELFTEST | 编辑区整篇上色 600 条耗时 "
+                + restyleMs + " 毫秒");
         // 编辑区与结果区都是第三页给人读的主区域：等宽，字号与第一页日志同档
         java.awt.Font resultFont = frame.sqlRunLogPanel().getFont();
         java.awt.Font inputFont = frame.sqlRunInputFont();
@@ -2536,6 +2572,17 @@ public final class GuiMain {
         if (frame.sqlSamplesIntroInk(0) <= 0 || frame.sqlSamplesIntroInk(1) <= 0) {
             problems.add("介绍块没真上到色：标题蓝 " + frame.sqlSamplesIntroInk(0)
                     + " 个像素，分组蓝与关键词块 " + frame.sqlSamplesIntroInk(1) + " 个");
+        }
+        // 语句全文这一栏也按角色上色（用户："看着太枯燥"）：读真文档的串 + 数渲染出来的墨，
+        // 与介绍块同一套判据，正文那条"一字未改"已由上面两条钉住
+        String previewSig = com.excel2mysql.gui.RichText.roleSignature(
+                frame.sqlSamplesPreviewPane());
+        if (previewSig.indexOf('W') < 0) {
+            problems.add("语句全文没挂上关键字那一档：" + previewSig);
+        }
+        if (inkOf(frame.sqlSamplesPreviewPane(),
+                com.excel2mysql.gui.RichText.KEYWORD_FG) <= 0) {
+            problems.add("语句全文的关键字那一档灰没真画到屏上");
         }
         // 关键词过滤：命中集合必须与 SqlSamples.matches 判的同一批，命中数要说出来
         frame.typeSqlSamplesFilter("注释");
@@ -7085,45 +7132,36 @@ public final class GuiMain {
             } else if (!frame.sqlSamplesTitle().contains("SQL 示例")) {
                 problems.add("开出来的不是那份示例清单：" + frame.sqlSamplesTitle());
             }
-            // 换一条要把右侧滚回开头：预览不折行，上一条留下的横向位置会切掉新语句的开头。
-            // 挑"单行最宽"那条而不是"全文最长"那条——撑出横向滚动条的是行宽不是总长；
-            // 切过去的那条也要同样宽，否则"回到 0"可能只是新内容本来就放得下被夹回去，
-            // 量到的不是复位。先把两侧滚到最右/最下，再换条，等事件分发线程做完看读数
+            // 换一条要把右侧滚回开头：预览折行之后，上一条长文留下的纵向位置会让新语句
+            // 看着像"缺了上半截"。挑"全文最长"那条——折行之后顶出可视区的是行数不是行宽；
+            // 切过去的那条也要同样长，否则"回到 0"可能只是新内容本来就放得下被夹回去，
+            // 量到的不是复位。先把滚动条推到最下，再换条，等事件分发线程做完看读数
             final javax.swing.JScrollPane spane = frame.sqlSamplesPane();
             if (spane == null) {
                 problems.add("示例预览没有滚动容器，验不了换条后的滚动复位");
-            } else if (frame.sqlSamplesPreviewWraps()) {
-                problems.add("示例预览折了行：长行该交给横向滚动，不把一句 SQL 拆成三行");
+            } else if (!frame.sqlSamplesPreviewWraps()) {
+                problems.add("示例预览没按词折行：这一栏是给人照着挑语句的阅读面，"
+                        + "长句该折在窗口里而不是拖横向滚动条");
             } else {
-                final int widest = orderByLineWidth(frame, 0);
-                final int second = orderByLineWidth(frame, 1);
-                invokeUi(() -> frame.setSqlSamplesRow(widest));
+                final int longest = orderByLongestText(frame, 0);
+                final int second = orderByLongestText(frame, 1);
+                invokeUi(() -> frame.setSqlSamplesRow(longest));
                 invokeUi(() -> {
-                    spane.getHorizontalScrollBar().setValue(
-                            spane.getHorizontalScrollBar().getMaximum());
                     spane.getVerticalScrollBar().setValue(
                             spane.getVerticalScrollBar().getMaximum());
                 });
-                final int h0 = spane.getHorizontalScrollBar().getValue();
                 final int v0 = spane.getVerticalScrollBar().getValue();
                 invokeUi(() -> frame.setSqlSamplesRow(second));
                 long resetUntil = System.currentTimeMillis() + 2000;
                 while (System.currentTimeMillis() < resetUntil
-                        && (spane.getHorizontalScrollBar().getValue() != 0
-                        || spane.getVerticalScrollBar().getValue() != 0)) {
+                        && spane.getVerticalScrollBar().getValue() != 0) {
                     Thread.sleep(20);
                 }
-                if (h0 <= 0) {
-                    problems.add("示例里没有一条宽到要横向滚动的（最宽那条第 "
-                            + (widest + 1) + " 条、" + lineWidth(frame.sqlSampleSql(widest))
-                            +  " 字符），这条复位没量到");
-                } else if (spane.getHorizontalScrollBar().getValue() != 0) {
-                    problems.add("换一条示例后右侧没滚回行首：横 "
-                            + spane.getHorizontalScrollBar().getValue()
-                            + "（换条前停在 " + h0 + "）");
-                } else if (v0 > 0 && spane.getVerticalScrollBar().getValue() != 0) {
-                    // 纵向只在"上一条确实把内容顶出可视区"时才断——高分屏上五条 SQL
-                    // 本来就放得下，拿它当无条件前提会假红
+                if (v0 <= 0) {
+                    problems.add("示例里没有一条长到要纵向滚动的（最长那条第 "
+                            + (longest + 1) + " 条、" + frame.sqlSampleSql(longest).length()
+                            + " 字符），这条复位没量到");
+                } else if (spane.getVerticalScrollBar().getValue() != 0) {
                     problems.add("换一条示例后右侧没滚回开头：纵 "
                             + spane.getVerticalScrollBar().getValue()
                             + "（换条前停在 " + v0 + "）");
@@ -7158,23 +7196,14 @@ public final class GuiMain {
         }
     }
 
-    /** 一条示例里最宽那行有多少字符：撑出横向滚动条的是行宽，不是全文长度。 */
-    private static int lineWidth(String sql) {
-        int max = 0;
-        for (String line : sql.split("\r?\n")) {
-            max = Math.max(max, line.length());
-        }
-        return max;
-    }
-
-    /** 按"最宽行"从宽到窄排第 rank 名（0 是最宽那条）的示例序号。 */
-    private static int orderByLineWidth(MainFrame frame, int rank) {
+    /** 按"全文字数"从长到短排第 rank 名（0 是最长那条）的示例序号。 */
+    private static int orderByLongestText(MainFrame frame, int rank) {
         List<Integer> order = new ArrayList<Integer>();
         for (int i = 0; i < frame.sqlSamplesCount(); i++) {
             order.add(i);
         }
         java.util.Collections.sort(order, (a, b) ->
-                lineWidth(frame.sqlSampleSql(b)) - lineWidth(frame.sqlSampleSql(a)));
+                frame.sqlSampleSql(b).length() - frame.sqlSampleSql(a).length());
         return order.get(rank);
     }
 
