@@ -72,7 +72,7 @@ SECTIONS = [
 <code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到
 <code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给
 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-3.4.5.jar --check</code>。
+<code>jre\\bin\\java.exe -jar excel2mysql-3.5.0.jar --check</code>。
 双击 jar 文件本身没有任何反应。</li>
 </ul>
 
@@ -847,8 +847,10 @@ dump 里认 <code>DELIMITER</code> 指令，触发器与存储过程的整句不
 命令行版仍把这些画成等宽文本表格（汉字按两列补齐）</li>
 <li>手写脚本与编辑区的切句与「SQL 脚本改名」页同一套：跳过字符串、反引号与注释里的分号；
 整句只剩注释的片段会被剔掉，不会算成「已提交 1 条」（dump 另按 <code>DELIMITER</code> 规则切）</li>
-<li>编辑区不折行，一句 SQL 一行看到底；开场预置 <code>SELECT 1 AS 连通检查;</code>，
-连不上库时结果区直接给错误码与原因</li>
+<li>编辑区与「示例 (?)」里的语句全文都按角色上色（关键字退灰、类型加粗、
+反引号名与注释各一档、<code>DROP</code> / <code>DELETE</code> / <code>TRUNCATE</code>
+走警示橙，与「DDL 预览」同一套），长句按词折行，不必拖横向滚动条；
+开场预置 <code>SELECT 1 AS 连通检查;</code>，连不上库时结果区直接给错误码与原因</li>
 <li>示例里的表名与库名是占位（<code>t_order</code>、<code>ods_data</code>），
 现场改完再执行；本页执行的就是提交的语句，<code>DROP</code> / <code>TRUNCATE</code>
 不另设确认，删除前先看清结果区里那句</li>
