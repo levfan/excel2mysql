@@ -45,7 +45,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLineEdit, QSpinBox, QPushButton, QComboBox, QFileDialog, QTableWidget,
-    QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QGroupBox,
+    QTableWidgetItem, QLabel, QProgressBar, QPlainTextEdit, QTextEdit, QGroupBox,
     QMessageBox, QHeaderView, QCheckBox, QAbstractItemView, QScrollArea, QStyle,
     QDialog, QDialogButtonBox, QTabWidget, QSplitter, QProxyStyle, QToolButton,
     QTreeWidget, QTreeWidgetItem, QStyledItemDelegate,
@@ -69,6 +69,7 @@ from core.sql_script import (
     set_table_comment, prepend_drop_tables,
     is_dump_script, dump_statements, dump_skip_reason, dump_database_switch,
     edit_column, format_sql, format_refusal,
+    SQL_FORMAT_KEYWORDS, SQL_FORMAT_TYPES,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES, matches as sample_matches
@@ -3445,13 +3446,17 @@ class MainWindow(QWidget):
         clear_row.addWidget(self.btn_run_scripts)
         ru.addLayout(clear_row)
 
-        self.sql_run_input = QPlainTextEdit(SQL_RUN_DEFAULT)
+        self.sql_run_input = QTextEdit(SQL_RUN_DEFAULT)
         self.sql_run_input.setFont(QFont("Consolas", SQL_RUN_FONT_SIZE))
-        # 编辑区与结果区同一档最小高度：初始化时整段压到最小，把高度让给上面的
-        # 脚本清单；清单为空时那张表的图标 + 引导语才不会被挤掉
+        # 编辑区是给人改字的，粘进来的富文本（网页/Word 带的那些颜色字号）必须只留字：
+        # 否则一段带样式的粘贴会把这块变成"半排好版"的文档，关键字色反而盖不住旧色
+        self.sql_run_input.setAcceptRichText(False)
+        # 初始化时整段压到最小，把高度让给上面的脚本清单；
+        # 清单为空时那张表的图标 + 引导语才不会被挤掉
         self.sql_run_input.setMinimumHeight(log_min_height(self.sql_run_input))
-        # 不折行：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
-        self.sql_run_input.setLineWrapMode(QPlainTextEdit.NoWrap)
+        # 关键字高亮：文本一变就重挂叠加层，格式化、清空、插示例走的都是这一条
+        self.sql_run_input.textChanged.connect(self._refresh_sql_highlight)
+        apply_sql_highlight(self.sql_run_input)
         # 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -3686,6 +3691,10 @@ class MainWindow(QWidget):
         if printed < total:
             caption += "（表格只装前 %d 行，其余没取回来）" % printed
         self.lbl_sql_run_caption.setText(caption)
+
+    def _refresh_sql_highlight(self):
+        """编辑区文本一变就重挂角色色（只动叠加层，正文与撤销栈都不碰）。"""
+        apply_sql_highlight(self.sql_run_input)
 
     def on_format_sql(self):
         """把编辑区那段 SQL 排整齐：排了、没得排、不许排三种结局都留一句可见的话。
@@ -4142,7 +4151,7 @@ class MainWindow(QWidget):
         if paths:
             self.paste_paths(paths)
             return True
-        if isinstance(focus, (QLineEdit, QPlainTextEdit)):
+        if isinstance(focus, (QLineEdit, QPlainTextEdit, QTextEdit)):
             return False        # 没有文件可加，这一按键本来就归文本控件自己粘
         # 焦点不在输入框里：让当前页给出那句"粘的不是文件"的回执，不静默
         self.paste_paths([])
@@ -5032,37 +5041,107 @@ def _char_role(fmt):
     return "V"
 
 
+def _runs_from_roles(text, segs):
+    """把 (起, 止, 角色) 段表压成 "T12|L3|V23"；段与段之间那些字没上色，记成 V。
+
+    换行不计：它是段界、本身没有字形，Qt 从段界读回来的是下一段那一档、
+    Swing 读回来的是上一段那一档，两边各说各话，计进段长就永远对不齐。
+    """
+    def count(a, b):
+        return sum(1 for i in range(max(a, 0), min(b, len(text)))
+                   if text[i] != "\n")
+
+    out = []
+    prev, run, pos = None, 0, 0
+
+    def push(role, n):
+        nonlocal prev, run
+        if n <= 0:
+            return
+        if role == prev:
+            run += n
+            return
+        if prev is not None:
+            out.append("%s%d" % (prev, run))
+        prev, run = role, n
+
+    for start, end, role in sorted(segs):
+        if end <= pos:
+            continue                      # 段重叠（不该发生）：已经用掉的那一段说了算
+        push("V", count(pos, start))
+        push(role, count(max(start, pos), end))
+        pos = max(pos, end)
+    push("V", count(pos, len(text)))
+    if prev is not None:
+        out.append("%s%d" % (prev, run))
+    return "|".join(out)
+
+
 def styled_signature(view):
     """读回文档里每一段的角色归属，压成 "T12|L3|V23|L4|K18" 这样一串。
 
     判角色靠颜色不靠记忆：这条串说的是"屏幕上现在哪一段是什么色"，两栈的切分规则
     一旦不一致，对撞就会红，而不是两边各自读同一份常量绿着。
     两处读法必须与 Java 侧（gui.RichText.roleSignature）逐字对齐，否则比的是读法不是切分：
-    一是逐字取格式要先选中这一个字再读，光标停在 i 处时 charFormat() 给的是插入点格式
-    （等于前一个字的格式），整串会右移一格；二是换行符整个跳过——它是段落分隔符，
-    本身没有字形，Qt 从段界读回来的是下一段那一档、Swing 读回来的是上一段那一档，
-    两边各说各话，把它计进段长就永远对不齐。
+    逐字取格式要先选中这一个字再读，光标停在 i 处时 charFormat() 给的是插入点格式
+    （等于前一个字的格式），整串会右移一格。
     """
     doc = view.document()
     text = doc.toPlainText()
     cur = QTextCursor(doc)
-    out = []
-    prev, run = None, 0
+    segs = []
+    prev, start = None, 0
     for i in range(len(text)):
-        if text[i] == "\n":
-            continue
         cur.setPosition(i)
         cur.setPosition(i + 1, QTextCursor.KeepAnchor)
         role = _char_role(cur.charFormat())
-        if role == prev:
-            run += 1
-        else:
+        if role != prev:
             if prev is not None:
-                out.append("%s%d" % (prev, run))
-            prev, run = role, 1
+                segs.append((start, i, prev))
+            prev, start = role, i
     if prev is not None:
-        out.append("%s%d" % (prev, run))
-    return "|".join(out)
+        segs.append((start, len(text), prev))
+    return _runs_from_roles(text, segs)
+
+
+def apply_sql_highlight(view):
+    """给编辑区挂上角色色：走 extraSelections 这一层，正文一个字不动、撤销栈也不加一步。
+
+    为什么不写成文档格式（只读那几块走的就是文档格式）：编辑区是给人敲字的，
+    整篇重挂格式会给撤销栈塞一层"看不见的编辑"，Ctrl+Z 第一下只把颜色撤没了，
+    字还在——用户读作"撤销没反应"。叠加层是绘制时套上去的，屏幕上一个字不多一个不少，
+    读回来靠 applied_signature。
+    """
+    formats = sql_formats(view)
+    sel = []
+    for start, end, role in sql_spans(view.toPlainText()):
+        fmt = formats.get(role)
+        if fmt is None:
+            continue
+        item = QTextEdit.ExtraSelection()
+        item.format = fmt
+        cur = QTextCursor(view.document())
+        cur.setPosition(start)
+        cur.setPosition(end, QTextCursor.KeepAnchor)
+        item.cursor = cur
+        sel.append(item)
+    view.setExtraSelections(sel)
+
+
+def applied_signature(view):
+    """编辑区那一份签名：角色挂在叠加层里，就从真挂上去的那一份读回来。
+
+    与 styled_signature 同一串形状（同样的角色字母、同样的段长压缩），
+    两栈的编辑区才比得了——Java 侧那块是文档属性，读法是 gui.RichText.appliedSignature。
+    """
+    text = view.toPlainText()
+    segs = []
+    for item in view.extraSelections():
+        cur = item.cursor
+        role = _char_role(item.format)
+        if role != "V":
+            segs.append((cur.selectionStart(), cur.selectionEnd(), role))
+    return _runs_from_roles(text, segs)
 
 
 DDL_KEYWORDS = frozenset(("CREATE", "TABLE", "PRIMARY", "KEY", "NOT", "NULL", "DEFAULT",
@@ -5118,6 +5197,49 @@ def ddl_formats(view):
         "keyword": rich_format(fg=RICH_KEYWORD_FG),
         "danger": rich_format(fg=RICH_DANGER_FG, bold=True),
     }
+
+
+# 认词不跑语法：注释（-- /# /块注释）、反引号标识符、单引号串先各自成段，
+# 剩下的裸词按"会不会真删数据 → 类型 → 关键字"排优先级
+SQL_TOKEN_RE = re.compile(r"/\*.*?\*/|--[^\n]*|#[^\n]*|`[^`]*`|'(?:[^']|'')*"
+                         r"|[A-Za-z_][A-Za-z0-9_]*", re.S)
+SQL_DANGER = frozenset(("DROP", "DELETE", "TRUNCATE"))
+
+
+def sql_spans(text):
+    """把一段 SQL 切成 (起, 止, 角色)：角色名与 DDL 预览同一套，颜色也就同一套。
+
+    词表直接取格式化器那两张（`SQL_FORMAT_KEYWORDS` / `SQL_FORMAT_TYPES`），
+    不再另立一份——同一句话里"哪些是关键字"在两处答案不同，比高亮难看多了。
+    DROP/DELETE/TRUNCATE 走警示色：DDL 预览里那句 `DROP TABLE` 同理，
+    这一段里只有它们会把数据真删掉。
+    """
+    text = rich_text(text)
+    spans = []
+    for tok in SQL_TOKEN_RE.finditer(text):
+        w = tok.group(0)
+        if w.startswith(("/*", "--", "#", "'")):
+            role = "comment"
+        elif w.startswith("`"):
+            role = "ident"
+        elif w.upper() in SQL_DANGER:
+            role = "danger"
+        elif w.upper() in SQL_FORMAT_TYPES:
+            role = "type"
+        elif w.upper() in SQL_FORMAT_KEYWORDS:
+            role = "keyword"
+        else:
+            continue
+        spans.append((tok.start(), tok.end(), role))
+    return spans
+
+
+def sql_formats(view):
+    """SQL 正文的角色格式：直接取 DDL 预览那一份（用户点名参照它的文字格式）。
+
+    两处共用同一支色与同一个角色名，签名在两处读法相同，也不会长出"两个预览两种蓝"。
+    """
+    return ddl_formats(view)
 
 
 def intro_formats(view):
@@ -5192,10 +5314,8 @@ class SqlSamplesDialog(QDialog):
 
         self.intro = QPlainTextEdit()
         self.intro.setReadOnly(True)
-        self.preview = QPlainTextEdit()
+        self.preview = QTextEdit()
         self.preview.setReadOnly(True)
-        # 与编辑区同一条口径：一句 SQL 折成三行之后，分号在哪、语句从哪儿开始都得数
-        self.preview.setLineWrapMode(QPlainTextEdit.NoWrap)
         # 介绍条跟着界面基准，目录已经抬到表格那一档（见 SAMPLE_TREE_FONT_SIZE），
         # 只有语句正文按日志档 10 号：
         # 这是照着挑的阅读弹窗，不吃编辑区那档 16 号（16 号在并排清单旁显得突兀）
@@ -5316,11 +5436,10 @@ class SqlSamplesDialog(QDialog):
         # 内容仍是那五行，只是按角色上色：标题一档、字段名一档、关键词成一块
         paint_styled(self.intro, _intro, intro_spans(_intro),
                      intro_formats(self.intro), SAMPLE_INTRO_BLOCK_SPACING)
-        # 语句正文这一栏两端都保持素色：Java 侧要按角色上色就得换 JTextPane，
-        # 而 JTextPane 只能折行，`samples.preview.wrap` 这条对撞键钉的是两端都不折行
-        # （编辑器口径：一句 SQL 折成三行之后，分号在哪得自己数）。
-        # 只给 Qt 一侧上色，闸门照不出来、两栈还会长得不一样，所以整条留着不做。
-        self.preview.setPlainText(SQL_SAMPLES[idx].sql)
+        # 语句正文与 DDL 预览共用同一套角色色：切分取自 sql_spans，格式取自 ddl_formats
+        _sql = SQL_SAMPLES[idx].sql
+        paint_styled(self.preview, _sql, sql_spans(_sql),
+                     sql_formats(self.preview), DDL_BLOCK_SPACING)
         # 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
         # 看着像"缺了上半截"（与 Java 侧 openSqlSamples 的复位同一处理）
         for view in (self.intro, self.preview):

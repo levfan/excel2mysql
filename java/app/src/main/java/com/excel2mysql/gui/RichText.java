@@ -62,6 +62,13 @@ public final class RichText {
     /** 反引号名与单引号串排在裸词前面，注释里出现的 NULL 之类不会被误当成关键字。 */
     private static final Pattern DDL_TOKEN = Pattern.compile(
             "`[^`]*`|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*");
+    /** 块注释要跨行，所以整篇扫（DotAll），行注释与字符串按各自那一行止住。 */
+    private static final Pattern SQL_TOKEN = Pattern.compile(
+            "/\\*.*?\\*/|--[^\\n]*|#[^\\n]*|`[^`]*`|'(?:[^']|'')*"
+            + "|[A-Za-z_][A-Za-z0-9_]*", Pattern.DOTALL);
+    /** 会真删数据的动词：与 Python 侧的 SQL_DANGER 同一张表。 */
+    private static final Set<String> SQL_DANGER = new HashSet<String>(Arrays.asList(
+            "DROP", "DELETE", "TRUNCATE"));
 
     private RichText() {
     }
@@ -147,6 +154,112 @@ public final class RichText {
             pos += line.length() + 1;
         }
         return spans;
+    }
+
+    /**
+     * 一段 SQL 的角色切分：认词、引号与注释，不跑语法。
+     *
+     * <p>词表直接取格式化器那两张（{@code SqlScript.formatKeywords/formatTypes}），
+     * 不再另立一份——同一句话里"哪些算关键字"在两处答案不同，比高亮难看多了。
+     * DROP/DELETE/TRUNCATE 走警示色：这一段里只有它们会把数据真删掉，
+     * 与 DDL 预览那句 `DROP TABLE` 同一个道理。注释与引号段排在裸词前面，
+     * 注释里写的 NULL 不会被当成关键字。
+     * 与 Python 侧 main.py 的 sql_spans 同一条规则，两栈切得一样由对撞键判。
+     */
+    public static List<int[]> sqlSpans(String text) {
+        text = normalizeNewlines(text);
+        List<int[]> spans = new ArrayList<int[]>();
+        Set<String> keywords = com.excel2mysql.core.SqlScript.formatKeywords();
+        Set<String> types = com.excel2mysql.core.SqlScript.formatTypes();
+        Matcher mk = SQL_TOKEN.matcher(text);
+        while (mk.find()) {
+            String w = mk.group();
+            int role;
+            if (w.startsWith("/*") || w.startsWith("--") || w.startsWith("#")
+                    || w.startsWith("'")) {
+                role = ROLE_COMMENT;
+            } else if (w.startsWith("`")) {
+                role = ROLE_IDENT;
+            } else {
+                String up = w.toUpperCase(java.util.Locale.ROOT);
+                if (SQL_DANGER.contains(up)) {
+                    role = ROLE_DANGER;
+                } else if (types.contains(up)) {
+                    role = ROLE_TYPE;
+                } else if (keywords.contains(up)) {
+                    role = ROLE_KEYWORD;
+                } else {
+                    continue;
+                }
+            }
+            spans.add(new int[]{mk.start(), mk.end(), role});
+        }
+        return spans;
+    }
+
+    /**
+     * 把编辑区那块文档换成"改完正文自己上色"的那一份。
+     *
+     * <p>为什么不挂 DocumentListener：Swing 在发通知的那一段里不让再动文档，
+     * 监听器里调 {@code setCharacterAttributes} 会当场抛
+     * {@code IllegalStateException: Attempt to mutate in notification}（实测踩过）。
+     * 插在 {@code insertString}/{@code remove} 的 super 之后就没这个问题——
+     * 那时事件已经发完，写锁还在这条线程上。
+     *
+     * <p>必须在 {@code setText} 之前装好，否则先塞进去的那段正文没人上色。
+     */
+    public static void attachSqlHighlight(JTextPane pane) {
+        SqlDocument doc = new SqlDocument(pane);
+        // JTextComponent 认这个属性：不关掉会按国际化再排一遍文本，两栈读回来的字数就不一样了
+        doc.putProperty("i18n", Boolean.FALSE);
+        pane.setDocument(doc);
+    }
+
+    /** 编辑区那一份文档：每次正文变动之后按角色重挂字符属性。 */
+    static final class SqlDocument extends javax.swing.text.DefaultStyledDocument {
+
+        private static final long serialVersionUID = 1L;
+        private final transient JTextPane pane;
+
+        SqlDocument(JTextPane pane) {
+            this.pane = pane;
+        }
+
+        @Override
+        public void insertString(int offs, String str, AttributeSet a)
+                throws BadLocationException {
+            super.insertString(offs, str, a);
+            RichText.restyleSql(pane);
+        }
+
+        @Override
+        public void remove(int offs, int len) throws BadLocationException {
+            super.remove(offs, len);
+            RichText.restyleSql(pane);
+        }
+    }
+
+    /**
+     * 给可编辑那一块重挂角色色：只改字符属性，正文、光标、选区都不动。
+     *
+     * <p>Python 侧的编辑区挂的是叠加层（extraSelections），不是文档格式：那边整篇重挂
+     * 格式会往撤销栈里塞一层"看不见的编辑"，用户按 Ctrl+Z 第一下只把颜色撤掉、字还在，
+     * 读作"撤销没反应"。Swing 这块控件没有内建撤销栈，写进文档属性撤不掉，
+     * 两栈用户按下去拿到的都是"撤掉刚敲的那个字"，这条口径才对得上。
+     */
+    public static void restyleSql(JTextPane pane) {
+        StyledDocument doc = pane.getStyledDocument();
+        java.awt.Font base = pane.getFont();
+        Color def = pane.getForeground();
+        doc.setCharacterAttributes(0, doc.getLength(), attrs(base, base.getSize(), def,
+                null, false), true);
+        for (int[] sp : sqlSpans(textOf(pane))) {
+            if (sp[0] >= sp[1]) {
+                continue;
+            }
+            doc.setCharacterAttributes(sp[0], sp[1] - sp[0],
+                    attrsFor(sp[2], base, def), true);
+        }
     }
 
     /**

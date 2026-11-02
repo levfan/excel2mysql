@@ -149,7 +149,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private String lastDialogIcon = "information";
     private javax.swing.JTabbedPane tabs;
     /** 第三个页签「SQL 执行器」：编辑区、结果区与那三颗按钮，示例对话框不算常驻控件。 */
-    private javax.swing.JTextArea sqlRunInput;
+    private javax.swing.JTextPane sqlRunInput;
     private LogPanel sqlRunLog;
     /** 结果集用真表格画：文本框里中英文混排必错行，且一长就被自动滚到底看不见数据。 */
     private javax.swing.JTable sqlRunResultTable;
@@ -192,7 +192,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JTree sqlRunSamplesTree;
     private javax.swing.JLabel sqlRunSamplesHits;
     private javax.swing.JTextPane sqlRunIntro;
-    private javax.swing.JTextArea sqlRunPreview;
+    private javax.swing.JTextPane sqlRunPreview;
     private javax.swing.JScrollPane sqlRunPreviewScroll;
     private javax.swing.JButton sqlRunCopyBtn;
     private javax.swing.JButton sqlRunInsertBtn;
@@ -2760,13 +2760,19 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         queueBox.add(clearRow, java.awt.BorderLayout.SOUTH);
         queueBox.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(150)));
 
-        sqlRunInput = new javax.swing.JTextArea(8, 60);
+        // 编辑区从 JTextArea 换成 JTextPane：JTextArea 一段只能一种颜色，
+        // 要按角色把关键字/类型/警示词上出色（与 DDL 预览同一套），只能换富文本件。
+        // JTextPane 按词折行，长句不再靠横向滚动条——用户点了这条契约作废。
+        sqlRunInput = new javax.swing.JTextPane();
         sqlRunInput.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
                 UiScale.fontPt(SQL_RUN_FONT_SIZE)));
         // 初始化时编辑区只占自己的 4 行：末段压到最小，空清单的图标与引导语才看得全
         sqlRunInput.setMinimumSize(new Dimension(0, LogPanel.LOG_MIN_LINES
                 * sqlRunInput.getFontMetrics(sqlRunInput.getFont()).getHeight()));
-        sqlRunInput.setLineWrap(false);
+        sqlRunInput.setText("SELECT 1 AS 连通检查;");
+        // 逐字重挂角色色挂在文档自己身上：正文一变就重挂，格式化、清空、插示例、粘贴、
+        // 手敲走的都是同一条（挂在 DocumentListener 上会被 Swing 那道通知锁拦下来）
+        RichText.attachSqlHighlight(sqlRunInput);
         sqlRunInput.setText("SELECT 1 AS 连通检查;");
         // 两颗清空各归各的 pane：只清结果区时不必丢掉刚敲了一半的语句，反过来也一样
         sqlRunHelpBtn = new javax.swing.JButton("示例 (?)");
@@ -3198,7 +3204,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
      * 看着像"排到一半被截了"。与 Python 侧 on_format_sql 同一处理。
      */
     private void formatSqlInEditor() {
-        String text = sqlRunInput.getText();
+        String text = paneText(sqlRunInput);
         String why = com.excel2mysql.core.SqlScript.formatRefusal(text);
         if (!why.isEmpty()) {
             warn("没有格式化：" + why);
@@ -3217,7 +3223,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     private void runSqlStatements() {
-        final String text = sqlRunInput.getText();
+        final String text = paneText(sqlRunInput);
         if (text == null || text.trim().isEmpty()) {
             warn("没有可执行的 SQL：编辑区是空的（只写注释也不算）");
             return;
@@ -3619,10 +3625,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunIntro = new javax.swing.JTextPane();
         sqlRunIntro.setEditable(false);
         sqlRunIntro.setFont(com.excel2mysql.gui.Tables.font());
-        sqlRunPreview = new javax.swing.JTextArea(12, 60);
+        // 语句全文也换成 JTextPane：这一栏是照着挑语句的阅读面，关键字/类型/警示词
+        // 与 DDL 预览同一套色，长句按词折行（原来 JTextArea 不折行，靠横向滚动条看全）
+        sqlRunPreview = new javax.swing.JTextPane();
         sqlRunPreview.setEditable(false);
-        // 与编辑区同一条口径：长行交给横向滚动，不把一句 SQL 折成三行
-        sqlRunPreview.setLineWrap(false);
         // 目录与介绍是界面基准那一档，只有语句正文按日志档（LogPanel.DEFAULT_FONT_SIZE）：
         // 这是照着挑的阅读弹窗，不跟编辑区那档 16 号——16 号在并排清单旁边显得突兀
         sqlRunPreview.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
@@ -3639,7 +3645,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             String receipt;
             try {
                 java.awt.datatransfer.StringSelection sel =
-                        new java.awt.datatransfer.StringSelection(sqlRunPreview.getText());
+                        new java.awt.datatransfer.StringSelection(paneText(sqlRunPreview));
                 java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, null);
                 receipt = "· 已复制到剪贴板";
             } catch (RuntimeException ex) {
@@ -3652,8 +3658,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         });
         sqlRunInsertBtn = new javax.swing.JButton("插入到编辑区");
         sqlRunInsertBtn.addActionListener(e -> {
-            String cur = sqlRunInput.getText();
-            String add = sqlRunPreview.getText();
+            String cur = paneText(sqlRunInput);
+            String add = paneText(sqlRunPreview);
             sqlRunInput.setText((cur == null || cur.trim().isEmpty() || "SELECT 1 AS 连通检查;"
                     .equals(cur.trim())) ? add : cur + (cur.endsWith(";") ? "" : ";")
                     + com.excel2mysql.core.LogText.NL + add);
@@ -3710,6 +3716,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         split.setResizeWeight(0.38D);
         dlg.getContentPane().add(split, java.awt.BorderLayout.CENTER);
         Windows.clientSize(dlg.getContentPane(), dlg, 980, 620);
+        // 左右两栏按 38:62 摊：JSplitPane 不显式给位置时，第一刀落在"左栏首选宽度"上，
+        // 右栏内容（这里是语句全文）一换形状，左栏就跟着变窄，搜索框那句提示放不下。
+        // Qt 侧是 setSizes([360,580]) + stretch 38:62，两边钉成同一个比例
+        split.setDividerLocation(0.38D);
         sqlRunSamples = dlg;
         filterSqlSamples();       // 建好目录并选中第一条：一开框右侧不是空白
         dlg.setVisible(true);
@@ -4139,7 +4149,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         String intro = SqlSamples.introText(s);
         com.excel2mysql.gui.RichText.paint(sqlRunIntro, intro,
                 com.excel2mysql.gui.RichText.introSpans(intro), UiScale.px(4));
-        sqlRunPreview.setText(s.sql);
+        // 语句正文与 DDL 预览共用同一套角色色：切分取自 sqlSpans，色板取自 RichText 那一份
+        com.excel2mysql.gui.RichText.paint(sqlRunPreview, s.sql,
+                com.excel2mysql.gui.RichText.sqlSpans(s.sql), UiScale.px(2));
         // 换一条就把两侧滚回开头：上一条长文留下的滚动位置会让新语句
         // 看着像"缺了上半截"（与 Python 侧 _on_pick 的复位同一处理）
         SwingUtilities.invokeLater(() -> {
@@ -4169,7 +4181,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     /** 给自检与双端对撞用：这一页的可观察量都从这几个口子出去。 */
     public String sqlRunInputText() {
-        return sqlRunInput == null ? "" : sqlRunInput.getText();
+        return paneText(sqlRunInput);
+    }
+
+    /**
+     * 富文本件读回来的正文：段界一律归成 \n。
+     *
+     * <p>JTextPane 的 getText() 把段界那个字符展开成 \r\n，JTextArea 与 Qt 的
+     * toPlainText() 给的是 \n。切句认的是分号、对撞比的是整段文本，
+     * 多出那几个 \r 会让"一个字没改"这条判据假红，执行时也会把换行带进语句里。
+     */
+    private static String paneText(javax.swing.JTextPane pane) {
+        return pane == null ? "" : com.excel2mysql.gui.RichText.textOf(pane);
     }
 
     /** 编辑区本体：自检要查它的 Ctrl+V 有没有改挂到粘贴分派上。 */
@@ -4368,9 +4391,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return sqlRunHint;
     }
 
-    /** 编辑区是否折行：两条线都要求"一句 SQL 不折行"，否则分号位置得数着看。 */
+    /**
+     * 编辑区折不折行：读 JTextPane 自己在当前滚动容器里的视口跟随（Scrollable）取值，
+     * 折行的富文本件会把整段排进视口宽、不给横向滚动的余地，所以这一读就是屏幕上的事实。
+     */
     public String sqlRunWrap() {
-        return sqlRunInput != null && sqlRunInput.getLineWrap() ? "wrap" : "nowrap";
+        return sqlRunInput != null && sqlRunInput.getScrollableTracksViewportWidth()
+                ? "wrap" : "nowrap";
     }
 
     public java.awt.Font sqlRunInputFont() {
@@ -4460,7 +4487,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     public String sqlSamplesPreviewText() {
-        return sqlRunPreview == null ? "" : sqlRunPreview.getText();
+        return paneText(sqlRunPreview);
+    }
+
+    /** 语句全文那块本体：对撞与自检读的是它真挂上的角色分布。 */
+    public javax.swing.JTextPane sqlSamplesPreviewPane() {
+        return sqlRunPreview;
     }
 
     /** 示例预览那个滚动容器：自检要先把滚动位置弄走、再断"换一条回到开头"。 */
@@ -4468,9 +4500,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         return sqlRunPreviewScroll;
     }
 
-    /** 语句全文折不折行：与 Python 侧的 NoWrap 同一口径，长行只能靠横向滚动。 */
+    /** 语句全文折不折行：与编辑区同一读法，JTextPane 按词折行、不给横向滚动留余地。 */
     public boolean sqlSamplesPreviewWraps() {
-        return sqlRunPreview != null && sqlRunPreview.getLineWrap();
+        return sqlRunPreview != null && sqlRunPreview.getScrollableTracksViewportWidth();
     }
 
     /** 选中目录里第 n 个可见叶子。 */

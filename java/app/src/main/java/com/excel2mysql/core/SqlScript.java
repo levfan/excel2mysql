@@ -1404,6 +1404,22 @@ public final class SqlScript {
     }
 
     /**
+     * 给界面高亮用的词表：就是格式化器那两张。
+     *
+     * <p>同一句话里"哪些算关键字、哪些算类型"若在格式化与高亮两处各有一份答案，
+     * 排完版再上色的结果会自相矛盾（同一个词一会儿灰一会儿黑）。
+     * Python 侧对应 core/sql_script.py 的 SQL_FORMAT_KEYWORDS / SQL_FORMAT_TYPES。
+     */
+    public static Set<String> formatKeywords() {
+        return java.util.Collections.unmodifiableSet(FMT_KEYWORDS);
+    }
+
+    /** 类型名那一档（加粗不染色），与 {@link #formatKeywords()} 同来源。 */
+    public static Set<String> formatTypes() {
+        return java.util.Collections.unmodifiableSet(FMT_TYPES);
+    }
+
+    /**
      * 这段文本该不该拒绝格式化，返回拒绝的理由（空串表示可以排）。
      *
      * 整库 dump 不能排：{@code DELIMITER ;;} 里的分号是客户端指令的一部分，按普通
