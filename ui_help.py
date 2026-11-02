@@ -16,6 +16,15 @@ from help_doc import SECTIONS
 # 两条线的关于框由对撞键 dlg.about.rows 逐行比，改一处不改另一处就会红
 AUTHOR = "刘帆"
 
+# 「关于」底下那两行小字：提交号与构建日期从前只写一个值，开发态那句
+# 「开发态（未打包）」看不出所以然——这一格到底哪来的、取不到会写什么、
+# 想自己核该跑哪条命令，都得当场说清。Java 侧镜像在 AboutDialog.java 的同名常量，
+# 由对撞键 dlg.about.footnote 逐字比
+ABOUT_FOOT_1 = ("提交号与构建日期取自构建戳：交付包里是打包那一刻烧进去的那一份，"
+                "直接跑源码时现场问 git")
+ABOUT_FOOT_2 = ("问不到就写「无 git 信息」，不编一个号出来；"
+                "要核当前源码版本，在仓库目录里跑 git rev-parse --short HEAD")
+
 # Qt 的 Rich Text 只支持 CSS 的一个子集，这里只写 QTextBrowser 认得的属性
 # （写多了不报错，但静默不生效，所以行高用段落间距撑，不用 line-height）
 STYLE = """
@@ -137,7 +146,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("关于")
         self.setModal(True)
-        fit_client(self, 380, 190)
+        fit_client(self, 380, 250)
         info = build_info()
 
         title = QLabel(f"Excel → MySQL 批量导入工具")
@@ -146,10 +155,18 @@ class AboutDialog(QDialog):
         f.setPointSize(f.pointSize() + 2)
         title.setFont(f)
 
+        # 标题与四行之间垫一条细线：原来两档字号之间只靠空白分开，扫一眼分不出
+        # 哪是产品名、哪是这台机器上这一份的构建信息
+        rule = QFrame()
+        rule.setFrameShape(QFrame.HLine)
+        rule.setFrameShadow(QFrame.Sunken)
+
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(7)
         self.rows = {}
+        tips = {"commit": "这一行从哪来见下方两行小字；选中后可直接贴给别人",
+                "built": "交付包里写的是打包完成那一刻；直接跑源码时这一格是「开发态（未打包）」"}
         for i, (key, label, value) in enumerate((
                 ("version", "版本", f"v{info['version']}"),
                 ("commit", "提交", commit_display(info)),
@@ -159,10 +176,17 @@ class AboutDialog(QDialog):
             head.setStyleSheet("color: #666;")
             body = QLabel(value)
             body.setTextInteractionFlags(Qt.TextSelectableByMouse)   # 提交号要能选中复制
+            body.setToolTip(tips.get(key, ""))
             grid.addWidget(head, i, 0)
             grid.addWidget(body, i, 1)
             self.rows[key] = body
         grid.setColumnStretch(1, 1)
+
+        # 底下两行小字：把"提交号/构建日期哪来的、取不到写什么、自己核跑哪条命令"说清
+        self.foot = QLabel(ABOUT_FOOT_1 + "\n" + ABOUT_FOOT_2)
+        self.foot.setStyleSheet("color: #666;")
+        self.foot.setWordWrap(True)
+        self.foot.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         self.btn_close = QPushButton("关闭")
         self.btn_close.clicked.connect(self.accept)
@@ -172,7 +196,9 @@ class AboutDialog(QDialog):
 
         lay = QVBoxLayout(self)
         lay.addWidget(title)
+        lay.addWidget(rule)
         lay.addLayout(grid)
+        lay.addWidget(self.foot)
         lay.addStretch(1)
         lay.addLayout(row)
 
