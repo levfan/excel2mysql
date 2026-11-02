@@ -6330,3 +6330,84 @@ Python 侧不加新路径，只加一枚读数 `window_icon_side(widget)`：量�
 
 按 patch 记：`3.4.4 → 3.4.5`（窗口图标一致性，不改行为）。
 
+## 117. tab3 的 SQL 正文换成富文本件：编辑区与示例语句全文都按角色上色
+
+### 117.1 用户口径的两段话
+
+先是"tab3 中，sql 文本里有关键字应该高亮，参照 tab1 的弹窗【DDL 预览】中的文字格式"，
+再补"sql 示例中的语句全文必须也要有关键字高亮，要不然看着太枯燥"。
+我给的回执是编辑区两端都不折行、Java 侧要上色就得换成只会折行的 JTextPane，
+用户直接把这条契约作废："tab3 那块 SQL 编辑区两端都是不折行，不要这个契约。
+对话框，例如预览 ddl、sql 文本，以及 sql 示例的语句全文，都要上富文本控件，高亮关键字。"
+于是三处统一到同一套角色色，折行不再是要守的东西。
+
+### 117.2 两端各自换了什么控件
+
+- Qt：`sql_run_input` 与示例的 `preview` 从 `QPlainTextEdit` 换成 `QTextEdit`，
+  两句 `setLineWrapMode(NoWrap)` 删掉，折行回到默认的按词折行。
+  编辑区另加一句 `setAcceptRichText(False)`：粘进来的富文本只留字，
+  不然网页/Word 带来的颜色字号会盖过这一套角色色。
+- Swing：`sqlRunInput` 与 `sqlRunPreview` 从 `JTextArea` 换成 `JTextPane`（与 DDL 预览同一件），
+  `setLineWrap(false)` 删掉。JTextPane 没有折行开关，读"折不折"改读
+  `getScrollableTracksViewportWidth()` —— 那是这块控件在当前滚动容器里的实际取值。
+- 词表不再另立一份：高亮直接取格式化器那两张（`SQL_FORMAT_KEYWORDS` / `SQL_FORMAT_TYPES`，
+  Java 侧 `SqlScript.formatKeywords()` / `formatTypes()` 是新开的口子）。
+  同一句话里"哪些算关键字"若在排版的和上色的两处各有一份答案，排完再上色会自相矛盾。
+  警示档 `DROP` / `DELETE` / `TRUNCATE` 两栈各写一份同名集合，靠对撞键钉在一起。
+
+### 117.3 两栈上色机制不同，但用户看到的行为相同
+
+- Qt 的编辑区挂的是叠加层（`setExtraSelections`）：整篇重挂文档格式会往撤销栈里塞一层
+  "看不见的编辑"——实测敲一个字再重挂，撤销步数从 1 变 2，Ctrl+Z 第一下只把颜色撤掉、
+  字还在，用户读作"撤销没反应"。叠加层是绘制时套上去的，正文与撤销栈都不碰。
+- Swing 的编辑区写的是文档属性，因为它没有内建撤销栈，写进去撤不掉，两栈用户按 Ctrl+Z
+  拿到的都是"撤掉刚敲的那个字"。重挂挂在 `DefaultStyledDocument` 的
+  `insertString`/`remove` 里、`super` 之后：改成 DocumentListener 会被 Swing 拦下，
+  实测抛 `IllegalStateException: Attempt to mutate in notification`。
+- 只读那两处（示例语句全文）两栈都直接铺文档格式，与 DDL 预览同一条路。
+
+### 117.4 顺手抓到的一条真缺陷
+
+`route_paste` 里那句 `isinstance(focus, (QLineEdit, QPlainTextEdit))` 只认这两类，
+编辑区换成 `QTextEdit` 之后纯文本粘贴被应用级过滤抢去回一句"粘的不是文件"。
+是 R75l（剪贴板是纯文本时不抢按键）判红的，补进 `QTextEdit` 后绿。
+Java 侧那条判的是 `JTextComponent`，本来就盖住新类型，没有这个问题。
+
+### 117.5 守卫
+
+- 对撞键新增 `sqlrun.rich`（同一句夹具，Qt 从真挂着的叠加层读、
+  Swing 从真文档属性读，压成同一形状的串）与 `samples.preview.rich`（读真文档）。
+  两栈同报 `W6|V1|L6…` 逐字一致 —— 这条比的是切分规则，任一侧改词表或改正则都会红。
+- `sqlrun.wrap` / `samples.preview.wrap` 两把键从钉"都不折行"改成钉"都按词折行"。
+- `pack_test.py`：F20 改成折行；新增 F67（正文一字未改）、F67b（四档角色都在）、
+  F67c（关键字灰与警示橙真画到屏上）、F67d（真按一个键只加一步撤销）、
+  F67e/F67f（示例全文的角色串与那档灰）、F35a 改折行、F35b 的复位判据从横向改成纵向
+  （折行之后顶出可视区的是行数不是行宽，夹具也从"最宽那条"改成"最长那条"）。
+- `GuiMain`：编辑区角色串四档齐 + 正文没被改 + 600 条整篇上色耗时（实测 56 毫秒，
+  判据钉 400 毫秒）；示例全文角色串与关键字那档灰的像素；
+  示例窗口换条后的滚动复位同步改成纵向。
+- 示例窗口左右两栏在 Java 侧显式钉成 38:62：`JSplitPane` 不给位置时第一刀落在
+  "左栏首选宽度"上，右栏内容一换形状左栏就跟着变窄，搜索框那句提示放不下（这条是自检抓的）。
+  Qt 侧本来就是 `setSizes([360, 580])` + stretch 38:62。
+
+### 117.6 变异抽查
+
+- 断掉 Qt 编辑区的 `textChanged` 连线（只在构造时上一次色）→ 对撞只红 `sqlrun.rich`。
+- 断掉 Java 的行注释识别（正则里去掉 `--[^\n]*`）→ 对撞只红 `sqlrun.rich`。
+- 上一节 F67d 那条不是变异出来的：文档格式那条路实测过，敲一个字撤销步数加二，
+  所以判据直接钉"只加一步"，改成那条实现就红。
+- 三处还原后 pack_test / 构建验证 / 对撞全绿。
+
+### 117.7 闸门与版本号
+
+| 闸门 | 结果 |
+| --- | --- |
+| `pack_test.py`（带真库凭据） | 通过 976 / 失败 0 / 跳过 5，退出码 0 |
+| `构建验证.bat` 十步 | 全过，退出码 0 |
+| `界面双端对撞.bat` | 376 键逐键一致，退出码 0 |
+| `check_generated.py` | 绿（HelpDoc 随说明同批改过） |
+| `pack_test38.py` | 本轮没跑：改的是图形线与说明，cli 与 core 的旧栈线不在改动面上 |
+
+按 minor 记：`3.4.5 → 3.5.0`（新增三处 SQL 正文的角色高亮，是一条新能力）。
+
+
