@@ -3,6 +3,7 @@ package com.excel2mysql.gui;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JDialog;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
@@ -16,10 +17,18 @@ import java.util.List;
  * 「SQL 脚本改名」页的 DDL 预览：一张表一个标签页，正文只读等宽。
  *
  * 与第一页的 DDLDialog 同形状（同一档尺寸、同样只读、同样一颗关闭），差别只在正文来源：
- * 第一页是从 Excel 推断出来的表定义现拼 DDL，这一页本来就是脚本正文，
- * 预览不该改成"按工具的理解重抄一遍"。对应 Python 侧 main.py 的 SqlScriptDdlDialog。
+ * 第一页是从 Excel 推断出来的表定义现拼 DDL，这一页本来就是脚本正文。
+ * 正文先按格式化器排一遍再显示——从前这里照原文贴，脚本里一行到底的 CREATE TABLE
+ * 在预览里就是一行长条，读的人只能横向拖。排的是显示，脚本本身一个字不动：
+ * 改名、保存、执行仍按原文走，下方那句话当面说清。
+ * 对应 Python 侧 main.py 的 SqlScriptDdlDialog。
  */
 public final class SqlScriptDdlDialog extends JDialog {
+
+    /** 预览下面那一句：排过版的是显示，没动的是脚本正文，两件事必须分开说。 */
+    public static final String NOTE = "预览按格式化器排版；脚本正文一个字没改，改名、保存、执行都按原文走";
+
+    private final JLabel noteLabel = new JLabel(NOTE);
 
     /** 一页一项：{标签上的表名, 那句建表正文}。 */
     public SqlScriptDdlDialog(Frame owner, List<String[]> pages) {
@@ -31,14 +40,15 @@ public final class SqlScriptDdlDialog extends JDialog {
         tabs.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
         TabScrollers.apply(tabs);
         for (String[] page : pages) {
-            // 与第一页那个弹窗同件同法：正文本来就是脚本自己的那句，一个字不改，
-            // 只按角色上色（字段名与注释两支蓝、类型加粗、关键字退灰、DROP 走告警橙）
+            // 与第一页那个弹窗同件同法：显示前过一遍格式化器，再按角色上色
+            // （字段名与注释两支蓝、类型加粗、关键字一支紫加粗、DROP 走告警橙）
+            String shown = com.excel2mysql.core.SqlScript.formatSql(page[1]);
             JTextPane area = new JTextPane();
             area.setEditable(false);
             // Python 用 QFont("Menlo") 的默认档；按 DPI 折成物理像素才对得上
             area.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
                     UiScale.fontPt(UiScale.UI_POINT_SIZE)));
-            RichText.paint(area, page[1], RichText.ddlSpans(page[1]), UiScale.px(2));
+            RichText.paint(area, shown, RichText.ddlSpans(shown), UiScale.px(2));
             area.setCaretPosition(0);
             JScrollPane scroll = new JScrollPane(area);
             scroll.setBorder(BorderFactory.createEmptyBorder());
@@ -56,7 +66,10 @@ public final class SqlScriptDdlDialog extends JDialog {
                 UiScale.px(8), UiScale.px(8), UiScale.px(8), UiScale.px(8)));
         body.add(tabs, BorderLayout.CENTER);
         row.setPreferredSize(new Dimension(10, UiScale.px(36)));
-        body.add(row, BorderLayout.SOUTH);
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(noteLabel, BorderLayout.NORTH);
+        south.add(row, BorderLayout.SOUTH);
+        body.add(south, BorderLayout.SOUTH);
         setContentPane(body);
 
         getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
@@ -84,6 +97,11 @@ public final class SqlScriptDdlDialog extends JDialog {
     public String tabText(int index) {
         JTextPane pane = paneAt(index);
         return pane == null ? "" : RichText.textOf(pane);
+    }
+
+    /** 自检与对撞用：那句"排的是显示、没动的是正文"当前的文字。 */
+    public String noteText() {
+        return noteLabel.getText();
     }
 
     /** 自检与对撞用：这一页读回来的角色分布（按颜色认，不读常量）。 */

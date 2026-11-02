@@ -39,14 +39,19 @@ public final class RichText {
     public static final int ROLE_TYPE = 6;
     public static final int ROLE_KEYWORD = 7;
     public static final int ROLE_DANGER = 8;
+    /** 「解决的问题」那一档提示色，与 Python 侧角色名 tip 对应（签名里的 S）。 */
+    public static final int ROLE_TIP = 9;
 
-    /** 配色全部取自既有色板：主按钮蓝、目录分组蓝、日志告警橙，不新造色值。 */
+    /** 配色：蓝的两档取既有主按钮与目录分组，紫/浅灰/绿是这一轮明造的三支。 */
     public static final Color TITLE_FG = new Color(0x2f, 0x6f, 0xeb);
     public static final Color LABEL_FG = new Color(0x1f, 0x5f, 0xd0);
-    public static final Color CHIP_FG = Color.WHITE;
-    public static final Color CHIP_BG = new Color(0x1f, 0x5f, 0xd0);
-    /** 关键字那一档：与正文同族但退到背景，读 DDL 时先看字段与注释、不看 CREATE / DEFAULT。 */
-    public static final Color KEYWORD_FG = new Color(0x9a, 0xa7, 0xb8);
+    /** 关键词一颗一小块：深底白字整条铺过去会把多个词连成一整块，字糊在底里读不出。 */
+    public static final Color CHIP_FG = new Color(0x82, 0x50, 0xdf);
+    public static final Color CHIP_BG = new Color(0xf0, 0xf2, 0xf4);
+    /** 「解决的问题」那一档提示绿：讲的是不查会撞上什么，与说明、场景分开。 */
+    public static final Color TIP_FG = new Color(0x1a, 0x7f, 0x37);
+    /** 关键字那一档：与介绍块的关键词同一支紫并加粗——退灰那一档比正文还淡，读作没高亮。 */
+    public static final Color KEYWORD_FG = CHIP_FG;
     /** DROP 那一行：整段预览里唯一会把数据真删掉的动作，用日志告警那一档橙。 */
     public static final Color DANGER_FG = new Color(0xb2, 0x6a, 0x00);
 
@@ -88,8 +93,11 @@ public final class RichText {
     }
 
     /**
-     * 介绍那五行的切分：第一行整行是标题；其余每行冒号（全角）之前是字段名，
-     * 之后是值；「关键词：」后面那一段单独成块。
+     * 介绍那五行的切分：第一行整行是标题；其余每行冒号（全角）之前是字段名，之后是值。
+     *
+     * 「关键词：」后面按空格切开，每个词各自一小块底，词间那一格不上底——整条铺过去
+     * 就是"多个词连成一整块深色，字糊在里面"。「解决的问题」单开一档提示色。
+     * 与 Python 侧 main.py 的 intro_spans 同一条规则，两栈是否切得一样由 intro.rich 判。
      */
     public static List<int[]> introSpans(String text) {
         text = normalizeNewlines(text);
@@ -104,10 +112,21 @@ public final class RichText {
                 int cut = line.indexOf('：');
                 if (cut < 0) {
                     spans.add(new int[]{pos, end, ROLE_VALUE});
+                } else if (line.startsWith("关键词：")) {
+                    spans.add(new int[]{pos, pos + cut + 1, ROLE_LABEL});
+                    int off = pos + cut + 1;
+                    for (String word : line.substring(cut + 1).split(" ", -1)) {
+                        if (!word.isEmpty()) {
+                            spans.add(new int[]{off, off + word.length(), ROLE_CHIP});
+                        }
+                        off += word.length() + 1;
+                    }
+                } else if (line.startsWith("解决的问题：")) {
+                    spans.add(new int[]{pos, pos + cut + 1, ROLE_LABEL});
+                    spans.add(new int[]{pos + cut + 1, end, ROLE_TIP});
                 } else {
                     spans.add(new int[]{pos, pos + cut + 1, ROLE_LABEL});
-                    spans.add(new int[]{pos + cut + 1, end,
-                            line.startsWith("关键词：") ? ROLE_CHIP : ROLE_VALUE});
+                    spans.add(new int[]{pos + cut + 1, end, ROLE_VALUE});
                 }
             }
             first = false;
@@ -315,7 +334,10 @@ public final class RichText {
             return attrs(base, base.getSize(), LABEL_FG, null, true);
         }
         if (role == ROLE_CHIP) {
-            return attrs(base, base.getSize(), CHIP_FG, CHIP_BG, false);
+            return attrs(base, base.getSize(), CHIP_FG, CHIP_BG, true);
+        }
+        if (role == ROLE_TIP) {
+            return attrs(base, base.getSize(), TIP_FG, null, false);
         }
         if (role == ROLE_IDENT) {
             return attrs(base, base.getSize(), LABEL_FG, null, false);
@@ -327,7 +349,7 @@ public final class RichText {
             return attrs(base, base.getSize(), def, null, true);
         }
         if (role == ROLE_KEYWORD) {
-            return attrs(base, base.getSize(), KEYWORD_FG, null, false);
+            return attrs(base, base.getSize(), KEYWORD_FG, null, true);
         }
         if (role == ROLE_DANGER) {
             return attrs(base, base.getSize(), DANGER_FG, null, true);
@@ -401,7 +423,10 @@ public final class RichText {
         Element run = doc.getCharacterElement(offset);
         AttributeSet attrs = run.getAttributes();
         Color bg = StyleConstants.getBackground(attrs);
-        if (bg != null && near(bg, CHIP_BG)) {
+        // 背景这一条必须精确相等，不能走 near 的 ±18：chip 底是浅灰 #f0f2f4，
+        // 白底与它只差 15/13/11，容差一放就把每个没上底的字都读成关键词
+        // （Python 侧 _char_role 本来就是按色名精确比的，两边同一口径）
+        if (bg != null && bg.getRGB() == CHIP_BG.getRGB()) {
             return 'K';
         }
         Color fg = StyleConstants.getForeground(attrs);
@@ -413,6 +438,9 @@ public final class RichText {
         }
         if (near(fg, LABEL_FG)) {
             return 'L';
+        }
+        if (near(fg, TIP_FG)) {
+            return 'S';
         }
         if (near(fg, KEYWORD_FG)) {
             return 'W';

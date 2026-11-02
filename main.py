@@ -135,7 +135,7 @@ SQL_RUN_DEFAULT = "SELECT 1 AS 连通检查;"
 # 用例按真按键走一遍，对撞比 tooltip 文案，所以这三者不会各说各话。
 SQL_FORMAT_LABEL = "格式化 SQL"
 SQL_FORMAT_KEY = "Ctrl+Alt+L"
-SQL_FORMAT_TIP = ("排整齐左边这段 SQL：关键字与类型大写、从句各起一行、建表字段一行一个；"
+SQL_FORMAT_TIP = ("排整齐左边这段 SQL：关键字与类型大写、从句各起一行、字段清单一个字段一行并缩进；"
                   "整库 dump（带 DELIMITER 那种）会拒绝并说明原因。\n"
                   "快捷键 " + SQL_FORMAT_KEY + "（焦点在这块编辑区里时按）")
 
@@ -183,16 +183,25 @@ SAMPLE_SEARCH_TIP = ("关键词过滤：短标题、说明、场景、解决的�
 SAMPLE_SEARCH_ICON_SIZE = 14
 
 # 介绍块的角色配色：标题一档、字段名一档、关键词成一块，值本身保持正文默认色。
-# 全用现成色值（主按钮蓝、目录分组蓝），一个新色都不造；两端同一组色与同一条切分规则，
-# 对撞键 intro.rich 把两栈各自读回的角色段比一遍。
+# 介绍块与 SQL 正文的角色色。以前"一个新色都不造"，结果两处都读不清：关键词整条铺
+# 深底白字，多个词连成一整块把字压糊；关键字刷的是比正文还淡的灰，看着等于没高亮。
+# 现在明造三支：紫 #8250df 给关键字与关键词（同一概念同一支色），浅灰 #f0f2f4 只当
+# 逐词小块的底，绿 #1a7f37 给「解决的问题」那一档提示。警示橙留给真会删数据的语句，
+# 不跟这三支混用。两端同一组色值与同一条切分规则，对撞键 intro.rich 把两栈各自读回的
+# 角色段比一遍。
 SAMPLE_INTRO_TITLE_FG = "#2f6feb"
 SAMPLE_INTRO_LABEL_FG = "#1f5fd0"
-SAMPLE_INTRO_CHIP_FG = "#ffffff"
-SAMPLE_INTRO_CHIP_BG = "#1f5fd0"
+SAMPLE_INTRO_CHIP_FG = "#8250df"
+SAMPLE_INTRO_CHIP_BG = "#f0f2f4"
+SAMPLE_INTRO_TIP_FG = "#1a7f37"
 SAMPLE_INTRO_BLOCK_SPACING = 4
 
 # DDL 预览的行距：一页几十行，每行都留介绍块那一档就太松，取它的一半。
 DDL_BLOCK_SPACING = 2
+
+# 第二页 DDL 预览下面那一句：预览排过版，但脚本正文没动，两件事必须分开说。
+# 两端逐字同形，由对撞键 sqlddl.note 比着。
+SCRIPT_DDL_NOTE = "预览按格式化器排版；脚本正文一个字没改，改名、保存、执行都按原文走"
 
 # 每张表格左上角那一句标识（组框标题）。用户口径：每个表格都要有标识，
 # 第一页的「待导入文件」就是样子——标题里顺带写明这一张表怎么操作。
@@ -4968,8 +4977,10 @@ class SqlScriptDdlDialog(QDialog):
     """「SQL 脚本改名」页的 DDL 预览：一张表一个页签，正文取自脚本自己的 CREATE TABLE。
 
     与第一页那个弹窗同形状（同一档尺寸、同样只读、同样一颗关闭），差别只在正文来源：
-    第一页是从 Excel 推断出来的表定义现拼 DDL，这一页本来就是脚本正文，
-    预览不该改成"按工具的理解重抄一遍"。
+    第一页是从 Excel 推断出来的表定义现拼 DDL，这一页本来就是脚本正文。
+    正文先按格式化器排一遍再显示——从前这里"照原文贴"，脚本里一行到底的 CREATE TABLE
+    在预览里就是一行长条，读的人只能横向拖。排的是显示，脚本本身一个字不动：
+    改名、保存、执行都仍按原文走，下方那句话把这件事当面说清。
     """
 
     def __init__(self, pages, parent=None):
@@ -4979,13 +4990,16 @@ class SqlScriptDdlDialog(QDialog):
         lay = QVBoxLayout(self)
         self.tabs = style_tab_scroll(QTabWidget())
         for name, ddl in pages:
+            shown = format_sql(ddl)
             te = QPlainTextEdit()
             te.setReadOnly(True)
             te.setFont(QFont("Menlo"))
-            # 正文仍是脚本自己那一句，一个字不改，只按角色上色（与第一页那个弹窗同一套）
-            paint_styled(te, ddl, ddl_spans(ddl), ddl_formats(te), DDL_BLOCK_SPACING)
+            # 排过的正文按角色上色（与第一页那个弹窗同一套切分与色板）
+            paint_styled(te, shown, ddl_spans(shown), ddl_formats(te), DDL_BLOCK_SPACING)
             self.tabs.addTab(te, name)
         lay.addWidget(self.tabs)
+        self.note = QLabel(SCRIPT_DDL_NOTE)
+        lay.addWidget(self.note)
         btns = QDialogButtonBox(QDialogButtonBox.Close)
         btns.rejected.connect(self.reject)
         btns.accepted.connect(self.accept)
@@ -5088,7 +5102,12 @@ def paint_styled(view, text, spans, formats, block_spacing=0):
 
 
 def intro_spans(text):
-    """介绍那五行的角色切分：第一行是标题，每行冒号前是字段名，关键词的值单独成块。"""
+    """介绍那五行的角色切分：第一行是标题，每行冒号前是字段名，关键词逐个成小块。
+
+    关键词按空格切，一个词一块底，词与词之间那格空格不上底——从前整条铺一片深色，
+    三五个词连成一整块，字糊在底里读不出来（用户原话："人字都看不清"）。
+    「解决的问题」单开一档提示色：那一句讲的是"不查会撞上什么"，与说明、场景不是一回事。
+    """
     text = rich_text(text)
     spans = []
     pos = 0
@@ -5102,14 +5121,22 @@ def intro_spans(text):
                 spans.append((pos, end, "value"))
             else:
                 spans.append((pos, pos + cut + 1, "label"))
-                spans.append((pos + cut + 1, end,
-                              "chip" if line.startswith("关键词：") else "value"))
+                if line.startswith("关键词："):
+                    off = pos + cut + 1
+                    for word in line[cut + 1:].split(" "):
+                        if word:
+                            spans.append((off, off + len(word), "chip"))
+                        off += len(word) + 1
+                elif line.startswith("解决的问题："):
+                    spans.append((pos + cut + 1, end, "tip"))
+                else:
+                    spans.append((pos + cut + 1, end, "value"))
         pos = end + 1
     return spans
 
 
 # 角色 → 屏幕上看得见的特征。签名与 Java 侧 roleAt 认同一组数，改一处必须同批改另一侧。
-RICH_KEYWORD_FG = "#9aa7b8"          # 关键字：退到背景那一档
+RICH_KEYWORD_FG = SAMPLE_INTRO_CHIP_FG   # 关键字：与介绍块那几颗关键词同一支紫
 RICH_DANGER_FG = LOG_WARN_COLOR      # DROP 那一行：预览里唯一会把数据真删掉的动作
 
 
@@ -5124,6 +5151,8 @@ def _char_role(fmt):
         return "T"
     if name == SAMPLE_INTRO_LABEL_FG:
         return "L"
+    if name == SAMPLE_INTRO_TIP_FG:
+        return "S"
     if name == RICH_KEYWORD_FG:
         return "W"
     if name == RICH_DANGER_FG:
@@ -5281,12 +5310,16 @@ def ddl_spans(text):
 
 
 def ddl_formats(view):
-    """中文注释最亮（那是人要读的内容），标识符次级蓝，类型只加粗，关键字退到背景。"""
+    """注释（中文说明）最亮，标识符次级蓝，类型与关键字都加粗上色。
+
+    关键字从前是"退到背景"那一档灰，比正文还淡——用户读作"没高亮关键字"。
+    现在给一支实色紫并加粗：它在整篇里确实跳得出来，又不与警示橙那种"会删数据"混。
+    """
     return {
         "ident": rich_format(fg=SAMPLE_INTRO_LABEL_FG),
         "comment": rich_format(fg=SAMPLE_INTRO_TITLE_FG),
         "type": rich_format(bold=True),
-        "keyword": rich_format(fg=RICH_KEYWORD_FG),
+        "keyword": rich_format(fg=RICH_KEYWORD_FG, bold=True),
         "danger": rich_format(fg=RICH_DANGER_FG, bold=True),
     }
 
@@ -5335,9 +5368,10 @@ def sql_formats(view):
 
 
 def intro_formats(view):
-    """标题用主按钮那支蓝并大一号；字段名用目录分组那支蓝；关键词整段铺底成一块。
+    """标题用主按钮那支蓝并大一号；字段名用目录分组那支蓝；关键词一颗一小块浅底。
 
-    值本身保持正文默认色，这样"哪是标签、哪是内容"靠颜色就分得开。
+    底色只铺在每一个关键词自己身上，词间那格空格留白：整行铺底会把多个词连成一整块，
+    字压在里面读不出来。「解决的问题」走提示绿，值本身仍是正文默认色。
     大一号是按这块自己的当前字号推的，不写死绝对值——换 DPI 或改界面基准都跟着走。
     """
     base = view.font().pointSize()
@@ -5346,7 +5380,8 @@ def intro_formats(view):
                              size_pt=(base + 1) if base > 0 else None),
         "label": rich_format(fg=SAMPLE_INTRO_LABEL_FG, bold=True),
         "value": rich_format(),
-        "chip": rich_format(fg=SAMPLE_INTRO_CHIP_FG, bg=SAMPLE_INTRO_CHIP_BG),
+        "chip": rich_format(fg=SAMPLE_INTRO_CHIP_FG, bg=SAMPLE_INTRO_CHIP_BG, bold=True),
+        "tip": rich_format(fg=SAMPLE_INTRO_TIP_FG),
     }
 
 

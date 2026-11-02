@@ -1394,6 +1394,8 @@ public final class SqlScript {
     private static final Set<String> FMT_JOIN_HEADS = wordSet(
             "LEFT", "RIGHT", "INNER", "FULL", "OUTER", "CROSS", "NATURAL", "STRAIGHT_JOIN");
     private static final Set<String> FMT_COND = wordSet("WHERE", "ON", "HAVING");
+    /** 顶层换行之后要缩进的那几位：ON 挂在 JOIN 底下，AND / OR 挂在 WHERE / ON / HAVING 底下。 */
+    private static final Set<String> FMT_CONT = wordSet("ON", "AND", "OR");
     private static final String FMT_INDENT = "  ";
     private static final int FMT_WRAP_COL = 100;
     private static final String FMT_OP_HEAD = "<>=!|-";
@@ -1660,9 +1662,15 @@ public final class SqlScript {
         return n;
     }
 
-    /** 把当前这一行收进结果：缩进按"是否在展开的字段清单里"决定。 */
+    /** 攒行的小账本：正在攒的这一行属于哪一档、下一行该挂在哪一档（对应 Python 闭包里的 mode）。 */
+    private static final class FmtState {
+        private String mode = "";
+        private String nextMode = "";
+    }
+
+    /** 把当前这一行收进结果：缩进按"建表字段清单 / SELECT 清单项 / 条件续行"决定。 */
     private static void flushLines(List<String> lines, List<String> cur,
-                                   boolean listed, int depth) {
+                                   boolean listed, int depth, FmtState st) {
         if (cur.isEmpty()) {
             return;
         }
@@ -1672,7 +1680,10 @@ public final class SqlScript {
         }
         String body = sb.toString().trim();
         cur.clear();
-        lines.add((listed && depth >= 1 ? FMT_INDENT : "") + body);
+        boolean indent = (listed && depth >= 1) || (depth == 0 && st.mode.length() > 0);
+        lines.add((indent ? FMT_INDENT : "") + body);
+        st.mode = st.nextMode;
+        st.nextMode = "";
     }
 
     /**
@@ -1732,6 +1743,8 @@ public final class SqlScript {
         int depth = 0;
         String clause = "";
         boolean listed = false;
+        boolean splitSelect = false;
+        FmtState st = new FmtState();
         for (int idx = 0; idx < sig.size(); idx++) {
             String kind = sig.get(idx)[0];
             String text = sig.get(idx)[1];
@@ -1756,7 +1769,7 @@ public final class SqlScript {
                     listed = true;
                     cur.add(gap(cur, text, prevKind, prevUp, tightEq, tightComma,
                             prevPunct, true) + text);
-                    flushLines(lines, cur, listed, depth);
+                    flushLines(lines, cur, listed, depth, st);
                     depth++;
                     typeParen.add(Boolean.FALSE);
                     continue;
@@ -1766,7 +1779,7 @@ public final class SqlScript {
                         && FMT_TYPES.contains(prevUp)));
             } else if ("punct".equals(kind) && ")".equals(text)) {
                 if (depth == 1 && listed) {
-                    flushLines(lines, cur, listed, depth);   // 最后一个字段先成行
+                    flushLines(lines, cur, listed, depth, st);   // 最后一个字段先成行
                 }
                 depth = Math.max(0, depth - 1);
                 if (!typeParen.isEmpty()) {
@@ -1775,15 +1788,24 @@ public final class SqlScript {
             } else if ("punct".equals(kind) && ",".equals(text) && depth == 1 && listed) {
                 cur.add(gap(cur, emit, prevKind, prevUp, tightEq, tightComma,
                         prevPunct, false) + emit);
-                flushLines(lines, cur, listed, depth);
+                flushLines(lines, cur, listed, depth, st);
+                continue;
+            } else if ("punct".equals(kind) && ",".equals(text) && depth == 0
+                    && "SELECT".equals(clause) && splitSelect) {
+                // 顶层 SELECT 清单：一个字段一行，逗号留在上一行行末（与建表字段清单同形）
+                cur.add(gap(cur, emit, prevKind, prevUp, tightEq, tightComma,
+                        prevPunct, false) + emit);
+                st.nextMode = "item";
+                flushLines(lines, cur, listed, depth, st);
                 continue;
             }
 
             boolean breakWord = false;
+            boolean condChain = false;
             if ("word".equals(kind) && !cur.isEmpty()) {
                 boolean joinHead = (FMT_JOIN_HEADS.contains(up) && joinAhead(sig, idx))
                         || ("JOIN".equals(up) && !FMT_JOIN_HEADS.contains(prevUp));
-                boolean condChain = ("AND".equals(up) || "OR".equals(up))
+                condChain = ("AND".equals(up) || "OR".equals(up))
                         && FMT_COND.contains(clause);
                 if (depth == 0) {
                     breakWord = (FMT_BREAK.contains(up) && !"JOIN".equals(up)
@@ -1799,11 +1821,14 @@ public final class SqlScript {
                 }
             }
             if (breakWord) {
-                flushLines(lines, cur, listed, depth);
+                if (depth == 0 && FMT_CONT.contains(up)) {
+                    st.nextMode = "cont";    // 条件续行挂到上一句底下，别顶格贴着从句站
+                }
+                flushLines(lines, cur, listed, depth, st);
             } else if (!cur.isEmpty() && ",".equals(prevText) && depth <= 1
                     && lineLen(cur) > FMT_WRAP_COL) {
                 // 超过这一列就在下一个逗号处折行：只在已经够长时才折，短清单照旧一行
-                flushLines(lines, cur, listed, depth);
+                flushLines(lines, cur, listed, depth, st);
             }
             if ("word".equals(kind) && depth == 0 && FMT_BREAK.contains(up)) {
                 // 只在从句关键词上更新"现在在哪一段"，否则走到 AND 时 clause 已变成表名
@@ -1815,11 +1840,52 @@ public final class SqlScript {
             } else {
                 cur.add(emit);
             }
+            if ("word".equals(kind) && depth == 0 && "SELECT".equals(up)) {
+                // 清单有两个以上才拆：SELECT 自己站一行，字段逐个往下排
+                splitSelect = selectListIsMulti(sig, idx);
+                if (splitSelect) {
+                    st.nextMode = "item";
+                    flushLines(lines, cur, listed, depth, st);
+                }
+            }
             if ("cmt".equals(kind) && (text.startsWith("--") || text.startsWith("#"))) {
-                flushLines(lines, cur, listed, depth);
+                flushLines(lines, cur, listed, depth, st);
             }
         }
-        flushLines(lines, cur, listed, depth);
+        flushLines(lines, cur, listed, depth, st);
         return lines;
+    }
+
+    /**
+     * 从 start 这个 SELECT 往后数：顶层字段清单是不是有两个以上的项。
+     *
+     * 只有一条的 {@code SELECT 1}、{@code SELECT *} 不该被拆成三行——拆完比原来更难看。
+     * 括号里（子查询、函数参数、{@code IN (…)}）的逗号不算这一层的清单。
+     * 与 Python 侧 core/sql_script.py 的 _select_list_is_multi 同一条走法。
+     */
+    private static boolean selectListIsMulti(List<String[]> sig, int start) {
+        int depth = 0;
+        for (int idx = start + 1; idx < sig.size(); idx++) {
+            String kind = sig.get(idx)[0];
+            String text = sig.get(idx)[1];
+            if ("punct".equals(kind) && "(".equals(text)) {
+                depth++;
+            } else if ("punct".equals(kind) && ")".equals(text)) {
+                if (depth == 0) {
+                    return false;      // 这一条 SELECT 已经被外层收尾，清单到此为止
+                }
+                depth--;
+            } else if (depth > 0) {
+                continue;
+            } else if ("punct".equals(kind) && ",".equals(text)) {
+                return true;
+            } else if ("punct".equals(kind) && ";".equals(text)) {
+                return false;
+            } else if ("word".equals(kind)
+                    && FMT_BREAK.contains(text.toUpperCase(Locale.ROOT))) {
+                return false;
+            }
+        }
+        return false;
     }
 }

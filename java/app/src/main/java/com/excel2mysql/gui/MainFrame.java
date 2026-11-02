@@ -77,7 +77,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private static final String SQL_FORMAT_LABEL = "格式化 SQL";
     private static final String SQL_FORMAT_KEY = "Ctrl+Alt+L";
     private static final String SQL_FORMAT_TIP =
-            "<html>排整齐左边这段 SQL：关键字与类型大写、从句各起一行、建表字段一行一个；"
+            "<html>排整齐左边这段 SQL：关键字与类型大写、从句各起一行、字段清单一个字段一行并缩进；"
           + "整库 dump（带 DELIMITER 那种）会拒绝并说明原因。<br>快捷键 "
           + SQL_FORMAT_KEY + "（焦点在这块编辑区里时按）</html>";
 
@@ -4115,8 +4115,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 || sqlRunIntro.getHeight() <= 0) {
             return -1;
         }
+        // 0 标题蓝 / 1 分组蓝 / 2 提示绿 / 3 关键词紫 / 4 关键词那颗浅底
         java.awt.Color want = role == 0 ? com.excel2mysql.gui.RichText.TITLE_FG
-                : com.excel2mysql.gui.RichText.LABEL_FG;
+                : role == 1 ? com.excel2mysql.gui.RichText.LABEL_FG
+                : role == 2 ? com.excel2mysql.gui.RichText.TIP_FG
+                : role == 4 ? com.excel2mysql.gui.RichText.CHIP_BG
+                : com.excel2mysql.gui.RichText.CHIP_FG;
+        // 浅底只能精确比：白与 #f0f2f4 只差 15/13/11，容差一放就把整片白底算成关键词块
+        boolean exact = role == 4;
+        int wantRgb = want.getRGB() & 0xffffff;
         int w = sqlRunIntro.getWidth();
         int h = sqlRunIntro.getHeight();
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(
@@ -4130,9 +4137,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int argb = img.getRGB(x, y);
-                if (Math.abs(((argb >> 16) & 0xff) - want.getRed()) <= 18
+                if (exact ? ((argb & 0xffffff) == wantRgb)
+                        : (Math.abs(((argb >> 16) & 0xff) - want.getRed()) <= 18
                         && Math.abs(((argb >> 8) & 0xff) - want.getGreen()) <= 18
-                        && Math.abs((argb & 0xff) - want.getBlue()) <= 18) {
+                        && Math.abs((argb & 0xff) - want.getBlue()) <= 18)) {
                     n++;
                 }
             }

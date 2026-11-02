@@ -60,7 +60,11 @@ public final class SqlSamples {
                 "接手一个陌生库，先摸清版本与字符集底座。",
                 "服务端字符集与表不一致时，注释和中文数据会写花。",
                 "版本 字符集 排序参数 DATABASE 会话变量",
-                            "SELECT DATABASE() AS 当前库, @@version AS 版本, @@character_set_server AS 服务端字符集, @@collation_server AS 服务端排序规则;"),
+                            "SELECT" + NL +
+                    "  DATABASE() AS 当前库," + NL +
+                    "  @@version AS 版本," + NL +
+                    "  @@character_set_server AS 服务端字符集," + NL +
+                    "  @@collation_server AS 服务端排序规则;"),
         new Sample("建表与改表",
                 "建表", "建表（InnoDB + utf8mb4 + 表注释与列注释，注释会进数据字典）",
                 "按交付口径新建一张业务表，注释要进数据字典。",
@@ -127,7 +131,7 @@ public final class SqlSamples {
                 "只靠应用层判重，并发写入照样能落进重复行。",
                 "唯一索引 业务主键 去重 UNIQUE INDEX",
                             "CREATE UNIQUE INDEX uk_order_cust" + NL +
-                    "ON t_order(order_no, created_at);"),
+                    "  ON t_order(order_no, created_at);"),
         new Sample("建表与改表",
                 "删索引", "删索引（先 SHOW INDEX 确认名字与是否被约束依赖）",
                 "索引建错了、或确认长期没人用要回收。",
@@ -157,8 +161,13 @@ public final class SqlSamples {
                 "治理开工第一天，先看清本库有哪些表、各占多大。",
                 "不知道从哪张表下手，也容易漏掉体积异常的那几张。",
                 "行数 占用空间 information_schema 家底 盘点",
-                            "SELECT TABLE_NAME AS 表名, TABLE_ROWS AS 估算行数, ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS 占用MB," + NL +
-                    "ENGINE AS 引擎, TABLE_COLLATION AS 排序规则, TABLE_COMMENT AS 表注释" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  TABLE_ROWS AS 估算行数," + NL +
+                    "  ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS 占用MB," + NL +
+                    "  ENGINE AS 引擎," + NL +
+                    "  TABLE_COLLATION AS 排序规则," + NL +
+                    "  TABLE_COMMENT AS 表注释" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
                     "ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC;"),
@@ -167,7 +176,10 @@ public final class SqlSamples {
                 "数据字典体检，把所有没写注释的列拉成清单。",
                 "字段含义只存在于前任脑子里，交接后没人敢动。",
                 "列注释缺失 数据字典 体检 COLUMN_COMMENT",
-                            "SELECT TABLE_NAME AS 表名, COLUMN_NAME AS 列名, DATA_TYPE AS 类型" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  COLUMN_NAME AS 列名," + NL +
+                    "  DATA_TYPE AS 类型" + NL +
                     "FROM information_schema.COLUMNS" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
                     "AND (COLUMN_COMMENT IS NULL" + NL +
@@ -178,11 +190,14 @@ public final class SqlSamples {
                 "中文乱码、生僻字丢失时先查列字符集。",
                 "latin1 或 utf8mb3 的列装不下生僻字与 emoji。",
                 "字符集 utf8mb4 乱码 生僻字 CHARACTER_SET_NAME",
-                            "SELECT TABLE_NAME AS 表名, COLUMN_NAME AS 列名, CHARACTER_SET_NAME AS 字符集" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  COLUMN_NAME AS 列名," + NL +
+                    "  CHARACTER_SET_NAME AS 字符集" + NL +
                     "FROM information_schema.COLUMNS" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND CHARACTER_SET_NAME IS NOT NULL" + NL +
-                    "AND CHARACTER_SET_NAME <> 'utf8mb4';"),
+                    "  AND CHARACTER_SET_NAME IS NOT NULL" + NL +
+                    "  AND CHARACTER_SET_NAME <> 'utf8mb4';"),
         new Sample("元数据与治理体检",
                 "缺主键表", "找出主键缺失的表（InnoDB 无主键会隐式生成，更新与同步都不好做）",
                 "同步、更新与在线改表都要求表有显式主键。",
@@ -191,10 +206,10 @@ public final class SqlSamples {
                             "SELECT t.TABLE_NAME AS 表名" + NL +
                     "FROM information_schema.TABLES t" + NL +
                     "LEFT JOIN (SELECT DISTINCT TABLE_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND CONSTRAINT_TYPE = 'PRIMARY KEY') k" + NL +
-                    "ON k.TABLE_NAME = t.TABLE_NAME" + NL +
+                    "  ON k.TABLE_NAME = t.TABLE_NAME" + NL +
                     "WHERE t.TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND t.TABLE_TYPE = 'BASE TABLE'" + NL +
-                    "AND k.TABLE_NAME IS NULL;"),
+                    "  AND t.TABLE_TYPE = 'BASE TABLE'" + NL +
+                    "  AND k.TABLE_NAME IS NULL;"),
         new Sample("元数据与治理体检",
                 "看建表语句", "看某张表的建表语句（对齐字段定义与索引）",
                 "对齐字段定义与索引，或把结构抄给下游。",
@@ -220,7 +235,10 @@ public final class SqlSamples {
                 "判断能不能把散落的字段收敛成统一维度。",
                 "同名列分散在几十张表里，口径是否一致没人说得清。",
                 "同名 列 维度 收敛 GROUP_CONCAT 复用",
-                            "SELECT COLUMN_NAME AS 列名, COUNT(*) AS 出现表数, GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME) AS 所在表" + NL +
+                            "SELECT" + NL +
+                    "  COLUMN_NAME AS 列名," + NL +
+                    "  COUNT(*) AS 出现表数," + NL +
+                    "  GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME) AS 所在表" + NL +
                     "FROM information_schema.COLUMNS" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
                     "GROUP BY COLUMN_NAME" + NL +
@@ -231,8 +249,11 @@ public final class SqlSamples {
                 "多库环境先按库统计表数与容量。",
                 "只看单库会低估治理范围，容量也找不到大头在哪。",
                 "库级 表数量 容量 分布 TABLE_SCHEMA",
-                            "SELECT TABLE_SCHEMA AS 库名, COUNT(*) AS 表数量, SUM(TABLE_ROWS) AS 估算总行数, ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024," + NL +
-                    "2) AS 占用MB" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_SCHEMA AS 库名," + NL +
+                    "  COUNT(*) AS 表数量," + NL +
+                    "  SUM(TABLE_ROWS) AS 估算总行数," + NL +
+                    "  ROUND(SUM(DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS 占用MB" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA NOT IN ('mysql', 'sys', 'information_schema', 'performance_schema')" + NL +
                     "GROUP BY TABLE_SCHEMA" + NL +
@@ -242,17 +263,23 @@ public final class SqlSamples {
                 "生命周期盘点，先找出很久没动过的表。",
                 "没人认领的历史表一直占空间，也没人敢删。",
                 "冷表 最后更新时间 UPDATE_TIME 生命周期 僵尸表",
-                            "SELECT TABLE_NAME AS 表名, UPDATE_TIME AS 最后更新, DATEDIFF(NOW(), UPDATE_TIME) AS 未变更天数" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  UPDATE_TIME AS 最后更新," + NL +
+                    "  DATEDIFF(NOW(), UPDATE_TIME) AS 未变更天数" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND TABLE_TYPE = 'BASE TABLE'" + NL +
+                    "  AND TABLE_TYPE = 'BASE TABLE'" + NL +
                     "ORDER BY UPDATE_TIME IS NULL DESC, UPDATE_TIME ASC;"),
         new Sample("元数据与治理体检",
                 "字典自审", "字典表自审：一张字典里同名对应多个编码（下游关联会数据膨胀）",
                 "字典表交给下游之前先自审一轮：一个名称是不是只对应一枚编码。",
                 "字典自身一名多码，下游一关联就整批翻倍。",
                 "字典 自审 一名多码 GROUP_CONCAT HAVING 膨胀",
-                            "SELECT dict_name AS 字典项名, COUNT(DISTINCT dict_code) AS 编码数, GROUP_CONCAT(DISTINCT dict_code) AS 冲突编码" + NL +
+                            "SELECT" + NL +
+                    "  dict_name AS 字典项名," + NL +
+                    "  COUNT(DISTINCT dict_code) AS 编码数," + NL +
+                    "  GROUP_CONCAT(DISTINCT dict_code) AS 冲突编码" + NL +
                     "FROM t_dict" + NL +
                     "GROUP BY dict_name" + NL +
                     "HAVING COUNT(DISTINCT dict_code) > 1" + NL +
@@ -262,40 +289,54 @@ public final class SqlSamples {
                 "想知道字典里哪些编码其实完全没人用。",
                 "孤码一直留在字典里，选值列表越拖越长，还容易被误选。",
                 "孤码 未使用 LEFT JOIN IS NULL 精简字典",
-                            "SELECT d.dict_code, d.dict_name" + NL +
+                            "SELECT" + NL +
+                    "  d.dict_code," + NL +
+                    "  d.dict_name" + NL +
                     "FROM t_dict d" + NL +
                     "LEFT JOIN t_order o" + NL +
-                    "ON TRIM(d.dict_name) = TRIM(o.order_no)" + NL +
+                    "  ON TRIM(d.dict_name) = TRIM(o.order_no)" + NL +
                     "WHERE o.order_no IS NULL;"),
         new Sample("数据质量检查",
                 "空值体检", "空值体检：关键字段的 NULL 与空串一次数清",
                 "关键字段先数一遍 NULL 与空串。",
                 "NULL 与空串混着用，聚合与判空的结果两边不一致。",
                 "空值 NULL 空串 计数 SUM 判空",
-                            "SELECT COUNT(*) AS 总行数, SUM(order_no IS NULL OR order_no = '') AS 订单号缺失, SUM(amount IS NULL) AS 金额缺失," + NL +
-                    "SUM(cust_no IS NULL OR cust_no = '') AS 客户号缺失, SUM(created_at IS NULL) AS 时间缺失" + NL +
+                            "SELECT" + NL +
+                    "  COUNT(*) AS 总行数," + NL +
+                    "  SUM(order_no IS NULL OR order_no = '') AS 订单号缺失," + NL +
+                    "  SUM(amount IS NULL) AS 金额缺失," + NL +
+                    "  SUM(cust_no IS NULL OR cust_no = '') AS 客户号缺失," + NL +
+                    "  SUM(created_at IS NULL) AS 时间缺失" + NL +
                     "FROM t_order;"),
         new Sample("数据质量检查",
                 "空值与空串混用", "空串与 NULL 口径混用统计（治理时最常见的一类脏数据）",
                 "同一列里 NULL、空串与纯空格三种都没填的情况混着用，先各数一遍。",
                 "判空条件写漏一半，统计结果忽大忽小。",
                 "NULL 空串 纯空格 CASE WHEN 统计 混用",
-                            "SELECT SUM(CASE WHEN remark IS NULL THEN 1 ELSE 0 END) AS 空值条数, SUM(CASE WHEN remark = '' THEN 1 ELSE 0 END) AS 空串条数," + NL +
-                    "SUM(CASE WHEN TRIM(remark) = '' THEN 1 ELSE 0 END) AS 纯空格条数" + NL +
+                            "SELECT" + NL +
+                    "  SUM(CASE WHEN remark IS NULL THEN 1 ELSE 0 END) AS 空值条数," + NL +
+                    "  SUM(CASE WHEN remark = '' THEN 1 ELSE 0 END) AS 空串条数," + NL +
+                    "  SUM(CASE WHEN TRIM(remark) = '' THEN 1 ELSE 0 END) AS 纯空格条数" + NL +
                     "FROM t_order;"),
         new Sample("数据质量检查",
                 "主键唯一性", "主键唯一性体检（重复主键必须为 0）",
                 "同步或迁移之后核对主键有没有重复。",
                 "主键重复会让按主键更新的作业把两行合成一行的假象。",
                 "主键 重复 COUNT DISTINCT 唯一性",
-                            "SELECT COUNT(*) AS 总行数, COUNT(DISTINCT id) AS 主键去重数, COUNT(*) - COUNT(DISTINCT id) AS 重复主键数" + NL +
+                            "SELECT" + NL +
+                    "  COUNT(*) AS 总行数," + NL +
+                    "  COUNT(DISTINCT id) AS 主键去重数," + NL +
+                    "  COUNT(*) - COUNT(DISTINCT id) AS 重复主键数" + NL +
                     "FROM t_order;"),
         new Sample("数据质量检查",
                 "业务键重复明细", "业务键重复明细（同名订单的所有行一次列出）",
                 "订单号这类业务键出现重复时，要看到具体是哪几行。",
                 "只报重复条数没法定位，改数时不知道该留哪条。",
                 "业务键 重复 明细 GROUP_CONCAT 定位",
-                            "SELECT order_no AS 订单编号, COUNT(*) AS 条数, GROUP_CONCAT(id ORDER BY id) AS 主键清单" + NL +
+                            "SELECT" + NL +
+                    "  order_no AS 订单编号," + NL +
+                    "  COUNT(*) AS 条数," + NL +
+                    "  GROUP_CONCAT(id ORDER BY id) AS 主键清单" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY order_no" + NL +
                     "HAVING COUNT(*) > 1;"),
@@ -304,7 +345,12 @@ public final class SqlSamples {
                 "整行字段都一样，判断是不是重复导入。",
                 "同一批数据被跑了两遍，统计值直接翻倍。",
                 "完全重复 重复导入 GROUP BY HAVING",
-                            "SELECT order_no, amount, cust_no, created_at, COUNT(*) AS 条数" + NL +
+                            "SELECT" + NL +
+                    "  order_no," + NL +
+                    "  amount," + NL +
+                    "  cust_no," + NL +
+                    "  created_at," + NL +
+                    "  COUNT(*) AS 条数" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY order_no, amount, cust_no, created_at" + NL +
                     "HAVING COUNT(*) > 1;"),
@@ -313,53 +359,71 @@ public final class SqlSamples {
                 "金额字段的空值、零值、负数一次筛出来。",
                 "负数与空金额会让合计失真，报表对不上账。",
                 "金额 负数 零值 空值 异常校验",
-                            "SELECT id, order_no, amount" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount" + NL +
                     "FROM t_order" + NL +
                     "WHERE amount IS NULL" + NL +
-                    "OR amount <= 0;"),
+                    "  OR amount <= 0;"),
         new Sample("数据质量检查",
                 "金额精度", "金额精度体检：小数位超过两位的行",
                 "小数位超过业务约定精度的行要挑出来。",
                 "多余的小数位让分摊与合计出现分位差。",
                 "精度 小数位 TRUNC 金额 ROUND",
-                            "SELECT id, order_no, amount" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount" + NL +
                     "FROM t_order" + NL +
                     "WHERE amount IS NOT NULL" + NL +
-                    "AND ROUND(amount, 2) <> amount;"),
+                    "  AND ROUND(amount, 2) <> amount;"),
         new Sample("数据质量检查",
                 "长度异常", "长度体检：客户号超长或过短",
                 "编号类字段过长过短都说明采集口径没守住。",
                 "超长值被截断、过短值是残缺录入。",
                 "长度 CHAR_LENGTH 超长 过短 编号",
-                            "SELECT id, order_no, cust_no, CHAR_LENGTH(cust_no) AS 长度" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  cust_no," + NL +
+                    "  CHAR_LENGTH(cust_no) AS 长度" + NL +
                     "FROM t_order" + NL +
                     "WHERE cust_no IS NOT NULL" + NL +
-                    "AND CHAR_LENGTH(cust_no) NOT BETWEEN 1" + NL +
-                    "AND 32;"),
+                    "  AND CHAR_LENGTH(cust_no) NOT BETWEEN 1" + NL +
+                    "  AND 32;"),
         new Sample("数据质量检查",
                 "首尾空格", "空白字符体检：首尾空格与全空格值",
                 "看起来一样却匹配不上的值，先查空格。",
                 "首尾空格让等值关联与去重全部失效。",
                 "空格 TRIM 不可见 LTRIM RTRIM 匹配不上",
-                            "SELECT id, CONCAT('[', order_no, ']') AS 带括号原值" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  CONCAT('[', order_no, ']') AS 带括号原值" + NL +
                     "FROM t_order" + NL +
                     "WHERE order_no <> TRIM(order_no)" + NL +
-                    "OR TRIM(order_no) = '';"),
+                    "  OR TRIM(order_no) = '';"),
         new Sample("数据质量检查",
                 "不可见字符", "不可见字符体检（制表、换行、零宽空格；8.0 可用 REGEXP_REPLACE 清洗）",
                 "从网页、Excel 粘进来的文本常带制表与零宽字符。",
                 "肉眼看不出差别，比对却永远不相等。",
                 "不可见字符 零宽 制表符 HEX CHAR_LENGTH",
-                            "SELECT id, order_no, HEX(order_no) AS 十六进制" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  HEX(order_no) AS 十六进制" + NL +
                     "FROM t_order" + NL +
                     "WHERE LOCATE(CHAR(9), order_no) + LOCATE(CHAR(10), order_no) + LOCATE(CHAR(13), order_no) > 0" + NL +
-                    "OR HEX(order_no) LIKE '%E2808B%';"),
+                    "  OR HEX(order_no) LIKE '%E2808B%';"),
         new Sample("数据质量检查",
                 "日期越界", "日期合法性：未来时间与超出业务边界的早期时间",
                 "未来时间与早于业务起始日的记录要单独看。",
                 "错填的日期会把按时间的统计窗口整个带偏。",
                 "日期 未来时间 越界 边界 created_at",
-                            "SELECT id, order_no, created_at" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  created_at" + NL +
                     "FROM t_order" + NL +
                     "WHERE created_at IS NOT NULL" + NL +
                     "AND (created_at > NOW()" + NL +
@@ -369,10 +433,13 @@ public final class SqlSamples {
                 "现场有明确规则（如 A 类订单限额）时按规则扫一遍。",
                 "规则只写在制度文档里，库里有没有违反没人核。",
                 "业务规则 阈值 限额 LIKE 条件",
-                            "SELECT id, order_no, amount" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount" + NL +
                     "FROM t_order" + NL +
                     "WHERE order_no LIKE 'A%'" + NL +
-                    "AND amount >= 10000;"),
+                    "  AND amount >= 10000;"),
         new Sample("数据质量检查",
                 "孤儿外键", "参照完整性：订单里的客户号在客户维表找不到",
                 "订单里的客户号在客户维表找不到，就是断链。",
@@ -383,19 +450,26 @@ public final class SqlSamples {
                     ");" + NL +
                     "INSERT INTO tmp_customer" + NL +
                     "VALUES ('C1');" + NL +
-                    "SELECT o.id, o.order_no, o.cust_no AS 缺失客户号" + NL +
+                    "SELECT" + NL +
+                    "  o.id," + NL +
+                    "  o.order_no," + NL +
+                    "  o.cust_no AS 缺失客户号" + NL +
                     "FROM t_order o" + NL +
                     "LEFT JOIN tmp_customer c" + NL +
-                    "ON c.cust_no = o.cust_no" + NL +
+                    "  ON c.cust_no = o.cust_no" + NL +
                     "WHERE o.cust_no IS NOT NULL" + NL +
-                    "AND c.cust_no IS NULL;" + NL +
+                    "  AND c.cust_no IS NULL;" + NL +
                     "DROP TEMPORARY TABLE tmp_customer;"),
         new Sample("数据质量检查",
                 "客户画像", "客户维度画像：订单数、金额合计与均值",
                 "按客户汇总订单数与金额，看头部与长尾。",
                 "看不出哪些客户贡献集中，也看不出异常大客户。",
                 "画像 汇总 分组 GROUP BY 客户 合计",
-                            "SELECT cust_no AS 客户号, COUNT(*) AS 订单数, SUM(amount) AS 金额合计, AVG(amount) AS 金额均值" + NL +
+                            "SELECT" + NL +
+                    "  cust_no AS 客户号," + NL +
+                    "  COUNT(*) AS 订单数," + NL +
+                    "  SUM(amount) AS 金额合计," + NL +
+                    "  AVG(amount) AS 金额均值" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY cust_no" + NL +
                     "ORDER BY 金额合计 DESC;"),
@@ -404,8 +478,9 @@ public final class SqlSamples {
                 "把金额按区间分桶，看分布是否异常集中。",
                 "平均值会掩盖极端值，分桶才看得出堆积在哪一档。",
                 "分布 分桶 CASE WHEN 区间 直方图",
-                            "SELECT CASE WHEN amount < 1 THEN '0-1' WHEN amount < 10 THEN '1-10' WHEN amount < 100 THEN '10-100' ELSE '100+' END AS 金额区间," + NL +
-                    "COUNT(*) AS 条数" + NL +
+                            "SELECT" + NL +
+                    "  CASE WHEN amount < 1 THEN '0-1' WHEN amount < 10 THEN '1-10' WHEN amount < 100 THEN '10-100' ELSE '100+' END AS 金额区间," + NL +
+                    "  COUNT(*) AS 条数" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY 金额区间" + NL +
                     "ORDER BY 条数 DESC;"),
@@ -417,30 +492,38 @@ public final class SqlSamples {
                             "SELECT TABLE_NAME AS 空表" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND TABLE_TYPE = 'BASE TABLE'" + NL +
-                    "AND TABLE_ROWS = 0;"),
+                    "  AND TABLE_TYPE = 'BASE TABLE'" + NL +
+                    "  AND TABLE_ROWS = 0;"),
         new Sample("数据质量检查",
                 "列基数", "列基数体检：每列不同值个数（基数过低要怀疑口径）",
                 "每列有多少不同值，基数过低的列要怀疑口径。",
                 "性别列出现一万个不同值，说明这列被挪作他用。",
                 "基数 不同值 COUNT DISTINCT 唯一值 口径",
-                            "SELECT COUNT(DISTINCT order_no) AS 订单号基数, COUNT(DISTINCT cust_no) AS 客户号基数, COUNT(DISTINCT amount) AS 金额基数," + NL +
-                    "COUNT(DISTINCT DATE(created_at)) AS 日期基数" + NL +
+                            "SELECT" + NL +
+                    "  COUNT(DISTINCT order_no) AS 订单号基数," + NL +
+                    "  COUNT(DISTINCT cust_no) AS 客户号基数," + NL +
+                    "  COUNT(DISTINCT amount) AS 金额基数," + NL +
+                    "  COUNT(DISTINCT DATE(created_at)) AS 日期基数" + NL +
                     "FROM t_order;"),
         new Sample("数据质量检查",
                 "唯一键体检", "唯一键体检：业务唯一键的空值与重复一起看",
                 "业务唯一键同时看空值与重复。",
                 "只查重复会漏掉用空值绕开唯一性的那批行。",
                 "唯一键 空值 重复 业务主键",
-                            "SELECT COUNT(*) AS 总行数, SUM(order_no IS NULL) AS 空值数, COUNT(*) - COUNT(DISTINCT order_no) AS 重复数" + NL +
+                            "SELECT" + NL +
+                    "  COUNT(*) AS 总行数," + NL +
+                    "  SUM(order_no IS NULL) AS 空值数," + NL +
+                    "  COUNT(*) - COUNT(DISTINCT order_no) AS 重复数" + NL +
                     "FROM t_order;"),
         new Sample("数据质量检查",
                 "匹配率", "映射匹配率统计（治理前后汇报用：总数 / 未匹配 / 命中率）",
                 "一轮映射跑完，对外要报总数、未匹配数与命中率。",
                 "只说跑完了没有数字，效果没法比，也定不下下一轮该治哪些。",
                 "匹配率 命中率 未匹配 CASE WHEN ROUND 统计",
-                            "SELECT COUNT(*) AS 总数, SUM(CASE WHEN new_code IS NULL THEN 1 ELSE 0 END) AS 未匹配数, ROUND(100 * SUM(CASE WHEN new_code IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*)," + NL +
-                    "2) AS 匹配率" + NL +
+                            "SELECT" + NL +
+                    "  COUNT(*) AS 总数," + NL +
+                    "  SUM(CASE WHEN new_code IS NULL THEN 1 ELSE 0 END) AS 未匹配数," + NL +
+                    "  ROUND(100 * SUM(CASE WHEN new_code IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 2) AS 匹配率" + NL +
                     "FROM t_map_order_code;"),
         new Sample("数据质量检查",
                 "单表质量分", "单表质量分：空值、业务键重复、金额异常按权重扣分",
@@ -456,7 +539,12 @@ public final class SqlSamples {
                 "没有门禁时质量检查只是看，看不出该拦谁。",
                 "门禁 CTE WITH 阈值 不达标 清单",
                             "WITH q AS (SELECT COUNT(*) AS n, SUM(order_no IS NULL OR order_no = '') AS bad_order_no, COUNT(*) - COUNT(DISTINCT order_no) AS dup_order_no FROM t_order)" + NL +
-                    "SELECT 't_order' AS 表名, n AS 总行数, bad_order_no AS 订单号缺失, dup_order_no AS 业务键重复, CASE WHEN bad_order_no = 0 AND dup_order_no = 0 THEN '通过' ELSE '不通过' END AS 门禁结论" + NL +
+                    "SELECT" + NL +
+                    "  't_order' AS 表名," + NL +
+                    "  n AS 总行数," + NL +
+                    "  bad_order_no AS 订单号缺失," + NL +
+                    "  dup_order_no AS 业务键重复," + NL +
+                    "  CASE WHEN bad_order_no = 0 AND dup_order_no = 0 THEN '通过' ELSE '不通过' END AS 门禁结论" + NL +
                     "FROM q;"),
         new Sample("数据质量检查",
                 "规则配置表", "把质量规则落成配置表，巡检时按表驱动执行",
@@ -473,7 +561,9 @@ public final class SqlSamples {
                     "VALUES ('t_order', 'order_no', '非空且唯一', 'SELECT COUNT(*) FROM t_order WHERE order_no IS NULL" + NL +
                     "   OR CHAR_LENGTH(TRIM(order_no)) = 0')," + NL +
                     "('t_order', 'amount', '大于零', 'SELECT COUNT(*) FROM t_order WHERE amount IS NULL OR amount <= 0');" + NL +
-                    "SELECT rule_name AS 规则, rule_sql AS 校验语句" + NL +
+                    "SELECT" + NL +
+                    "  rule_name AS 规则," + NL +
+                    "  rule_sql AS 校验语句" + NL +
                     "FROM tmp_dq_rule;" + NL +
                     "DROP TEMPORARY TABLE tmp_dq_rule;"),
         new Sample("数据标准化与清洗",
@@ -481,25 +571,34 @@ public final class SqlSamples {
                 "清洗之前先看会改动哪些行。",
                 "直接 UPDATE 改错方向，回滚要连数据一起重灌。",
                 "标准化 预览 UPPER TRIM 对照",
-                            "SELECT id, cust_no AS 原值, UPPER(TRIM(cust_no)) AS 标准值" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  cust_no AS 原值," + NL +
+                    "  UPPER(TRIM(cust_no)) AS 标准值" + NL +
                     "FROM t_order" + NL +
                     "WHERE cust_no IS NOT NULL" + NL +
-                    "AND cust_no <> UPPER(TRIM(cust_no));"),
+                    "  AND cust_no <> UPPER(TRIM(cust_no));"),
         new Sample("数据标准化与清洗",
                 "名称大小写归一", "名称标准化：去空格 + 大小写归一（提升跨系统关联命中率）",
                 "名称类字段先去掉首尾空格、统一小写，看会动到哪些行。",
                 "大小写与空格不一致时，等值关联与去重都会把同一个值当成两个。",
                 "标准化 LOWER TRIM 大小写 名称 预览",
-                            "SELECT id, order_no AS 原值, LOWER(TRIM(order_no)) AS 标准值" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no AS 原值," + NL +
+                    "  LOWER(TRIM(order_no)) AS 标准值" + NL +
                     "FROM t_order" + NL +
                     "WHERE order_no IS NOT NULL" + NL +
-                    "AND LOWER(TRIM(order_no)) <> LOWER(order_no);"),
+                    "  AND LOWER(TRIM(order_no)) <> LOWER(order_no);"),
         new Sample("数据标准化与清洗",
                 "全角转半角", "特殊符号归一：全角括号转半角（名称类字段清洗常见一步）",
                 "名称类字段里的全角括号要转成半角，顺带去掉首尾空格。",
                 "全半角混写让等值匹配与去重都判成不同值。",
                 "全角 半角 REPLACE TRIM 括号 清洗",
-                            "SELECT id, order_no, REPLACE(REPLACE(TRIM(order_no), '（', '('), '）', ')') AS 半角化" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  REPLACE(REPLACE(TRIM(order_no), '（', '('), '）', ')') AS 半角化" + NL +
                     "FROM t_order;"),
         new Sample("数据标准化与清洗",
                 "事务内清洗", "事务内批量标准化客户号，看结果后回滚（确认无误再去掉 ROLLBACK）",
@@ -510,7 +609,9 @@ public final class SqlSamples {
                     "UPDATE t_order" + NL +
                     "SET cust_no = UPPER(TRIM(cust_no))" + NL +
                     "WHERE cust_no IS NOT NULL;" + NL +
-                    "SELECT id, cust_no" + NL +
+                    "SELECT" + NL +
+                    "  id," + NL +
+                    "  cust_no" + NL +
                     "FROM t_order" + NL +
                     "ORDER BY id;" + NL +
                     "ROLLBACK;"),
@@ -519,7 +620,10 @@ public final class SqlSamples {
                 "对外交付要把时间统一成 YYYY-MM-DD。",
                 "带时分秒的原值让按天对账多出重复行。",
                 "日期格式 DATE_FORMAT 标准化 输出",
-                            "SELECT id, created_at AS 原值, DATE_FORMAT(created_at, '%Y-%m-%d') AS 标准日期" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  created_at AS 原值," + NL +
+                    "  DATE_FORMAT(created_at, '%Y-%m-%d') AS 标准日期" + NL +
                     "FROM t_order" + NL +
                     "WHERE created_at IS NOT NULL;"),
         new Sample("数据标准化与清洗",
@@ -527,14 +631,20 @@ public final class SqlSamples {
                 "空串与 NULL 混用时，先统一成 NULL。",
                 "聚合与判空对两者的处理不同，指标会莫名对不上。",
                 "空串 NULL NULLIF TRIM 统一口径",
-                            "SELECT id, cust_no AS 原值, NULLIF(TRIM(cust_no), '') AS 清洗后" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  cust_no AS 原值," + NL +
+                    "  NULLIF(TRIM(cust_no), '') AS 清洗后" + NL +
                     "FROM t_order;"),
         new Sample("数据标准化与清洗",
                 "金额舍入", "金额统一保留两位小数（先确认舍入规则是否为四舍五入）",
                 "金额统一保留两位小数，先确认舍入规则。",
                 "多余小数位在分摊与合计里累积成分位差。",
                 "舍入 两位小数 ROUND CAST DECIMAL",
-                            "SELECT id, amount AS 原值, CAST(ROUND(amount, 2) AS DECIMAL(18,2)) AS 两位小数" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  amount AS 原值," + NL +
+                    "  CAST(ROUND(amount, 2) AS DECIMAL(18,2)) AS 两位小数" + NL +
                     "FROM t_order" + NL +
                     "WHERE amount IS NOT NULL;"),
         new Sample("数据标准化与清洗",
@@ -542,14 +652,20 @@ public final class SqlSamples {
                 "把散乱的取值映射成统一等级码。",
                 "同一含义写成 VIP、vip、会员三种样，分组统计被拆开。",
                 "枚举 映射 CASE WHEN 码表 等级",
-                            "SELECT id, cust_no, CASE WHEN cust_no = 'C1' THEN 'VIP' WHEN cust_no LIKE 'C%' THEN 'NORMAL' ELSE 'UNKNOWN' END AS 客户等级" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  cust_no," + NL +
+                    "  CASE WHEN cust_no = 'C1' THEN 'VIP' WHEN cust_no LIKE 'C%' THEN 'NORMAL' ELSE 'UNKNOWN' END AS 客户等级" + NL +
                     "FROM t_order;"),
         new Sample("数据标准化与清洗",
                 "合并空格", "连续空格合并为一个（正则替换，8.0 才有的 REGEXP_REPLACE）",
                 "文本里连续多个空格压成一个。",
                 "空格数量不一致让同一句话匹配出多个不同值。",
                 "正则替换 REGEXP_REPLACE 空格 压缩 8.0",
-                            "SELECT id, order_no AS 原值, REGEXP_REPLACE(TRIM(order_no), ' +', ' ') AS 规范化" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no AS 原值," + NL +
+                    "  REGEXP_REPLACE(TRIM(order_no), ' +', ' ') AS 规范化" + NL +
                     "FROM t_order;"),
         new Sample("数据标准化与清洗",
                 "不可见字符清洗", "不可见字符清洗：换行/制表符直接剔除（8.0+，低版本放应用层做）",
@@ -564,14 +680,20 @@ public final class SqlSamples {
                 "报表口径要求数值补 0、文本补占位符。",
                 "NULL 参与计算会让整行结果为空，合计凭空少一截。",
                 "空值填充 COALESCE 占位符 默认值",
-                            "SELECT id, COALESCE(amount, 0) AS 金额, COALESCE(cust_no, 'UNKNOWN') AS 客户号" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  COALESCE(amount, 0) AS 金额," + NL +
+                    "  COALESCE(cust_no, 'UNKNOWN') AS 客户号" + NL +
                     "FROM t_order;"),
         new Sample("数据标准化与清洗",
                 "脱敏展示", "脱敏展示：客户号保留前 3 后 4，中间打星",
                 "对外展示客户号，中间几位打星。",
                 "整串明文出现在截图与导出文件里，泄露无从追溯。",
                 "脱敏 掩码 CONCAT LEFT RIGHT 隐私",
-                            "SELECT id, cust_no, CASE WHEN CHAR_LENGTH(cust_no) >= 7 THEN CONCAT(LEFT(cust_no, 3), REPEAT ('*', CHAR_LENGTH(cust_no) - 7)," + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  cust_no," + NL +
+                    "CASE WHEN CHAR_LENGTH(cust_no) >= 7 THEN CONCAT(LEFT(cust_no, 3), REPEAT ('*', CHAR_LENGTH(cust_no) - 7)," + NL +
                     "RIGHT(cust_no, 4)) ELSE '**' END AS 脱敏客户号" + NL +
                     "FROM t_order;"),
         new Sample("数据标准化与清洗",
@@ -579,7 +701,10 @@ public final class SqlSamples {
                 "明细要汇成日粒度才能对上日报。",
                 "带时分秒的明细直接汇总，同一天被拆成多行。",
                 "日汇总 DATE 截断 时间口径 分组",
-                            "SELECT DATE(created_at) AS 日期, COUNT(*) AS 订单数, SUM(amount) AS 金额" + NL +
+                            "SELECT" + NL +
+                    "  DATE(created_at) AS 日期," + NL +
+                    "  COUNT(*) AS 订单数," + NL +
+                    "  SUM(amount) AS 金额" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY DATE(created_at)" + NL +
                     "ORDER BY 日期;"),
@@ -589,15 +714,20 @@ public final class SqlSamples {
                 "改动量说不清，验收只能靠抽样肉眼比。",
                 "对照 底稿 临时表 diff 变化行数",
                             "CREATE TEMPORARY TABLE tmp_before AS" + NL +
-                    "SELECT id, cust_no" + NL +
+                    "SELECT" + NL +
+                    "  id," + NL +
+                    "  cust_no" + NL +
                     "FROM t_order;" + NL +
                     "UPDATE t_order" + NL +
                     "SET cust_no = UPPER(TRIM(cust_no))" + NL +
                     "WHERE cust_no IS NOT NULL;" + NL +
-                    "SELECT b.id, b.cust_no AS 清洗前, t.cust_no AS 清洗后" + NL +
+                    "SELECT" + NL +
+                    "  b.id," + NL +
+                    "  b.cust_no AS 清洗前," + NL +
+                    "  t.cust_no AS 清洗后" + NL +
                     "FROM tmp_before b" + NL +
                     "JOIN t_order t" + NL +
-                    "ON t.id = b.id" + NL +
+                    "  ON t.id = b.id" + NL +
                     "WHERE NOT (BINARY b.cust_no <=> BINARY t.cust_no);" + NL +
                     "DROP TEMPORARY TABLE tmp_before;"),
         new Sample("主数据与重复数据",
@@ -605,17 +735,23 @@ public final class SqlSamples {
                 "从字段里挑业务主键，先看空值与重复。",
                 "选错主键会让后续所有去重与同步建在沙上。",
                 "业务主键 候选 空值 重复 GROUP BY",
-                            "SELECT order_no, COUNT(*) AS 条数" + NL +
+                            "SELECT" + NL +
+                    "  order_no," + NL +
+                    "  COUNT(*) AS 条数" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY order_no" + NL +
                     "HAVING order_no IS NULL" + NL +
-                    "OR COUNT(*) > 1;"),
+                    "  OR COUNT(*) > 1;"),
         new Sample("主数据与重复数据",
                 "组内排序", "重复组内排序：按更新时间保留最新一条",
                 "重复组内按更新时间排，确定该留哪条。",
                 "没有排序规则时，保留哪条全凭偶然。",
                 "窗口函数 ROW_NUMBER PARTITION BY 保留最新",
-                            "SELECT id, order_no, created_at, ROW_NUMBER() OVER(PARTITION BY order_no ORDER BY created_at DESC, id DESC) AS 组内序号" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  created_at," + NL +
+                    "  ROW_NUMBER() OVER(PARTITION BY order_no ORDER BY created_at DESC, id DESC) AS 组内序号" + NL +
                     "FROM t_order;"),
         new Sample("主数据与重复数据",
                 "待删标记", "删除前先标记：找出每组里除第一条之外的待删主键",
@@ -623,7 +759,9 @@ public final class SqlSamples {
                 "直接 DELETE 删错行，数据找不回来。",
                 "标记 待删 WITH ranked 主键 核对",
                             "WITH ranked AS (SELECT id, order_no, ROW_NUMBER() OVER(PARTITION BY order_no ORDER BY id) AS rn FROM t_order)" + NL +
-                    "SELECT id AS 待删主键, order_no AS 业务键" + NL +
+                    "SELECT" + NL +
+                    "  id AS 待删主键," + NL +
+                    "  order_no AS 业务键" + NL +
                     "FROM ranked" + NL +
                     "WHERE rn > 1;"),
         new Sample("主数据与重复数据",
@@ -631,7 +769,10 @@ public final class SqlSamples {
                 "同一编号写成大小写两种，先归一化再数。",
                 "默认排序规则不区分大小写，重复会被判成一条。",
                 "大小写 LOWER BINARY 变体 规范化",
-                            "SELECT LOWER(order_no) AS 规范化订单号, COUNT(DISTINCT BINARY order_no) AS 变体数, GROUP_CONCAT(DISTINCT BINARY order_no) AS 变体" + NL +
+                            "SELECT" + NL +
+                    "  LOWER(order_no) AS 规范化订单号," + NL +
+                    "  COUNT(DISTINCT BINARY order_no) AS 变体数," + NL +
+                    "  GROUP_CONCAT(DISTINCT BINARY order_no) AS 变体" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY LOWER(order_no)" + NL +
                     "HAVING COUNT(DISTINCT BINARY order_no) > 1;"),
@@ -649,16 +790,18 @@ public final class SqlSamples {
                     "SELECT DISTINCT o.cust_no AS 未登记客户号" + NL +
                     "FROM t_order o" + NL +
                     "LEFT JOIN tmp_master_customer m" + NL +
-                    "ON m.cust_no = o.cust_no" + NL +
+                    "  ON m.cust_no = o.cust_no" + NL +
                     "WHERE o.cust_no IS NOT NULL" + NL +
-                    "AND m.cust_no IS NULL;" + NL +
+                    "  AND m.cust_no IS NULL;" + NL +
                     "DROP TEMPORARY TABLE tmp_master_customer;"),
         new Sample("主数据与重复数据",
                 "新旧编码映射", "新旧编码映射：给现有客户号批量生成新码",
                 "换编码体系时要一份新旧对照。",
                 "没有映射表，历史数据与新系统对不上。",
                 "编码映射 换码 CONCAT 对照 迁移",
-                            "SELECT DISTINCT cust_no AS 旧编码, CONCAT('K_', cust_no) AS 新编码" + NL +
+                            "SELECT" + NL +
+                    "  DISTINCT cust_no AS 旧编码," + NL +
+                    "  CONCAT('K_', cust_no) AS 新编码" + NL +
                     "FROM t_order" + NL +
                     "WHERE cust_no IS NOT NULL" + NL +
                     "ORDER BY 旧编码;"),
@@ -667,7 +810,10 @@ public final class SqlSamples {
                 "先量清重复的规模，再决定治不治、怎么治。",
                 "不知道能回收多少行，投入产出算不出来。",
                 "规模 重复组数 涉及行数 可回收 盘点",
-                            "SELECT COUNT(*) AS 重复组数, SUM(条数) AS 涉及行数, SUM(条数 - 1) AS 可回收行数" + NL +
+                            "SELECT" + NL +
+                    "  COUNT(*) AS 重复组数," + NL +
+                    "  SUM(条数) AS 涉及行数," + NL +
+                    "  SUM(条数 - 1) AS 可回收行数" + NL +
                     "FROM (SELECT order_no, COUNT(*) AS 条数 FROM t_order GROUP BY order_no HAVING COUNT(*) > 1) d;"),
         new Sample("主数据与重复数据",
                 "黄金记录", "合并后的黄金记录：每组按时间取最新一条",
@@ -675,7 +821,12 @@ public final class SqlSamples {
                 "多来源记录字段互相打架，下游不知信哪条。",
                 "黄金记录 golden 主数据 ROW_NUMBER 最新",
                             "WITH ranked AS (SELECT t.*, ROW_NUMBER() OVER(PARTITION BY order_no ORDER BY created_at DESC, id DESC) AS rn FROM t_order t)" + NL +
-                    "SELECT id, order_no, amount, cust_no, created_at" + NL +
+                    "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount," + NL +
+                    "  cust_no," + NL +
+                    "  created_at" + NL +
                     "FROM ranked" + NL +
                     "WHERE rn = 1;"),
         new Sample("主数据与重复数据",
@@ -683,7 +834,9 @@ public final class SqlSamples {
                 "主数据合并之前，把同一个名称挂着多枚编码的那批挑出来。",
                 "名称相同而编码不同，机器判不了该留哪一枚，硬合一定合错。",
                 "歧义 同名 COUNT DISTINCT 人工确认 主数据",
-                            "SELECT order_no AS 名称, COUNT(DISTINCT id) AS 编码数" + NL +
+                            "SELECT" + NL +
+                    "  order_no AS 名称," + NL +
+                    "  COUNT(DISTINCT id) AS 编码数" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY order_no" + NL +
                     "HAVING COUNT(DISTINCT id) > 1;"),
@@ -692,58 +845,73 @@ public final class SqlSamples {
                 "两边名称口径基本一致时，先按名称精确关联一轮。",
                 "换成内连接会把没匹配上的行整批吞掉，连少了多少都看不出来。",
                 "精确匹配 LEFT JOIN TRIM 名称 关联 全量",
-                            "SELECT a.old_code AS 旧编码, a.name AS 名称, b.new_code AS 新编码" + NL +
+                            "SELECT" + NL +
+                    "  a.old_code AS 旧编码," + NL +
+                    "  a.name AS 名称," + NL +
+                    "  b.new_code AS 新编码" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name);"),
+                    "  ON TRIM(a.name) = TRIM(b.name);"),
         new Sample("编码映射与关联",
                 "模糊兜底", "模糊兜底匹配：字典名包含源端名（加长度门槛防误命中，需人工复核）",
                 "精确没命中的，再用字典名包含源端名兜一轮。",
                 "模糊命中不可靠，短名称尤其容易误接，要带长度门槛并交人工复核。",
                 "模糊匹配 LIKE CONCAT 长度门槛 复核 兜底",
-                            "SELECT a.name AS 源端名称, b.name AS 字典名称, b.new_code" + NL +
+                            "SELECT" + NL +
+                    "  a.name AS 源端名称," + NL +
+                    "  b.name AS 字典名称," + NL +
+                    "  b.new_code" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON b.name LIKE CONCAT('%', TRIM(a.name), '%')" + NL +
-                    "AND CHAR_LENGTH(TRIM(a.name)) > 2;"),
+                    "  ON b.name LIKE CONCAT('%', TRIM(a.name), '%')" + NL +
+                    "  AND CHAR_LENGTH(TRIM(a.name)) > 2;"),
         new Sample("编码映射与关联",
                 "联合键关联", "联合键关联：名称 + 分类码双条件收敛，规避同名一对多",
                 "不同分类下有同名的，用名称加分类码两个条件一起收敛。",
                 "只按名称关联会一对多，一行源端数据配出好几枚编码。",
                 "联合键 分类码 一对多 JOIN 收敛",
-                            "SELECT a.name, a.cat_code, b.new_code" + NL +
+                            "SELECT" + NL +
+                    "  a.name," + NL +
+                    "  a.cat_code," + NL +
+                    "  b.new_code" + NL +
                     "FROM t_order a" + NL +
                     "JOIN t_dict b" + NL +
-                    "ON a.cat_code = b.cat_code" + NL +
-                    "AND TRIM(a.name) = TRIM(b.name);"),
+                    "  ON a.cat_code = b.cat_code" + NL +
+                    "  AND TRIM(a.name) = TRIM(b.name);"),
         new Sample("编码映射与关联",
                 "别名表桥接", "同义词/别名映射：经别名表把术语不一致的两边接起来",
                 "两边叫法本来就不一致时，经别名表把术语接起来。",
                 "硬靠字面匹配接不上，术语差异会长期留在数据里。",
                 "同义词 别名表 术语 桥接 t_synonym",
-                            "SELECT a.name AS 源端, b.new_code" + NL +
+                            "SELECT" + NL +
+                    "  a.name AS 源端," + NL +
+                    "  b.new_code" + NL +
                     "FROM t_order a" + NL +
                     "JOIN t_synonym s" + NL +
-                    "ON TRIM(a.name) = TRIM(s.alias)" + NL +
+                    "  ON TRIM(a.name) = TRIM(s.alias)" + NL +
                     "JOIN t_dict b" + NL +
-                    "ON TRIM(s.std_name) = TRIM(b.name);"),
+                    "  ON TRIM(s.std_name) = TRIM(b.name);"),
         new Sample("编码映射与关联",
                 "父级编码兜底", "树形层级兜底：本级未匹配时向上取父级编码",
                 "明细项在本级查不到字典时，向上取父级的编码。",
                 "本级没有字典项就直接判未匹配，其实父级编码是能用的。",
                 "层级 父级 COALESCE 兜底 树形",
-                            "SELECT a.name, COALESCE(b.new_code, p.new_code) AS 最终编码" + NL +
+                            "SELECT" + NL +
+                    "  a.name," + NL +
+                    "  COALESCE(b.new_code, p.new_code) AS 最终编码" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
                     "LEFT JOIN t_dict p" + NL +
-                    "ON a.parent_name = p.name;"),
+                    "  ON a.parent_name = p.name;"),
         new Sample("编码映射与关联",
                 "前缀规则校验", "编码反解校验：新编码是否符合旧编码前缀规则（回写前检查）",
                 "回写之前先看新编码还守不守旧编码的前缀规则。",
                 "前缀一变，下游按前缀分流的作业会静默走错分支。",
                 "前缀 编码规则 LIKE LEFT 校验 回写前",
-                            "SELECT old_code, new_code" + NL +
+                            "SELECT" + NL +
+                    "  old_code," + NL +
+                    "  new_code" + NL +
                     "FROM t_map_order_code" + NL +
                     "WHERE new_code NOT LIKE CONCAT(LEFT(old_code, 2), '%');"),
         new Sample("编码映射与关联",
@@ -751,10 +919,12 @@ public final class SqlSamples {
                 "把没匹配上的名称按出现次数排下来，先推最高的那批。",
                 "按条数看未匹配是一堆长尾，按频次才知道先解决哪几条最划算。",
                 "未匹配 频次 GROUP BY 排序 明细",
-                            "SELECT a.name, COUNT(*) AS 次数" + NL +
+                            "SELECT" + NL +
+                    "  a.name," + NL +
+                    "  COUNT(*) AS 次数" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
                     "WHERE b.new_code IS NULL" + NL +
                     "GROUP BY a.name" + NL +
                     "ORDER BY 次数 DESC;"),
@@ -763,20 +933,28 @@ public final class SqlSamples {
                 "一轮里同时做精确与模糊匹配，给每条结果标上置信度。",
                 "匹配结果不分层级，人工复核只能全量重看，排不出优先级。",
                 "置信度 精确 模糊 COALESCE CASE WHEN 分级",
-                            "SELECT a.old_code, a.name, COALESCE(b1.new_code, b2.new_code) AS new_code, CASE WHEN b1.new_code IS NOT NULL THEN '精确' WHEN b2.new_code IS NOT NULL THEN '模糊' ELSE '未匹配' END AS conf_level" + NL +
+                            "SELECT" + NL +
+                    "  a.old_code," + NL +
+                    "  a.name," + NL +
+                    "  COALESCE(b1.new_code, b2.new_code) AS new_code," + NL +
+                    "  CASE WHEN b1.new_code IS NOT NULL THEN '精确' WHEN b2.new_code IS NOT NULL THEN '模糊' ELSE '未匹配' END AS conf_level" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b1" + NL +
-                    "ON TRIM(a.name) = TRIM(b1.name)" + NL +
+                    "  ON TRIM(a.name) = TRIM(b1.name)" + NL +
                     "LEFT JOIN t_dict b2" + NL +
-                    "ON b1.new_code IS NULL" + NL +
-                    "AND b2.name LIKE CONCAT('%', TRIM(a.name), '%');"),
+                    "  ON b1.new_code IS NULL" + NL +
+                    "  AND b2.name LIKE CONCAT('%', TRIM(a.name), '%');"),
         new Sample("编码映射与关联",
                 "映射去重落地", "映射去重落地：每枚旧编码只留一条，精确优先于模糊",
                 "一枚旧编码命中多条映射时，落地只留置信度最高的那条。",
                 "落地表里一枚旧码带出多枚新码，下游关联当场行数翻倍。",
                 "去重 ROW_NUMBER PARTITION BY FIELD 窗口函数 8.0",
                             "INSERT INTO t_map_order_code_clean(old_code, name, new_code, conf_level)" + NL +
-                    "SELECT old_code, name, new_code, conf_level" + NL +
+                    "SELECT" + NL +
+                    "  old_code," + NL +
+                    "  name," + NL +
+                    "  new_code," + NL +
+                    "  conf_level" + NL +
                     "FROM (SELECT *, ROW_NUMBER() OVER(PARTITION BY old_code ORDER BY FIELD(conf_level, '精确', '模糊', '未匹配')) AS rn FROM t_map_order_code) t" + NL +
                     "WHERE rn = 1;"),
         new Sample("编码映射与关联",
@@ -785,48 +963,63 @@ public final class SqlSamples {
                 "直接改 ODS 会污染贴源层，出了问题也回不到原样。",
                 "宽表 CTAS DWD 贴源 match_status 可重复跑",
                             "CREATE TABLE IF NOT EXISTS t_map_order_code AS" + NL +
-                    "SELECT a.*, b.new_code, CASE WHEN b.new_code IS NULL THEN '未匹配' ELSE '成功' END AS match_status" + NL +
+                    "SELECT" + NL +
+                    "  a.*," + NL +
+                    "  b.new_code," + NL +
+                    "  CASE WHEN b.new_code IS NULL THEN '未匹配' ELSE '成功' END AS match_status" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name);"),
+                    "  ON TRIM(a.name) = TRIM(b.name);"),
         new Sample("编码映射与关联",
                 "历史版本追溯", "字典版本快照追溯：业务日期落在字典生效区间内，历史数据可回放",
                 "回放历史单据时，按业务日期落在字典的生效区间里取编码。",
                 "字典只留当前版，历史单据会被按新码重算，结果对不上当年。",
                 "版本 生效区间 BETWEEN 回放 快照 追溯",
-                            "SELECT a.*, b.new_code, b.dict_version" + NL +
+                            "SELECT" + NL +
+                    "  a.*," + NL +
+                    "  b.new_code," + NL +
+                    "  b.dict_version" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name)" + NL +
-                    "AND a.biz_date BETWEEN b.eff_date" + NL +
-                    "AND b.exp_date;"),
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.biz_date BETWEEN b.eff_date" + NL +
+                    "  AND b.exp_date;"),
         new Sample("编码映射与关联",
                 "只取生效字典", "有效版本映射：只取生效期内字典，避免拿到历史旧码",
                 "只让当前仍在生效期内的字典项参与匹配。",
                 "过期项也留在候选里，会把已经停用的编码重新发出去。",
                 "生效期 COALESCE 过期 过滤 字典版本",
-                            "SELECT a.*, b.new_code, b.dict_version" + NL +
+                            "SELECT" + NL +
+                    "  a.*," + NL +
+                    "  b.new_code," + NL +
+                    "  b.dict_version" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name)" + NL +
-                    "AND a.biz_date BETWEEN b.eff_date" + NL +
-                    "AND COALESCE(b.exp_date, '9999-12-31');"),
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.biz_date BETWEEN b.eff_date" + NL +
+                    "  AND COALESCE(b.exp_date, '9999-12-31');"),
         new Sample("数据血缘与影响分析",
                 "外键依赖", "外键依赖清单：子表列指向哪张父表",
                 "改表、下线表之前先看谁引用它。",
                 "删掉被引用的父表，子表数据当场断链。",
                 "外键 依赖 REFERENCED_TABLE_NAME 子表",
-                            "SELECT TABLE_NAME AS 子表, COLUMN_NAME AS 外键列, REFERENCED_TABLE_NAME AS 父表, REFERENCED_COLUMN_NAME AS 父列" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 子表," + NL +
+                    "  COLUMN_NAME AS 外键列," + NL +
+                    "  REFERENCED_TABLE_NAME AS 父表," + NL +
+                    "  REFERENCED_COLUMN_NAME AS 父列" + NL +
                     "FROM information_schema.KEY_COLUMN_USAGE" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND REFERENCED_TABLE_NAME IS NOT NULL" + NL +
+                    "  AND REFERENCED_TABLE_NAME IS NOT NULL" + NL +
                     "ORDER BY 子表, 外键列;"),
         new Sample("数据血缘与影响分析",
                 "视图依赖", "视图依赖了哪些表（改表前先看视图定义）",
                 "改列名之前先看有哪些视图在用。",
                 "视图定义里的列一改就失效，报错还在下一次查询时。",
                 "视图 VIEW_DEFINITION 依赖 改列",
-                            "SELECT TABLE_NAME AS 视图, VIEW_DEFINITION AS 定义" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 视图," + NL +
+                    "  VIEW_DEFINITION AS 定义" + NL +
                     "FROM information_schema.VIEWS" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE();"),
         new Sample("数据血缘与影响分析",
@@ -834,11 +1027,15 @@ public final class SqlSamples {
                 "改表前列出存储过程、函数与触发器。",
                 "触发器里写死了旧表名，改完表才在运行时炸。",
                 "存储过程 触发器 ROUTINE_TYPE 清点 依赖",
-                            "SELECT ROUTINE_TYPE AS 类型, ROUTINE_NAME AS 名称" + NL +
+                            "SELECT" + NL +
+                    "  ROUTINE_TYPE AS 类型," + NL +
+                    "  ROUTINE_NAME AS 名称" + NL +
                     "FROM information_schema.ROUTINES" + NL +
                     "WHERE ROUTINE_SCHEMA = DATABASE()" + NL +
                     "UNION ALL" + NL +
-                    "SELECT 'TRIGGER', TRIGGER_NAME" + NL +
+                    "SELECT" + NL +
+                    "  'TRIGGER'," + NL +
+                    "  TRIGGER_NAME" + NL +
                     "FROM information_schema.TRIGGERS" + NL +
                     "WHERE TRIGGER_SCHEMA = DATABASE();"),
         new Sample("数据血缘与影响分析",
@@ -846,20 +1043,27 @@ public final class SqlSamples {
                 "一个关键字段出现在哪些表，先量影响面。",
                 "只改一张表，其余同名表口径就与主表分叉。",
                 "影响面 同名字段 表数 GROUP_CONCAT 血缘",
-                            "SELECT COLUMN_NAME AS 列名, COUNT(*) AS 表数, GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME) AS 涉及表" + NL +
+                            "SELECT" + NL +
+                    "  COLUMN_NAME AS 列名," + NL +
+                    "  COUNT(*) AS 表数," + NL +
+                    "  GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME) AS 涉及表" + NL +
                     "FROM information_schema.COLUMNS" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND COLUMN_NAME IN ('cust_no', 'order_no')" + NL +
+                    "  AND COLUMN_NAME IN ('cust_no', 'order_no')" + NL +
                     "GROUP BY COLUMN_NAME;"),
         new Sample("数据血缘与影响分析",
                 "索引依赖", "改列前评估：依赖该列的索引与组合顺序",
                 "改列类型前看它被哪些索引占用。",
                 "被索引依赖的列改类型会失败或悄悄改执行计划。",
                 "索引依赖 改列 组合顺序 STATISTICS",
-                            "SELECT TABLE_NAME AS 表名, INDEX_NAME AS 索引名, COLUMN_NAME AS 列名, SEQ_IN_INDEX AS 序号" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  INDEX_NAME AS 索引名," + NL +
+                    "  COLUMN_NAME AS 列名," + NL +
+                    "  SEQ_IN_INDEX AS 序号" + NL +
                     "FROM information_schema.STATISTICS" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND COLUMN_NAME = 'order_no'" + NL +
+                    "  AND COLUMN_NAME = 'order_no'" + NL +
                     "ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX;"),
         new Sample("数据血缘与影响分析",
                 "血缘登记", "字段级血缘登记：上下游表、列与转换规则",
@@ -876,7 +1080,12 @@ public final class SqlSamples {
                     "INSERT INTO tmp_lineage" + NL +
                     "VALUES ('t_order', 'order_no', 'dwd_order', 'order_no', '直接映射'), ('t_order', 'amount', 'dwd_order', 'pay_amount'," + NL +
                     "'元转分'), ('t_order', 'created_at', 'dwd_order', 'order_date', '截断到天');" + NL +
-                    "SELECT source_table AS 上游表, source_column AS 上游列, target_table AS 下游表, target_column AS 下游列, transform AS 转换" + NL +
+                    "SELECT" + NL +
+                    "  source_table AS 上游表," + NL +
+                    "  source_column AS 上游列," + NL +
+                    "  target_table AS 下游表," + NL +
+                    "  target_column AS 下游列," + NL +
+                    "  transform AS 转换" + NL +
                     "FROM tmp_lineage" + NL +
                     "ORDER BY 上游列;" + NL +
                     "DROP TEMPORARY TABLE tmp_lineage;"),
@@ -887,7 +1096,10 @@ public final class SqlSamples {
                 "递归 CTE WITH RECURSIVE 链路 分层",
                             "WITH RECURSIVE lineage(lvl, node, upstream) AS (SELECT 0, CAST('ods_order' AS CHAR(32)), CAST(NULL AS CHAR(32)) UNION ALL SELECT lvl + 1," + NL +
                     "CAST(CASE lvl WHEN 0 THEN 'dwd_order' WHEN 1 THEN 'dws_order_d' END AS CHAR(32)), node FROM lineage WHERE lvl < 2)" + NL +
-                    "SELECT lvl AS 层级, node AS 表, COALESCE(upstream, '（源头）') AS 上游表" + NL +
+                    "SELECT" + NL +
+                    "  lvl AS 层级," + NL +
+                    "  node AS 表," + NL +
+                    "  COALESCE(upstream, '（源头）') AS 上游表" + NL +
                     "FROM lineage" + NL +
                     "ORDER BY lvl;"),
         new Sample("安全与权限治理",
@@ -895,7 +1107,9 @@ public final class SqlSamples {
                 "安全体检第一天，先看每个账号的全局权限。",
                 "权限散在几十个账号里，谁有什么说不清。",
                 "权限 授权 全局 SCHEMA_PRIVILEGES 账号",
-                            "SELECT GRANTEE AS 账号, PRIVILEGE_TYPE AS 权限" + NL +
+                            "SELECT" + NL +
+                    "  GRANTEE AS 账号," + NL +
+                    "  PRIVILEGE_TYPE AS 权限" + NL +
                     "FROM information_schema.USER_PRIVILEGES" + NL +
                     "ORDER BY GRANTEE, PRIVILEGE_TYPE;"),
         new Sample("安全与权限治理",
@@ -903,7 +1117,10 @@ public final class SqlSamples {
                 "看谁对哪个库有权限，按库核最小授权。",
                 "整库权限过宽，业务账号能碰到不该碰的库。",
                 "库权限 TABLE_SCHEMA 最小权限 授权",
-                            "SELECT GRANTEE AS 账号, TABLE_SCHEMA AS 库, PRIVILEGE_TYPE AS 权限" + NL +
+                            "SELECT" + NL +
+                    "  GRANTEE AS 账号," + NL +
+                    "  TABLE_SCHEMA AS 库," + NL +
+                    "  PRIVILEGE_TYPE AS 权限" + NL +
                     "FROM information_schema.SCHEMA_PRIVILEGES" + NL +
                     "ORDER BY 账号, 库;"),
         new Sample("安全与权限治理",
@@ -911,7 +1128,11 @@ public final class SqlSamples {
                 "逐表核对业务账号到底需要哪些权限。",
                 "表级授权缺失或过宽，审计时拿不出依据。",
                 "表级 授权 逐表 核对 PRIVILEGE_TYPE",
-                            "SELECT GRANTEE AS 账号, TABLE_SCHEMA AS 库, TABLE_NAME AS 表, PRIVILEGE_TYPE AS 权限" + NL +
+                            "SELECT" + NL +
+                    "  GRANTEE AS 账号," + NL +
+                    "  TABLE_SCHEMA AS 库," + NL +
+                    "  TABLE_NAME AS 表," + NL +
+                    "  PRIVILEGE_TYPE AS 权限" + NL +
                     "FROM information_schema.TABLE_PRIVILEGES" + NL +
                     "ORDER BY 账号, 库, 表;"),
         new Sample("安全与权限治理",
@@ -919,7 +1140,9 @@ public final class SqlSamples {
                 "SUPER、GRANT OPTION、FILE 这类权限要单独盯。",
                 "普通账号被赋予管理能力，越权无人拦。",
                 "高权限 SUPER GRANT OPTION FILE 盘点",
-                            "SELECT GRANTEE AS 账号, PRIVILEGE_TYPE AS 权限" + NL +
+                            "SELECT" + NL +
+                    "  GRANTEE AS 账号," + NL +
+                    "  PRIVILEGE_TYPE AS 权限" + NL +
                     "FROM information_schema.USER_PRIVILEGES" + NL +
                     "WHERE PRIVILEGE_TYPE IN ('SUPER', 'GRANT OPTION', 'SYSTEM_USER', 'FILE')" + NL +
                     "ORDER BY 账号, 权限;"),
@@ -928,7 +1151,10 @@ public final class SqlSamples {
                 "业务库账号不该有 DROP、DELETE、ALTER。",
                 "误删误改的口子一直开着，事故只是没来。",
                 "越权 DROP DELETE ALTER 业务账号 检查",
-                            "SELECT GRANTEE AS 账号, TABLE_SCHEMA AS 库, PRIVILEGE_TYPE AS 越权项" + NL +
+                            "SELECT" + NL +
+                    "  GRANTEE AS 账号," + NL +
+                    "  TABLE_SCHEMA AS 库," + NL +
+                    "  PRIVILEGE_TYPE AS 越权项" + NL +
                     "FROM information_schema.SCHEMA_PRIVILEGES" + NL +
                     "WHERE PRIVILEGE_TYPE IN ('DROP', 'DELETE', 'ALTER')" + NL +
                     "ORDER BY 账号, 库;"),
@@ -937,7 +1163,13 @@ public final class SqlSamples {
                 "看谁连进来、在跑什么、闲了多久。",
                 "连接被占满时不知道是谁握着不放。",
                 "连接 SHOW PROCESSLIST 空闲 来源 会话",
-                            "SELECT ID AS 连接, USER AS 账号, HOST AS 来源, DB AS 库, COMMAND AS 状态, TIME AS 持续秒" + NL +
+                            "SELECT" + NL +
+                    "  ID AS 连接," + NL +
+                    "  USER AS 账号," + NL +
+                    "  HOST AS 来源," + NL +
+                    "  DB AS 库," + NL +
+                    "  COMMAND AS 状态," + NL +
+                    "  TIME AS 持续秒" + NL +
                     "FROM information_schema.PROCESSLIST" + NL +
                     "ORDER BY TIME DESC;"),
         new Sample("生命周期与归档",
@@ -945,17 +1177,24 @@ public final class SqlSamples {
                 "按创建与最后变更时间排一遍表龄。",
                 "老表一直在线，没人记得它是否还在用。",
                 "表龄 CREATE_TIME UPDATE_TIME 生命周期 盘点",
-                            "SELECT TABLE_NAME AS 表名, CREATE_TIME AS 创建时间, UPDATE_TIME AS 最后变更, DATEDIFF(NOW(), CREATE_TIME) AS 表龄天" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  CREATE_TIME AS 创建时间," + NL +
+                    "  UPDATE_TIME AS 最后变更," + NL +
+                    "  DATEDIFF(NOW(), CREATE_TIME) AS 表龄天" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND TABLE_TYPE = 'BASE TABLE'" + NL +
+                    "  AND TABLE_TYPE = 'BASE TABLE'" + NL +
                     "ORDER BY 表龄天 DESC;"),
         new Sample("生命周期与归档",
                 "冷数据规模", "冷数据识别：180 天前的订单规模与时间边界",
                 "先量清 180 天前的数据有多少。",
                 "归档方案没有规模依据，冷热边界拍脑袋。",
                 "冷数据 180 天 规模 时间边界 DATEDIFF",
-                            "SELECT COUNT(*) AS 冷数据行数, MIN(created_at) AS 最早, MAX(created_at) AS 最晚" + NL +
+                            "SELECT" + NL +
+                    "  COUNT(*) AS 冷数据行数," + NL +
+                    "  MIN(created_at) AS 最早," + NL +
+                    "  MAX(created_at) AS 最晚" + NL +
                     "FROM t_order" + NL +
                     "WHERE created_at < DATE_SUB(NOW(), INTERVAL 180 DAY);"),
         new Sample("生命周期与归档",
@@ -966,11 +1205,11 @@ public final class SqlSamples {
                             "SELECT TABLE_NAME AS 表名" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND TABLE_TYPE = 'BASE TABLE'" + NL +
+                    "  AND TABLE_TYPE = 'BASE TABLE'" + NL +
                     "AND (TABLE_NAME LIKE '%_bak%'" + NL +
                     "OR TABLE_NAME LIKE '%_his%'" + NL +
                     "OR TABLE_NAME LIKE '%_tmp%')" + NL +
-                    "AND TABLE_NAME NOT REGEXP '_(bak|his|tmp)_[0-9]{8}$';"),
+                    "  AND TABLE_NAME NOT REGEXP '_(bak|his|tmp)_[0-9]{8}$';"),
         new Sample("生命周期与归档",
                 "归档建表", "归档留底：按一年前的数据建归档表（演示完即删）",
                 "把一年前的数据搬到归档表，先建结构。",
@@ -989,17 +1228,24 @@ public final class SqlSamples {
                 "看哪些表分了区、按什么方式分。",
                 "以为按时间分区了，实际全在一个分区里。",
                 "分区 PARTITION_NAME 表体检 范围分区",
-                            "SELECT TABLE_NAME AS 表名, PARTITION_NAME AS 分区, PARTITION_METHOD AS 分区方式, TABLE_ROWS AS 估算行数" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  PARTITION_NAME AS 分区," + NL +
+                    "  PARTITION_METHOD AS 分区方式," + NL +
+                    "  TABLE_ROWS AS 估算行数" + NL +
                     "FROM information_schema.PARTITIONS" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
-                    "AND PARTITION_NAME IS NOT NULL" + NL +
+                    "  AND PARTITION_NAME IS NOT NULL" + NL +
                     "ORDER BY TABLE_NAME, PARTITION_ORDINAL_POSITION;"),
         new Sample("生命周期与归档",
                 "处置清单", "按保留期生成处置清单（只查不删，人工确认后再动手）",
                 "按保留期生成待处置清单，只查不删。",
                 "直接按时间 DELETE 容易删掉还要留用的数据。",
                 "保留期 处置 清单 CASE WHEN 人工确认 派生表",
-                            "SELECT 日期, 条数, CASE WHEN 日期 < DATE_SUB(CURDATE(), INTERVAL 365 DAY) THEN '待归档' ELSE '保留' END AS 处置" + NL +
+                            "SELECT" + NL +
+                    "  日期," + NL +
+                    "  条数," + NL +
+                    "  CASE WHEN 日期 < DATE_SUB(CURDATE(), INTERVAL 365 DAY) THEN '待归档' ELSE '保留' END AS 处置" + NL +
                     "FROM (SELECT DATE(created_at) AS 日期, COUNT(*) AS 条数 FROM t_order GROUP BY DATE(created_at)) t" + NL +
                     "ORDER BY 日期;"),
         new Sample("性能与容量治理",
@@ -1007,8 +1253,11 @@ public final class SqlSamples {
                 "找出体积最大的表，先看容量花在哪。",
                 "磁盘告警时不知道该找哪张表谈。",
                 "容量 占用 DATA_LENGTH INDEX_LENGTH TOP",
-                            "SELECT TABLE_NAME AS 表名, TABLE_ROWS AS 估算行数, ROUND(DATA_LENGTH / 1024 / 1024, 2) AS 数据MB, ROUND(INDEX_LENGTH / 1024 / 1024," + NL +
-                    "2) AS 索引MB" + NL +
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  TABLE_ROWS AS 估算行数," + NL +
+                    "  ROUND(DATA_LENGTH / 1024 / 1024, 2) AS 数据MB," + NL +
+                    "  ROUND(INDEX_LENGTH / 1024 / 1024, 2) AS 索引MB" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
                     "ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC" + NL +
@@ -1018,7 +1267,10 @@ public final class SqlSamples {
                 "长期没被走过的索引可以回收。",
                 "索引只增不减，写入变慢还没人敢删。",
                 "未使用索引 sys.schema_unused_indexes 写入开销",
-                            "SELECT object_schema AS 库, object_name AS 表, index_name AS 未使用索引" + NL +
+                            "SELECT" + NL +
+                    "  object_schema AS 库," + NL +
+                    "  object_name AS 表," + NL +
+                    "  index_name AS 未使用索引" + NL +
                     "FROM sys.schema_unused_indexes" + NL +
                     "WHERE object_schema = DATABASE();"),
         new Sample("性能与容量治理",
@@ -1026,7 +1278,11 @@ public final class SqlSamples {
                 "从语句汇总里挑扫描行数最大的。",
                 "慢是慢在库上还是应用上，没有数据支撑。",
                 "全表扫描 慢查询 events_statements_summary 扫描行数",
-                            "SELECT SCHEMA_NAME AS 库, LEFT(DIGEST_TEXT, 80) AS 语句摘要, SUM_SELECT_SCAN AS 全表扫描行数, COUNT_STAR AS 执行次数" + NL +
+                            "SELECT" + NL +
+                    "  SCHEMA_NAME AS 库," + NL +
+                    "  LEFT(DIGEST_TEXT, 80) AS 语句摘要," + NL +
+                    "  SUM_SELECT_SCAN AS 全表扫描行数," + NL +
+                    "  COUNT_STAR AS 执行次数" + NL +
                     "FROM performance_schema.events_statements_summary_by_digest" + NL +
                     "WHERE SCHEMA_NAME = DATABASE()" + NL +
                     "ORDER BY SUM_SELECT_SCAN DESC" + NL +
@@ -1036,8 +1292,11 @@ public final class SqlSamples {
                 "按平均延迟排，找最该优化的语句。",
                 "凭感觉优化，改完延迟照旧。",
                 "延迟 慢语句 平均执行时间 DIGEST_TEXT",
-                            "SELECT SCHEMA_NAME AS 库, LEFT(DIGEST_TEXT, 80) AS 语句摘要, COUNT_STAR AS 执行次数, ROUND(AVG_TIMER_WAIT / 1000000000," + NL +
-                    "2) AS 平均毫秒" + NL +
+                            "SELECT" + NL +
+                    "  SCHEMA_NAME AS 库," + NL +
+                    "  LEFT(DIGEST_TEXT, 80) AS 语句摘要," + NL +
+                    "  COUNT_STAR AS 执行次数," + NL +
+                    "  ROUND(AVG_TIMER_WAIT / 1000000000, 2) AS 平均毫秒" + NL +
                     "FROM performance_schema.events_statements_summary_by_digest" + NL +
                     "WHERE SCHEMA_NAME IS NOT NULL" + NL +
                     "ORDER BY AVG_TIMER_WAIT DESC" + NL +
@@ -1047,7 +1306,11 @@ public final class SqlSamples {
                 "排序与分组把中间结果落到了磁盘。",
                 "内存不够时语句慢一个量级，却看不出原因。",
                 "临时表 磁盘排序 SUM_CREATED_TMP_DISK_TABLES",
-                            "SELECT SCHEMA_NAME AS 库, LEFT(DIGEST_TEXT, 80) AS 语句摘要, SUM_CREATED_TMP_TABLES AS 内存临时表, SUM_CREATED_TMP_DISK_TABLES AS 磁盘临时表" + NL +
+                            "SELECT" + NL +
+                    "  SCHEMA_NAME AS 库," + NL +
+                    "  LEFT(DIGEST_TEXT, 80) AS 语句摘要," + NL +
+                    "  SUM_CREATED_TMP_TABLES AS 内存临时表," + NL +
+                    "  SUM_CREATED_TMP_DISK_TABLES AS 磁盘临时表" + NL +
                     "FROM performance_schema.events_statements_summary_by_digest" + NL +
                     "WHERE SUM_CREATED_TMP_DISK_TABLES > 0" + NL +
                     "ORDER BY SUM_CREATED_TMP_DISK_TABLES DESC" + NL +
@@ -1057,7 +1320,9 @@ public final class SqlSamples {
                 "按状态汇总当前连接，看空闲与活跃比例。",
                 "连接池配置不合理，会话被闲置占位。",
                 "连接 状态 COMMAND 空闲 汇总",
-                            "SELECT COMMAND AS 状态, COUNT(*) AS 连接数" + NL +
+                            "SELECT" + NL +
+                    "  COMMAND AS 状态," + NL +
+                    "  COUNT(*) AS 连接数" + NL +
                     "FROM information_schema.PROCESSLIST" + NL +
                     "GROUP BY COMMAND" + NL +
                     "ORDER BY 连接数 DESC;"),
@@ -1066,7 +1331,9 @@ public final class SqlSamples {
                 "看缓冲池读与增删改行数，判断内存够不够。",
                 "缓冲池命中率低，读全走磁盘却没人察觉。",
                 "InnoDB 缓冲池 GLOBAL_STATUS 计数器 命中率",
-                            "SELECT VARIABLE_NAME AS 指标, VARIABLE_VALUE AS 值" + NL +
+                            "SELECT" + NL +
+                    "  VARIABLE_NAME AS 指标," + NL +
+                    "  VARIABLE_VALUE AS 值" + NL +
                     "FROM performance_schema.global_status" + NL +
                     "WHERE VARIABLE_NAME IN ('Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads', 'Innodb_rows_read'," + NL +
                     "'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted');"),
@@ -1075,7 +1342,9 @@ public final class SqlSamples {
                 "先看清有几批重复，再决定怎么合。",
                 "上来就删，容易把不同业务的同号订单合掉。",
                 "查重 GROUP BY HAVING 业务键 批次",
-                            "SELECT order_no, COUNT(*) AS 条数" + NL +
+                            "SELECT" + NL +
+                    "  order_no," + NL +
+                    "  COUNT(*) AS 条数" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY order_no" + NL +
                     "HAVING COUNT(*) > 1;"),
@@ -1093,7 +1362,10 @@ public final class SqlSamples {
                 "大表翻页，按主键排序取下一页。",
                 "OFFSET 越大越慢，翻到后面直接超时。",
                 "分页 LIMIT OFFSET 游标 主键排序",
-                            "SELECT id, order_no, amount" + NL +
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount" + NL +
                     "FROM t_order" + NL +
                     "ORDER BY id" + NL +
                     "LIMIT 200" + NL +
@@ -1114,8 +1386,8 @@ public final class SqlSamples {
                             "DELETE t1" + NL +
                     "FROM t_order t1" + NL +
                     "JOIN t_order t2" + NL +
-                    "ON t1.order_no = t2.order_no" + NL +
-                    "AND t1.id > t2.id;"),
+                    "  ON t1.order_no = t2.order_no" + NL +
+                    "  AND t1.id > t2.id;"),
         new Sample("数据修正",
                 "清全表", "清全表并重置自增（比 DELETE 快，且不进事务回滚）",
                 "临时表或备份表要整张清空重来。",
@@ -1132,7 +1404,7 @@ public final class SqlSamples {
                     "SELECT *" + NL +
                     "FROM t_order" + NL +
                     "WHERE amount IS NULL" + NL +
-                    "OR amount <= 0;" + NL +
+                    "  OR amount <= 0;" + NL +
                     "UPDATE t_order" + NL +
                     "SET amount = 0" + NL +
                     "WHERE amount IS NULL;" + NL +
@@ -1146,12 +1418,18 @@ public final class SqlSamples {
                 "改完不知道对不对，只能等业务方来反馈。",
                 "核对 前后对比 COUNT SUM 临时表 验收",
                             "CREATE TEMPORARY TABLE tmp_fix_before AS" + NL +
-                    "SELECT COUNT(*) AS 行数, SUM(amount) AS 金额合计" + NL +
+                    "SELECT" + NL +
+                    "  COUNT(*) AS 行数," + NL +
+                    "  SUM(amount) AS 金额合计" + NL +
                     "FROM t_order;" + NL +
                     "UPDATE t_order" + NL +
                     "SET amount = ROUND(amount, 2)" + NL +
                     "WHERE amount IS NOT NULL;" + NL +
-                    "SELECT b.行数 AS 修正前行数, a.行数 AS 修正后行数, b.金额合计 AS 修正前金额, a.金额合计 AS 修正后金额" + NL +
+                    "SELECT" + NL +
+                    "  b.行数 AS 修正前行数," + NL +
+                    "  a.行数 AS 修正后行数," + NL +
+                    "  b.金额合计 AS 修正前金额," + NL +
+                    "  a.金额合计 AS 修正后金额" + NL +
                     "FROM tmp_fix_before b" + NL +
                     "JOIN (SELECT COUNT(*) AS 行数, SUM(amount) AS 金额合计 FROM t_order) a;" + NL +
                     "DROP TEMPORARY TABLE tmp_fix_before;"),
@@ -1162,7 +1440,7 @@ public final class SqlSamples {
                 "回写 UPDATE JOIN IS NULL 不覆盖",
                             "UPDATE t_order a" + NL +
                     "JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
                     "SET a.new_code = b.new_code" + NL +
                     "WHERE a.new_code IS NULL;"),
         new Sample("数据修正",
@@ -1170,7 +1448,9 @@ public final class SqlSamples {
                 "回写之后检查同一旧编码是否被写进了多枚新码。",
                 "冲突没在下游取数前拦掉，脏映射会一路带进报表。",
                 "冲突 COUNT DISTINCT HAVING 拦截 回写后",
-                            "SELECT old_code, COUNT(DISTINCT new_code) AS 冲突数" + NL +
+                            "SELECT" + NL +
+                    "  old_code," + NL +
+                    "  COUNT(DISTINCT new_code) AS 冲突数" + NL +
                     "FROM t_order" + NL +
                     "GROUP BY old_code" + NL +
                     "HAVING 冲突数 > 1;"),
@@ -1180,10 +1460,14 @@ public final class SqlSamples {
                 "未匹配混在成功里，治理没有跟踪落点，也没人认领这批。",
                 "异常表 INSERT SELECT 未匹配 原因 跟踪",
                             "INSERT INTO t_exception_order(old_code, name, reason, check_time)" + NL +
-                    "SELECT a.old_code, a.name, '字典未匹配', NOW()" + NL +
+                    "SELECT" + NL +
+                    "  a.old_code," + NL +
+                    "  a.name," + NL +
+                    "  '字典未匹配'," + NL +
+                    "  NOW()" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
                     "WHERE b.new_code IS NULL;"),
         new Sample("数据修正",
                 "事务内回写", "事务包裹回写（预览影响行数，无误 COMMIT，否则 ROLLBACK）",
@@ -1193,7 +1477,7 @@ public final class SqlSamples {
                             "START TRANSACTION;" + NL +
                     "UPDATE t_order a" + NL +
                     "JOIN t_dict b" + NL +
-                    "ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
                     "SET a.new_code = b.new_code" + NL +
                     "WHERE a.new_code IS NULL;" + NL +
                     "SELECT ROW_COUNT() AS 影响行数;" + NL +
@@ -1207,15 +1491,18 @@ public final class SqlSamples {
                             "SELECT a.*" + NL +
                     "FROM t_order a" + NL +
                     "LEFT JOIN t_map_order_code m" + NL +
-                    "ON a.old_code = m.old_code" + NL +
+                    "  ON a.old_code = m.old_code" + NL +
                     "WHERE m.old_code IS NULL" + NL +
-                    "OR TRIM(a.name) <> TRIM(m.name);"),
+                    "  OR TRIM(a.name) <> TRIM(m.name);"),
         new Sample("数据修正",
                 "对账报告", "治理结果对账报告：按置信度汇总占比",
                 "按置信度汇总条数与占比，出一版能交出去的对账数。",
                 "只有明细没有汇总，交付时说不清这一轮治到了什么程度。",
                 "对账 占比 汇总 窗口函数 OVER 8.0",
-                            "SELECT conf_level, COUNT(*) AS 条数, ROUND(100 * COUNT(*) / SUM(COUNT(*)) OVER(), 2) AS 占比" + NL +
+                            "SELECT" + NL +
+                    "  conf_level," + NL +
+                    "  COUNT(*) AS 条数," + NL +
+                    "  ROUND(100 * COUNT(*) / SUM(COUNT(*)) OVER(), 2) AS 占比" + NL +
                     "FROM t_map_order_code" + NL +
                     "GROUP BY conf_level;"),
         new Sample("数据修正",
@@ -1223,7 +1510,9 @@ public final class SqlSamples {
                 "映射定时跑起来之后，按天看未匹配数量的走势。",
                 "单轮命中率会偶然变好，按天的趋势才看得出治理真的在收敛。",
                 "监控 趋势 按天 DATE 未匹配 GROUP BY",
-                            "SELECT DATE(check_time) AS 日期, COUNT(*) AS 未匹配数" + NL +
+                            "SELECT" + NL +
+                    "  DATE(check_time) AS 日期," + NL +
+                    "  COUNT(*) AS 未匹配数" + NL +
                     "FROM t_exception_order" + NL +
                     "GROUP BY DATE(check_time)" + NL +
                     "ORDER BY 日期 DESC;")

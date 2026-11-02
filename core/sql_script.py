@@ -508,6 +508,8 @@ _SQL_JOIN_HEADS = frozenset(("LEFT", "RIGHT", "INNER", "FULL", "OUTER", "CROSS",
                              "NATURAL", "STRAIGHT_JOIN"))
 # AND / OR 只在条件类从句里换行：SELECT 列表里 `a AND b` 是一个表达式，拆开反而读不断
 _SQL_COND_CLAUSES = frozenset(("WHERE", "ON", "HAVING"))
+# 顶层换行之后要缩进的那几位：ON 挂在 JOIN 底下，AND / OR 挂在 WHERE / ON / HAVING 底下
+_SQL_CONT_WORDS = frozenset(("ON", "AND", "OR"))
 # 两个符号字符合起来是一个运算符：`<=` `>=` `<>` `!=` `||` `->`。
 # 分开发就会写出 `amount < = 0`，那是另一个意思都读不出来的样子。
 _SQL_OP_HEAD = frozenset("<>=!|-")
@@ -652,6 +654,32 @@ def _sql_head_is_table_def(seen):
     return i + 1 >= len(words) or words[i + 1] == "."
 
 
+def _select_list_is_multi(sig, start):
+    """从 start 这个 SELECT 往后数：顶层字段清单是不是有两个以上的项。
+
+    只有一条的 `SELECT 1`、`SELECT *` 不该被拆成三行——拆完比原来更难看。
+    括号里（子查询、函数参数、`IN (…)`）的逗号不算这一层的清单。
+    """
+    depth = 0
+    for idx in range(start + 1, len(sig)):
+        kind, text = sig[idx]
+        if kind == "punct" and text == "(":
+            depth += 1
+        elif kind == "punct" and text == ")":
+            if depth == 0:
+                return False            # 这一条 SELECT 已经被外层收尾，清单到此为止
+            depth -= 1
+        elif depth > 0:
+            continue
+        elif kind == "punct" and text == ",":
+            return True
+        elif kind == "punct" and text == ";":
+            return False
+        elif kind == "word" and text.upper() in _SQL_BREAK_WORDS:
+            return False
+    return False
+
+
 def _format_one_statement(tokens):
     """一句（不含结尾分号）排成若干行。"""
     sig = [t for t in tokens if t[0] != "ws"]
@@ -663,14 +691,24 @@ def _format_one_statement(tokens):
     clause = ""
     listed = False          # 字段清单是否已经展开过（只展开第一处）
     type_paren = []         # 每层括号是不是"类型的参数表"（VARCHAR(64) / DECIMAL(20,4)）
+    mode = ""               # 正在攒的这一行属于哪一档："" 顶格 / item 清单行 / cont 续行
+    next_mode = ""          # 下一次换行之后那一行的档位
+    split_select = False    # 眼前这段 SELECT 的顶层清单要不要逐列成行
 
     def indent_now():
-        return _SQL_INDENT if (listed and depth >= 1) else ""
+        # 建表字段清单与 SELECT 清单项、条件续行同一档缩进（两格）：
+        # 三种"挂在上一行底下"的东西读起来该是同一个形状，不该各缩各的
+        if (listed and depth >= 1) or (depth == 0 and mode):
+            return _SQL_INDENT
+        return ""
 
     def flush():
-        if cur:
-            lines.append(indent_now() + "".join(cur).strip())
-            del cur[:]
+        nonlocal mode, next_mode
+        if not cur:
+            return
+        lines.append(indent_now() + "".join(cur).strip())
+        del cur[:]
+        mode, next_mode = next_mode, ""
 
     def gap(text, prev_kind, prev_up, tight_eq, tight_comma, prev_punct,
             table_name=False):
@@ -738,6 +776,13 @@ def _format_one_statement(tokens):
             cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
             flush()
             continue
+        elif (kind == "punct" and text == "," and depth == 0
+                and clause == "SELECT" and split_select):
+            # 顶层 SELECT 清单：一个字段一行，逗号留在上一行行末（与建表字段清单同形）
+            cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
+            next_mode = "item"
+            flush()
+            continue
 
         break_word = False
         if kind == "word" and cur:
@@ -757,6 +802,8 @@ def _format_one_statement(tokens):
                 # 在一行就要横向拖两百多列才看完
                 break_word = cond_chain
         if break_word:
+            if depth == 0 and up in _SQL_CONT_WORDS:
+                next_mode = "cont"      # 条件续行挂到上一句底下，别顶格贴着从句站
             flush()
         elif (cur and prev_text == "," and depth <= 1
                 and len("".join(cur)) > _SQL_WRAP_COL):
@@ -773,6 +820,12 @@ def _format_one_statement(tokens):
             cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
         else:
             cur.append(emit)
+        if kind == "word" and depth == 0 and up == "SELECT":
+            # 清单有两个以上才拆：SELECT 自己站一行，字段逐个往下排
+            split_select = _select_list_is_multi(sig, idx)
+            if split_select:
+                next_mode = "item"
+                flush()
         if kind == "cmt" and (text.startswith("--") or text.startswith("#")):
             flush()
     flush()
