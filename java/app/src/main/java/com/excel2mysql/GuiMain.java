@@ -1820,13 +1820,7 @@ public final class GuiMain {
         if (probeClicks[0] != 1) {
             problems.add("点击拖拽区没有触发选择文件（回调次数 " + probeClicks[0] + "）");
         }
-        java.awt.Image icon = frame.getIconImage();
-        if (icon == null) {
-            problems.add("窗口图标没设上，任务栏里只会是默认图");
-        } else if (icon.getWidth(null) < 64) {
-            problems.add("窗口图标取小了，任务栏会糊：" + icon.getWidth(null) + "x"
-                    + icon.getHeight(null));
-        }
+        checkWindowIcons(frame, problems);
         // 窗口尺寸：客户区不得小于设计值（内容要摆得开），整窗必须落在屏幕可用区内
         // （首次打开就能看见全部文字与按钮，老屏上也不会被任务栏吃掉半截）
         java.awt.Rectangle work = com.excel2mysql.gui.Windows.workArea(frame);
@@ -5261,6 +5255,79 @@ public final class GuiMain {
     private static void putLe64(byte[] b, int at, long v) {
         for (int i = 0; i < 8; i++) {
             b[at + i] = (byte) ((v >> (8 * i)) & 0xFF);
+        }
+    }
+
+    /**
+     * 每个顶层窗口都要挂着同一颗图标。
+     *
+     * <p>Python 那条线是应用级 setWindowIcon，所有窗口天然跟着走；Swing 没有应用级图标，
+     * 只能一个窗口一次 setIconImage——漏掉哪个窗口，用户在那个窗口的标题栏与任务栏上
+     * 看到的就是默认那颗 Java 杯，同一个程序看着像两个。所以两条一起钉：
+     * 先量真窗口（源图能不能真取到手），再横扫一遍 gui 包源码（新加的窗口类漏挂也在这里红，
+     * 不靠人记得去补对撞键）。
+     */
+    private static void checkWindowIcons(MainFrame frame, List<String> problems) {
+        int side = com.excel2mysql.gui.WindowIcons.sideOf(frame);
+        if (side < 64) {
+            problems.add("主窗口图标没挂上或取小了，任务栏里会糊：" + side);
+            return;     // 源图都没了，比下去每一扇窗都是 0，再说一遍没意义
+        }
+        boolean samplesWasOpen = frame.sqlSamplesShowing();
+        frame.showSqlSamples();
+        javax.swing.JFrame samples = frame.sqlSamplesWindow();
+        int samplesSide = samples == null ? -1
+                : com.excel2mysql.gui.WindowIcons.sideOf(samples);
+        if (samplesSide != side) {
+            problems.add("SQL 示例窗口的图标与主窗口不是同一颗：示例 " + samplesSide
+                    + " / 主窗口 " + side);
+        }
+        if (!samplesWasOpen) {
+            frame.closeSqlSamples();
+        }
+        sweepWindowIconSources(problems);
+    }
+
+    /**
+     * 横扫 gui 包里每一个顶层窗口类：`extends JFrame`/`extends JDialog` 就得自己挂图标。
+     *
+     * <p>数出来的窗口类个数也钉住：只查"每个命中的类都挂了图标"，命中规则一旦失效
+     * （比如窗口改成 `extends JFrame implements X` 之外的写法），一个都没扫到反而全绿。
+     */
+    private static void sweepWindowIconSources(List<String> problems) {
+        java.io.File dir = new java.io.File("app/src/main/java/com/excel2mysql/gui");
+        java.io.File[] files = dir.isDirectory() ? dir.listFiles() : null;
+        if (files == null) {
+            problems.add("窗口图标源码横扫没跑：找不到 " + dir.getPath()
+                    + "（这一步要在 java/ 目录下跑）");
+            return;
+        }
+        java.util.Arrays.sort(files);
+        int top = 0;
+        for (java.io.File f : files) {
+            if (!f.getName().endsWith(".java")) {
+                continue;
+            }
+            String code;
+            try {
+                code = new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                        java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                problems.add("读不到窗口源码 " + f.getName() + "：" + e);
+                continue;
+            }
+            if (!code.contains("extends JFrame") && !code.contains("extends JDialog")) {
+                continue;
+            }
+            top++;
+            if (!code.contains("WindowIcons.apply(this)")) {
+                problems.add(f.getName() + " 是顶层窗口却没挂应用图标，"
+                        + "标题栏与任务栏会是默认 Java 杯");
+            }
+        }
+        if (top < 9) {
+            problems.add("窗口图标源码横扫只点到 " + top + " 个顶层窗口（应有 9 个），"
+                    + "多半是命中规则或窗口类的位置变了，这条判据已经管不住");
         }
     }
 

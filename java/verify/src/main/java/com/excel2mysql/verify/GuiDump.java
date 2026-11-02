@@ -310,6 +310,7 @@ public final class GuiDump {
                 frame.setSqlRunInputText("SELECT 1 AS 连通检查;");
                 frame.showSqlSamples();
                 put("samples.title", frame.sqlSamplesTitle());
+                put("window.icon.samples", icon(frame.sqlSamplesWindow()));
                 // 目录两层：第一层是分组数，第二层是当前可见条目数（不过滤时等于总条数）
                 put("samples.groups", String.valueOf(frame.sqlSamplesGroupCount()));
                 put("samples.count", String.valueOf(frame.sqlSamplesVisibleCount()));
@@ -475,9 +476,7 @@ public final class GuiDump {
                 // Qt 的 resize 与 Swing 的 pack 说的都是客户区，外框由操作系统加，不拿来比。
                 put("window.want", want(frame));
                 put("env.window.size", clientSize(frame));
-                java.awt.Image icon = frame.getIconImage();
-                put("window.icon", icon == null ? "none"
-                        : "max=" + Math.max(icon.getWidth(null), icon.getHeight(null)));
+                put("window.icon.main", icon(frame));
                 put("file.tooltip.0", frame.fileModel().tooltipAt(0));
                 // 文件表只有「表名」列可编辑；单击改名、非法名恢复原名，两条线逐句话比
                 put("file.rename.editable",
@@ -511,6 +510,8 @@ public final class GuiDump {
                                 frame, "任务异常", worst, null,
                                 javax.swing.JOptionPane.ERROR_MESSAGE);
                 put("popup.display.raw", worst.equals(wdlg.displayText()) ? "原文" : "被改写过");
+                // 每个顶层窗口都得挂着同一颗图标，标题栏才不会看着像两个程序（与 Python 侧同一条）
+                put("window.icon.popup", icon(wdlg));
                 wdlg.dispose();
                 // 弹窗按正文给尺寸：三把键钉住这条规则的两端（都落在夹取边界上，
                 // 不受两边字体度量差几个像素的影响），中间值由两边的用例各自量。
@@ -743,6 +744,7 @@ public final class GuiDump {
                         tabs.append(plain.tabTitleAt(i));
                     }
                     put("dlg.ddl.want", want(plain));
+                    put("window.icon.ddl", icon(plain));
                     put("env.dlg.ddl.size", clientSize(plain));
                     put("ddl.tabs", tabs.toString());
                     put("ddl.first", plain.tabCount() == 0 ? "" : plain.tabText(0));
@@ -776,6 +778,7 @@ public final class GuiDump {
                 StructureDialog sd = new StructureDialog(frame, two, frame.logPanel());
                 try {
                     put("dlg.structure.title", sd.getTitle());
+                    put("window.icon.structure", icon(sd));
                     put("dlg.structure.want", want(sd));
                     put("env.dlg.structure.size", clientSize(sd));
                     put("dlg.structure.tabs", join(sd.tabTitles(), "|"));
@@ -818,6 +821,7 @@ public final class GuiDump {
                 HelpDialog hd = new HelpDialog(frame);
                 try {
                     put("dlg.help.title", hd.getTitle());
+                    put("window.icon.help", icon(hd));
                     put("dlg.help.want", want(hd));
                     put("env.dlg.help.size", clientSize(hd));
                     StringBuilder toc = new StringBuilder();
@@ -835,6 +839,7 @@ public final class GuiDump {
                 AboutDialog ad = new AboutDialog(frame);
                 try {
                     put("dlg.about.title", ad.getTitle());
+                    put("window.icon.about", icon(ad));
                     put("dlg.about.want", want(ad));
                     put("env.dlg.about.size", clientSize(ad));
                     put("dlg.about.rows", join(ad.rowCaptions(), "|"));
@@ -847,6 +852,7 @@ public final class GuiDump {
                     pd.setTotal(3);
                     pd.step("读盘");
                     put("dlg.progress.title", pd.getTitle());
+                    put("window.icon.progress", icon(pd));
                     put("dlg.progress.want", want(pd));
                     put("env.dlg.progress.size", clientSize(pd));
                     put("dlg.progress.status", pd.statusText());
@@ -1232,6 +1238,14 @@ public final class GuiDump {
 
     private static void put(String key, String value) {
         D.put(key, norm(value));
+    }
+
+    /**
+     * 这个顶层窗口标题栏实际挂着的图标，报最大边长；没挂就是 0。
+     * 与 Python 侧的 main.window_icon_side 同一口径：读窗口自己那份，不在探针里重读源图。
+     */
+    private static String icon(java.awt.Window win) {
+        return String.valueOf(com.excel2mysql.gui.WindowIcons.sideOf(win));
     }
 
     /** 色值统一成 #rrggbb 小写，Python 侧存的就是这个写法。 */

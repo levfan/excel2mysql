@@ -620,6 +620,7 @@ def main():
                         if not g.isHidden())
 
     put("samples.title", _sd.windowTitle())
+    put("window.icon.samples", str(m.window_icon_side(_sd)))
     # 目录两层：第一层是分组数，第二层是当前可见条目数（不过滤时等于总条数）
     put("samples.groups", str(_sd.tree.topLevelItemCount()))
     put("samples.count", str(len(_sd_leaves(_sd))))
@@ -747,10 +748,7 @@ def main():
     # 跨线比的是配置值 want（两边必须写同一个数）；实测值受现场屏幕与夹取影响，只记不比。
     put("window.want", str(win.property("e2mWant") or ""))
     put("env.window.size", "%dx%d" % (win.width(), win.height()))
-    ic = app.windowIcon()   # 图标挂在 QApplication 上（main.py 末尾 setWindowIcon），不是挂在窗口上
-    sizes = sorted(ic.availableSizes(), key=lambda s: max(s.width(), s.height()))
-    put("window.icon", "none" if not sizes
-        else "max=%d" % max(sizes[-1].width(), sizes[-1].height()))
+    put("window.icon.main", str(m.window_icon_side(win)))
     tip0 = win.file_table.item(0, 1)
     put("file.tooltip.0", tip0.toolTip() if tip0 else "")
     # 文件表只有「表名」列可编辑；单击改名、非法名恢复原名，两条线逐句话比
@@ -787,6 +785,9 @@ def main():
     _raw_box = m.build_popup_box(None, "任务异常", _worst, "critical",
                                  box_class=m.PopupMessageBox)
     put("popup.display.raw", "原文" if _raw_box.text() == _worst else "被改写过")
+    # 每个顶层窗口都得挂着同一颗图标，标题栏才不会看着像两个程序。
+    # Qt 的应用级图标天然落到所有窗口，Java 要逐窗挂——这一键比的就是"这个窗口实际显示什么"
+    put("window.icon.popup", str(m.window_icon_side(_raw_box)))
     _raw_box.deleteLater()
     # 弹窗按正文给尺寸：三把键钉住这条规则的两端（都落在夹取边界上，
     # 不受两边字体度量差几个像素的影响），中间值由两边的用例各自量。
@@ -903,6 +904,7 @@ def main():
     # 翻页钮的宽度：两侧都读真控件给的值（Qt 的 sizeHint / Swing 的 preferredSize
     # 折回设计档），用户点名"太小了"这一条靠它跨栈对平
     put("tabs.scroller.width", str(m.tab_scroller_width(dlg.tabs)))
+    put("window.icon.ddl", str(m.window_icon_side(dlg)))
     dlg.deleteLater()
     win.chk_drop.setChecked(True)
     dlg2 = m.DDLDialog(win.tables, True, win)
@@ -953,6 +955,7 @@ def main():
     # ---- 结构弹窗 ----
     sd = m.StructureDialog(win.tables[:2], win)
     put("dlg.structure.title", sd.windowTitle())
+    put("window.icon.structure", str(m.window_icon_side(sd)))
     put("dlg.structure.want", str(sd.property("e2mWant") or ""))
     put("env.dlg.structure.size", "%dx%d" % (sd.width(), sd.height()))
     put("dlg.structure.tabs", "|".join(sd.tabs.tabText(i)
@@ -988,6 +991,7 @@ def main():
     # ---- 说明与关于 ----
     hd = m.HelpDialog(win)
     put("dlg.help.title", hd.windowTitle())
+    put("window.icon.help", str(m.window_icon_side(hd)))
     put("dlg.help.want", str(hd.property("e2mWant") or ""))
     put("env.dlg.help.size", "%dx%d" % (hd.width(), hd.height()))
     lst = hd.findChild(QListWidget)
@@ -995,6 +999,7 @@ def main():
     hd.deleteLater()
     ad = m.AboutDialog(win)
     put("dlg.about.title", ad.windowTitle())
+    put("window.icon.about", str(m.window_icon_side(ad)))
     put("dlg.about.want", str(ad.property("e2mWant") or ""))
     put("env.dlg.about.size", "%dx%d" % (ad.width(), ad.height()))
     captions = []
@@ -1010,6 +1015,7 @@ def main():
     # ---- 进度框文案 ----
     pd = m.ProgressDialog(u"正在解析文件…", win)
     put("dlg.progress.title", pd.windowTitle())
+    put("window.icon.progress", str(m.window_icon_side(pd)))
     put("dlg.progress.want", str(pd.property("e2mWant") or ""))
     put("env.dlg.progress.size", "%dx%d" % (pd.width(), pd.height()))
     pd.set_progress(1, 3, u"读盘")

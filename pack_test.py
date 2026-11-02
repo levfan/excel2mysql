@@ -228,6 +228,8 @@ from PySide6.QtGui import QIcon
 import PySide6
 
 _app = QApplication.instance() or QApplication(sys.argv)
+# 应用级设置走生产入口：图标就挂在 QApplication 上，F66 那几条量的才是"窗口实际显示的那颗"
+app_main.setup_app(_app)
 icon = QIcon(ico)
 check("A6 Qt 平台插件可用（能建 QApplication）", _app is not None, f"PySide6 {PySide6.__version__}")
 check("A7 图标资源能被 Qt 解码且非空", not icon.isNull() and bool(icon.availableSizes()),
@@ -2388,6 +2390,30 @@ for _where, _ddlg in (("第一页", app_main.DDLDialog(
           (_accent_ink(_dimg, target=(0xb2, 0x6a, 0x00)),
            _accent_ink(_dimg, target=(0x2f, 0x6f, 0xeb)), _accent_ink(_dimg)))
     _ddlg.deleteLater()
+# 每个顶层窗口都要挂着同一颗图标：标题栏与任务栏不一致，同一个程序看着像两个。
+# Qt 这一侧由应用级 setWindowIcon 天然覆盖，判据仍逐窗读窗口自己那份 windowIcon——
+# 再问一次 QApplication 就只是把设置抄了一遍，接没接上窗口它照不出来。
+# Java 侧没有应用级图标，只能逐窗挂，对应 GuiMain.checkWindowIcons 的源码横扫。
+_icon_tbl = {"table_comment": "小表", "columns": [
+    {"field": "id", "comment": "编号", "type": "INT",
+     "primary_key": True, "nullable": False}]}
+_icon_main = app_main.window_icon_side(w)
+for _icon_where, _icon_win in (
+        ("结构预览", app_main.StructureDialog(w.tables, None)),
+        ("DDL 预览", app_main.DDLDialog([], False, None)),
+        ("脚本页 DDL", app_main.SqlScriptDdlDialog(
+            [("t_a", "CREATE TABLE t_a (id INT);")], None)),
+        ("表元数据", app_main.SqlMetadataDialog(_icon_tbl, "t_a", False, None)),
+        ("SQL 示例", app_main.SqlSamplesDialog(None)),
+        ("使用说明", app_main.HelpDialog(None)),
+        ("关于", app_main.AboutDialog(None)),
+        ("进度", app_main.ProgressDialog("测试进度", None)),
+        ("消息框", app_main.PopupMessageBox(None))):
+    check("F66 %s窗口与主窗口是同一颗图标" % _icon_where,
+          _icon_main >= 64
+          and app_main.window_icon_side(_icon_win) == _icon_main,
+          (app_main.window_icon_side(_icon_win), _icon_main))
+    _icon_win.deleteLater()
 check("F34 每条示例都能切成至少一句可执行语句",
       all(split_sql_statements(s.sql) for s in app_main.SQL_SAMPLES),
       [i for i, s in enumerate(app_main.SQL_SAMPLES) if not split_sql_statements(s.sql)])

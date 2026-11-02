@@ -5355,6 +5355,17 @@ def setup_app(app: QApplication) -> None:
     app.setWindowIcon(QIcon(resource_path(os.path.join("assets", "app_icon.ico"))))
 
 
+def window_icon_side(widget):
+    """这个窗口标题栏那颗图标的最大边长；一个都没挂就是 0。
+
+    读的是窗口自己那份 `windowIcon()`，不是再问一次 QApplication：对撞要比的就是
+    "这个窗口实际显示什么"。Qt 会把应用级图标落进每个顶层窗口的这个属性，所以
+    两侧只要都读真窗口就能对上；Java 侧的同名读法是 gui.WindowIcons.sideOf。
+    """
+    sizes = widget.windowIcon().availableSizes()
+    return max([max(s.width(), s.height()) for s in sizes], default=0)
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     setup_app(app)
