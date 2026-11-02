@@ -58,6 +58,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private static final int SQL_RUN_FONT_SIZE = LogPanel.DEFAULT_FONT_SIZE;
 
     /**
+     * 目标库那一行的就地说明，与 Python 侧 main.py 的 DB_HINT_UNLOADED / DB_HINT_STALE 逐字相同。
+     *
+     * <p>这颗下拉在清单加载出来之前是禁用的，控件本身说不出"为什么灰、点哪颗才会亮"，
+     * 用户就只读成"目标库不给换"（现场报的正是这句）。灰着与过期是两件事，各写一句。
+     */
+    public static final String DB_HINT_UNLOADED
+            = "库列表还没加载：点「连接并加载库」拿到清单，再在这里选库";
+    public static final String DB_HINT_STALE
+            = "连接信息改过了：下面这份清单来自上一次连接，重新点「连接并加载库」才作数";
+
+    /**
      * 编辑区那段 SQL 的格式化入口：按钮文案、悬停那一句、快捷键写法。
      * 与 Python 侧 main.py 的 SQL_FORMAT_* 同值（对撞比的是真控件上的 tooltip）。
      * Swing 的 tooltip 要多行只能走 html，换行用 &lt;br&gt;——对撞器比文案时会把
@@ -128,6 +139,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JTextField userField;
     private javax.swing.JPasswordField passField;
     private javax.swing.JComboBox<String> dbCombo;
+    /** 目标库那一行下面的就地说明（清单没加载 / 清单已过期两种话，加载好之后为空）。 */
+    private javax.swing.JLabel dbHint;
     /** 第一页顶部那句介绍（三页同一块底板，见 PageIntro）。 */
     private javax.swing.JLabel impIntro;
     /** 连接区收起后的那一条状态栏（只报当前库），与「设置数据源信息」按钮一起常驻顶部。 */
@@ -137,6 +150,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private JPanel connForm;
     /** 正在重填库列表：这时第一项被自动选上不算"用户选定"，不该触发自动收起。 */
     private boolean dbListReloading;
+    /** 改过主机/端口/用户名/密码：手上这份库清单来自上一次连接，不再作数（只说，不拦）。 */
+    private boolean connDirty;
     private SqlPage sqlPage;
     private ProgressDialog lastTask;
     /** 最近一次请求的任务标题：原地模式不弹框，标题也要留痕才断言得了"用的是 Python 原话"。 */
@@ -367,17 +382,17 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.event.DocumentListener refresher = new javax.swing.event.DocumentListener() {
             @Override
             public void insertUpdate(javax.swing.event.DocumentEvent e) {
-                refreshDbLabels();
+                markConnDirty();
             }
 
             @Override
             public void removeUpdate(javax.swing.event.DocumentEvent e) {
-                refreshDbLabels();
+                markConnDirty();
             }
 
             @Override
             public void changedUpdate(javax.swing.event.DocumentEvent e) {
-                refreshDbLabels();
+                markConnDirty();
             }
         };
         portField = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(
@@ -406,10 +421,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
         userField.setText("root");
         hostField.getDocument().addDocumentListener(refresher);
+        // 用户名与口令也一起标脏：改过这四项里任何一项，手上那份库清单就是上一台机器给的
+        userField.getDocument().addDocumentListener(refresher);
+        passField.getDocument().addDocumentListener(refresher);
         portField.getModel().addChangeListener(new javax.swing.event.ChangeListener() {
             @Override
             public void stateChanged(javax.swing.event.ChangeEvent e) {
-                refreshDbLabels();
+                markConnDirty();
             }
         });
 
@@ -431,6 +449,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         addFormRow(fields, 2, "用户名：", userField, true);
         addFormRow(fields, 3, "密码：", passField, true);
         addFormRow(fields, 4, "目标库：", dbRow, true);
+        // 灰掉的下拉自己说不出原因，就地补一句（与 Python 侧同一行同一位置）
+        dbHint = new javax.swing.JLabel();
+        dbHint.setForeground(new java.awt.Color(0x66, 0x66, 0x66));
+        addFormRow(fields, 5, "", dbHint, true);
 
         bar.add(fields, BorderLayout.CENTER);
         outer.add(bar, BorderLayout.CENTER);
@@ -832,6 +854,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         config = cfg;
         connected = true;
+        // 这份清单就是当前这四项连上去的那台服务器给的，"改过连接信息"这笔账到此结清
+        connDirty = false;
         importBtn.setEnabled(!tables.isEmpty());
         log("[已加载] 可用数据库：" + String.join(", ", dbs));
         refreshDbLabels();
@@ -883,7 +907,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private void autoConnectFailed(Config cfg, Exception e) {
         String detail = LogText.describe(e);
         logError("[连接失败] 启动自动连接失败：无法连接到 " + cfg.host + ":" + cfg.port
-                + "（用户 " + cfg.user + "），库列表未加载；可点「设置数据源信息」重试"
+                + "（用户 " + cfg.user + "），库列表未加载；点右侧「设置数据源信息」展开，"
+                + "再点「连接并加载库」重试"
                 + LogText.NL + LogText.indentDetail(detail));
         refreshDbLabels();
     }
@@ -900,7 +925,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return null;
         } catch (Exception e) {
             connected = false;
+            // 连不上的那台服务器给不回清单，上一台的那份也就不作数了：
+            // 只禁用不清空的话，状态栏还挂着"● 目标库 旧库名"，而写入会指向另一台机器
+            dbListReloading = true;
+            try {
+                dbCombo.removeAllItems();
+            } finally {
+                dbListReloading = false;
+            }
             dbCombo.setEnabled(false);
+            connDirty = false;
             String detail = LogText.describe(e);
             logError("[连接失败] 无法连接到 " + cfg.host + ":" + cfg.port + "（用户 "
                     + cfg.user + "），库列表未加载" + LogText.NL + LogText.indentDetail(detail));
@@ -917,6 +951,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         if (connState == null) {
             return;     // 连接栏比页签里的提示条先建，输入框赋初值时这里还不能动它们
         }
+        refreshDbHint();
         String db = selectedDatabase();
         if (db.isEmpty()) {
             // 告警条的说法要看当前是展开还是收起：让人去点的那颗按钮必须真的在界面上
@@ -929,6 +964,43 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         connState.setOk("● 目标库 " + db);
         connState.setToolTipText(db + "@" + hostField.getText().trim() + ":"
                 + portField.getValue() + "（用户 " + userField.getText().trim() + "）");
+    }
+
+    /**
+     * 目标库那一行下面的就地说明：清单没加载（禁用）与清单已过期（改过连接信息）是两件事。
+     * 与 Python 侧 main.py 的 _refresh_db_hint 同一判序——先看灰没灰，再看脏不脏。
+     */
+    private void refreshDbHint() {
+        if (dbHint == null) {
+            return;
+        }
+        if (!dbCombo.isEnabled()) {
+            dbHint.setText(DB_HINT_UNLOADED);
+        } else if (connDirty) {
+            dbHint.setText(DB_HINT_STALE);
+        } else {
+            dbHint.setText("");
+        }
+    }
+
+    /** 改过主机/端口/用户名/口令 = 清单不再作数，只说不清空：清空会在逐字填表时反复打断。 */
+    private void markConnDirty() {
+        connDirty = true;
+        refreshDbLabels();
+    }
+
+    /** 自检与对撞读这三样：就地提示的原文、格子灰不灰、脏标记。 */
+    public String dbRowHint() {
+        return dbHint == null ? "" : dbHint.getText();
+    }
+
+    /** 清单里现在有几本库：失败后是不是真清了场，读这个而不是读常量。 */
+    public int dbListSize() {
+        return dbCombo == null ? -1 : dbCombo.getItemCount();
+    }
+
+    public boolean isConnDirty() {
+        return connDirty;
     }
 
     /** 第一页顶部那句介绍的原文：两栈逐字对撞用（Python 侧 win.imp_intro）。 */
@@ -1182,7 +1254,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     + "；要预填就在程序同级放一份（写法见《使用说明》）");
         } else {
             log("[已加载] 连接信息预填 " + shown + " | 来源：" + c.source + " | 密码" + pwd);
+            if (cfgDb.isEmpty()) {
+                // 随包那份模板就是这一态：只说"(未填库)"，用户会以为已经连上、
+                // 回头盯着灰掉的目标库纳闷
+                log("[提示] 配置里没写目标库，启动不自动连接；"
+                        + "点右侧「设置数据源信息」展开，再点「连接并加载库」就能选库");
+            }
         }
+        // 预填是程序自己往四个框里写字，不算"用户改过连接信息"
+        connDirty = false;
     }
 
     /** 自检读这条：有没有一份明确的连接配置（决定窗口显示后要不要自动连）。 */

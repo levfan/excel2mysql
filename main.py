@@ -120,6 +120,10 @@ MAX_LOG_STATEMENT = 2000   # 出错语句全文最长展示，超出截断，避
 
 # 未选库只在顶部状态栏说一次；这句是不点名状态的完整解释，给悬停提示与拦下弹窗共用
 NO_DB_HINT = "未选择目标库：请先在上方连接区填好连接信息，加载出库列表后选中要写入的库"
+# 目标库那一行的就地说明。那一格灰着的时候，控件本身说不出"为什么灰、点哪颗才会亮"，
+# 用户只能读成"这个库不给换"（现场报的就是这句），所以两态各写一句钉在旁边。
+DB_HINT_UNLOADED = "库列表还没加载：点「连接并加载库」拿到清单，再在这里选库"
+DB_HINT_STALE = "连接信息改过了：下面这份清单来自上一次连接，重新点「连接并加载库」才作数"
 NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
 
 # 「SQL 执行器」编辑区的开场文本：既是"连不连得上库"的一键自检语句，
@@ -2049,6 +2053,7 @@ class MainWindow(QWidget):
         self._tasks = []
         self._import_task = None   # 导入这条长任务单独留一份引用，收尾收它自己的框
         self._cfg_db = ""          # conn.ini 里写的目标库，库列表加载出来后按它预选
+        self._conn_dirty = False   # 改过主机/端口/用户名/密码：手上的库清单来自上一次连接
         # 启动自动连接：只有真的读到 conn.ini 或 E2M_* 才算"用户配过"。
         # 什么都没配时不去连——否则每台机器一开窗都先对本机 3306 撞一次，日志里多一条红
         self._conn_auto = False
@@ -2134,11 +2139,22 @@ class MainWindow(QWidget):
         h.addWidget(self.cb_db, 1)
         h.addWidget(self.btn_load_db)
         h.addWidget(self.btn_conn_collapse)
+        # 那一格灰着/清单过期时的就地说明：只有顶部状态栏一句话的话，
+        # 用户盯着这颗点不动的下拉只会读成"目标库不给换"（现场报的就是这句）
+        self.lbl_db_hint = QLabel()
+        self.lbl_db_hint.setStyleSheet("color: #666;")
+        self.lbl_db_hint.setWordWrap(True)
         f.addRow("主机：", self.ed_host)
         f.addRow("端口：", self.ed_port)
         f.addRow("用户名：", self.ed_user)
         f.addRow("密码：", self.ed_pass)
         f.addRow("目标库：", h)
+        f.addRow("", self.lbl_db_hint)
+        # 四项里任一改动就把清单标成"来自上一次连接"：不拦人也不清空，只把话说在前面
+        self.ed_host.textChanged.connect(self._mark_conn_dirty)
+        self.ed_port.valueChanged.connect(self._mark_conn_dirty)
+        self.ed_user.textChanged.connect(self._mark_conn_dirty)
+        self.ed_pass.textChanged.connect(self._mark_conn_dirty)
         conn_lay.addWidget(self.conn_form)
         root.addWidget(conn)
 
@@ -2369,6 +2385,7 @@ class MainWindow(QWidget):
     def _refresh_db_labels(self):
         cfg = self._conn_cfg()
         db = self.cb_db.currentData() or self.cb_db.currentText().strip()
+        self._refresh_db_hint(db)
         if db:
             self.lbl_conn_state.setText("● 目标库 %s" % db)
             self.lbl_conn_state.setToolTip("%s@%s:%s（用户 %s）"
@@ -2381,6 +2398,29 @@ class MainWindow(QWidget):
             self.lbl_conn_state.setText("⚠ 未选择目标库——点右侧「设置数据源信息」展开后填写")
         self.lbl_conn_state.setToolTip(NO_DB_HINT)
         self.lbl_conn_state.setStyleSheet("color: #c62828; font-weight: bold;")
+
+    def _refresh_db_hint(self, db):
+        """目标库那一行旁边的就地说明：清单没加载与清单已过期是两件事，分开说。
+
+        加载中（格子还灰着）与改过连接信息（清单来自上一台服务器）都让用户以为
+        "这颗下拉不给用"，而这两种情况下要点的那颗按钮是同一颗——写在格子边上才看得到。
+        """
+        if not self.cb_db.isEnabled():
+            self.lbl_db_hint.setText(DB_HINT_UNLOADED)
+        elif self._conn_dirty:
+            self.lbl_db_hint.setText(DB_HINT_STALE)
+        else:
+            self.lbl_db_hint.setText("")
+
+    def _mark_conn_dirty(self, *_a):
+        """改过主机/端口/用户名/密码 = 手上这份库清单不再作数，先说出来，别替用户决定。
+
+        不清空也不禁用：清空会在人逐字填表时反复打断，而"清单来自上一次连接"这句话
+        该由界面说，不该靠猜。真正加载一次（成功或失败）之后再回到各自的状态。
+        """
+        if not self._conn_dirty:
+            self._conn_dirty = True
+        self._refresh_db_labels()
 
     # -------------------- 使用说明 / 关于 --------------------
     def on_help(self):
@@ -3993,6 +4033,14 @@ class MainWindow(QWidget):
             append_log(self.log,
                        "[已加载] 连接信息预填 %s | 来源：%s | 密码%s"
                        % (shown, src, "已读入（不回显）" if cfg["password"] else "未配置"))
+            if not self._cfg_db:
+                # 随包那份模板就是这一态：只说"(未填库)"，用户会以为已经连上、
+                # 回头盯着灰掉的目标库纳闷
+                append_log(self.log,
+                           "[提示] 配置里没写目标库，启动不自动连接；"
+                           "点右侧「设置数据源信息」展开，再点「连接并加载库」就能选库")
+        # 预填是程序自己往四个框里写字，不算"用户改过连接信息"
+        self._conn_dirty = False
 
     def showEvent(self, e):
         """首屏画完再自动连接：连接慢（对端不在线要等到超时）也不能卡住开窗。"""
@@ -4034,7 +4082,7 @@ class MainWindow(QWidget):
         cfg = self._conn_cfg()
         append_log(self.log,
                    "[连接失败] 启动自动连接失败：无法连接到 %s:%s（用户 %s），"
-                   "库列表未加载；可点「设置数据源信息」重试\n%s"
+                   "库列表未加载；点右侧「设置数据源信息」展开，再点「连接并加载库」重试\n%s"
                    % (cfg["host"], cfg["port"], cfg["user"], indent_detail(detail)),
                    error=True)
 
@@ -4051,6 +4099,8 @@ class MainWindow(QWidget):
             self.cb_db.addItem(d, d)
         self.cb_db.blockSignals(False)
         self.cb_db.setEnabled(True)
+        # 这份清单就是当前这四项连上去的那台服务器给的，"改过连接信息"这笔账到此结清
+        self._conn_dirty = False
         if self._cfg_db and self.cb_db.findText(self._cfg_db) >= 0:
             # 配置里写了目标库就别让人再选一遍；库里没有这个名字就照旧让人手选
             self.cb_db.setCurrentText(self._cfg_db)
@@ -4068,6 +4118,12 @@ class MainWindow(QWidget):
         try:
             self._apply_databases(fetch_databases(cfg))
         except Exception as e:
+            # 连不上的那台服务器给不回清单，上一台的那份也就不作数了：
+            # 留着旧清单加旧库名，界面会一边显示"● 目标库 xxx"一边把库指向另一台机器
+            self.cb_db.clear()
+            self.cb_db.setEnabled(False)
+            self._conn_dirty = False
+            self._refresh_db_labels()
             # 弹窗与日志用同一套展开格式，否则弹窗里是 (2003, '...') 这种元组原文
             popup_box(self, "连接失败", describe_db_error(e), "critical")
             append_log(self.log,
