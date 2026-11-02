@@ -321,11 +321,39 @@ def smoke(java_exe, jar, fixtures):
     ok("输出干净，没有第三方日志框架的噪声行")
 
 
+def check_build_stamp(jar_path):
+    """交付 jar 里必须烧着真提交号与构建日期。
+
+    「关于」框那两行小字当面写着"交付包里是打包那一刻烧进去的那一份"，而提交号只有走
+    构建验证.bat 才会以 -Dgit.commit 传给 maven：绕过闸门直跑 mvn 出来的 jar 那一格是空的，
+    用户打开关于框看到的就是一句兑现不了的话。空提交号一律拒绝出包。
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(jar_path) as zf:
+            raw = zf.read("appinfo.properties").decode("utf-8", "replace")
+    except Exception as e:
+        fail("读不到 jar 里的 appinfo.properties：%s" % e)
+        return
+    props = {}
+    for line in raw.splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            k, v = line.split("=", 1)
+            props[k.strip()] = v.strip()
+    missing = [k for k in ("commit", "builtAt") if not props.get(k, "")]
+    if missing:
+        fail("交付 jar 里 %s 是空的：提交号与构建日期只有走 构建验证.bat 才会烧进 jar，"
+             "直跑 mvn 出的包不能拿去发布" % "、".join(missing))
+    ok("随包提交号 %s（分支 %s，构建于 %s）已烧进 jar"
+       % (props["commit"], props.get("branch") or "未记", props["builtAt"]))
+
+
 def main():
     version = pom_version()
     jar_src = os.path.join(JAVA_DIR, "app", "target", JAR_NAME_TMPL % version)
     if not os.path.isfile(jar_src):
         fail("找不到 %s；先跑 构建验证.bat 产出程序包" % jar_src)
+    check_build_stamp(jar_src)
     jdk = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("JDK8", JDK8_DEFAULT)
     src_jre = os.path.join(jdk, "jre")
     if not os.path.isfile(os.path.join(src_jre, "bin", "java.exe")):
