@@ -6266,3 +6266,67 @@ tooltip 初稿写的是"与「Excel 导入」页不同：……"，被 F6d（`ma
 | `check_generated.py` | 绿 |
 
 按 patch 记：`3.4.3 → 3.4.4`（界面文案订正，不改行为）。
+
+## 116. 每扇顶层窗口挂同一颗图标：从「SQL 示例」窗口抓到 Java 侧八扇漏挂
+
+### 116.1 现象与取证
+
+用户："tab3中，sql示例窗口，左侧的icon，要统一成这个主弹框的icon"。
+改前两栈各是什么：
+
+- Qt：图标挂在 QApplication 上（`setup_app` 里那句 `setWindowIcon`），每个顶层窗口的
+  `windowIcon()` 都是同一份，最大一档 256。这条线本来就不存在"哪扇窗口没图标"。
+- Swing：全仓只有一处 `setIconImage`，就是主窗口 `MainFrame.applyWindowIcon()`。
+  示例那个 JFrame 上 `getIconImages()` 是空表，标题栏与任务栏因此显示系统默认那颗 Java 杯。
+  主窗口和它并排摆着，用户看到的就是"同一个程序两套图标"。
+
+### 116.2 为什么这一条对撞器照不出来
+
+`window.icon` 那把键只量主窗口。Java 侧漏挂的是另外八扇，压根不在键表里，两栈各自报
+主窗口那 256，照旧绿。Java 侧的顶层窗口一共九扇（`MainFrame` 与八个弹窗类），
+其中示例窗口还是 `MainFrame` 里现建的一个 JFrame，不是独立类。
+
+### 116.3 定稿
+
+新增 `gui.WindowIcons`：`image()` 把 `/app_icon.png` 读一次并缓存，`apply(Window)` 挂上去，
+`sideOf(Window)` 给自检与对撞读数。八扇弹窗的构造里各加一句 `WindowIcons.apply(this)`，
+示例那个 JFrame 加 `WindowIcons.apply(dlg)`；`MainFrame.applyWindowIcon()` 不再自己读图，
+改成委托同一份逻辑，取不到源图时照旧在日志里说一句。
+
+Python 侧不加新路径，只加一枚读数 `window_icon_side(widget)`：量的是窗口自己那份
+`windowIcon()` 的最大边长，不再回头问 QApplication —— 探针去抄设置就照不出"窗口接没接上"，
+与 16.2 那次"图标写在 `__main__` 里所以对撞器永远看不到"是同一个坑的反面。
+
+### 116.4 守卫
+
+- 对撞键从一把扩成八把：`window.icon.main` / `.samples` / `.ddl` / `.structure` /
+  `.help` / `.about` / `.progress` / `.popup`，两侧都从真窗口读（Java 走 `WindowIcons.sideOf`，
+  Python 走 `window_icon_side`），口径统一成"这个窗口实际显示哪颗"。八把两栈同报 256。
+- `GuiMain.checkWindowIcons`：主窗口边长不得小于 64（源图缺失时整条判据就失效，先钉住），
+  示例窗口必须与主窗口同一颗；再横扫一遍 `gui/` 源码，凡 `extends JFrame`/`extends JDialog`
+  的文件都要有 `WindowIcons.apply(this)`，横扫点到的窗口类少于 9 个也判红——
+  命中规则哪天失效不能悄悄变成全绿。
+- `pack_test.py` F66 九条：Qt 侧九扇活窗口逐个与主窗口比那颗图标。这条第一次跑就全红，
+  红得对：`pack_test.py` 建完 QApplication 没走 `setup_app`，所有窗口的 `windowIcon()` 都是空的。
+  补上那句之后才有意义，判据里同时留着"主窗口那颗必须不小于 64"，两边都为 0 不算通过。
+
+### 116.5 变异抽查
+
+- 删 `MainFrame` 给示例 JFrame 的那句 `WindowIcons.apply(dlg)` → `GuiMain` 报
+  "SQL 示例窗口的图标与主窗口不是同一颗：示例 0 / 主窗口 256"，对撞报
+  `window.icon.samples` 值不等。
+- 删 `HelpDialog` 构造里那句 → `GuiMain` 源码横扫点名 `HelpDialog.java`，对撞报
+  `window.icon.help` 值不等。
+- 两处一起删，对撞只报这两把键，其余 372 把不动。还原后全绿。
+
+### 116.6 闸门与版本号
+
+| 闸门 | 结果 |
+| --- | --- |
+| `pack_test.py`（带真库凭据） | 通过 970 / 失败 0 / 跳过 5，退出码 0 |
+| `构建验证.bat` 十步 | 全过，退出码 0 |
+| `界面双端对撞.bat` | 374 键逐键一致，退出码 0 |
+| `pack_test38.py` | 本轮没跑：改的是图形线与探针，旧栈那条线只管 cli 与 core |
+
+按 patch 记：`3.4.4 → 3.4.5`（窗口图标一致性，不改行为）。
+
