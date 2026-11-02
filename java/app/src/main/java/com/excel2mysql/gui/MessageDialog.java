@@ -59,6 +59,7 @@ public final class MessageDialog extends JDialog {
 
     private MessageDialog(Window owner, String title, String body, String fullText, int iconType) {
         super(owner, title, ModalityType.APPLICATION_MODAL);
+        WindowIcons.apply(this);
         this.displayText = body;
         this.fullText = fullText == null ? body : fullText;
         area = createArea(body);

@@ -45,6 +45,7 @@ public final class ProgressDialog extends JDialog {
     public ProgressDialog(Frame owner, String title) {
         // 非模态：任务在跑时用户还要能切到别的页签做事，进度各看各的框
         super(owner, title, false);
+        WindowIcons.apply(this);
         JPanel body = new JPanel(new BorderLayout(UiScale.px(8), UiScale.px(8)));
         body.setBorder(BorderFactory.createEmptyBorder(
                 UiScale.px(12), UiScale.px(12), UiScale.px(12), UiScale.px(12)));

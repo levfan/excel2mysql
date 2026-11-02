@@ -48,6 +48,7 @@ public final class SqlMetadataDialog extends JDialog {
                              String displayName, boolean upper, boolean lower,
                              FieldEdit edit) {
         super(owner, "表元数据（" + displayName + "）", false);
+        WindowIcons.apply(this);
         JPanel content = new JPanel(new java.awt.BorderLayout(0, UiScale.px(6)));
         content.setBorder(BorderFactory.createEmptyBorder(
                 UiScale.px(8), UiScale.px(10), UiScale.px(8), UiScale.px(10)));

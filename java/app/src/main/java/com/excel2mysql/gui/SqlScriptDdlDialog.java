@@ -24,6 +24,7 @@ public final class SqlScriptDdlDialog extends JDialog {
     /** 一页一项：{标签上的表名, 那句建表正文}。 */
     public SqlScriptDdlDialog(Frame owner, List<String[]> pages) {
         super(owner, "DDL 预览", false);
+        WindowIcons.apply(this);
 
         JTabbedPane tabs = new JTabbedPane();
         // 与结构弹窗同理：Qt 的 QTabWidget 默认单行滚动，Swing 默认换行

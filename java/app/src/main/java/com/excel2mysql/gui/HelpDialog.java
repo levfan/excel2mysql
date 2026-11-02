@@ -36,6 +36,7 @@ public final class HelpDialog extends JDialog {
 
     public HelpDialog(Frame owner) {
         super(owner, "使用说明", true);
+        WindowIcons.apply(this);
         HelpDoc.Section[] sections = HelpDoc.sections();
         DefaultListModel<String> model = new DefaultListModel<String>();
         for (HelpDoc.Section s : sections) {

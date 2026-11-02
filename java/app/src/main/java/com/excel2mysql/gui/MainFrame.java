@@ -263,20 +263,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 窗口图标。源图只有 assets/app_icon.ico 一份，Java 的 ImageIO 不认 ico 容器，
+     * 主窗口的图标：源图只有 assets/app_icon.ico 一份，Java 的 ImageIO 不认 ico 容器，
      * 所以由 tools/export_icon_png.py 把里面最大的那张 PNG 抽成随包资源。
+     * 其余顶层窗口走同一个 gui.WindowIcons，标题栏图标才不会出现"这程序有两套"。
      */
     private void applyWindowIcon() {
-        try {
-            java.net.URL u = MainFrame.class.getResource("/app_icon.png");
-            if (u == null) {
-                log("! 缺 app_icon.png，窗口用系统默认图标");
-                return;
-            }
-            setIconImage(javax.imageio.ImageIO.read(u));
-        } catch (Exception e) {
-            log("! 读窗口图标失败：" + LogText.describe(e));
+        if (WindowIcons.image() == null) {
+            log("! 取不到 app_icon.png，窗口用系统默认图标");
+            return;
         }
+        WindowIcons.apply(this);
     }
 
     /**
@@ -3586,6 +3582,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         final javax.swing.JFrame dlg = new javax.swing.JFrame(
                 "SQL 示例（" + SqlSamples.ALL.length + " 条）");
+        // 独立顶层窗口自己也要挂图标：不挂就是系统默认那颗 Java 杯，
+        // 与主窗口摆在一起看着像两个程序（Python 侧由应用级 setWindowIcon 天然覆盖）
+        WindowIcons.apply(dlg);
         dlg.setDefaultCloseOperation(javax.swing.JFrame.HIDE_ON_CLOSE);
 
         // 目录分两层（分组 → 短标题）而不是把上百条平铺在第一层：示例只会越加越多，
@@ -4349,6 +4348,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public String sqlSamplesTitle() {
         return sqlRunSamples == null ? "" : sqlRunSamples.getTitle();
+    }
+
+    /** 对撞器要量的是这个窗口实际挂上的图标，别的取样都绕过了真窗口。 */
+    public javax.swing.JFrame sqlSamplesWindow() {
+        return sqlRunSamples;
     }
 
     public void runSqlFromUi() {

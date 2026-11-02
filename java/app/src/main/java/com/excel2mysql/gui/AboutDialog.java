@@ -38,6 +38,7 @@ public final class AboutDialog extends JDialog {
     /** 自检用：喂一份指定构建信息，覆盖“提交号带着长分支名”这类现场值。 */
     public AboutDialog(Frame owner, AppInfo info) {
         super(owner, "关于", true);
+        WindowIcons.apply(this);
 
         JLabel title = new JLabel("Excel → MySQL 批量导入工具");
         // Python 是默认 9pt 再加 2pt；这里按 11pt 折成物理像素（144dpi → 22px）

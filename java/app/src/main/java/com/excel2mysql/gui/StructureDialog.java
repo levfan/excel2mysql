@@ -96,6 +96,7 @@ public final class StructureDialog extends JDialog {
 
     public StructureDialog(Frame ownerFrame, List<TableBuilder.Result> results, LogPanel logPanel) {
         super(ownerFrame, "表结构预览（可编辑）", true);
+        WindowIcons.apply(this);
         this.logPanel = logPanel;
 
         JTabbedPane tabs = new JTabbedPane();

@@ -24,6 +24,7 @@ public final class DDLDialog extends JDialog {
 
     public DDLDialog(Frame owner, List<TableOps.Table> tables, boolean dropIfExists) {
         super(owner, "DDL 预览", false);
+        WindowIcons.apply(this);
 
         JTabbedPane tabs = new JTabbedPane();
         // 与结构弹窗同理：Qt 的 QTabWidget 默认单行滚动，Swing 默认换行
