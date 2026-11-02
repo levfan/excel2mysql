@@ -703,6 +703,12 @@ def main():
     # 驱动细节（pymysql 的 2003 与 JDBC 的 Communications link failure）必然不同，
     # 那是运行时差异不是界面差异；但"无法连接到 主机:端口（用户 X），库列表未加载"
     # 这一句和弹窗标题是两条线共用的契约。
+    # 连接加载是一条长任务，枚举要"点下去就跑完"：关掉 MODAL_PROGRESS 后框架原地跑完再回调，
+    # 走的仍是同一个工作函数与同一个收尾，读到的不是半个状态（与两条线的自检同一处理）。
+    # 归还的是进来时那一份（本文件第 38 行就关掉了），不是"默认值"：还成 True 的话，
+    # 后面加载夹具那句会起线程不等回执，文件表还是空的，枚举直接踩空。
+    _MP_PREV = m.MODAL_PROGRESS
+    m.MODAL_PROGRESS = False
     win.ed_host.setText("127.0.0.1")
     win.ed_port.setValue(1)
     POPUPS.clear()
@@ -728,6 +734,7 @@ def main():
     put("conn.db.size.failed", str(win.cb_db.count()))
     put("conn.db.enabled.failed", "1" if win.cb_db.isEnabled() else "0")
     put("conn.db.selected.failed", win.cb_db.currentText())
+    m.MODAL_PROGRESS = _MP_PREV
 
     # ---- 加载夹具 ----
     files = sorted(os.path.join(FIX, f) for f in os.listdir(FIX)

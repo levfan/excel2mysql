@@ -462,6 +462,12 @@ public final class GuiMain {
                 problems.add("另一页点击取证意外中止：" + e.getClass().getName()
                         + " " + e.getMessage());
             }
+            try {
+                conn_load_task(holder[0], problems);
+            } catch (Throwable e) {
+                problems.add("连接加载长任务自检意外中止：" + e.getClass().getName()
+                        + " " + e.getMessage());
+            }
         }
         if (problems.isEmpty()) {
             System.out.println("+ [OK] GUI-SELFTEST | 窗口构造成功，文件表 " + metrics[0]
@@ -6533,6 +6539,59 @@ public final class GuiMain {
         if (!frame.logPanel().contains("没有正在执行的任务")) {
             problems.add("空点「停止」的提示语不对");
         }
+    }
+
+    /**
+     * 「连接并加载库」是一条长任务：握手实测要 2~5 秒，站在事件分发线程上就是整窗假死。
+     *
+     * <p>用户报的就是这个：点下去界面不动了，看着像软件死了。这一组开真线程 + 真进度框，
+     * 验三件事：那颗按钮点下去立刻返回（握手不在本线程）、进度框挂上且标题说清在干什么、
+     * 跑完把清单灌进那一格并腾出资源位。判据取"点下去到返回的毫秒数"，
+     * 哪天有人把这段改回同步跑，这一条会直接红到 1200 毫秒。
+     */
+    private static void conn_load_task(MainFrame frame, List<String> problems) throws Exception {
+        MainFrame.modalProgress = true;
+        MainFrame.fetchOverride = () -> {
+            Thread.sleep(1200);
+            return Arrays.asList("alpha", "beta");
+        };
+        final long[] took = {-1};
+        final String[] title = {null};
+        final boolean[] shown = {false};
+        final boolean[] busy = {false};
+        frame.hostField().setText("10.0.0.1");
+        long t0 = System.currentTimeMillis();
+        clickNow(frame.connectButton());
+        took[0] = System.currentTimeMillis() - t0;
+        com.excel2mysql.gui.ProgressDialog box = frame.lastTaskDialog();
+        title[0] = box == null ? null : box.getTitle();
+        shown[0] = box != null && box.isVisible();
+        busy[0] = frame.taskBusy(MainFrame.RES_CONN);
+        if (took[0] > 300) {
+            problems.add("点「连接并加载库」在本线程等了 " + took[0]
+                    + " 毫秒才返回（握手还站在事件分发线程上，界面等于假死）");
+        }
+        if (!"正在连接并加载库…".equals(title[0]) || !shown[0]) {
+            problems.add("连接任务没挂上进度框或标题不对：" + title[0]);
+        }
+        if (!busy[0]) {
+            problems.add("连接任务没占住「连接区」这一位，第二次点击会挤进来");
+        }
+        if (!waitTasks(frame, 0, 20)) {
+            problems.add("连接任务跑不完：" + frame.runningTasks().size() + " 个还在");
+        }
+        final int[] loaded = {-1};
+        final boolean[] enabled = {false};
+        invokeUi(() -> {
+            loaded[0] = frame.dbListSize();
+            enabled[0] = frame.databaseChooserEnabled();
+        });
+        if (loaded[0] != 2 || !enabled[0]) {
+            problems.add("任务跑完没把清单灌进目标库那一格：条目 " + loaded[0]
+                    + " 可选中=" + enabled[0]);
+        }
+        MainFrame.modalProgress = false;
+        MainFrame.fetchOverride = null;
     }
 
     /**

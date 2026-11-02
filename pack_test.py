@@ -4970,6 +4970,56 @@ check("Q7e 换过去的那台连不上时上一台的清单要清场：不留旧
 app_main.connect = _fake_connect
 hw.deleteLater()
 
+# ---- 「连接并加载库」是一条长任务：握手 2~5 秒不能站在界面线程里 ----
+# 用户报"点击后页面假死"，就是因为这一步从前同步跑在界面线程上，那几秒整窗不响应。
+# 这一组开真线程 + 真进度框，验四件事：点下去立刻返回、框挂上且标题说清在干什么、
+# 握手期间事件循环照常转、跑完把清单灌进那一格。
+lw = app_main.MainWindow()
+_PD_PREV = app_main.ProgressDialog       # 这一段临时换成真框，跑完原样还回去
+app_main.ProgressDialog = REAL_PROGRESS
+app_main.MODAL_PROGRESS = True
+_real_fetch = app_main.fetch_databases
+
+
+def _slow_fetch(cfg, _sink=None):
+    _t_busy.sleep(1.2)
+    return ["alpha", "beta"]
+
+
+app_main.fetch_databases = _slow_fetch
+lw.btn_conn_edit.click()
+_t_click = _t_busy.time()
+lw.btn_load_db.click()
+_launch_conn = _t_busy.time() - _t_click
+_qdlg = lw.task_dialog
+check("Q8 点「连接并加载库」立刻挂上真进度框，标题说的是这一步在干什么",
+      _qdlg is not None and isinstance(_qdlg, REAL_PROGRESS)
+      and _qdlg.windowTitle() == "正在连接并加载库…",
+      _qdlg.windowTitle() if _qdlg is not None else "没框")
+check("Q8b 起任务这一句立刻返回（握手没站在界面线程上）",
+      _launch_conn < 0.3 and lw.task_busy((lw.RES_CONN,)),
+      (_launch_conn, lw.task_busy((lw.RES_CONN,))))
+_ticks_conn = [0]
+_conn_timer = QTimer()
+_conn_timer.setInterval(10)
+_conn_timer.timeout.connect(lambda: _ticks_conn.__setitem__(0, _ticks_conn[0] + 1))
+_conn_timer.start()
+_pump(0.4)
+_conn_timer.stop()
+check("Q8c 握手还在后台跑的当口，事件循环照常在拍上（界面没冻）",
+      _ticks_conn[0] > 0 and lw.task_busy((lw.RES_CONN,)),
+      (_ticks_conn[0], lw.task_busy((lw.RES_CONN,))))
+_drained = _wait_until(lambda: not lw.task_busy((lw.RES_CONN,))
+                       and lw.cb_db.count() == 2, 20)
+check("Q8d 跑完把清单灌进那一格，并腾出资源位",
+      _drained and lw.cb_db.isEnabled() and lw.lbl_db_hint.text() == "",
+      (lw.cb_db.count(), lw.cb_db.isEnabled(), lw.lbl_db_hint.text()))
+lw.close()
+lw.deleteLater()
+app_main.fetch_databases = _real_fetch
+app_main.ProgressDialog = _PD_PREV
+app_main.MODAL_PROGRESS = False
+
 # ---- 程序同级 conn.ini 预填连接信息：现场配一次，不用每次手填 ----
 _cdir = os.path.join(_tmpdir, "conn预填")
 os.makedirs(_cdir, exist_ok=True)
