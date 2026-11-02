@@ -1350,6 +1350,20 @@ def fetch_databases(cfg, _sink=None):
         conn.close()
 
 
+def load_databases_task(cfg, sink):
+    """连库取列表这一趟长任务的正文（跑在子线程里）。
+
+    失败不往任务框架外面抛：那条路会变成一句「任务异常」，而"连不上库"有自己
+    既定的弹窗与日志口径（`连接失败` + `库列表未加载`），所以把原因随结果一起回给界面。
+    返回 (库列表或 None, 失败原因或 None)，永远不为 None——不然收尾会被当成"没做成"跳过。
+    """
+    sink.step("连接 %s:%s" % (cfg["host"], cfg["port"]))
+    try:
+        return fetch_databases(cfg), None
+    except Exception as e:
+        return None, describe_db_error(e)
+
+
 def sql_execute_task(items, cfg, sink):
     """逐个脚本执行到目标库，每个文件一个事务。
 
@@ -2054,6 +2068,7 @@ class MainWindow(QWidget):
         self._import_task = None   # 导入这条长任务单独留一份引用，收尾收它自己的框
         self._cfg_db = ""          # conn.ini 里写的目标库，库列表加载出来后按它预选
         self._conn_dirty = False   # 改过主机/端口/用户名/密码：手上的库清单来自上一次连接
+        self._conn_load_cfg = None  # 正在跑的这次连接用的是哪一份配置（回执要报出来）
         # 启动自动连接：只有真的读到 conn.ini 或 E2M_* 才算"用户配过"。
         # 什么都没配时不去连——否则每台机器一开窗都先对本机 3306 撞一次，日志里多一条红
         self._conn_auto = False
@@ -2439,10 +2454,13 @@ class MainWindow(QWidget):
     RES_EXCEL = "excel"
     RES_SQL = "sql"
     RES_RUN = "run"
+    # 连库取库列表占自己一位：它不动任何一页的列表，导入跑到一半也该能换库
+    RES_CONN = "conn"
     RES_LABEL = {
         "excel": "Excel 导入页的待导入列表",
         "sql": "SQL 脚本改名页的脚本列表",
         "run": "SQL 执行器页的执行结果区（编辑区 SQL 与脚本清单共用）",
+        "conn": "连接区（连库取库列表）",
     }
 
     def _resources_for(self, log_view):
@@ -2499,16 +2517,20 @@ class MainWindow(QWidget):
         dlg.move(max(avail.left() + 8, min(x, avail.right() - dlg.width() - 8)),
                  max(avail.top() + 8, min(y, avail.bottom() - dlg.height() - 8)))
 
-    def _run_modal(self, title, work, args=(), on_done=None, log_view=None):
+    def _run_modal(self, title, work, args=(), on_done=None, log_view=None,
+                   resources=None):
         """统一入口：把纯工作函数 work(sink, *args) 放到子线程跑，弹一个非模态进度框。
 
         非模态是为了不挡窗口：框挡在中间时另外两页根本点不动，用户只能等或者强关窗口。
         同一页的任务互斥、不同页可以并行，每个任务自己的框显示自己的进度。
         MODAL_PROGRESS=False（离屏用例）时不起线程、不弹框，原地跑完再回调，
         两条路径共用同一个 work 和同一个 TaskInfo，测试跑到的就是线上那段逻辑。
+
+        resources 不给就按日志去向认发起页；连接区那种不属任何一页的活儿自己报一位，
+        否则会被算成 Excel 页的任务，导入跑着时连不上库。
         """
         view = log_view if log_view is not None else self.log
-        resources = self._resources_for(view)
+        resources = tuple(resources) if resources else self._resources_for(view)
         other = self._conflict(resources)
         if other is not None:
             # 静默 return 是最坏的写法：用户点了没反应，也不知道在等谁
@@ -4113,23 +4135,37 @@ class MainWindow(QWidget):
         append_log(self.log, f"[已加载] 可用数据库：{', '.join(dbs)}")
 
     def on_load_databases(self):
+        """连库取列表：走长任务框架，点下去立刻有进度框。
+
+        这一趟握手实测 2~5 秒（端口没人听 2 秒、地址黑洞吃满 5 秒连接超时），
+        从前它直接站在界面线程里跑，那几秒整窗不响应——用户读作"软件死了"。
+        """
         cfg = self._conn_cfg()
         self._db_load_seq += 1       # 还在路上的自动连接结果就此过期
-        try:
-            self._apply_databases(fetch_databases(cfg))
-        except Exception as e:
-            # 连不上的那台服务器给不回清单，上一台的那份也就不作数了：
-            # 留着旧清单加旧库名，界面会一边显示"● 目标库 xxx"一边把库指向另一台机器
-            self.cb_db.clear()
-            self.cb_db.setEnabled(False)
-            self._conn_dirty = False
-            self._refresh_db_labels()
-            # 弹窗与日志用同一套展开格式，否则弹窗里是 (2003, '...') 这种元组原文
-            popup_box(self, "连接失败", describe_db_error(e), "critical")
-            append_log(self.log,
-                       f"[连接失败] 无法连接到 "
-                       f"{cfg['host']}:{cfg['port']}（用户 {cfg['user']}），库列表未加载\n"
-                       + indent_detail(describe_db_error(e)), error=True)
+        self._conn_load_cfg = cfg    # 回执那句要报"连的是哪台"，不能读回来时再问一次界面
+        self._run_modal("正在连接并加载库…", load_databases_task, (cfg,),
+                        on_done=self._on_db_load_done, log_view=self.log,
+                        resources=(self.RES_CONN,))
+
+    def _on_db_load_done(self, outcome):
+        """任务回来：成功灌清单，失败照旧弹窗 + 日志 + 清场（口径与改造前一致）。"""
+        dbs, err = outcome
+        cfg = self._conn_load_cfg or self._conn_cfg()
+        if err is None:
+            self._apply_databases(dbs)
+            return
+        # 连不上的那台服务器给不回清单，上一台的那份也就不作数了：
+        # 留着旧清单加旧库名，界面会一边显示"● 目标库 xxx"一边把库指向另一台机器
+        self.cb_db.clear()
+        self.cb_db.setEnabled(False)
+        self._conn_dirty = False
+        self._refresh_db_labels()
+        # 弹窗与日志用同一套展开格式，否则弹窗里是 (2003, '...') 这种元组原文
+        popup_box(self, "连接失败", err, "critical")
+        append_log(self.log,
+                   f"[连接失败] 无法连接到 "
+                   f"{cfg['host']}:{cfg['port']}（用户 {cfg['user']}），库列表未加载\n"
+                   + indent_detail(err), error=True)
 
     def on_initials_toggled(self, checked):
         """命名开关切换要留痕：之后看到 ddje 这样的字段名，得能对上是自己勾的。"""

@@ -113,6 +113,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     public static final String RES_EXCEL = "excel";
     public static final String RES_SQL = "sql";
     public static final String RES_RUN = "run";
+    /** 连库取库列表占自己一位：它不动任何一页的列表，导入跑到一半也该能换库。 */
+    public static final String RES_CONN = "conn";
     /** 资源位的人话名字：被挡下的那句要说清楚在等的是哪一样东西。 */
     private static final Map<String, String> RES_LABEL =
             new java.util.LinkedHashMap<String, String>();
@@ -121,6 +123,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         RES_LABEL.put(RES_EXCEL, "Excel 导入页的待导入列表");
         RES_LABEL.put(RES_SQL, "SQL 脚本改名页的脚本列表");
         RES_LABEL.put(RES_RUN, "SQL 执行器页的执行结果区（编辑区 SQL 与脚本清单共用）");
+        RES_LABEL.put(RES_CONN, "连接区（连库取库列表）");
     }
 
     /**
@@ -371,12 +374,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         connForm = bar;
 
         connect = new JButton("连接并加载库");
-        connect.addActionListener(e -> {
-            String failure = loadDatabases();
-            if (failure != null) {
-                critical(failure);
-            }
-        });
+        connect.addActionListener(e -> startConnLoad());
 
         hostField = new javax.swing.JTextField();
         javax.swing.event.DocumentListener refresher = new javax.swing.event.DocumentListener() {
@@ -914,8 +912,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 连接服务器并列出库。返回 null 表示成功；非 null 是弹窗正文，
-     * 与日志用的是同一份展开文案（对应 main.py 的 on_load_databases）。
+     * 连接服务器并列出库（原地跑完）。返回 null 表示成功；非 null 是弹窗正文，
+     * 与日志用的是同一份展开文案（对应 main.py 的 on_load_databases 那条失败口径）。
+     *
+     * <p>界面那颗按钮走的是 {@link #startConnLoad()} 那条长任务；这里保留原地版本给
+     * 自检与双端对撞器用（它们站在事件分发线程上，等的就是同步那一段）。
      */
     public String loadDatabases() {
         Config cfg = currentConfig();
@@ -924,23 +925,71 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             applyDatabases(cfg, fetchDatabases(cfg));
             return null;
         } catch (Exception e) {
-            connected = false;
-            // 连不上的那台服务器给不回清单，上一台的那份也就不作数了：
-            // 只禁用不清空的话，状态栏还挂着"● 目标库 旧库名"，而写入会指向另一台机器
-            dbListReloading = true;
-            try {
-                dbCombo.removeAllItems();
-            } finally {
-                dbListReloading = false;
-            }
-            dbCombo.setEnabled(false);
-            connDirty = false;
             String detail = LogText.describe(e);
-            logError("[连接失败] 无法连接到 " + cfg.host + ":" + cfg.port + "（用户 "
-                    + cfg.user + "），库列表未加载" + LogText.NL + LogText.indentDetail(detail));
-            refreshDbLabels();
+            connFailure(cfg, detail);
             return detail;
         }
+    }
+
+    /**
+     * 一次连接加载的结果：{@code dbs} 为 null 就是没连上，{@code error} 是给用户看的那段原因。
+     *
+     * <p>失败不往任务框架外抛：那条路会变成一句「任务异常」，而"连不上库"有自己既定的
+     * 弹窗与日志口径（「连接失败」+「库列表未加载」），所以原因随结果一起带回界面。
+     */
+    public static final class ConnLoad {
+        public final List<String> dbs;
+        public final String error;
+
+        ConnLoad(List<String> dbs, String error) {
+            this.dbs = dbs;
+            this.error = error;
+        }
+    }
+
+    /** 连不上库的统一收场：清单是上一台给的，不作数，清掉并把那一格改回灰。 */
+    private void connFailure(Config cfg, String detail) {
+        connected = false;
+        // 只禁用不清空的话，状态栏还挂着"● 目标库 旧库名"，而写入会指向另一台机器
+        dbListReloading = true;
+        try {
+            dbCombo.removeAllItems();
+        } finally {
+            dbListReloading = false;
+        }
+        dbCombo.setEnabled(false);
+        connDirty = false;
+        logError("[连接失败] 无法连接到 " + cfg.host + ":" + cfg.port + "（用户 "
+                + cfg.user + "），库列表未加载" + LogText.NL + LogText.indentDetail(detail));
+        refreshDbLabels();
+    }
+
+    /**
+     * 「连接并加载库」那颗按钮的入口：把这趟握手交给长任务框架跑。
+     *
+     * <p>握手实测要 2~5 秒（端口没人听 2 秒、地址黑洞吃满 5 秒连接超时），从前它直接
+     * 站在事件分发线程上跑，那几秒整窗不响应、进度不刷新，用户读作"软件死了"。
+     * 现在点下去立刻有进度框（标题 + 当前一步 + 已用秒数 + 取消），别的页照常能点。
+     */
+    private void startConnLoad() {
+        final Config cfg = currentConfig();
+        dbLoadSeq++;                     // 还在路上的自动连接结果就此过期
+        runTask("正在连接并加载库…", sink -> {
+            sink.step("连接 " + cfg.host + ":" + cfg.port);
+            try {
+                return new ConnLoad(fetchDatabases(cfg), null);
+            } catch (Exception e) {
+                return new ConnLoad(null, LogText.describe(e));
+            }
+        }, out -> {
+            ConnLoad r = (ConnLoad) out;
+            if (r.error == null) {
+                applyDatabases(cfg, r.dbs);
+                return;
+            }
+            connFailure(cfg, r.error);
+            critical(r.error);
+        }, null, new String[]{RES_CONN});
     }
 
     /**
@@ -1525,11 +1574,23 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                          java.util.function.Function<ImportParse.Sink, Object> work,
                          java.util.function.Consumer<Object> onUi,
                          LogPanel logView) {
+        runTask(title, work, onUi, logView, null);
+    }
+
+    /**
+     * resources 不给就按日志去向认发起页；连接区那种不属任何一页的活儿自己报一位，
+     * 否则会被算成 Excel 页的任务，导入跑着时连不上库（Python 侧 _run_modal 同一处理）。
+     */
+    private void runTask(String title,
+                         java.util.function.Function<ImportParse.Sink, Object> work,
+                         java.util.function.Consumer<Object> onUi,
+                         LogPanel logView, String[] resources) {
         lastTaskTitle = title;
         LogPanel previous = taskLogView;
         // 先认下面板再抢资源位：抢输的那句"已有任务在跑"要落在用户刚点的那一页
         taskLogView = logView;
-        if (!startTask(resourcesFor(logView))) {
+        if (!startTask(resources != null && resources.length > 0
+                ? resources : resourcesFor(logView))) {
             taskLogView = previous;
             return;
         }
@@ -1677,6 +1738,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JButton stopButton() {
         return stopBtn;
+    }
+
+    /** 自检与对撞按用户的方式点这颗连接按钮，不绕过界面直接调 loadDatabases。 */
+    public javax.swing.JButton connectButton() {
+        return connect;
     }
 
     /** 自检按用户的入口点这颗主按钮，不绕过界面直接调导入逻辑。 */
