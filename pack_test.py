@@ -7927,6 +7927,110 @@ check("U11 入口装了压掉第三方警告的过滤器（行为断言见 3.8 �
       and any("core team" in str(_p) for _p in _pats),
       [str(_p)[:40] for _p in _pats if _p][:4])
 
+section("ST 静态文字可拖选复制（三页与顶部那些只说字的句子）")
+
+_stw = app_main.MainWindow()
+_stq = app_main.Qt
+# 这一族的字面清单，与 Swing 侧 GuiMain.STATIC_TEXTS 同一份：少一处（某个说明条退回
+# 选不了字的 QLabel）或多一处（把不该开的也开了）都要红
+_st_want = collections.Counter([
+    "中英表头建模，回写库", "解析建表语句，回写库", "执行脚本与临时语句",
+    "主机：", "端口：", "用户名：", "密码：", "目标库：",
+    "命名规则：", "命名规则：", "表名前缀：", "表名前缀：",
+    "SQL 文本", "执行结果", "还没有执行结果"])
+# 那两句正文随运行状态变（当前是哪个库 / 清单加载没加载），按件单判，不进这张清单
+_st_dyn = {id(_stw.lbl_conn_state), id(_stw.lbl_db_hint)}
+
+
+def _st_flags(_lb):
+    """这一版 PySide6 不许 int() 转文本交互标志，只能按位与再判真假（与 U8 同一写法）。"""
+    return _lb.textInteractionFlags()
+
+
+_st_got = collections.Counter()
+_st_kb = []
+_st_tab = []
+for _lb in _stw.findChildren(app_main.QLabel):
+    _t = (_lb.text() or "").strip()
+    if not _t or id(_lb) in _st_dyn:
+        continue
+    if _st_flags(_lb) & _stq.TextSelectableByMouse:
+        _st_got[_t] += 1
+        if _st_flags(_lb) & _stq.TextSelectableByKeyboard:
+            _st_kb.append(_t)
+        if bool(_lb.focusPolicy() & _stq.TabFocus):
+            _st_tab.append(_t)
+check("ST1 可拖选的静态文字正是这一族那几句（两栈同一份清单）",
+      _st_got == _st_want, (dict(_st_got), dict(_st_want)))
+check("ST2 只开鼠标拖选、不开键盘选字：开了会把这格塞进焦点链，方向键就不再翻表",
+      not _st_kb, _st_kb)
+check("ST3 静态文字都不占 Tab 位：点它才给焦点，Tab 不在这里停",
+      not _st_tab, _st_tab)
+check("ST4 顶部那条状态行与目标库就地提示也可拖选（正文会变，按件判）",
+      bool(_st_flags(_stw.lbl_conn_state) & _stq.TextSelectableByMouse)
+      and bool(_st_flags(_stw.lbl_db_hint) & _stq.TextSelectableByMouse),
+      (str(_stw.lbl_conn_state.textInteractionFlags()),
+       str(_stw.lbl_db_hint.textInteractionFlags())))
+_st_drop = []
+for _da in (_stw.drop, _stw.sql_drop, _stw.sql_run_drop):
+    _st_drop += [lb.text() for lb in _da.findChildren(app_main.QLabel)
+                 if _st_flags(lb) & _stq.TextSelectableByMouse]
+check("ST5 拖拽区那句提示不开选区：它是点击热区，开了选区就吃掉那一下点击",
+      not _st_drop, _st_drop)
+
+# 真拖选 + 真 Ctrl+C：把选中的字抄出去再读回来。offscreen 平台的剪贴板是进程内那一份，
+# 先拿一句哨兵自证它 round-trip 得动；动不了这一判记未覆盖，不混进通过里。
+from PySide6.QtCore import QEvent, QPointF                       # noqa: E402
+from PySide6.QtGui import QKeyEvent, QMouseEvent                 # noqa: E402
+
+_st_clip_ok = False
+_st_prev = None
+_st_sel = ""
+_st_copy = ""
+try:
+    _st_prev = _app.clipboard().text()
+    _app.clipboard().setText("e2m哨兵")
+    _st_clip_ok = _app.clipboard().text() == "e2m哨兵"
+except Exception as _st_e:
+    _st_clip_ok = False
+    print("! [WARN] pack_test | 剪贴板读不动：" + str(_st_e)[:60])
+if _st_clip_ok:
+    _stw.show()
+    _app.processEvents()
+    _stl = _stw.imp_intro
+    _st_y = _stl.height() / 2.0
+    _st_x1 = max(3.0, _stl.width() - 2.0)
+    # 六参数那一支（local + global 两个坐标）才是当前 API：五参数那支已标 deprecated
+    _st_g = _stl.mapToGlobal(QPointF(0, 0))
+
+    def _st_ev(_kind, _x, _btn, _mods):
+        _lp = QPointF(_x, _st_y)
+        return QMouseEvent(_kind, _lp, _st_g + _lp, _stq.LeftButton, _btn, _mods)
+
+    _app.sendEvent(_stl, _st_ev(QEvent.MouseButtonPress, 2.0,
+                                _stq.LeftButton, _stq.NoModifier))
+    _app.sendEvent(_stl, _st_ev(QEvent.MouseMove, _st_x1,
+                                _stq.LeftButton, _stq.NoModifier))
+    _app.sendEvent(_stl, _st_ev(QEvent.MouseButtonRelease, _st_x1,
+                                _stq.NoButton, _stq.NoModifier))
+    _st_sel = _stl.selectedText()
+    _app.sendEvent(_stl, QKeyEvent(QEvent.KeyPress, _stq.Key_C, _stq.ControlModifier, "c"))
+    _app.sendEvent(_stl, QKeyEvent(QEvent.KeyRelease, _stq.Key_C, _stq.ControlModifier, "c"))
+    _app.processEvents()
+    _st_copy = _app.clipboard().text() or ""
+    _stw.close()
+    _app.processEvents()
+    check("ST6 按住拖选出整句、Ctrl+C 抄得走：读回来的就是选中的那几个字",
+          _st_sel == "中英表头建模，回写库" and _st_copy == _st_sel,
+          (_st_sel, _st_copy, _stl.width(), _stl.height()))
+else:
+    print("! [WARN] pack_test | 本轮剪贴板不可用，静态文字「Ctrl+C 抄进剪贴板」这一判未覆盖")
+try:
+    if _st_prev is not None:
+        _app.clipboard().setText(_st_prev)
+except Exception:
+    pass
+
 section("G MySQL 真实读写（建表→导入→查询→回滚）")
 
 _cfg = {"host": os.environ.get("PT_HOST", "127.0.0.1"),

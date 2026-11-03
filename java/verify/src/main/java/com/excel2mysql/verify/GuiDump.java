@@ -280,6 +280,15 @@ public final class GuiDump {
                     lbSb.append(runLabels.get(i));
                 }
                 put("sqlrun.labels", lbSb.toString());
+                // 三页上"能拖选、能 Ctrl+C、不占 Tab 位"的那一族静态文字：这一键比的是
+                // 哪些句子算这一族（Python 侧按 TextSelectableByMouse 认），机制各自由自检判
+                java.util.List<String> statics = new ArrayList<String>();
+                for (int i = 0; i < frame.tabs().getTabCount(); i++) {
+                    traverseStatic(frame.tabs().getComponentAt(i),
+                            frame.tabs().getTitleAt(i), statics);
+                }
+                java.util.Collections.sort(statics);
+                put("static.selectable", join(statics, "|"));
                 put("sqlrun.default", frame.sqlRunInputText());
                 put("sqlrun.wrap", frame.sqlRunWrap());
                 // 与 Python 侧同一句夹具：读的是真文档上的角色分布，不是 core 那张表抄一遍
@@ -1337,16 +1346,26 @@ public final class GuiDump {
 
     /** 递归收集这棵子树上的静态文案（去空白后的 JLabel 文字）。 */
     private static void traverseLabels(java.awt.Component c, java.util.List<String> out) {
-        if (c instanceof javax.swing.JLabel) {
-            String t = norm(((javax.swing.JLabel) c).getText());
+        // 目标库信息条在 Swing 这边是 HintLabel（为了能被拖选，用不可编辑的 JTextField 顶的
+        // QLabel），它不是 JLabel，但确实"是这一页上的一句话"，所以要一起收进来；
+        // 告警那一档正文里被摘掉的 ⚠ 由 hintText() 给回原文
+        if (c instanceof com.excel2mysql.gui.HintLabel) {
+            String t = norm(((com.excel2mysql.gui.HintLabel) c).hintText());
             if (!t.isEmpty()) {
                 out.add(t);
             }
+            return;
         }
-        // 目标库信息条在 Swing 这边是 HintLabel（为了能被拖选，用不可编辑的 JTextField 顶的
-        // QLabel），它不是 JLabel，但确实"是这一页上的一句话"，所以要一起收进来
-        if (c instanceof com.excel2mysql.gui.HintLabel) {
-            String t = norm(((com.excel2mysql.gui.HintLabel) c).hintText());
+        // 三页上的静态文字（含介绍条）也是同一族：不是 JLabel，但同样是这一页上的一句话
+        if (c instanceof com.excel2mysql.gui.StaticText) {
+            String t = norm(((javax.swing.text.JTextComponent) c).getText());
+            if (!t.isEmpty()) {
+                out.add(t);
+            }
+            return;
+        }
+        if (c instanceof javax.swing.JLabel) {
+            String t = norm(((javax.swing.JLabel) c).getText());
             if (!t.isEmpty()) {
                 out.add(t);
             }
@@ -1354,6 +1373,23 @@ public final class GuiDump {
         if (c instanceof java.awt.Container) {
             for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
                 traverseLabels(kid, out);
+            }
+        }
+    }
+
+    /** 这一棵子树上的静态文字（StaticText 族）：与 Python 侧"开了 TextSelectableByMouse 的 QLabel"同族。 */
+    private static void traverseStatic(java.awt.Component c, String page,
+                                       java.util.List<String> out) {
+        if (c instanceof com.excel2mysql.gui.StaticText
+                && !(c instanceof com.excel2mysql.gui.HintLabel)) {
+            String t = norm(((javax.swing.text.JTextComponent) c).getText());
+            if (!t.isEmpty()) {
+                out.add(page + "|" + t);
+            }
+        }
+        if (c instanceof java.awt.Container) {
+            for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
+                traverseStatic(kid, page, out);
             }
         }
     }

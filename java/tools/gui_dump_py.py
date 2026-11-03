@@ -575,6 +575,18 @@ def main():
     put("sqlrun.labels", "|".join(sorted(
         norm(l.text()) for l in win.main_tabs.widget(2).findChildren(QLabel)
         if norm(l.text()) and not win.sql_run_drop.isAncestorOf(l))))
+    # 三页上"能拖选、能 Ctrl+C、不占 Tab 位"的那一族静态文字：这一键比的是哪些句子算
+    # 这一族（Swing 侧按 StaticText 认），机制各自由自己那条自检判。
+    _statics = []
+    for _i in range(win.main_tabs.count()):
+        _page = win.main_tabs.widget(_i)
+        for _lbl in _page.findChildren(QLabel):
+            if not (_lbl.textInteractionFlags() & Qt.TextSelectableByMouse):
+                continue
+            _t = norm(_lbl.text())
+            if _t:
+                _statics.append(norm(win.main_tabs.tabText(_i)) + "|" + _t)
+    put("static.selectable", "|".join(sorted(_statics)))
     put("sqlrun.default", win.sql_run_input.toPlainText())
     put("sqlrun.wrap", "wrap" if win.sql_run_input.lineWrapMode()
         == QTextEdit.WidgetWidth else "nowrap")

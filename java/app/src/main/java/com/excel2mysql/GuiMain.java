@@ -109,6 +109,8 @@ public final class GuiMain {
                 }
                 // 空表引导语只在表还空着时画得出来，趁添加夹具之前验
                 ui_guidance(frame, problems);
+                // 静态文字这一族趁窗口刚建好、正文还没被任何一条用例改过之前判
+                static_texts(frame, problems);
                 // 主按钮的底色必须跟着启用状态走：列表还空着时「开始导入」是禁用的，
                 // 涂成强调色会让它看着就能点（现场那句"没导任何东西，点一下颜色才变"）
                 if (frame.importButton().isEnabled()) {
@@ -2220,9 +2222,9 @@ public final class GuiMain {
         if (!"执行脚本与临时语句".equals(frame.sqlRunHintText())) {
             problems.add("SQL 执行器页顶部那句介绍不对：" + frame.sqlRunHintText());
         }
-        javax.swing.JLabel intro1 = frame.excelIntro();
-        javax.swing.JLabel intro2 = frame.sqlPage().introField();
-        javax.swing.JLabel intro3 = frame.sqlRunIntro();
+        com.excel2mysql.gui.StaticText intro1 = frame.excelIntro();
+        com.excel2mysql.gui.StaticText intro2 = frame.sqlPage().introField();
+        com.excel2mysql.gui.StaticText intro3 = frame.sqlRunIntro();
         if (!intro1.getForeground().equals(intro2.getForeground())
                 || !intro2.getForeground().equals(intro3.getForeground())
                 || !intro1.getBackground().equals(intro2.getBackground())
@@ -2312,6 +2314,160 @@ public final class GuiMain {
         t.selectAll();
         if (t.getSelectedText() == null || !t.getSelectedText().equals(t.getText())) {
             problems.add(who + "选不出整行文字：" + t.getSelectedText());
+        }
+    }
+
+    /**
+     * 界面上那一句句"只是说字"的静态文字：两栈都必须够得着（可拖选、可 Ctrl+C），
+     * 又都不许多占一个 Tab 位。这份清单就是"哪些句子抄得走"的字面口径。
+     */
+    private static final String[] STATIC_TEXTS = {
+            "中英表头建模，回写库", "解析建表语句，回写库", "执行脚本与临时语句",
+            "主机：", "端口：", "用户名：", "密码：", "目标库：",
+            "命名规则：", "命名规则：", "表名前缀：", "表名前缀：",
+            "SQL 文本", "执行结果", "还没有执行结果"};
+
+    /** 静态文字这一族的三条承诺：选得出整行、Ctrl+C 真绑在复制上、Tab 环不在它这里停。 */
+    private static void static_texts(MainFrame frame, List<String> problems) {
+        java.util.List<com.excel2mysql.gui.StaticText> found =
+                new java.util.ArrayList<com.excel2mysql.gui.StaticText>();
+        collectStatic(frame.getContentPane(), found);
+        // 目标库那行的就地提示正文随连接状态变（没加载 / 已过期 / 空），句子数不进这张清单，
+        // 按件排除——Python 侧 ST1 排除的是同一件（lbl_db_hint）
+        found.remove(frame.dbHintField());
+        java.util.Map<String, Integer> want = new java.util.TreeMap<String, Integer>();
+        for (String t : STATIC_TEXTS) {
+            Integer n = want.get(t);
+            want.put(t, n == null ? 1 : n + 1);
+        }
+        java.util.Map<String, Integer> got = new java.util.TreeMap<String, Integer>();
+        for (com.excel2mysql.gui.StaticText st : found) {
+            String t = st.getText();
+            if (t == null || t.isEmpty()) {
+                continue;       // 空着的目标库提示此刻没有可抄的话
+            }
+            Integer n = got.get(t);
+            got.put(t, n == null ? 1 : n + 1);
+        }
+        if (!want.equals(got)) {
+            problems.add("静态文字这一族的覆盖面变了：应为 " + want + "，现为 " + got);
+        }
+        if (!com.excel2mysql.gui.StaticText.skips(frame.getFocusTraversalPolicy())) {
+            problems.add("主窗口没装上绕开静态文字的焦点环策略，Tab 会多停几站");
+        }
+        for (com.excel2mysql.gui.StaticText st : found) {
+            String who = "静态文字「" + brief(st.getText()) + "」";
+            dragSelectable(st, who, problems);
+            if (!st.isFocusable() || !st.isRequestFocusEnabled()) {
+                problems.add(who + "点进去拿不到焦点，Ctrl+C 那条走不通");
+            }
+            Object name = st.getInputMap(javax.swing.JComponent.WHEN_FOCUSED).get(
+                    javax.swing.KeyStroke.getKeyStroke("control C"));
+            javax.swing.Action copy = name == null ? null : st.getActionMap().get(name);
+            if (!(copy instanceof javax.swing.text.DefaultEditorKit.CopyAction)) {
+                problems.add(who + "的 Ctrl+C 没绑在复制上：" + name + " -> " + copy);
+            }
+        }
+        // 焦点环的数学单独判：真窗口的排序策略要排版过才作数，自检这条线从不 show 窗口，
+        // 所以这里用一个只放着三件的小容器把"下一站跳过静态文字"钉死
+        javax.swing.JPanel ring = new javax.swing.JPanel();
+        // 普通 JPanel 的 getFocusTraversalPolicy() 会返回 null：要读回自己设的那一条，
+        // 得先声明自己是策略提供方（JFrame 天生是焦点环根，不需要这一步）
+        ring.setFocusTraversalPolicyProvider(true);
+        javax.swing.JButton head = new javax.swing.JButton("head");
+        com.excel2mysql.gui.StaticText mid = new com.excel2mysql.gui.StaticText("中间这句");
+        javax.swing.JButton tail = new javax.swing.JButton("tail");
+        ring.add(head);
+        ring.add(mid);
+        ring.add(tail);
+        ring.setFocusTraversalPolicy(com.excel2mysql.gui.StaticText.policySkipping(new OrderPolicy()));
+        java.awt.FocusTraversalPolicy pol = ring.getFocusTraversalPolicy();
+        if (pol.getComponentAfter(ring, head) != tail
+                || pol.getComponentAfter(ring, tail) != head
+                || pol.getComponentBefore(ring, head) != tail) {
+            problems.add("焦点环没绕开静态文字：after(head)="
+                    + brief(String.valueOf(pol.getComponentAfter(ring, head)))
+                    + " after(tail)=" + brief(String.valueOf(pol.getComponentAfter(ring, tail)))
+                    + " before(head)="
+                    + brief(String.valueOf(pol.getComponentBefore(ring, head))));
+        }
+        // 真按 Ctrl+C 抄进系统剪贴板那一步要焦点落在件上（JDK 的 CopyAction 取焦点组件），
+        // 自检从不 show 窗口，这一格由界面探针实跑（拖选 + 真按键 + 读回剪贴板）
+        System.out.println("! [WARN] GUI-SELFTEST | 静态文字「拖选后 Ctrl+C 抄进剪贴板」"
+                + "在自检里未覆盖（不 show 窗口拿不到焦点），由 gui 探针实跑那一趟判");
+    }
+
+    /** 这棵树上的静态文字（HintLabel 是带状态色的那种，不算这一族的清单成员）。 */
+    private static void collectStatic(java.awt.Component c,
+                                      java.util.List<com.excel2mysql.gui.StaticText> out) {
+        if (c instanceof com.excel2mysql.gui.StaticText
+                && !(c instanceof com.excel2mysql.gui.HintLabel)) {
+            out.add((com.excel2mysql.gui.StaticText) c);
+        }
+        if (c instanceof java.awt.Container) {
+            for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
+                collectStatic(kid, out);
+            }
+        }
+    }
+
+    /**
+     * 只按加入顺序排的极小焦点策略，给上面那条焦点环判据当底座。
+     *
+     * <p>不借 JDK 那两套（ContainerOrder / Layout）：它们要容器排版过或在活窗口里，
+     * 自检这条线从不 show 窗口，拿它们当底座读出的是 null——那样判的是 JDK 的实现状态，
+     * 不是这一层包装"遇到静态文字就往下走"的逻辑。真窗口 + 真 Tab 那一趟由界面探针实跑，
+     * 结果记在 java/GUI-对齐清单.md。
+     */
+    private static final class OrderPolicy extends java.awt.FocusTraversalPolicy {
+
+        private java.util.List<java.awt.Component> cycle(java.awt.Container c) {
+            java.util.List<java.awt.Component> out = new java.util.ArrayList<java.awt.Component>();
+            for (java.awt.Component k : c.getComponents()) {
+                if (k.isFocusable() && k.isEnabled()) {
+                    out.add(k);
+                }
+            }
+            return out;
+        }
+
+        private java.awt.Component step(java.awt.Container c, java.awt.Component a, int dir) {
+            java.util.List<java.awt.Component> l = cycle(c);
+            if (l.isEmpty()) {
+                return null;
+            }
+            int i = l.indexOf(a);
+            if (i < 0) {
+                return l.get(0);
+            }
+            return l.get(((i + dir) % l.size() + l.size()) % l.size());
+        }
+
+        @Override
+        public java.awt.Component getComponentAfter(java.awt.Container c, java.awt.Component a) {
+            return step(c, a, 1);
+        }
+
+        @Override
+        public java.awt.Component getComponentBefore(java.awt.Container c, java.awt.Component a) {
+            return step(c, a, -1);
+        }
+
+        @Override
+        public java.awt.Component getFirstComponent(java.awt.Container c) {
+            java.util.List<java.awt.Component> l = cycle(c);
+            return l.isEmpty() ? null : l.get(0);
+        }
+
+        @Override
+        public java.awt.Component getLastComponent(java.awt.Container c) {
+            java.util.List<java.awt.Component> l = cycle(c);
+            return l.isEmpty() ? null : l.get(l.size() - 1);
+        }
+
+        @Override
+        public java.awt.Component getDefaultComponent(java.awt.Container c) {
+            return getFirstComponent(c);
         }
     }
 
