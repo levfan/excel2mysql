@@ -77,7 +77,7 @@ SECTIONS = [
 <code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到
 <code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给
 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-3.10.0.jar --check</code>。
+<code>jre\\bin\\java.exe -jar excel2mysql-3.11.0.jar --check</code>。
 双击 jar 文件本身没有任何反应。</li>
 </ul>
 
@@ -431,13 +431,19 @@ MySQL 直接报语法错误</li>
 <tr><td>日期对象或带分隔符的日期串</td><td><code>DATE</code></td></tr>
 <tr><td><b>表头含金额语义的数值列</b></td><td><code>DECIMAL(16,2)</code>；样本恰为整数也不用
 <code>INT</code>，实测位数更多时放宽（见下「金额语义」）</td></tr>
+<tr><td><b>表头是码值（证件号 / 卡号 / 电话 / 邮编 / 序列号）</b></td><td>一律按文本建，
+样本全是数字也不用 <code>INT</code>/<code>BIGINT</code>——带 <code>X</code> 的身份证号、
+带前导零的工号之后都要写得进去</td></tr>
+<tr><td><b>表头是产量 / 运量这类物质量</b></td><td><code>DECIMAL</code>，小数位至少留 4 位；
+样本恰为整数也不用 <code>INT</code>，之后进来 <code>12.5</code> 不会被抹掉</td></tr>
 <tr><td>纯整数</td><td><code>INT</code>，溢出则 <code>BIGINT</code>，
 再大改用 <code>DECIMAL(n,0)</code>，超过 MySQL 65 位精度才退为文本并留痕</td></tr>
 <tr><td>含小数</td><td><code>DECIMAL(p,s)</code> 按实测数据定宽：
 <code>s</code> 取实测最大小数位（下限 2、不截断），<code>p</code> 由实测整数位推出；
 上限取 MySQL 真实上限（总精度 65、小数 30），装不下退为文本</td></tr>
 <tr><td>文本</td><td><code>VARCHAR(n)</code>，按全量最大 UTF-8 字节 + 20% 余量向上取档位
-（64 ~ 16383）；超 16383 字节 → <code>TEXT</code>，超 65535 字节 → <code>MEDIUMTEXT</code></td></tr>
+（32 ~ 16383）；超 16383 字节 → <code>TEXT</code>，超 65535 字节 → <code>MEDIUMTEXT</code>。
+整列没值时无从观测长度，仍按默认 <code>VARCHAR(64)</code> 建，不给窄档</td></tr>
 <tr><td>带前导零的整数串（如 <code>007</code>）</td><td>保持文本，不丢前导零</td></tr>
 <tr><td>8 位纯数字（如 <code>20230101</code>）</td><td>按数值处理，编码列不会误判成日期</td></tr>
 <tr><td>数值列里无法转换的值</td><td>按 NULL 写入，并在日志汇总告警（列名、数量、行号示例），
@@ -445,9 +451,15 @@ MySQL 直接报语法错误</li>
 <tr><td><b>整列一个值都没有</b></td><td>按字段名语义定类型，见下表</td></tr>
 </table>
 
-<h3>整列为空时按字段名定类型（二十类，按优先级排列）</h3>
+<h3>整列为空时按字段名定类型（按优先级排列）</h3>
 <table class="t">
 <tr><th>语义</th><th>关键词</th><th>类型</th></tr>
+<tr><td>码值</td><td>身份证 / 军官证 / 护照 / 社保卡 / 银行卡 / 卡号 / 账号 / 统一社会信用代码 /
+组织机构代码 / 纳税人识别号 / 手机号 / 联系电话 / 电话 / 传真 / 邮编 / 邮政编码 / 微信号 /
+车牌号 / 车架号 / 发动机号 / 序列号 / 流水号 / 批次号 / 条码 / 二维码 / 验证码 / 学号 / 工号 / 警号</td>
+<td><code>VARCHAR(64)</code>（排在最前；「账号余额」钱在尾巴上仍归金额，
+「卡号类型」「证件名称」存的是名字，「身份证有效期」存的是日期，都不归这一族。
+裸「编号」「代码」「单号」刻意不收——那些多是真自增键）</td></tr>
 <tr><td>时长</td><td>工期 / 周期 / 时长 / 间隔 / 时延 / 工时 / 机时 / 台时</td>
 <td><code>INT</code>（时长与金额同时命中时看结尾：<code>付款周期</code> 是天数，<code>工时费</code> 是钱）</td></tr>
 <tr><td>金额</td><td>金额 / 单价 / 价格 / 费用 / 租金 / 水电费 / 增值税 / 净利润 / 总资产 /
@@ -469,16 +481,23 @@ MySQL 直接报语法错误</li>
 跨度 / 含沙量 / 壁厚 / 振幅 / 挠度 / 沉降 / 位移 / 噪声 / 分贝 / 总磷 / 开间 / 进深 /
 航程 / 航速 / 转速 / 亩产 / 血糖 / 视力 / 剂量 / 用药量 / 射程 / 射高 / 射速 / 仰角 /
 炮径 / 弹径 / 装药量 / 自重等</td><td><code>DECIMAL(18,4)</code></td></tr>
+<tr><td>产量</td><td>产量 / 销量 / 销售量 / 出货量 / 进货量 / 采购量 / 运量 / 客运量 / 货运量 /
+旅客发送量 / 吞吐量 / 发电量 / 供水量 / 用水量 / 用电量 / 耗电量 / 产油量 / 捕捞量 / 收获量 /
+入库量 / 出库量</td>
+<td><code>DECIMAL(18,4)</code>（带吨、公斤、度这类单位，样本恰为整数也不给 <code>INT</code>；
+「交易量」「成交量」数的是笔数，仍按 <code>INT</code>）</td></tr>
 <tr><td>大计数</td><td>播放量 / 阅读量 / 曝光量 / 点击量 / 访问量 / 下载量 / 转发量 /
 浏览量 / 粉丝数 / 关注数 / 收藏数 / 评论数 / 点赞数</td>
 <td><code>BIGINT</code>（持续增长的大计数会超过 INT 的 21 亿上限）</td></tr>
 <tr><td>计数</td><td>数量 / 个数 / 人数 / 次数 / 库存 / 户数、票数 / 名额 / 课时 / 学分 /
-场次 / 销量 / 产量 / 人次 / 班次 / 车次 / 行数 / 站点数 / 订单数、出库数 / 入库数 /
+场次 / 人次 / 班次 / 车次 / 行数 / 站点数 / 订单数、出库数 / 入库数 /
 在库数 / 在册数 / 在位数 / 配发数 / 消耗数 / 报废数 / 维修数 / 领用数 / 盘盈数 / 盘亏数 /
 官兵数 / 兵员数 / 装备数 / 台套数 / 辆数 / 参与数、心率 / 脉搏 / 剂次 / 环数 / 圈数、
-发数 / 航次、年龄 / 工龄 / 年限、序号 / 排名 / 位次 / 座次 / 顺位、
+发数 / 航次、年龄 / 工龄 / 年限 / 兵龄 / 警龄 / 婚龄 / 驾龄 / 司龄 / 机龄 / 船龄 / 房龄 / 车龄、
+序号 / 排名 / 位次 / 座次 / 顺位、
 年份 / 月份 / 季度 / 月数 / 旬</td><td><code>INT</code></td></tr>
-<tr><td>网址</td><td>网址 / 网站 / 链接 / 路径 / 域名 / 短链</td><td><code>VARCHAR(512)</code></td></tr>
+<tr><td>网址</td><td>网址 / 网站 / 链接 / 路径 / 域名 / 短链 / 文件名 / 文件夹名 / 目录名 /
+附件名 / 文档名 / 图片名</td><td><code>VARCHAR(512)</code></td></tr>
 <tr><td>长文本</td><td>备注 / 说明 / 描述 / 详情 / 内容 / 摘要 / 评价 / 意见 / 经营范围 /
 注意事项 / 留言 / 反馈 / 条款 / 笔录 / 诉求 / 处置情况 / 主要做法 / 工作纪要 / 事由 / 成效</td>
 <td><code>TEXT</code></td></tr>
@@ -486,12 +505,16 @@ MySQL 直接报语法错误</li>
 机构 / 项目 / 地址 / 联系人 / 职称 / 岗位 / 科室 / 楼盘 / 街道 / 线路 / 品名 / 语种 / 币种、
 创建人 / 修改人 / 更新人 / 删除人 / 录入人 / 制单人 / 复核人 / 审核人 / 经办人 / 负责人 /
 批准人 / 填报人 / 申请人 / 受理人 / 移交人 / 接收人、密级 / 级别 / 层级 / 建制 / 番号 / 部队、
-课目 / 驾驶员 / 附件 / 状态 / 标记</td><td><code>VARCHAR(255)</code></td></tr>
+课目 / 驾驶员 / 附件 / 状态 / 标记、
+省 / 市 / 县 / 区 / 乡镇 / 村 / 社区 / 国籍 / 民族 / 籍贯 / 户籍 / 户口 / 军种 / 兵种 /
+战区 / 军区 / 流域 / 河流 / 性别 / 学历 / 学位 / 婚姻 / 政治面貌 / 健康状况 / 宗教 / 体质</td><td><code>VARCHAR(255)</code></td></tr>
 <tr><td>其余</td><td>—</td><td><code>VARCHAR(64)</code></td></tr>
 </table>
 <h3>判定细则</h3>
 <ul>
-<li><b>优先级</b>：时长优先于金额与时间（<code>付款周期</code>、<code>结算周期</code>
+<li><b>优先级</b>：码值排在最前（<code>身份证</code>、<code>流水号</code>、<code>联系电话</code>
+这类一律先归文本，但「账号余额」钱在尾巴上仍归金额、「卡号类型」存的是名字、「身份证有效期」
+存的是日期，这三类让出去）；时长优先于金额与时间（<code>付款周期</code>、<code>结算周期</code>
 存的是天/月数）；金额优先于其他数值语义；显式比率词优先于计量词，裸「率」排在所有显式词条之后
 （频率、功率按计量，容积率按比率，点名过的「心率」按计数）；文本三档排在最后，
 不让「描述」「名称」抢掉带数字语义的复合表头（<code>数量说明</code> 仍按计数）</li>
@@ -500,17 +523,18 @@ MySQL 直接报语法错误</li>
 <li><b>英文按成词匹配</b>：<code>create_date</code>、<code>qty</code>、<code>is_deleted</code>、
 <code>longitude</code>、<code>sub_total</code>、<code>home_url</code>、<code>remark_text</code>、
 <code>page_views</code>、<code>impressions</code>、<code>principal</code>、<code>premium</code>、
-<code>latency_ms</code>、<code>ordinal</code>、<code>message_body</code> 命中，
-<code>update</code>、<code>birthday</code>、<code>phone_number</code> 不误中。
+<code>latency_ms</code>、<code>ordinal</code>、<code>message_body</code>、<code>phone_number</code> 命中，
+<code>update</code>、<code>birthday</code>、<code>news</code> 不误中。
 英文词根还要过一遍拼音音节表：<code>参考率</code> 转拼音是 <code>can_kao_lv</code>，
 因此 <code>can</code> 这类既是英文词又是拼音音节的不作词根使用；
 <code>is</code> / <code>has</code> / <code>bool</code> / <code>flag</code> 保留</li>
-<li><b>词表覆盖面由夹具机器判定</b>：表头直接从词表导出（1085 列，中文 768 条、
-英文词根 317 个），两条线逐列必须给出同一个类型；少抄一条词、顺序错位、两侧不一致，
+<li><b>词表覆盖面由夹具机器判定</b>：表头直接从词表导出（1516 列，中文 1160 条、
+英文词根 356 个），两条线逐列必须给出同一个类型；少抄一条词、顺序错位、两侧不一致，
 都会在类型推断金标准差分那一步报差异</li>
-<li><b>文本档只放宽不收紧</b>：链接给 512、长文本给 TEXT、名称给 255。
-不把编码、电话这类列收窄到 <code>VARCHAR(32)</code>——空列看不出真实长度，
-收窄会让后来填进来的长值变成截断报错</li>
+<li><b>空列不给窄档</b>：整列没值时无从观测长度，未知列一律按默认 <code>VARCHAR(64)</code> 建，
+名称档 255、链接档 512、长文本 TEXT 都只放宽；有值的列才按实测最大字节 + 20% 余量
+（余量下限 16 字节）向上取档位，最短一档 32——能进 32 的列观测长度不超过 16，
+仍留着至少一倍的空间给以后进来的长值</li>
 <li><b>只收成词的关键词，不认裸「费」「价」</b>：<code>费县</code>（地名）、<code>评价</code>
 不会被误判成金额；<b>钱味词根在中间不算金额</b>——<code>付款单位</code>、<code>缴费方式</code>、
 <code>工资名单</code>、<code>收费标准</code> 按结尾判定否决，落回名称档，
