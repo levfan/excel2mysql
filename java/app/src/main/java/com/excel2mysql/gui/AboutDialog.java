@@ -8,7 +8,6 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JSeparator;
-import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -20,11 +19,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 「关于」小框：版本 / 提交 / 构建日期 / 作者四行，值全部来自 AppInfo，
- * 底下再垫两行小字讲清提交号与构建日期的来源。对应 ui_help.py 的 AboutDialog。
+ * 「关于」小框：版本 / 提交 / 构建日期 / 作者四行，值全部来自 AppInfo。
+ * 对应 ui_help.py 的 AboutDialog。
  *
  * 提交号与构建日期是打包时烧进产物的（目标机没有 git），开发态现场问一次；
- * 问不到就显示"开发态（未打包）"或"无 git 信息"，不编。
+ * 问不到就显示"开发态（未打包）"或"无 git 信息"，不编。来源这一层不占界面，
+ * 挂在「提交」「构建日期」两行的悬浮提示上，说明文字与 Python 侧逐字同形。
  */
 public final class AboutDialog extends JDialog {
 
@@ -32,20 +32,21 @@ public final class AboutDialog extends JDialog {
     public static final String AUTHOR = "刘帆";
 
     /**
-     * 底下那两行小字：提交号与构建日期从前只写一个值，开发态那句「开发态（未打包）」
-     * 看不出所以然。这一格哪来的、取不到会写什么、自己核该跑哪条命令，当场说清。
-     * 与 Python 侧 ui_help 的 ABOUT_FOOT_1 / ABOUT_FOOT_2 逐字相同，由 dlg.about.footnote 比。
+     * 「提交」这一行的来源说明：这一格哪来的、取不到会写什么、自己核该跑哪条命令。
+     * 与 Python 侧 ui_help.COMMIT_TIP 逐字相同；各栈只在末尾接自己那套取用方式
+     * （Qt 鼠标选中、Swing 双击整行），两侧自检都按同样的三个关键词判。
      */
-    public static final String FOOT_1 =
-            "提交号与构建日期取自构建戳：交付包里是打包那一刻烧进去的那一份，"
-            + "直接跑源码时现场问 git";
-    public static final String FOOT_2 =
-            "问不到就写「无 git 信息」，不编一个号出来；"
+    public static final String COMMIT_TIP =
+            "提交号取自构建戳：交付包里是打包那一刻烧进去的那一份，"
+            + "直接跑源码时现场问 git；问不到写「无 git 信息」，不编一个号出来。"
             + "要核当前源码版本，在仓库目录里跑 git rev-parse --short HEAD";
+    /** 「构建日期」这一行的来源说明，与 Python 侧 ui_help.BUILT_TIP 逐字相同。 */
+    public static final String BUILT_TIP =
+            "构建日期同样取自构建戳：交付包里写的是打包完成那一刻，"
+            + "直接跑源码时这一格显示「开发态（未打包）」";
 
     private final Map<String, HintLabel> rows = new LinkedHashMap<String, HintLabel>();
     private final List<String> captions = new ArrayList<String>();
-    private final JTextArea footnote = new JTextArea(FOOT_1 + "\n" + FOOT_2);
 
     public AboutDialog(Frame owner) {
         this(owner, AppInfo.load());
@@ -72,25 +73,8 @@ public final class AboutDialog extends JDialog {
         addRow(grid, "commit", "提交", info.commitDisplay(), false);
         addRow(grid, "built", "构建日期", info.builtAt, false);
         addRow(grid, "author", "作者", AUTHOR, true);
-        rows.get("commit").setToolTipText("这一行从哪来见下方两行小字；双击可整行复制");
-        rows.get("built").setToolTipText("交付包里写的是打包完成那一刻；"
-                + "直接跑源码时这一格是「开发态（未打包）」");
-
-        // 两行小字要跟着窗口宽度折行：JLabel 不折行（除非上 HTML，而两栈的 HTML 渲染
-        // 不是一套），用只读的 JTextArea 原生折行，顺带还能选中整段贴给别人
-        footnote.setEditable(false);
-        footnote.setOpaque(false);
-        footnote.setForeground(new Color(0x66, 0x66, 0x66));
-        footnote.setFont(title.getFont().deriveFont(Font.PLAIN,
-                (float) UiScale.fontPt(UiScale.UI_POINT_SIZE - 1)));
-        footnote.setLineWrap(true);
-        footnote.setWrapStyleWord(true);
-        // 不能 setCaret(null)：折行视图绘制时要读选区起点，光标被抽掉就是
-        // WrappedPlain.paint 里的空指针（拍图才画得到，自检不画窗口发现不了）。
-        // 只读 + 不可聚焦就已经没有闪烁光标，仍然可以拖选复制。
-        footnote.setFocusable(false);
-        footnote.setCaretColor(new Color(0, 0, 0, 0));
-        footnote.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.TEXT_CURSOR));
+        rows.get("commit").setToolTipText(COMMIT_TIP + "；双击可整行复制");
+        rows.get("built").setToolTipText(BUILT_TIP);
 
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
@@ -107,7 +91,6 @@ public final class AboutDialog extends JDialog {
         top.add(head, BorderLayout.NORTH);
         top.add(grid, BorderLayout.CENTER);
         root.add(top, BorderLayout.NORTH);
-        root.add(footnote, BorderLayout.CENTER);
         root.add(row, BorderLayout.SOUTH);
         setContentPane(root);
         // 首选尺寸只说"文字本身要多宽"：JTextField 左右还要各留 2px，且默认 380 宽在
@@ -125,18 +108,14 @@ public final class AboutDialog extends JDialog {
             }
         });
         // 尺寸要等组件都摆好再算：pack 之前设尺寸等于跟布局抢活
-        // 250 那档是垫了分隔线与两行小字之后要的：仍按客户区给，换字号只会变高不会裁字
-        Windows.clientSize(getContentPane(), this, 380, 250);
+        // 200 那档是垫了分隔线之后要的：仍按客户区给，换字号只会变高不会裁字
+        Windows.clientSize(getContentPane(), this, 380, 200);
     }
 
-    /** 自检与对撞用：底下那两行小字当前的文字（与 Qt 侧 foot.text() 逐字比）。 */
-    public String footnoteText() {
-        return footnote.getText();
-    }
-
-    /** 自检用：那两行小字的组件本身，供"真画一次"的像素判据取用。 */
-    public java.awt.Component footnoteView() {
-        return footnote;
+    /** 自检用：某一行的悬浮提示文字（来源说明挂在提示里，界面不再铺小字）。 */
+    public String tipOf(String key) {
+        HintLabel label = rows.get(key);
+        return label == null ? null : label.getToolTipText();
     }
 
     private void addRow(JPanel grid, String key, String label, String value, boolean last) {

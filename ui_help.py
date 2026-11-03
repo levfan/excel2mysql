@@ -16,14 +16,13 @@ from help_doc import SECTIONS
 # 两条线的关于框由对撞键 dlg.about.rows 逐行比，改一处不改另一处就会红
 AUTHOR = "刘帆"
 
-# 「关于」底下那两行小字：提交号与构建日期从前只写一个值，开发态那句
-# 「开发态（未打包）」看不出所以然——这一格到底哪来的、取不到会写什么、
-# 想自己核该跑哪条命令，都得当场说清。Java 侧镜像在 AboutDialog.java 的同名常量，
-# 由对撞键 dlg.about.footnote 逐字比
-ABOUT_FOOT_1 = ("提交号与构建日期取自构建戳：交付包里是打包那一刻烧进去的那一份，"
-                "直接跑源码时现场问 git")
-ABOUT_FOOT_2 = ("问不到就写「无 git 信息」，不编一个号出来；"
-                "要核当前源码版本，在仓库目录里跑 git rev-parse --short HEAD")
+# 「关于」底下不铺说明文字：提交号与构建日期的来源改挂在「提交」「构建日期」
+# 两行的悬浮提示上，界面只留四行结果。Java 侧镜像在 AboutDialog.java 的同名常量
+COMMIT_TIP = ("提交号取自构建戳：交付包里是打包那一刻烧进去的那一份，"
+              "直接跑源码时现场问 git；问不到写「无 git 信息」，不编一个号出来。"
+              "要核当前源码版本，在仓库目录里跑 git rev-parse --short HEAD")
+BUILT_TIP = ("构建日期同样取自构建戳：交付包里写的是打包完成那一刻，"
+             "直接跑源码时这一格显示「开发态（未打包）」")
 
 # Qt 的 Rich Text 只支持 CSS 的一个子集，这里只写 QTextBrowser 认得的属性
 # （写多了不报错，但静默不生效，所以行高用段落间距撑，不用 line-height）
@@ -146,7 +145,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("关于")
         self.setModal(True)
-        fit_client(self, 380, 250)
+        fit_client(self, 380, 200)
         info = build_info()
 
         title = QLabel(f"Excel → MySQL 批量导入工具")
@@ -165,8 +164,8 @@ class AboutDialog(QDialog):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(7)
         self.rows = {}
-        tips = {"commit": "这一行从哪来见下方两行小字；选中后可直接贴给别人",
-                "built": "交付包里写的是打包完成那一刻；直接跑源码时这一格是「开发态（未打包）」"}
+        tips = {"commit": COMMIT_TIP + "；选中后可直接贴给别人",
+                "built": BUILT_TIP}
         for i, (key, label, value) in enumerate((
                 ("version", "版本", f"v{info['version']}"),
                 ("commit", "提交", commit_display(info)),
@@ -182,12 +181,6 @@ class AboutDialog(QDialog):
             self.rows[key] = body
         grid.setColumnStretch(1, 1)
 
-        # 底下两行小字：把"提交号/构建日期哪来的、取不到写什么、自己核跑哪条命令"说清
-        self.foot = QLabel(ABOUT_FOOT_1 + "\n" + ABOUT_FOOT_2)
-        self.foot.setStyleSheet("color: #666;")
-        self.foot.setWordWrap(True)
-        self.foot.setTextInteractionFlags(Qt.TextSelectableByMouse)
-
         self.btn_close = QPushButton("关闭")
         self.btn_close.clicked.connect(self.accept)
         row = QHBoxLayout()
@@ -198,7 +191,6 @@ class AboutDialog(QDialog):
         lay.addWidget(title)
         lay.addWidget(rule)
         lay.addLayout(grid)
-        lay.addWidget(self.foot)
         lay.addStretch(1)
         lay.addLayout(row)
 
