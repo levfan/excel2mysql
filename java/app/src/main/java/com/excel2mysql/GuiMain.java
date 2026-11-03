@@ -348,6 +348,8 @@ public final class GuiMain {
                 checkBigIntWire(problems);
                 // 1264 回归：浮点整数溢出、金额精度被压、字符串金额经 float 进位
                 checkInfer1264(frame.names(), problems);
+                // 表头语义修正的另两层：码值按文本、物质量按 DECIMAL（与 pack_test L15–L26 同一批）
+                checkInferSemantics(frame.names(), problems);
                 // 「生成标准/简易 excel 文件」两颗按钮：落点、产物形状、回读与日志弹窗
                 meta_export(frame, files, problems);
                 // 标题版本号、说明窗口与关于框
@@ -6556,6 +6558,99 @@ public final class GuiMain {
     private static String tail(String text) {
         String s = text == null ? "" : text.replace((char) 10, ' ');
         return s.length() <= 260 ? s : s.substring(s.length() - 260);
+    }
+
+    /**
+     * 表头语义修正那两层在 Java 线的判据，与 pack_test 的 L15–L26 同一批：
+     * 码值列按文本、物质量列按 DECIMAL，两栈各判各的实现，再由 TYPE-DIFF 逐列对。
+     */
+    private static void checkInferSemantics(com.excel2mysql.core.Names names,
+                                            List<String> problems) {
+        com.excel2mysql.core.Infer infer = new com.excel2mysql.core.Infer(names);
+
+        com.excel2mysql.core.Infer.Column idc = one(infer, "身份证号",
+                "110101199003078877", "320311199901010019");
+        if (!"VARCHAR(64)".equals(idc.type) || idc.typeNote == null
+                || !idc.typeNote.contains("码值")) {
+            problems.add("身份证号全是数字没按码值走文本：" + idc.type + " / " + idc.typeNote);
+        }
+        // 样本里已经带 X：本来就走文本，这一层不必再留痕（留痕只在"差点被判成数值"时说得上）
+        com.excel2mysql.core.Infer.Column idx = one(infer, "身份证号",
+                "110101199003078877", "32011119990101001X");
+        if (!"VARCHAR(64)".equals(idx.type) || idx.typeNote != null) {
+            problems.add("带 X 的身份证号重复留痕或类型不对：" + idx.type + " / " + idx.typeNote);
+        }
+        if (!"VARCHAR(32)".equals(one(infer, "手机号", "13800138000").type)) {
+            problems.add("手机号没落进 32 这一档：" + one(infer, "手机号", "13800138000").type);
+        }
+        if (!one(infer, "流水号", "100001", "100002").type.startsWith("VARCHAR")) {
+            problems.add("流水号被「流水」的钱味抢走，没按码值走文本："
+                    + one(infer, "流水号", "100001", "100002").type);
+        }
+        if (!"DECIMAL(16,2)".equals(one(infer, "账号余额", 100, 200).type)) {
+            problems.add("账号余额钱在尾巴上，该按金额而不是码值："
+                    + one(infer, "账号余额", 100, 200).type);
+        }
+        if (!"VARCHAR(255)".equals(one(infer, "卡号类型", (Object) null).type)) {
+            problems.add("卡号类型结尾是「类型」，名字后缀没把码值否决掉："
+                    + one(infer, "卡号类型", (Object) null).type);
+        }
+        if (!"DATE".equals(one(infer, "身份证有效期", "2030-01-01", "2031-02-03").type)) {
+            problems.add("身份证有效期结尾是日期，不该被码值那一层抢走："
+                    + one(infer, "身份证有效期", "2030-01-01", "2031-02-03").type);
+        }
+        com.excel2mysql.core.Infer.Column sale = one(infer, "销量", 120, 300);
+        if (sale.type == null || !sale.type.startsWith("DECIMAL")
+                || sale.type.endsWith(",0)" ) || sale.typeNote == null
+                || !sale.typeNote.contains("物质量")) {
+            problems.add("销量样本为整数没给带小数位的 DECIMAL："
+                    + sale.type + " / " + sale.typeNote);
+        }
+        if (!"INT".equals(one(infer, "交易量", 120, 300).type)) {
+            problems.add("交易量数的是笔数，该照旧按 INT："
+                    + one(infer, "交易量", 120, 300).type);
+        }
+        if (!"VARCHAR(32)".equals(one(infer, "短", rep(16)).type)) {
+            problems.add("16 字节的文本列没落进新加的 32 档："
+                    + one(infer, "短", rep(16)).type);
+        }
+        if (!"VARCHAR(64)".equals(one(infer, "长一点", rep(33)).type)) {
+            problems.add("33 字节的文本列越过了 32 档该给 64："
+                    + one(infer, "长一点", rep(33)).type);
+        }
+        // 16 那一档刻意不收：整列没值时未知列仍按默认 64 建，收到 16 就是拿不准反而收紧
+        if (!"VARCHAR(64)".equals(one(infer, "甲", new Object[]{null}).type)) {
+            problems.add("空列的默认档被改动：" + one(infer, "甲", new Object[]{null}).type);
+        }
+        if (!"VARCHAR(255)".equals(one(infer, "省", new Object[]{null}).type)
+                || !"VARCHAR(512)".equals(one(infer, "文件名", new Object[]{null}).type)) {
+            problems.add("空列按名定档没跟上：" + one(infer, "省", new Object[]{null}).type
+                    + " / " + one(infer, "文件名", new Object[]{null}).type);
+        }
+    }
+
+    /** 一列一判的取样写法：表头 + 若干行值，与 Python 侧 `one()` 同一形状。 */
+    private static com.excel2mysql.core.Infer.Column one(com.excel2mysql.core.Infer infer,
+                                                          String header, Object... values) {
+        List<java.util.List<Object>> rows = new ArrayList<java.util.List<Object>>();
+        for (Object v : values) {
+            if (v instanceof Object[]) {
+                for (Object each : (Object[]) v) {
+                    rows.add(Arrays.<Object>asList(each));
+                }
+            } else {
+                rows.add(Arrays.<Object>asList(v));
+            }
+        }
+        return infer.inferColumns(Arrays.<Object>asList((Object) header), rows).get(0);
+    }
+
+    private static String rep(int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            sb.append('a');
+        }
+        return sb.toString();
     }
 
     private static void task_crash(MainFrame frame, List<String> problems) {
