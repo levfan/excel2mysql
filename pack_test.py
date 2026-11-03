@@ -973,9 +973,13 @@ check("D10 INSERT 模板列数与占位符数一致",
 section("F GUI 构造与交互逻辑（冻结态）")
 
 w = app_main.MainWindow()
+import appinfo          # 显示名的唯一来源，标题判据按它比，不各抄一份字面串
 check("F1 MainWindow 构造成功，标题带版本号",
-      w.windowTitle().startswith("Excel → MySQL 批量导入工具 v")
+      w.windowTitle().startswith(appinfo.APP_NAME + " v")
       and app_main.APP_VERSION in w.windowTitle(), w.windowTitle())
+check("F1b 产品显示名只有一个来源，且不再是最早期那条通道的名字",
+      appinfo.APP_NAME == "表库工作台 Excel·SQL·MySQL"
+      and "批量导入工具" not in appinfo.APP_NAME, appinfo.APP_NAME)
 check("F2 前两个页签齐全", [w.main_tabs.tabText(i) for i in range(2)]
       == ["Excel 导入", "SQL 脚本改名"])
 w.cb_db.blockSignals(True); w.cb_db.clear()
@@ -7705,6 +7709,33 @@ check("T8c 提交号与构建日期的来源写在各自那一行的悬浮提示
 # 关于框界面上只留四行结果：说明挪进悬浮提示之后，底部再长出灰字段落就是退回老样子
 check("T8d 关于框正面不铺来源说明（那段话只在提示里，不在界面里）",
       not any("构建戳" in t for t in _labels), [t[:20] for t in _labels if t][:8])
+# 复制这一路：正面那一格是短号，贴出去的必须是能直接粘进 git 里查的那一份
+import appinfo as _ai2
+_copy = ad.copy_text()
+_lines = _copy.splitlines()
+_sha = _lines[2].split("：", 1)[1].split("（")[0] if len(_lines) > 2 else ""
+check("T8e 「复制全部」那一份文本四行齐备，首行是产品名",
+      len(_lines) == 5 and _lines[0] == _ai2.APP_NAME
+      and _lines[1].startswith("版本：v") and _lines[2].startswith("提交：")
+      and _lines[3].startswith("构建日期：") and _lines[4] == "作者：" + AUTHOR,
+      _lines[:2])
+check("T8f 复制出去的提交号是 40 位十六进制（正面那一格仍是短号）",
+      _re.fullmatch(r"[0-9a-f]{40}", _sha) is not None
+      and len(ad.rows["commit"].text()) < len(_sha),
+      (_sha, ad.rows["commit"].text()))
+check("T8g 那颗按钮写着「复制全部」，点下去先给回执再自己复原（复制没有别的反馈）",
+      ad.btn_copy.text() == "复制全部", ad.btn_copy.text())
+ad.btn_copy.click()
+_copied_now = ad.btn_copy.text()
+_deadline = _time.time() + 3.0
+while _time.time() < _deadline and ad.btn_copy.text() == _copied_now:
+    _app.processEvents()
+    _time.sleep(0.05)
+# 这台机器上系统剪贴板时好时坏（无桌面会话或被占着）：按钮必须二选一如实报，
+# 到底是哪一个由这一条的证据说出来，不拿环境当产品缺陷判红
+check("T8h 回执只说实话（要么「已复制」要么「剪贴板打不开」），两秒后自己收回",
+      _copied_now in ("已复制", "剪贴板打不开") and ad.btn_copy.text() == "复制全部",
+      (_copied_now, ad.btn_copy.text()))
 ad.deleteLater()
 check("T8b 构建的 dirty 判定只看已跟踪文件的改动（未跟踪遗留不算）",
       _i["dirty"] == _run_git_probe(),
@@ -7818,7 +7849,7 @@ _app.processEvents()
 _geo = _app.primaryScreen().availableGeometry()
 _suites = [("主窗口", app_main.MainWindow(), "1100x780"),
            ("使用说明", app_main.HelpDialog(), "960x700"),
-           ("关于", app_main.AboutDialog(), "380x200"),
+           ("关于", app_main.AboutDialog(), "380x230"),
            ("进度框", REAL_PROGRESS("正在解析文件…"), "480x140"),
            ("表结构预览", app_main.StructureDialog([]), "980x640"),
            ("DDL 预览", app_main.DDLDialog([], False), "900x600")]

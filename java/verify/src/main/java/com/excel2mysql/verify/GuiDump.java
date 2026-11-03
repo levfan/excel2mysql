@@ -884,6 +884,9 @@ public final class GuiDump {
                     put("dlg.about.want", want(ad));
                     put("env.dlg.about.size", clientSize(ad));
                     put("dlg.about.rows", join(ad.rowCaptions(), "|"));
+                    // 产品名与复制按钮那两种字都是两栈各写一份的串，逐字比才知道有没有漂
+                    put("dlg.about.heading", norm(ad.headingText()));
+                    put("dlg.about.copy", norm(ad.copyLabels()));
                 } finally {
                     ad.dispose();
                 }

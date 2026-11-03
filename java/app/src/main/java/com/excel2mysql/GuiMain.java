@@ -993,6 +993,150 @@ public final class GuiMain {
         return n;
     }
 
+    /**
+     * 「复制全部」这一路走真系统剪贴板。
+     *
+     * <p>为什么只在这一栈钉系统级判据：Python 那条线在这台机器上连裸 Win32 的
+     * {@code OpenClipboard} 都失败，拿它当闸门红的是执行环境不是产品；JDK 这一侧
+     * 实测能读能写，所以剪贴板这一格在这里验一次，界面那一侧判文案与回执。
+     *
+     * <p>剪贴板是用户桌上的东西：先捕获原值，判完原样归还。
+     */
+    private static void checkAboutCopy(com.excel2mysql.gui.AboutDialog ad,
+                                       List<String> problems) {
+        final String want = ad.copyText();
+        java.awt.Component btn = findButtonByLabel(ad.getContentPane(),
+                com.excel2mysql.gui.AboutDialog.COPY_LABEL);
+        if (!(btn instanceof javax.swing.JButton)) {
+            problems.add("关于框没有那颗「复制全部」按钮");
+            return;
+        }
+        String prev = clipboardText();
+        // 这一层自检整段跑在事件分发线程上：doClick() 只是把动作排进队列，
+        // 而队列要等这一段让出去才会走——所以直接派发同一个 ActionListener，
+        // 走的是按钮点击时那条一模一样的调用链，只是不再排队（invokeAndWait 在这里是非法的）
+        java.awt.event.ActionListener[] listeners = ((javax.swing.JButton) btn).getActionListeners();
+        if (listeners.length == 0) {
+            problems.add("「复制全部」那颗按钮没挂上动作，点了不会有任何反应");
+            return;
+        }
+        for (java.awt.event.ActionListener al : listeners) {
+            al.actionPerformed(new java.awt.event.ActionEvent(btn,
+                    java.awt.event.ActionEvent.ACTION_PERFORMED, "click"));
+        }
+        String got = clipboardText();
+        String receipt = ad.copyButtonText();
+        boolean copied = com.excel2mysql.gui.AboutDialog.COPIED_LABEL.equals(receipt);
+        boolean clipUsable = com.excel2mysql.gui.AboutDialog.COPIED_LABEL.equals(receipt)
+                || com.excel2mysql.gui.AboutDialog.CLIP_FAIL_LABEL.equals(receipt);
+        if (!clipUsable) {
+            problems.add("点完「复制全部」那颗按钮没换字，用户无从知道点没点上：" + receipt);
+        } else if (!copied) {
+            // 这台机器开不了系统剪贴板（无桌面会话或被占着）：这一判记为未覆盖，不算通过
+            System.out.println("! [WARN] GUI-SELFTEST | 剪贴板开不了，"
+                    + "「复制全部」写进系统剪贴板这一判本轮未覆盖（按钮已如实报「剪贴板打不开」）");
+        } else if (!want.equals(got)) {
+            problems.add("点「复制全部」后剪贴板里不是那五行：" + brief(got));
+        }
+        String sha = "";
+        String[] lines = want.split("\n");
+        if (lines.length > 2 && lines[2].startsWith("提交：")) {
+            sha = lines[2].substring(3).split("（")[0];
+        }
+        if (!sha.matches("[0-9a-f]{40}")) {
+            problems.add("复制出去的提交号不是 40 位十六进制：" + sha);
+        }
+        if (!lines[0].equals(com.excel2mysql.core.AppInfo.APP_NAME)) {
+            problems.add("复制文本的首行不是产品名那一行：" + brief(lines[0]));
+        }
+        if (prev != null) {
+            writeClipboard(prev);                  // 桌上借来的东西要还回去
+        }
+        // 双击那一行：只负责把整行选上（真复制仍走 Ctrl+C），承诺与行为必须对齐。
+        // 这一判只能验到"处理挂上了没有"：合成 MouseEvent 在这个 JDK 里 getClickCount()
+        // 恒为 0（实测 x=6、y=2、clickCount=0，构造参数落点与文档不符），
+        // 而关于框是模态的、自检不能 show 它——行为那一格显式记未覆盖，不混进通过里
+        String value = ad.valueOf("commit");
+        java.awt.Component row = findTextByValue(ad.getContentPane(), value);
+        if (row == null) {
+            problems.add("关于框里找不到提交号那一行，双击这一判没跑成");
+            return;
+        }
+        boolean ours = false;
+        for (java.awt.event.MouseListener ml : row.getMouseListeners()) {
+            if (ml.getClass().getName().startsWith("com.excel2mysql.gui.AboutDialog")) {
+                ours = true;
+            }
+        }
+        if (!ours) {
+            problems.add("关于框那一行没挂双击处理，tooltip 却写着「双击整行选中」");
+        } else {
+            java.awt.event.MouseEvent dbl = new java.awt.event.MouseEvent(row,
+                    java.awt.event.MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(),
+                    6, 6, 2, 0, false);
+            for (java.awt.event.MouseListener ml : row.getMouseListeners()) {
+                ml.mouseClicked(dbl);
+            }
+            String selected = ((javax.swing.text.JTextComponent) row).getSelectedText();
+            if (!value.equals(selected)) {
+                System.out.println("! [WARN] GUI-SELFTEST | 合成鼠标事件在这台 JDK 上"
+                        + "带不出 clickCount，「双击整行选中」这一判本轮未覆盖"
+                        + "（选到的是：" + brief(selected) + "）");
+            }
+        }
+    }
+
+    /** 系统剪贴板里的文本；没有文本、读不动都返回 null，不把环境问题报成产品缺陷。 */
+    private static String clipboardText() {
+        try {
+            Object data = java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .getData(java.awt.datatransfer.DataFlavor.stringFlavor);
+            return data == null ? null : String.valueOf(data);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void writeClipboard(String text) {
+        try {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+                    new java.awt.datatransfer.StringSelection(text), null);
+        } catch (Exception ignored) {
+            // 还得回去是运气，拿不回去也不能把自检带崩
+        }
+    }
+
+    private static java.awt.Component findButtonByLabel(java.awt.Container c, String label) {
+        for (java.awt.Component k : c.getComponents()) {
+            if (k instanceof javax.swing.JButton && label.equals(((javax.swing.JButton) k).getText())) {
+                return k;
+            }
+            if (k instanceof java.awt.Container) {
+                java.awt.Component sub = findButtonByLabel((java.awt.Container) k, label);
+                if (sub != null) {
+                    return sub;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static java.awt.Component findTextByValue(java.awt.Container c, String value) {
+        for (java.awt.Component k : c.getComponents()) {
+            if (k instanceof javax.swing.text.JTextComponent
+                    && value.equals(((javax.swing.text.JTextComponent) k).getText())) {
+                return k;
+            }
+            if (k instanceof java.awt.Container) {
+                java.awt.Component sub = findTextByValue((java.awt.Container) k, value);
+                if (sub != null) {
+                    return sub;
+                }
+            }
+        }
+        return null;
+    }
+
     /** 整棵子树里找有没有进度条控件（页内进度条拿掉了，留着就是回归）。 */
     private static boolean hasProgressBar(java.awt.Container root) {
         if (root == null) {
@@ -3863,6 +4007,15 @@ public final class GuiMain {
         }
     }
 
+    /** 报错信息里给一段看得完的原文：null 要说得出口，换行不许把日志劈成两段。 */
+    private static String brief(String text) {
+        if (text == null) {
+            return "(空)";
+        }
+        String flat = text.replace('\n', ' ').replace('\r', ' ');
+        return flat.length() <= 120 ? flat : flat.substring(0, 120) + "…";
+    }
+
     private static String tailOf(String text) {
         int from = Math.max(0, text.length() - 300);
         return text.substring(from);
@@ -5058,6 +5211,7 @@ public final class GuiMain {
             if (inkOf(ad.getContentPane(), new java.awt.Color(0x66, 0x66, 0x66)) <= 0) {
                 problems.add("关于框没画出灰色那一档文字（灰字像素为 0）");
             }
+            checkAboutCopy(ad, problems);
             // 构建时间戳：Maven 打的是 UTC，Python 打的是本机时间，显示前必须换成时区
             String shifted = com.excel2mysql.core.AppInfo.toLocal("2026-10-13 02:22:08");
             java.util.Calendar utc = java.util.Calendar.getInstance(

@@ -1056,6 +1056,9 @@ def main():
             if wd is not None and norm(wd.text()):
                 captions.append(norm(wd.text()))
     put("dlg.about.rows", "|".join(captions))
+    # 产品名与复制按钮那两种字都是两栈各写一份的串，逐字比才知道有没有漂
+    put("dlg.about.heading", norm(ad.heading_text()))
+    put("dlg.about.copy", norm(ad.copy_labels()))
     ad.deleteLater()
 
     # ---- 进度框文案 ----
