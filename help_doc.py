@@ -77,7 +77,7 @@ SECTIONS = [
 <code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到
 <code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给
 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-3.7.1.jar --check</code>。
+<code>jre\\bin\\java.exe -jar excel2mysql-3.8.0.jar --check</code>。
 双击 jar 文件本身没有任何反应。</li>
 </ul>
 
@@ -364,9 +364,11 @@ MySQL 直接报语法错误</li>
 可空这一格写「否」才是 <code>NOT NULL</code>，留空或写「是」都是可空；主键列自动写成「否」。
 日期一律写成 <code>2008-05-19</code> 这样的文本而非 Excel 序列号，
 避免同一份数据在两次读写之间被历元换算挪走一天。</p>
-<p>「SQL 脚本改名」页的这两颗按钮产物形状完全一致，只是表定义改成从脚本正文的
-<code>CREATE TABLE</code> 解析，且脚本里没有数据，「数据」Sheet 只剩英文字段名那一行表头，
-不假装里面有数据行，详见「SQL 脚本改名页」一节。</p>
+<p>「SQL 脚本改名」页的这两颗按钮产物形状完全一致，只是数据源换成脚本正文：
+列定义从 <code>CREATE TABLE</code> 解析，「数据」Sheet 的行从脚本里的
+<code>INSERT</code> / <code>REPLACE INTO</code> 取，每张表最多写 10000 行、
+超出的只在日志点名；脚本里没有 INSERT 时这一张只剩英文字段名那一行表头，
+仍是给下游填数据的模板，详见「SQL 脚本改名页」一节。</p>
 <p class="tip">进度按文件计项（一张表 1 项），逐文件写日志，完成后弹窗把目录名原样报出来。
 按「停止」在当前文件写完后停下，剩余文件不写，日志与弹窗都写明
 「已取消，剩余文件未生成」。</p>
@@ -672,9 +674,10 @@ budget / revenue / profit / payment / charge / fund / tax / interest / capital�
 <code>sql_meta_data_file_年月日</code> 目录下的 xlsx，一张表一个文件，形状与
 「Excel 导入」页那两颗完全一致（标准件两个 Sheet、简易件只留数据 Sheet）；
 目录名带 <code>sql_</code> 前缀，与第一页产物互不覆盖，两颗按钮可同时跑。
-区别在数据源：<b>只看 <code>CREATE TABLE</code> 的列定义，不看库、也不看文件里的
-<code>INSERT</code></b>；脚本里没有数据，「数据」Sheet 只剩英文字段名那一行表头，
-给下游当可填模板</td></tr>
+区别在数据源：列定义<b>只看 <code>CREATE TABLE</code>，不看库</b>，
+数据行取脚本正文里的 <code>INSERT</code> / <code>REPLACE INTO</code> 字面量
+（每张表最多 10000 行，超出的在日志点名，值个数与列数对不上的行不写并逐条说明）。
+脚本里没有 INSERT 时「数据」Sheet 只剩英文字段名那一行表头，给下游当可填模板</td></tr>
 <tr><td>双击行（文件 / 原表名 / 表注释列）</td><td>打开该表从 <code>CREATE TABLE</code>
 解析出的元数据，逐列看<b>字段名、字段注释、数据类型、主键、可空</b>五列。
 数据类型是一整列，按 <code>VARCHAR(64)</code>、<code>DECIMAL(10,2)</code>
