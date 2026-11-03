@@ -28,8 +28,8 @@ from core.naming import clean_prefix, is_valid_prefix, swap_first_segment  # noq
 from core.sql_execute import render_table  # noqa: E402
 from core.sql_script import (  # noqa: E402
     apply_table_prefix_sql, edit_column, extract_create_tables, format_sql,
-    replace_first_segment_sql, parse_create_tables, set_table_comment,
-    split_sql_statements,
+    parse_insert_rows, replace_first_segment_sql, parse_create_tables,
+    set_table_comment, split_sql_statements,
 )
 from sql_samples import SAMPLES  # noqa: E402
 
@@ -48,6 +48,26 @@ SCRIPTS = [
     "INSERT INTO `t_semi` VALUES ('esc\\';still');",
     "CREATE TABLE `ods_t_order` (id INT);\nCREATE TABLE `ods_t_order_item` (id INT);\n"
     "CREATE INDEX idx ON ods_t_order (id);",
+    # 取数这一路的夹具：多行 VALUES、NULL、双写引号与反斜杠转义、字符串里的括号与分号、
+    # 函数值、省略列清单、只给部分列、REPLACE INTO、只有 INSERT 没有建表、超 64 位整数
+    "CREATE TABLE `t_data` (\n"
+    "  `id` bigint NOT NULL COMMENT '主键',\n"
+    "  `name` varchar(60) NOT NULL COMMENT '姓名',\n"
+    "  `score` decimal(8,2) DEFAULT NULL COMMENT '得分',\n"
+    "  `note` varchar(40) DEFAULT NULL COMMENT '备注',\n"
+    "  `born` datetime DEFAULT NULL COMMENT '出生时间',\n"
+    "  PRIMARY KEY (`id`)\n"
+    ") ENGINE=InnoDB COMMENT='取数样例';\n"
+    "INSERT INTO `t_data` (`id`, `name`, `score`, `note`, `born`) VALUES\n"
+    "  (1, '张三', 12.50, NULL, '2001-01-02 03:04:05'),\n"
+    "  (2, 'O''Brien(a,b);--不像注释', -3.25e1, 'it''s ok', NOW()),\n"
+    r"  (3, '李四\n换行', 0, '  两头空格  ', '2020-02-02 00:00:00');" "\n"
+    "INSERT INTO `t_data` VALUES (4, '王五', 7, '省略列清单', '2021-03-04 05:06:07');\n"
+    "INSERT INTO `t_data` (`id`) VALUES (5) ON DUPLICATE KEY UPDATE name='x';\n"
+    "REPLACE INTO `t_orphan` (`a`, `b`) VALUES (1, 'x'), (2, 'y');\n"
+    "INSERT INTO `t_data` (`id`, `extra`) VALUES (6, '表里没有的列');\n"
+    "INSERT INTO `t_data` (`id`, `name`, `score`, `note`, `born`) "
+    "VALUES (99999999999999999999, 'big', 0.1, '', CURRENT_TIMESTAMP);",
 ]
 
 PREFIXES = ["ods", "ods_", "`ods`\\", "", "dim", "odsods"]
@@ -217,6 +237,60 @@ def ddl_parse_lines(text):
     return out
 
 
+def hexnorm(v):
+    """一个 double -> 两栈都能印成同一串的十六进制文本。
+
+    Python 的 float.hex 固定印 13 位尾数并带指数符号（0x1.9000000000000p+3），
+    Java 的 Double.toHexString 走最短尾数且不写 '+'（0x1.9p3）。
+    这里把尾数的尾零去掉、指数补上符号，两个写法就落到同一个串上；
+    inf / nan 两边字面不同（'inf' 与 'Infinity'），单独归成 f:inf / f:nan。
+    """
+    import math
+
+    if math.isnan(v):
+        return "nan"
+    if math.isinf(v):
+        return "inf" if v > 0 else "-inf"
+    head, exp = float.hex(v).split("p")
+    if "." in head:
+        head = head.rstrip("0").rstrip(".")
+    if exp[0] not in "+-":
+        exp = "+" + exp
+    return head + "p" + exp
+
+
+def ins_value(v):
+    """一个取出来的值 -> 可比对文本。浮点走 hex：两栈的十进制打印规则不同，hex 才是同一个数。"""
+    if v is None:
+        return "-"
+    if isinstance(v, bool):
+        return "b:%d" % (1 if v else 0)
+    if isinstance(v, int):
+        return "i:%d" % v
+    if isinstance(v, float):
+        return "f:%s" % hexnorm(v)
+    return "s:%s" % v
+
+
+def ins_lines(text, cap=0):
+    """INSERT 取数结果渲染成扁平文本行，Java 侧 SqlDiffer 用同一种渲染逐行对。
+
+    表名、列清单、脚本里的真实行数与收下的行数拍进一行，值一行一格，
+    近似与截断说明照抄——两栈任何一格不同都会露出来。
+    """
+    out = []
+    for name, rows in parse_insert_rows(text, cap).items():
+        out.append("I|%s|%s|%d|%d" % (
+            name,
+            "-" if rows["columns"] is None else ",".join(rows["columns"]),
+            rows["total"], len(rows["rows"])))
+        for row in rows["rows"]:
+            out.append("R|" + "|".join(ins_value(v) for v in row))
+        for n in rows["notes"]:
+            out.append("N|%s" % n)
+    return out
+
+
 def sql_cases():
     for text in SCRIPTS:
         yield {"in": text,
@@ -233,6 +307,11 @@ def sql_cases():
         yield {"op": "format", "in": s.sql, "out": format_sql(s.sql)}
     for text in DDL_SCRIPTS:
         yield {"op": "ddl-parse", "in": text, "out": ddl_parse_lines(text)}
+    for text in SCRIPTS:
+        # 取数这一路两条线各写一份解析器：值、类型、行数、截断与说明逐行对
+        yield {"op": "ins", "in": text, "out": ins_lines(text)}
+        rec = {"op": "ins", "in": text, "cap": 2, "out": ins_lines(text, 2)}
+        yield rec
     for cols, rows in TABLE_CASES:
         # 结果集渲染成表格是两条线各写一份的渲染器：拍成一行一行逐字符对，
         # 宽度算错、边框少画、截断位置不同、NULL 与空串混起来都会露出来

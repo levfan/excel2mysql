@@ -3775,6 +3775,92 @@ public final class GuiMain {
         } catch (Exception e) {
             problems.add("读含 U+FFFD 的 UTF-8 脚本失败：" + e);
         }
+        sqlDataExport(problems);
+    }
+
+    /** 第二页取数那一份脚本：列定义走 CREATE TABLE，数据行走 INSERT。 */
+    private static final String SD_SCRIPT =
+            "CREATE TABLE `t_user` (\n"
+                    + "  `id` bigint NOT NULL COMMENT '主键',\n"
+                    + "  `name` varchar(60) NOT NULL COMMENT '姓名',\n"
+                    + "  `score` decimal(8,2) DEFAULT NULL COMMENT '得分',\n"
+                    + "  `note` varchar(40) DEFAULT NULL COMMENT '备注',\n"
+                    + "  `born` datetime DEFAULT NULL COMMENT '出生时间',\n"
+                    + "  PRIMARY KEY (`id`)\n"
+                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';\n"
+                    + "INSERT INTO `t_user` (`id`, `name`, `score`, `note`, `born`) VALUES\n"
+                    + "  (1, '\u5f20\u4e09', 12.50, NULL, '2001-01-02 03:04:05'),\n"
+                    + "  (2, 'O''Brien(a,b);--\u4e0d\u50cf\u6ce8\u91ca', -3.25e1, "
+                    + "'it''s ok', NOW()),\n"
+                    + "  (3, '\u674e\u56db\\n\u6362\u884c', 0, '  \u4e24\u5934\u7a7a\u683c  ', "
+                    + "'2020-02-02 00:00:00');\n"
+                    + "INSERT INTO `t_user` VALUES (4, '\u738b\u4e94', 7, "
+                    + "'\u6ca1\u5199\u5217\u6e05\u5355', '2021-03-04 05:06:07');\n"
+                    + "REPLACE INTO `t_orphan` (`a`, `b`) VALUES (1, 'x'), (2, 'y');\n";
+
+    /**
+     * 脚本里的 INSERT 要真写进「数据」Sheet——与 Python 用例集 SD 组同一份判据。
+     *
+     * <p>取数器本身由 SQL-DIFF 逐字节对（两栈各一份实现），这一条对的是"落到文件上"：
+     * 类型别在写盘那一步走样（12.5 变文本、NULL 变成字符串 "NULL"），
+     * 只有 INSERT 没有建表语句的表要点名跳过，不能静默少一张。
+     */
+    private static void sqlDataExport(List<String> problems) {
+        java.io.File root = new java.io.File(System.getProperty("java.io.tmpdir"),
+                "e2m-sd-" + System.nanoTime());
+        if (!root.mkdirs()) {
+            problems.add("取数自检建不出临时目录：" + root.getPath());
+            return;
+        }
+        java.io.File script = new java.io.File(root, "sd_demo.sql");
+        writeText(script.getPath(), SD_SCRIPT);
+        List<com.excel2mysql.gui.SqlPage.Src> items =
+                new ArrayList<com.excel2mysql.gui.SqlPage.Src>();
+        items.add(new com.excel2mysql.gui.SqlPage.Src(script.getPath(), SD_SCRIPT));
+        Recorder rec = new Recorder();
+        com.excel2mysql.gui.SqlPage.GenResult res = com.excel2mysql.gui.SqlPage
+                .exportFromScripts(items, root.getPath(), true, false, false, rec);
+        java.io.File file = new java.io.File(new java.io.File(root,
+                "sql_meta_data_file_" + today()), "用户表（t_user）.xlsx");
+        if (res.written != 1 || !file.isFile()) {
+            problems.add("取数这一路没写出预期的文件：写出 " + res.written + " 个，找 "
+                    + file.getPath());
+            return;
+        }
+        try {
+            com.excel2mysql.core.MetaExport.Dump data = null;
+            for (com.excel2mysql.core.MetaExport.Dump d
+                    : com.excel2mysql.core.MetaExport.dump(file.getPath())) {
+                if ("数据".equals(d.sheet)) {
+                    data = d;
+                }
+            }
+            if (data == null || data.cells.size() != 5) {
+                problems.add("「数据」Sheet 不是表头加 4 行："
+                        + (data == null ? "没有这一页" : String.valueOf(data.cells.size())));
+                return;
+            }
+            Object score = data.cells.get(1).get(2);
+            Object note = data.cells.get(1).get(3);
+            Object born = data.cells.get(2).get(4);
+            if (!(score instanceof Double) || ((Double) score).doubleValue() != 12.5) {
+                problems.add("12.50 没按数落格：" + score);
+            }
+            if (note != null && !"".equals(note)) {
+                problems.add("NULL 那格不该有字：" + note);
+            }
+            if (!"NOW()".equals(String.valueOf(born))) {
+                problems.add("函数值没按原样落文本：" + born);
+            }
+            if (!String.valueOf(data.cells.get(3).get(1)).contains("\u6362\u884c")) {
+                problems.add("转义 \\n 没解成换行：" + String.valueOf(data.cells.get(3).get(1)));
+            }
+        } catch (Exception e) {
+            problems.add("读回取数产物失败：" + e);
+        }
+        if (!rec.saw("t_orphan", false)) {
+            problems.add("只有 INSERT、没有 CREATE TABLE 的表没被点名跳过");
+        }
     }
 
     private static String tailOf(String text) {

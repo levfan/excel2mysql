@@ -77,6 +77,14 @@ public final class SqlDiffer {
                 List<String> got = renderParsed(SqlScript.parseCreateTables(in));
                 List<Object> want = (List<Object>) rec.get("out");
                 report("ddl-parse", in, got.equals(want), join(got), join(want));
+            } else if ("ins".equals(op)) {
+                // 两条线各一份 INSERT 取数器：值与类型、行数、截断位置、说明逐行对
+                checked++;
+                Object capRaw = rec.get("cap");
+                int cap = capRaw == null ? 0 : Integer.parseInt(String.valueOf(capRaw));
+                List<String> got = renderIns(SqlScript.parseInsertRows(in, cap));
+                List<Object> want = (List<Object>) rec.get("out");
+                report("ins", in, got.equals(want), join(got), join(want));
             } else if ("table-render".equals(op)) {
                 // 结果集表格：两条线各写一份渲染器，宽度、边框、截断、NULL
                 // 任一处对不上都会在某一行的某一格露出来
@@ -351,6 +359,91 @@ public final class SqlDiffer {
             }
         }
         return out;
+    }
+
+    /** 与 Python 侧 ins_lines 同一套渲染：表名、列清单、两个行数一行，值一行一格。 */
+    private static List<String> renderIns(Map<String, SqlScript.InsertRows> data) {
+        List<String> out = new ArrayList<String>();
+        for (Map.Entry<String, SqlScript.InsertRows> e : data.entrySet()) {
+            SqlScript.InsertRows r = e.getValue();
+            out.add("I|" + e.getKey() + "|" + (r.columns == null ? "-" : joinWith(r.columns))
+                    + "|" + r.total + "|" + r.rows.size());
+            for (List<Object> row : r.rows) {
+                StringBuilder sb = new StringBuilder("R|");
+                for (int i = 0; i < row.size(); i++) {
+                    if (i > 0) {
+                        sb.append('|');
+                    }
+                    sb.append(insValue(row.get(i)));
+                }
+                out.add(sb.toString());
+            }
+            for (String n : r.notes) {
+                out.add("N|" + n);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 一个值 -> 可比对文本，与 Python 的 ins_value 同规则。
+     *
+     * <p>浮点走 hex 而不是十进制：Java 的 Double.toString 与 Python 的 repr 对同一个
+     * double 未必印成同一串（1e23 一个写 1.0E23、一个写 1e+23），hex 才是同一个数。
+     */
+    private static String insValue(Object v) {
+        if (v == null) {
+            return "-";
+        }
+        if (v instanceof Long) {
+            return "i:" + v;
+        }
+        if (v instanceof Double) {
+            return "f:" + hexnorm(((Double) v).doubleValue());
+        }
+        return "s:" + String.valueOf(v);
+    }
+
+    /**
+     * 与 Python 侧 hexnorm 同一条归一：尾数去尾零、指数补符号、inf/nan 收成固定词。
+     *
+     * <p>Python 的 float.hex 固定印 13 位尾数（0x1.9000000000000p+3），Java 的
+     * Double.toHexString 走最短尾数且不写 '+'（0x1.9p3）——不归一的话每个浮点都会假红。
+     */
+    private static String hexnorm(double d) {
+        if (Double.isNaN(d)) {
+            return "nan";
+        }
+        if (Double.isInfinite(d)) {
+            return d > 0 ? "inf" : "-inf";
+        }
+        String s = Double.toHexString(d);
+        int p = s.indexOf('p');
+        String head = s.substring(0, p);
+        String exp = s.substring(p + 1);
+        if (head.indexOf('.') >= 0) {
+            while (head.endsWith("0")) {
+                head = head.substring(0, head.length() - 1);
+            }
+            if (head.endsWith(".")) {
+                head = head.substring(0, head.length() - 1);
+            }
+        }
+        if (exp.charAt(0) != '+' && exp.charAt(0) != '-') {
+            exp = "+" + exp;
+        }
+        return head + "p" + exp;
+    }
+
+    private static String joinWith(List<String> parts) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.size(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(parts.get(i));
+        }
+        return sb.toString();
     }
 
     private static String nz2(String s) {

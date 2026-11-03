@@ -1147,6 +1147,10 @@ def main():
                  u"  `st` enum('a','b') DEFAULT 'a',\n"
                  u"  PRIMARY KEY (`id`)\n"
                  u") ENGINE=InnoDB COMMENT='生成检查表';\n"
+                 # 取数这一路也在对撞里跑：日志那一份与产物那两格都是两栈逐字比，
+                 # 只有 INSERT 没有建表语句的表要点名跳过，函数值要原样落文本
+                 u"INSERT INTO `t_gen` (`id`, `st`) VALUES (1, 'a'), (2, NULL), (3, NOW());\n"
+                 u"INSERT INTO `t_orphan9` (`a`) VALUES (7);\n"
                  u"CREATE TABLE t_dup9 (x INT);\n"
                  u"CREATE TABLE t_dup9 (y INT);\n"
                  u"CREATE TABLE t_like9 LIKE t_dup9;\n")

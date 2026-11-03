@@ -3546,6 +3546,135 @@ check("SF6 示例库正文都已是格式化后的形状（改语料与改格式
        if format_sql(s.sql) != s.sql][:8])
 
 # ---------------------------------------------------------------------------
+section("SD 脚本取数（INSERT 字面量 → 「数据」Sheet 的行）")
+
+import core.sql_script as _sds
+_parse_ins = getattr(_sds, "parse_insert_rows", None)
+
+
+def _pi(text, cap=0):
+    """解析器还没长出来时不许把整条用例集带崩：红一条就够。"""
+    if _parse_ins is None:
+        return {}
+    return _parse_ins(text, cap)
+
+
+# r 串：SQL 字面量里的 \n 要按两个字符进解析器，才能验转义真被解开
+_SD_TEXT = r"""
+CREATE TABLE `t_user` (
+  `id` bigint NOT NULL COMMENT '主键',
+  `name` varchar(60) NOT NULL COMMENT '姓名',
+  `score` decimal(8,2) DEFAULT NULL COMMENT '得分',
+  `note` varchar(40) DEFAULT NULL COMMENT '备注',
+  `born` datetime DEFAULT NULL COMMENT '出生时间',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
+
+-- 三行一批：字符串里带括号、逗号、分号与 -- 都不许被当成结构
+INSERT INTO `t_user` (`id`, `name`, `score`, `note`, `born`) VALUES
+  (1, '张三', 12.50, NULL, '2001-01-02 03:04:05'),
+  (2, 'O''Brien(a,b);--不像注释', -3.25e1, 'it''s ok', NOW()),
+  (3, '李四\n换行', 0, '  两头空格  ', '2020-02-02 00:00:00');
+
+INSERT INTO `t_user` VALUES (4, '王五', 7, '没写列清单', '2021-03-04 05:06:07');
+
+REPLACE INTO `t_orphan` (`a`, `b`) VALUES (1, 'x'), (2, 'y');
+
+INSERT INTO `t_short` (`id`, `name`) VALUES (9);
+"""
+_sd_user = _pi(_SD_TEXT).get("t_user") or {}
+_sd_rows = _sd_user.get("rows") or []
+
+check("SD0 解析器存在（core.sql_script.parse_insert_rows）", _parse_ins is not None,
+      getattr(_sds, "__file__", "?"))
+check("SD1 带列清单的多行 VALUES 逐行取出，列清单原样保留",
+      _sd_user.get("columns") == ["id", "name", "score", "note", "born"]
+      and len(_sd_rows) == 4 and _sd_user.get("total") == 4,
+      (_sd_user.get("columns"), len(_sd_rows), _sd_user.get("total")))
+check("SD2 值按字面量转类型：整数是整数、小数是浮点、NULL 是空、日期时间按文本原样",
+      _sd_rows[0] == [1, "张三", 12.5, None, "2001-01-02 03:04:05"]
+      and _sd_rows[2][2] == 0 and isinstance(_sd_rows[2][2], int),
+      _sd_rows[:1] and _sd_rows[2])
+check("SD3 字符串里的括号、逗号、分号与 -- 不切断语句，双写引号解开",
+      _sd_rows[1][1] == "O'Brien(a,b);--不像注释" and _sd_rows[1][3] == "it's ok",
+      _sd_rows[1:2])
+check("SD4 反斜杠转义解开（\\n 成真换行），两头空格照留",
+      _sd_rows[2][1] == "李四\n换行" and _sd_rows[2][3] == "  两头空格  ",
+      repr(_sd_rows[2][1:2] if _sd_rows[2:] else []))
+check("SD5 科学计数与负数照值收，不落成文本",
+      _sd_rows[1][2] == -32.5 and isinstance(_sd_rows[1][2], float), _sd_rows[1:2])
+check("SD6 函数与表达式（NOW()）原样落文本并记一条说明，不静默变空",
+      _sd_rows[1][4] == "NOW()"
+      and any("NOW()" in n for n in (_sd_user.get("notes") or [])),
+      (_sd_rows[1][4], _sd_user.get("notes")))
+check("SD7 省略列清单的那条按同表已知的列序对位（列数对得上才收）",
+      _sd_rows[3] == [4, "王五", 7, "没写列清单", "2021-03-04 05:06:07"],
+      _sd_rows[3:4])
+check("SD8 值个数与列清单不符的行不写，并点名是第几行",
+      (_pi(_SD_TEXT).get("t_short") or {}).get("rows") == []
+      and any("第 1 行" in n for n in
+              ((_pi(_SD_TEXT).get("t_short") or {}).get("notes") or [])),
+      _pi(_SD_TEXT).get("t_short"))
+check("SD9 REPLACE INTO 一起认；只有 INSERT 没有 CREATE TABLE 的表照样返回",
+      _pi(_SD_TEXT).get("t_orphan", {}).get("rows") == [[1, "x"], [2, "y"]],
+      _pi(_SD_TEXT).get("t_orphan"))
+check("SD10 上限之内全收，超上限只收前 N 行、total 仍报真实行数",
+      _pi(_SD_TEXT, 2).get("t_user", {}).get("total") == 4
+      and len(_pi(_SD_TEXT, 2).get("t_user", {}).get("rows") or []) == 2,
+      (len(_pi(_SD_TEXT, 2).get("t_user", {}).get("rows") or []),
+       _pi(_SD_TEXT, 2).get("t_user", {}).get("total")))
+
+# 端到端：走第二页那颗按钮背后的同一个工作函数，读回真产物
+from openpyxl import load_workbook as _sd_lw
+
+
+def _sd_export(text, with_meta=True):
+    out = tempfile.mkdtemp(prefix="pt_sd_")
+    lines = []
+    sink = app_main.ProgressSink(on_log=lambda t, *a: lines.append(t))
+    res = app_main.sql_meta_export_task([("sd_demo.sql", text)], out, with_meta,
+                                        False, sink)
+    return res, lines
+
+
+_res_sd, _log_sd = _sd_export(_SD_TEXT)
+_sd_files = _res_sd["written"] or []
+_sd_wb = _sd_lw(_sd_files[0]) if _sd_files else None
+_sd_data = _sd_wb["数据"] if _sd_wb is not None else None
+_sd_cells = [list(r) for r in _sd_data.iter_rows(values_only=True)] if _sd_data else []
+check("SD11 端到端：「数据」Sheet 不再只有表头，脚本里的行真写进来了",
+      len(_sd_files) == 1 and len(_sd_cells) == 5
+      and _sd_cells[0] == ["id", "name", "score", "note", "born"]
+      and _sd_cells[1][0] == 1 and _sd_cells[1][1] == "张三",
+      (len(_sd_files), _sd_cells[:2]))
+check("SD12 端到端：NULL 落空格子，函数值那格是原样文本（不是空、不是报错）",
+      len(_sd_cells) == 5 and _sd_cells[1][3] is None and _sd_cells[2][4] == "NOW()",
+      _sd_cells[2:3])
+check("SD13 端到端：导出日志按行报数，不再写「0 行」",
+      any("4 行" in l for l in _log_sd), [l for l in _log_sd if "导出" in l])
+check("SD14 端到端：只有 INSERT、没有 CREATE TABLE 的表被点名跳过，不产出文件",
+      _pi(_SD_TEXT, 0).get("t_orphan") and not any(
+          "t_orphan" in f for f in _sd_files)
+      and any("t_orphan" in l and "跳过" in l for l in _log_sd),
+      [l for l in _log_sd if "t_orphan" in l])
+_cap_const = getattr(app_main, "SQL_EXPORT_ROW_CAP", None)
+if _cap_const is None:
+    check("SD15 超限截断要点名（常量 SQL_EXPORT_ROW_CAP 还没加）", False, "缺常量")
+else:
+    _CAP_PREV = app_main.SQL_EXPORT_ROW_CAP
+    try:
+        app_main.SQL_EXPORT_ROW_CAP = 2
+        _res_cap, _log_cap = _sd_export(_SD_TEXT)
+        _wb_cap = _sd_lw((_res_cap["written"] or [""])[0]) if _res_cap["written"] else None
+        check("SD15 超上限只写前 N 行，日志点名共多少行、写了多少行",
+              _wb_cap is not None and _wb_cap["数据"].max_row == 3
+              and any("共 4 行" in l and "只写入前 2 行" in l for l in _log_cap),
+              (_wb_cap["数据"].max_row if _wb_cap is not None else None,
+               [l for l in _log_cap if "只写入前" in l]))
+    finally:
+        app_main.SQL_EXPORT_ROW_CAP = _CAP_PREV
+
+# ---------------------------------------------------------------------------
 section("L 字段类型映射（金额语义 + 精度按数据校核）")
 
 from core.infer import _is_money
@@ -6287,11 +6416,14 @@ try:
     gw.on_sql_add_files()
 finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn4)
-check("R34 有脚本后两颗按钮亮起，tooltip 说清数据 Sheet 只有表头",
+check("R34 有脚本后两颗按钮亮起，tooltip 说清数据行取自 INSERT 并写明每张表的行数上限",
       gw.btn_sql_gen_std.isEnabled() and gw.btn_sql_gen_simple.isEnabled()
       and gw.btn_sql_save.isEnabled() and gw.btn_sql_run.isEnabled()
-      and "只有表头" in gw.btn_sql_gen_std.toolTip()
-      and "英文名表头" in gw.btn_sql_gen_simple.toolTip(), gw.btn_sql_gen_std.toolTip())
+      and "INSERT" in gw.btn_sql_gen_std.toolTip()
+      and str(app_main.SQL_EXPORT_ROW_CAP) in gw.btn_sql_gen_std.toolTip()
+      and "INSERT" in gw.btn_sql_gen_simple.toolTip()
+      and "不含数据行" not in gw.btn_sql_gen_std.toolTip(),
+      gw.btn_sql_gen_std.toolTip().replace("\n", " ")[:80])
 gout = os.path.join(_tmpdir, "sqlgen_out")
 _pdir = app_main.program_dir
 app_main.program_dir = lambda: gout
