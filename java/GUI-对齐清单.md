@@ -6915,6 +6915,107 @@ CREATE TABLE 那一路的同类隐患（列注释里写半角括号会切错）�
 确实多了一条——脚本里的数据能进交付件；旧做法没失效：没有 INSERT 的脚本照旧出
 只有表头的那一张模板，元数据 Sheet、目录命名、大小写开关、简易件形状一个字都没改。
 
+## 125. 产品改名「表库工作台 Excel·SQL·MySQL」，并把「关于」的信息做成能复制的
+
+用户一句话里塞了两件事：「关于中的信息，需要能复制」和「Excel → MySQL 批量导入工具
+这名字过时了，结合现在核心功能改名」。两件落在同一批文件上（`appinfo` / `AboutDialog`
+/ `ui_help` / `README` / `help_doc`），一起验一起提。
+
+### 125.1 改名只动显示名这一层
+
+名字定的是「表库工作台 Excel·SQL·MySQL」：三条通道（Excel/ZIP 建表导入、表结构与数据
+出成交付件、`.sql` 批量改名与执行）都在名字里，早期那种"只有第一条通道、且只往一个方向"
+的说法不再骗人。
+
+- 显示名收进一个来源：`appinfo.APP_NAME` 与 `AppInfo.APP_NAME`。原先散在 9 处字面串
+  （窗口标题两处、关于框两处、复制文本首行两处、`main.py` 与 `cli.py` 的模块说明、
+  README 首行、`pack_test` 那条标题判据），改一处就会漏一处；现在标题与复制文本都读常量。
+- 标识这一层刻意不动：仓库名、Java 包名 `com.excel2mysql`（74 个文件）、
+  `excel2mysql.exe` / `excel2mysql-cli.exe` / jar 名 / 三个产物目录名全部照旧。
+  理由写进常量注释：现场指向旧名的脚本与部署文档不能因为换个标题就失效。
+- 新增对撞键 `dlg.about.heading`：框面那一行产品名两栈各写一份就会漂，逐字比。
+- README 首行与那句定位一起改（多约 60 字符，实测 3003，仍在 `_pack_common.py`
+  那条 2000–3200 区间里）；标题挂 `assets/app_icon.png` 那条字面串没动，
+  出包那一步的判据照旧咬得住。`cli.py` 的 argparse 描述也从"Excel/ZIP 批量导入 MySQL"
+  改成实话（它还会执行 `.sql`）。
+
+### 125.2 复制这一件的前半是补依赖，不是加按钮
+
+核过才发现 40 位完整提交号**根本不在交付物里**——两栈都只烧 `git rev-parse --short`。
+所以先给构建戳补一格，再谈"复制时给全号"：
+
+- Python：`build_exe.write_build_stamp` 多写 `COMMIT_FULL`；`appinfo.build_info()`
+  多回一个 `commit_full`；`full_commit()` 在没这一格的老产物上退回短号，不写空值。
+- Java：`构建验证.bat` 多传一个 `-Dgit.commitFull`，`appinfo.properties` 多一行，
+  `AppInfo.commitFull` + `fullCommit()` 同规则。
+- `build_java_dist.check_build_stamp` 把 `commitFull` 也列进"空就拒绝出包"——
+  界面承诺了却兑现不了的包不出门（与 121.4 那条同一个思路）。
+- 界面：底部加一颗「复制全部」（在「关闭」左边），一次放进五行（产品名 + 四行），
+  提交那一行给 40 位；客户区 `380x200 → 380x230`，两栈同数仍由 `dlg.about.want` 钉住。
+
+### 125.3 顺手抓到第二条假承诺
+
+Swing 那句 tooltip 写「双击可整行复制」，而 `HintLabel` 是不可编辑的 `JTextField`，
+一句双击处理都没有——双击只会选中一个词。改成：双击真的把整行选上（补一个 MouseAdapter），
+tooltip 改说「双击整行选中，Ctrl+C 复制」。Qt 那句「选中后可直接贴给别人」是真的，不动。
+
+### 125.4 系统剪贴板在这台机器上不可靠，判据按环境分档
+
+第一次把"真剪贴板回读"写进闸门就撞上：Python 这条线连裸 Win32 的 `OpenClipboard`
+都失败（`QApplication.clipboard().setText` 之后自己读回也是空串），而 Java 早先的探针
+明明能读能写——再跑一遍 Swing 自检，它又抛
+`IllegalStateException: cannot open system clipboard`。同一个环境里时好时坏的东西
+不能当硬判据，红的是机器不是产品。于是分三档处理：
+
+- **产品侧说实话**：那颗按钮点下去先回读一次，写进去且读得回来才报「已复制」，
+  否则报「剪贴板打不开」，两秒后都复原。三种文字两栈逐字相同，新增对撞键
+  `dlg.about.copy` 比的就是这一串。
+- **判得住的部分照常硬判**：复制那一份文本的形状（五行、首行是产品名、提交那行是
+  40 位十六进制、正面那一格仍是短号）、按钮必须换字（不换字等于没反应）——
+  `pack_test` T8e–T8h 与 `GuiMain` 各钉一条，两边都不依赖剪贴板可用性。
+- **判不住的那一格显式记未覆盖**：Swing 自检读到「剪贴板打不开」时打一行 WARN
+  说明这一判本轮没跑，不混进"通过"里；剪贴板可用时才逐字比对读回的内容。
+  自检先捕获剪贴板原值、判完归还——桌上借来的东西要还。
+
+### 125.5 这一轮踩的两个坑
+
+- **`invokeAndWait` 在事件分发线程上是非法的**：Swing 自检整段跑在 EDT 上，
+  我照习惯包了一层 `invokeAndWait` → `java.lang.Error: Cannot call invokeAndWait from
+  the event dispatcher thread`，第 10 步直接红。而且 `doClick()` 只是把动作排进队列，
+  队列要等这一段让出去才走——同一段里再睡住线程等结果，等的就是永远不来的事件。
+  改成直接派发按钮上那一个 `ActionListener`（与点击同一条调用链，只是不再排队）。
+- **自己手动跑生成器会把闸门跑红**：`export_help_java.py` 的输出路径是相对 cwd 的
+  `app\src\...`，`check_generated.py` 用 `cwd=JAVA_DIR` 起它才对；我从仓库根直调一次
+  正好撞上闸门那一步在跑，第 0 步报 `FileNotFoundError`。教训是别与闸门并发跑生成脚本。
+
+### 125.6 闸门、变异与版本
+
+| 闸门 | 结果 |
+| --- | --- |
+| `构建验证.bat` 十步 | 全过，退出码 0；另打两行 WARN 记未覆盖（剪贴板、合成双击） |
+| `界面双端对撞.bat` | 389 键逐键一致，退出码 0（本轮新增 `dlg.about.heading`、`dlg.about.copy`） |
+| `pack_test.py`（带真库凭据） | 通过 1011 / 失败 0 / 跳过 5，退出码 0 |
+| `check_generated.py` | 绿（`HelpDoc.java` 与 `SqlSamples.java` 与源逐字节一致） |
+| 两端出图逐屏读 | `09_about` 两屏都读过：Swing 那屏是新标题 + 四行 +「复制全部」「关闭」两颗按钮，无裁字；Qt 离屏缺 CJK 字形，按版式判同一形状 |
+
+变异抽查（一次下三处，各拔掉一条守卫要咬的东西），三道闸门全部按预期变红：
+
+- Swing 侧把 `buttons.add(copy)` 摘掉 → 第 10 步报 `关于框没有那颗「复制全部」按钮`，退出码 1；
+- 只把 Java 侧 `APP_NAME` 改短一格（Python 不动）→ 对撞报"值不等 1 处"，退出码 1——
+  新加的那把 `dlg.about.heading` 确实咬得住两栈漂移；
+- Qt 侧把 `on_copy_all` 的改字那两行换成 `pass` → `pack_test` T8h 红
+  （证据 `('复制全部', '复制全部')`：点了没有任何反应），退出码 1。
+
+三处都用 Edit 还原，`md5sum -c` 对 16 个文件逐字节复核一致——上面那张绿表指的仍是现在这棵树。
+
+版本按 minor 记：`3.8.0 → 3.9.0`。这轮多出的是"以前做不到、现在能做"的一件事
+（一次把「关于」那四行连同 40 位全号放进剪贴板），交付件里也多了一个可选字段
+（构建戳的 `commitFull`）；改名只是把显示名换准，能力一项没减，旧做法（拖选复制、
+`--version`、产物名与包结构）全部照旧。标识那一层（仓库名、包名、exe/jar/产物目录名）
+本轮刻意没动。
+
+
+
 
 
 
