@@ -599,6 +599,17 @@ PAGE_INTRO_QSS = (
 )
 
 
+def selectable(lbl):
+    """让一句纯文字能用鼠标拖选、Ctrl+C 抄走。
+
+    只开 `TextSelectableByMouse`，不开 `TextSelectableByKeyboard`：后者会把这格文字
+    放进焦点链，Tab 就会多停几站、方向键也不再翻表——那是"能复制"付出的交互税，
+    按口径不该收。拖拽区那句提示也不开：它是点击热区，开了选区就吃掉那一下点击。
+    """
+    lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    return lbl
+
+
 def page_intro(text):
     """页签顶部那句介绍：三页同一块强调底板，一眼看出这一页把什么写进库。
 
@@ -606,7 +617,7 @@ def page_intro(text):
     """
     lbl = QLabel(text)
     lbl.setStyleSheet(PAGE_INTRO_QSS)
-    return lbl
+    return selectable(lbl)
 
 
 def hline():
@@ -2229,14 +2240,14 @@ class MainWindow(QWidget):
         h.addWidget(self.btn_conn_collapse)
         # 那一格灰着/清单过期时的就地说明：只有顶部状态栏一句话的话，
         # 用户盯着这颗点不动的下拉只会读成"目标库不给换"（现场报的就是这句）
-        self.lbl_db_hint = QLabel()
+        self.lbl_db_hint = selectable(QLabel())
         self.lbl_db_hint.setStyleSheet("color: #666;")
         self.lbl_db_hint.setWordWrap(True)
-        f.addRow("主机：", self.ed_host)
-        f.addRow("端口：", self.ed_port)
-        f.addRow("用户名：", self.ed_user)
-        f.addRow("密码：", self.ed_pass)
-        f.addRow("目标库：", h)
+        f.addRow(selectable(QLabel("主机：")), self.ed_host)
+        f.addRow(selectable(QLabel("端口：")), self.ed_port)
+        f.addRow(selectable(QLabel("用户名：")), self.ed_user)
+        f.addRow(selectable(QLabel("密码：")), self.ed_pass)
+        f.addRow(selectable(QLabel("目标库：")), h)
         f.addRow("", self.lbl_db_hint)
         # 四项里任一改动就把清单标成"来自上一次连接"：不拦人也不清空，只把话说在前面
         self.ed_host.textChanged.connect(self._mark_conn_dirty)
@@ -2270,7 +2281,7 @@ class MainWindow(QWidget):
         # 只把首字母勾上：新加的文件按「首字母 + 小写」起名，转大写由用户按需勾。
         # 在连信号之前设好，免得启动时凭空打一行"切换"日志
         name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("命名规则："))
+        name_row.addWidget(selectable(QLabel("命名规则：")))
         self.chk_initials = QCheckBox("表名和字段名取中文拼音首字母")
         self.chk_initials.setChecked(True)
         self.chk_initials.setToolTip(
@@ -2330,7 +2341,7 @@ class MainWindow(QWidget):
 
         # 表名前缀（批量应用到全部表）
         prefix_row = QHBoxLayout()
-        prefix_row.addWidget(QLabel("表名前缀："))
+        prefix_row.addWidget(selectable(QLabel("表名前缀：")))
         self.ed_prefix = QLineEdit()
         self.ed_prefix.setPlaceholderText(PREFIX_PLACEHOLDER)
         self.btn_apply_prefix = QPushButton("批量应用前缀")
@@ -2701,7 +2712,7 @@ class MainWindow(QWidget):
         # 默认不勾选。勾选后表名清单、元数据弹窗和生成件都按大写显示，
         # 但脚本正文仍保持原样，避免用户只是想看一份大写清单却把源文件改掉。
         name_bar = QHBoxLayout()
-        name_bar.addWidget(QLabel("命名规则："))
+        name_bar.addWidget(selectable(QLabel("命名规则：")))
         self.chk_sql_upper = QCheckBox("表名与字段名转大写")
         self.chk_sql_upper.setToolTip(
             "勾选后，「当前表名」清单、双击打开的表元数据以及生成的 Excel 里的表名与字段名全部大写\n"
@@ -2742,7 +2753,7 @@ class MainWindow(QWidget):
         # 表格与下面的两行操作条作为一个整体参与高度缩放，先不挂到页面布局上
 
         prefix_row = QHBoxLayout()
-        prefix_row.addWidget(QLabel("表名前缀："))
+        prefix_row.addWidget(selectable(QLabel("表名前缀：")))
         self.ed_sql_prefix = QLineEdit()
         self.ed_sql_prefix.setPlaceholderText(PREFIX_PLACEHOLDER)
         self.btn_sql_prefix = QPushButton("批量应用前缀")
@@ -3603,7 +3614,7 @@ class MainWindow(QWidget):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
         lh = QHBoxLayout()
-        lh.addWidget(QLabel("SQL 文本"))
+        lh.addWidget(selectable(QLabel("SQL 文本")))
         lh.addStretch(1)
         self.btn_sql_run_samples = QPushButton("示例 (?)")
         self.btn_sql_run_samples.setToolTip("打开示例清单：选中一条可复制到剪贴板或插到编辑区")
@@ -3661,8 +3672,8 @@ class MainWindow(QWidget):
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
         rh = QHBoxLayout()
-        rh.addWidget(QLabel("执行结果"))
-        self.lbl_sql_run_caption = QLabel("还没有执行结果")
+        rh.addWidget(selectable(QLabel("执行结果")))
+        self.lbl_sql_run_caption = selectable(QLabel("还没有执行结果"))
         rh.addWidget(self.lbl_sql_run_caption)
         rh.addStretch(1)
         # 一批里多条 select 时用来切换看哪一批结果；只有一批就不占这块地方

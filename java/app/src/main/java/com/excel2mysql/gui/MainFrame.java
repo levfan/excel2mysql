@@ -143,9 +143,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JPasswordField passField;
     private javax.swing.JComboBox<String> dbCombo;
     /** 目标库那一行下面的就地说明（清单没加载 / 清单已过期两种话，加载好之后为空）。 */
-    private javax.swing.JLabel dbHint;
+    private StaticText dbHint;
     /** 第一页顶部那句介绍（三页同一块底板，见 PageIntro）。 */
-    private javax.swing.JLabel impIntro;
+    private StaticText impIntro;
     /** 连接区收起后的那一条状态栏（只报当前库），与「设置数据源信息」按钮一起常驻顶部。 */
     private HintLabel connState;
     private JButton btnConnEdit;
@@ -182,7 +182,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 }
             };
     private javax.swing.JComboBox<String> sqlRunSets;
-    private javax.swing.JLabel sqlRunCaption;
+    private StaticText sqlRunCaption;
     private javax.swing.JSplitPane sqlRunResultSplit;
     private java.util.List<com.excel2mysql.core.SqlExecute.ResultSetData> sqlRunSetList =
             new java.util.ArrayList<com.excel2mysql.core.SqlExecute.ResultSetData>();
@@ -191,7 +191,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JButton sqlRunFormatBtn;
     private javax.swing.JButton sqlRunClearLogBtn;
     private javax.swing.JButton sqlRunHelpBtn;
-    private javax.swing.JLabel sqlRunHint;
+    private StaticText sqlRunHint;
     /** 第三页的脚本文件队列：拖拽区、清单表（含行内【执行】）与清空/批量执行那一排。 */
     private DropArea sqlRunDrop;
     private javax.swing.JTable sqlRunFilesTable;
@@ -245,6 +245,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         applyWindowIcon();
         setLocationByPlatform(true);
         setLayout(new BorderLayout());
+        // 三页上那些静态文字点得着、抄得走，但不许多占一个 Tab 位：把窗口自己的焦点环
+        // 策略包一层，环里绕开 StaticText（真控件之间的先后次序一个字都不改）
+        setFocusTraversalPolicy(StaticText.policySkipping(getFocusTraversalPolicy()));
 
         JPanel north = new JPanel(new BorderLayout());
         north.add(buildHeaderRow(), BorderLayout.NORTH);
@@ -448,7 +451,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         addFormRow(fields, 3, "密码：", passField, true);
         addFormRow(fields, 4, "目标库：", dbRow, true);
         // 灰掉的下拉自己说不出原因，就地补一句（与 Python 侧同一行同一位置）
-        dbHint = new javax.swing.JLabel();
+        dbHint = new StaticText("");
         dbHint.setForeground(new java.awt.Color(0x66, 0x66, 0x66));
         addFormRow(fields, 5, "", dbHint, true);
 
@@ -504,7 +507,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         c.gridy = y;
         c.anchor = java.awt.GridBagConstraints.WEST;
         c.insets = new java.awt.Insets(UiScale.px(2), 0, UiScale.px(2), UiScale.px(8));
-        row.add(new JLabel(label), c);
+        // 空标签那一行是给提示件留的格子，没字可选，照旧用 JLabel
+        row.add(label.isEmpty() ? new JLabel(label) : new StaticText(label), c);
         c.gridx = 1;
         c.weightx = stretch ? 1.0 : 0.0;
         c.fill = stretch ? java.awt.GridBagConstraints.HORIZONTAL
@@ -616,7 +620,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         });
         JPanel nameBar = new JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
-        nameBar.add(new JLabel("命名规则："));
+        nameBar.add(new StaticText("命名规则："));
         nameBar.add(initialsBox);
         nameBar.add(upperBox);
         nameBar.add(lowerBox);
@@ -624,7 +628,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
         prefixEast.add(prefixBtns);
         JPanel prefixRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
-        prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
+        prefixRow.add(new StaticText("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixEast, BorderLayout.EAST);
 
@@ -1058,8 +1062,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 介绍条本体：自检查三页是不是同一块底板。 */
-    public javax.swing.JLabel excelIntro() {
+    public StaticText excelIntro() {
         return impIntro;
+    }
+
+    /** 目标库那行的就地提示件本体：正文随连接状态变，静态文字清单按件把它排除。 */
+    public StaticText dbHintField() {
+        return dbHint;
     }
 
     /** 弹窗按严重级区分：连接失败这种必须用 error 级挡在前面。 */
@@ -2955,7 +2964,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunBtn.addActionListener(e -> runSqlStatements());
         javax.swing.JPanel leftHead = new javax.swing.JPanel(new java.awt.BorderLayout());
         sqlRunEditorHead = leftHead;
-        leftHead.add(new javax.swing.JLabel("SQL 文本"), java.awt.BorderLayout.WEST);
+        leftHead.add(new StaticText("SQL 文本"), java.awt.BorderLayout.WEST);
         javax.swing.JPanel leftEast = new javax.swing.JPanel(
                 new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
         leftEast.add(sqlRunHelpBtn);
@@ -2989,7 +2998,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         sqlRunResultTable.getTableHeader().setToolTipText(RESULT_HEADER_HINT);
         // 没有结果集（一批全是写语句）时不摆空表：这一页初开的三段高度是钉住的契约
         sqlRunResultTable.setVisible(false);
-        sqlRunCaption = new javax.swing.JLabel("还没有执行结果");
+        sqlRunCaption = new StaticText("还没有执行结果");
         sqlRunSets = new javax.swing.JComboBox<String>();
         sqlRunSets.setVisible(false);
         sqlRunSets.addActionListener(e -> showSqlRunSet(sqlRunSets.getSelectedIndex()));
@@ -2999,7 +3008,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         javax.swing.JPanel runHead = new javax.swing.JPanel(new java.awt.BorderLayout());
         javax.swing.JPanel runHeadWest = new javax.swing.JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
-        runHeadWest.add(new javax.swing.JLabel("执行结果"));
+        runHeadWest.add(new StaticText("执行结果"));
         runHeadWest.add(sqlRunCaption);
         javax.swing.JPanel runHeadEast = new javax.swing.JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
@@ -4541,7 +4550,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /** 第三页的介绍条本体：自检查三页是不是同一块底板。 */
-    public javax.swing.JLabel sqlRunIntro() {
+    public StaticText sqlRunIntro() {
         return sqlRunHint;
     }
 

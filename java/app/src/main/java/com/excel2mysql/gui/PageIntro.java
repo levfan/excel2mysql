@@ -1,7 +1,6 @@
 package com.excel2mysql.gui;
 
 import javax.swing.BorderFactory;
-import javax.swing.JLabel;
 import javax.swing.border.Border;
 import java.awt.Color;
 import java.awt.Font;
@@ -12,6 +11,9 @@ import java.awt.Font;
  * 文字放在状态条下面一行、不在按钮旁边排：这句是整页的定位说明，
  * 与目标库提示条同一竖列才看得见。Swing 没有 border-radius，
  * 用四边 1px 细边 + 左边 3px 强调条做出同一形状，强调色取主按钮那一支。
+ *
+ * 底板本体是 {@link StaticText} 而不是 JLabel：这句也要能用鼠标拖选、Ctrl+C 抄走，
+ * 但不占 Tab 位。
  */
 public final class PageIntro {
 
@@ -22,8 +24,8 @@ public final class PageIntro {
     private PageIntro() {
     }
 
-    public static JLabel of(String text) {
-        JLabel label = new JLabel(text);
+    public static StaticText of(String text) {
+        StaticText label = new StaticText(text);
         label.setOpaque(true);
         label.setBackground(BACKGROUND);
         label.setForeground(TEXT);

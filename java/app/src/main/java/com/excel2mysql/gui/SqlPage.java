@@ -252,7 +252,7 @@ public final class SqlPage extends JPanel {
     /** 底部动作条（覆盖开关 + 保存/执行/生成四颗），在分隔条之外。 */
     private java.awt.Container rowAct;
     /** 页签顶部那句介绍：与另两页同一块底板（Python 侧 win.sql_intro）。 */
-    private final javax.swing.JLabel intro = PageIntro.of("解析建表语句，回写库");
+    private final StaticText intro = PageIntro.of("解析建表语句，回写库");
 
     public SqlPage(Host host) {
         this.host = host;
@@ -405,7 +405,7 @@ public final class SqlPage extends JPanel {
         prefixBtns.add(replace);
         JPanel prefixRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
         rowPrefix = prefixRow;
-        prefixRow.add(new JLabel("表名前缀："), BorderLayout.WEST);
+        prefixRow.add(new StaticText("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixBtns, BorderLayout.EAST);
 
@@ -429,7 +429,7 @@ public final class SqlPage extends JPanel {
 
         // 命名规则工具条贴表格上沿（与第一页同一位置）：管的是"表名/字段名怎么起"
         JPanel nameBar = flow();
-        nameBar.add(new JLabel("命名规则："));
+        nameBar.add(new StaticText("命名规则："));
         nameBar.add(upperBox);
         nameBar.add(lowerBox);
 
@@ -567,7 +567,7 @@ public final class SqlPage extends JPanel {
     }
 
     /** 介绍条本体：自检查三页是不是同一块底板。 */
-    public javax.swing.JLabel introField() {
+    public StaticText introField() {
         return intro;
     }
 
