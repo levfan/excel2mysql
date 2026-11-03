@@ -93,7 +93,7 @@ public final class HelpDoc {
                     "<code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到" + NL +
                     "<code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.8.0.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.9.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
@@ -1004,6 +1004,9 @@ public final class HelpDoc {
                     "表格内容与表头同档，行高按字体量出，不写死像素</li>" + NL +
                     "<li><b>右上角两个小按钮</b>：「?」打开本使用说明，「i」打开「关于」" + NL +
                     "（版本号 / 提交号 / 构建日期 / 作者四行，提交号可鼠标选中复制）。" + NL +
+                    "「关于」底下那颗<b>「复制全部」</b>一次把这四行放进剪贴板，提交号给的是 <b>40 位完整值</b>" + NL +
+                    "（正面那一格仍是短号，够人眼看；贴出去的要能直接粘进 git 里查），点下去按钮变「已复制」两秒后复原；" + NL +
+                    "系统剪贴板被占着或这台机器没桌面会话时，按钮会照实说「剪贴板打不开」，不会假装复制过了。" + NL +
                     "「关于」里的提交号与构建日期是<b>打包那一刻写进 exe</b> 的（exe 所在机器没有 git，" + NL +
                     "运行时查不到）；开发态直接跑 <code>python main.py</code> 时现查 git，" + NL +
                     "查不到就显示「开发态（未打包）」，不会编造提交号</li>" + NL +

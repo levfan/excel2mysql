@@ -1,5 +1,5 @@
 """
-Excel -> MySQL 批量导入工具（PySide6 GUI）
+表库工作台 Excel·SQL·MySQL（PySide6 GUI）
 ========================================
 功能：
   - 输入 MySQL 连接信息，选择目标库

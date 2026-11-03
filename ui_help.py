@@ -2,14 +2,14 @@
 
 单独成模块是因为主窗口已经够挤，而这些对话框只服务于"看"，不参与任何导入逻辑。
 """
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
     QTextBrowser, QPushButton, QLabel, QFrame, QGridLayout, QApplication,
 )
 
-from appinfo import build_info, commit_display
+from appinfo import APP_NAME, build_info, commit_display, full_commit
 from help_doc import SECTIONS
 
 # 「关于」里那一行作者。Java 侧镜像在 gui/AboutDialog.java 的 AUTHOR 常量，
@@ -23,6 +23,10 @@ COMMIT_TIP = ("提交号取自构建戳：交付包里是打包那一刻烧进�
               "要核当前源码版本，在仓库目录里跑 git rev-parse --short HEAD")
 BUILT_TIP = ("构建日期同样取自构建戳：交付包里写的是打包完成那一刻，"
              "直接跑源码时这一格显示「开发态（未打包）」")
+# 「复制全部」那颗按钮的三种状态：两栈各写一份就会漂移，由对撞键逐字比
+COPY_LABEL = "复制全部"
+COPIED_LABEL = "已复制"
+CLIP_FAIL_LABEL = "剪贴板打不开"
 
 # Qt 的 Rich Text 只支持 CSS 的一个子集，这里只写 QTextBrowser 认得的属性
 # （写多了不报错，但静默不生效，所以行高用段落间距撑，不用 line-height）
@@ -145,10 +149,11 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("关于")
         self.setModal(True)
-        fit_client(self, 380, 200)
+        fit_client(self, 380, 230)
         info = build_info()
 
-        title = QLabel(f"Excel → MySQL 批量导入工具")
+        self.head_label = QLabel(APP_NAME)
+        title = self.head_label
         f = QFont()
         f.setBold(True)
         f.setPointSize(f.pointSize() + 2)
@@ -181,10 +186,14 @@ class AboutDialog(QDialog):
             self.rows[key] = body
         grid.setColumnStretch(1, 1)
 
+        self.btn_copy = QPushButton(COPY_LABEL)
+        self.btn_copy.setToolTip("把上面四行一次放进剪贴板（提交号给 40 位完整值）")
+        self.btn_copy.clicked.connect(self.on_copy_all)
         self.btn_close = QPushButton("关闭")
         self.btn_close.clicked.connect(self.accept)
         row = QHBoxLayout()
         row.addStretch(1)
+        row.addWidget(self.btn_copy)
         row.addWidget(self.btn_close)
 
         lay = QVBoxLayout(self)
@@ -193,6 +202,43 @@ class AboutDialog(QDialog):
         lay.addLayout(grid)
         lay.addStretch(1)
         lay.addLayout(row)
+
+    def copy_text(self):
+        """「复制全部」放进剪贴板的那一份文本：一行一项，提交号给全号。
+
+        正面那一格仍是短号（一行放得下、也够人眼看），贴出去的要能一路粘进 git 里查，
+        所以这一份给 40 位；老产物没烧全号时退回短号，不写一个空值出去。
+        """
+        info = build_info()
+        return "\n".join((
+            APP_NAME,
+            "版本：v%s" % info["version"],
+            "提交：%s" % commit_display(dict(info, commit=full_commit(info))),
+            "构建日期：%s" % info["built_at"],
+            "作者：%s" % AUTHOR,
+        ))
+
+    def on_copy_all(self):
+        text = self.copy_text()
+        ok = False
+        try:
+            cb = QApplication.clipboard()
+            cb.setText(text)
+            # 写了不等于放进去了：没有桌面会话、或被别的程序占着剪贴板时，
+            # setText 静默落空。回读一次，回执只说实话
+            ok = cb.text() == text
+        except Exception:
+            ok = False
+        self.btn_copy.setText(COPIED_LABEL if ok else CLIP_FAIL_LABEL)
+        QTimer.singleShot(2000, lambda: self.btn_copy.setText(COPY_LABEL))
+
+    def heading_text(self):
+        """自检与对撞用：框面上那一行产品名。名字只有一个来源，两栈各抄一份就会漂。"""
+        return self.head_label.text()
+
+    def copy_labels(self):
+        """自检与对撞用：「复制全部」这颗按钮的两种文字（点了要变、两秒后复原）。"""
+        return self.btn_copy.text() + "|" + COPIED_LABEL + "|" + CLIP_FAIL_LABEL
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:

@@ -340,10 +340,10 @@ def check_build_stamp(jar_path):
         if "=" in line and not line.lstrip().startswith("#"):
             k, v = line.split("=", 1)
             props[k.strip()] = v.strip()
-    missing = [k for k in ("commit", "builtAt") if not props.get(k, "")]
+    missing = [k for k in ("commit", "commitFull", "builtAt") if not props.get(k, "")]
     if missing:
-        fail("交付 jar 里 %s 是空的：提交号与构建日期只有走 构建验证.bat 才会烧进 jar，"
-             "直跑 mvn 出的包不能拿去发布" % "、".join(missing))
+        fail("交付 jar 里 %s 是空的：提交号（短号与 40 位全号）与构建日期只有走 构建验证.bat"
+             " 才会烧进 jar，直跑 mvn 出的包不能拿去发布" % "、".join(missing))
     ok("随包提交号 %s（分支 %s，构建于 %s）已烧进 jar"
        % (props["commit"], props.get("branch") or "未记", props["builtAt"]))
 

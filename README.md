@@ -1,6 +1,6 @@
-# <img src="assets/app_icon.png" width="44" height="44" alt="excel2mysql 图标"> Excel → MySQL 批量导入工具
+# <img src="assets/app_icon.png" width="44" height="44" alt="excel2mysql 图标"> 表库工作台 Excel·SQL·MySQL
 
-一叠中文表头的 Excel，拖进去就变成 MySQL 里的表：中文表头原样留作字段注释，表名和字段名自动转拼音，类型与长度按整列真实数据推断，然后批量建表、分批插入。MIT 许可。
+一叠中文表头的 Excel，拖进去就变成 MySQL 里的表：中文表头原样留作字段注释，表名和字段名自动转拼音，类型与长度按整列真实数据推断，然后批量建表、分批插入。反过来也能把表结构与数据出成标准/简易 Excel 交付件；`.sql` 脚本可以批量改表名、格式化，再执行到库。MIT 许可。
 
 ```sql
 订单金额 → 字段名 ding_dan_jin_e  COMMENT '订单金额'

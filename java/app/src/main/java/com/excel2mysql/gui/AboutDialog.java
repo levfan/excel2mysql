@@ -44,9 +44,17 @@ public final class AboutDialog extends JDialog {
     public static final String BUILT_TIP =
             "构建日期同样取自构建戳：交付包里写的是打包完成那一刻，"
             + "直接跑源码时这一格显示「开发态（未打包）」";
+    /** 「复制全部」那颗按钮的三种状态，与 Python 侧 ui_help 的同名常量逐字相同（对撞比）。 */
+    public static final String COPY_LABEL = "复制全部";
+    public static final String COPIED_LABEL = "已复制";
+    public static final String CLIP_FAIL_LABEL = "剪贴板打不开";
+    /** 值那一行的取用方式：JTextField 拖选是真能选，双击只负责把整行选上，不吹"即复制"。 */
+    static final String COPY_HINT = "双击整行选中，Ctrl+C 复制";
 
     private final Map<String, HintLabel> rows = new LinkedHashMap<String, HintLabel>();
     private final List<String> captions = new ArrayList<String>();
+    private JButton copyButton;
+    private JLabel headingLabel;
 
     public AboutDialog(Frame owner) {
         this(owner, AppInfo.load());
@@ -57,7 +65,8 @@ public final class AboutDialog extends JDialog {
         super(owner, "关于", true);
         WindowIcons.apply(this);
 
-        JLabel title = new JLabel("Excel → MySQL 批量导入工具");
+        JLabel title = new JLabel(AppInfo.APP_NAME);
+        headingLabel = title;
         // Python 是默认 9pt 再加 2pt；这里按 11pt 折成物理像素（144dpi → 22px）
         title.setFont(title.getFont().deriveFont(Font.BOLD,
                 (float) UiScale.fontPt(UiScale.UI_POINT_SIZE + 2)));
@@ -73,13 +82,39 @@ public final class AboutDialog extends JDialog {
         addRow(grid, "commit", "提交", info.commitDisplay(), false);
         addRow(grid, "built", "构建日期", info.builtAt, false);
         addRow(grid, "author", "作者", AUTHOR, true);
-        rows.get("commit").setToolTipText(COMMIT_TIP + "；双击可整行复制");
+        rows.get("commit").setToolTipText(COMMIT_TIP + "；" + COPY_HINT);
         rows.get("built").setToolTipText(BUILT_TIP);
 
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
+        JButton copy = new JButton(COPY_LABEL);
+        copy.setToolTipText("把上面四行一次放进剪贴板（提交号给 40 位完整值）");
+        copy.addActionListener(e -> {
+            String text = copyText();
+            boolean ok = false;
+            try {
+                java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+                        new java.awt.datatransfer.StringSelection(text), null);
+                // 写了不等于放进去了：没有桌面会话、或被别的程序占着剪贴板时会直接抛
+                // IllegalStateException，也有环境静默落空。回读一次，回执只说实话
+                Object back = java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                        .getData(java.awt.datatransfer.DataFlavor.stringFlavor);
+                ok = text.equals(back == null ? null : String.valueOf(back));
+            } catch (Exception ignored) {
+                ok = false;
+            }
+            copy.setText(ok ? COPIED_LABEL : CLIP_FAIL_LABEL);
+            javax.swing.Timer back2 = new javax.swing.Timer(2000, ev -> copy.setText(COPY_LABEL));
+            back2.setRepeats(false);
+            back2.start();
+        });
+        copyButton = copy;
         JPanel row = new JPanel(new BorderLayout());
-        row.add(close, BorderLayout.EAST);
+        JPanel buttons = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
+        buttons.add(copy);
+        buttons.add(close);
+        row.add(buttons, BorderLayout.EAST);
 
         JPanel root = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(10)));
         root.setBorder(BorderFactory.createEmptyBorder(
@@ -108,8 +143,9 @@ public final class AboutDialog extends JDialog {
             }
         });
         // 尺寸要等组件都摆好再算：pack 之前设尺寸等于跟布局抢活
-        // 200 那档是垫了分隔线之后要的：仍按客户区给，换字号只会变高不会裁字
-        Windows.clientSize(getContentPane(), this, 380, 200);
+        // 230 那档是垫了分隔线、底下又多出「复制全部」那一行之后要的：
+        // 仍按客户区给，换字号只会变高不会裁字
+        Windows.clientSize(getContentPane(), this, 380, 230);
     }
 
     /** 自检用：某一行的悬浮提示文字（来源说明挂在提示里，界面不再铺小字）。 */
@@ -118,16 +154,60 @@ public final class AboutDialog extends JDialog {
         return label == null ? null : label.getToolTipText();
     }
 
+    /** 自检用：那颗按钮当前的文字（点下去要先变「已复制」，两秒后复原）。 */
+    public String copyButtonText() {
+        return copyButton == null ? "" : copyButton.getText();
+    }
+
+    /** 自检与双端对撞用：框面上那一行产品名 + 复制按钮的两种文字。 */
+    public String headingText() {
+        return headingLabel == null ? "" : headingLabel.getText();
+    }
+
+    public String copyLabels() {
+        return copyButtonText() + "|" + COPIED_LABEL + "|" + CLIP_FAIL_LABEL;
+    }
+
+    /**
+     * 「复制全部」放进剪贴板的那一份文本，与 Python 侧 {@code copy_text()} 同一形状。
+     *
+     * <p>正面那一格仍是短号（一行放得下、也够人眼看），贴出去的要能一路粘进 git 里查，
+     * 所以这里给 40 位；老产物没烧全号时退回短号，不写一个空值出去。
+     */
+    public String copyText() {
+        return copyText(AppInfo.load());
+    }
+
+    /** 自检用：喂一份指定构建信息算出同一份文本。 */
+    public static String copyText(AppInfo info) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(AppInfo.APP_NAME).append('\n');
+        sb.append("版本：v").append(info.versionText()).append('\n');
+        sb.append("提交：").append(info.commitDisplayFor(info.fullCommit())).append('\n');
+        sb.append("构建日期：").append(info.builtAt).append('\n');
+        sb.append("作者：").append(AUTHOR);
+        return sb.toString();
+    }
+
     private void addRow(JPanel grid, String key, String label, String value, boolean last) {
         int row = rows.size();
         JLabel head = new JLabel(label);
         head.setForeground(new Color(0x66, 0x66, 0x66));
         captions.add(label);
-        // 值用 HintLabel：提交号要能取走，JLabel 不能拖选，双击即整行复制到剪贴板
+        // 值用 HintLabel（不可编辑的 JTextField）：拖选、高亮、Ctrl+C 都是现成的。
+        // 双击不吹"即复制"——那要自己编一套；这里让双击把整行选上，剩下的一步照旧走 Ctrl+C
         HintLabel body = new HintLabel();
         body.setText(value);
         body.setFont(body.getFont().deriveFont(Font.PLAIN));
-        body.setToolTipText("双击复制这一行");
+        body.setToolTipText(COPY_HINT);
+        body.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() >= 2) {
+                    body.selectAll();
+                }
+            }
+        });
         java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
         c.gridx = 0;
         c.gridy = row;

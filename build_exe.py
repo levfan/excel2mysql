@@ -173,6 +173,8 @@ def write_build_stamp():
             return ""
 
     commit = git("rev-parse", "--short", "HEAD")
+    # 完整 40 位单独存一格：短号会随仓库变大自动加长，「关于」里要能给出可核对的全号
+    commit_full = git("rev-parse", "HEAD")
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
     # 只看已跟踪文件的改动：未跟踪的遗留文件不该把构建标成 dirty
     dirty = bool(git("status", "--porcelain", "-uno"))
@@ -183,6 +185,7 @@ def write_build_stamp():
             "", "开发态缺这个文件属正常，appinfo 会退回现场查 git。" + doc_open,
             "APP_VERSION = " + q + APP_VERSION + q,
             "COMMIT = " + q + (commit or "unknown") + q,
+            "COMMIT_FULL = " + q + (commit_full or "unknown") + q,
             "BRANCH = " + q + (branch or "unknown") + q,
             "DIRTY = " + str(bool(dirty)),
             "BUILT_AT = " + q + built + q]

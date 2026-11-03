@@ -19,12 +19,14 @@ echo - [INFO] BUILD ^| 构建所用 JDK %RUNTIME%
 echo.
 rem 随包信息：提交号/分支/工作区是否脏，只有构建这一刻知道，烧进 jar 里的 appinfo.properties
 set "GIT_COMMIT="
+set "GIT_COMMIT_FULL="
 set "GIT_BRANCH="
 set "GIT_DIRTY=false"
 for /f "delims=" %%c in ('git rev-parse --short HEAD 2^>nul') do set "GIT_COMMIT=%%c"
+for /f "delims=" %%f in ('git rev-parse HEAD 2^>nul') do set "GIT_COMMIT_FULL=%%f"
 for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "GIT_BRANCH=%%b"
 for /f "delims=" %%d in ('git status --porcelain -uno 2^>nul') do set "GIT_DIRTY=true"
-set "GIT_ARGS=-Dgit.commit=%GIT_COMMIT% -Dgit.branch=%GIT_BRANCH% -Dgit.dirty=%GIT_DIRTY%"
+set "GIT_ARGS=-Dgit.commit=%GIT_COMMIT% -Dgit.commitFull=%GIT_COMMIT_FULL% -Dgit.branch=%GIT_BRANCH% -Dgit.dirty=%GIT_DIRTY%"
 echo - [INFO] BUILD ^| 随包提交号 %GIT_COMMIT%（%GIT_BRANCH%，未提交改动 %GIT_DIRTY%）
 
 echo === 0/10 生成物与源一致（HelpDoc / SqlSamples 不是手抄的）===
@@ -53,7 +55,7 @@ echo.
 echo === 3/10 class 主版本闸门 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "verify\target\classes" ^
   com.excel2mysql.verify.ClassVersionAudit ^
-  app\target\classes verify\target\classes verify\target\lib app\target\excel2mysql-3.8.0.jar || exit /b 1
+  app\target\classes verify\target\classes verify\target\lib app\target\excel2mysql-3.9.0.jar || exit /b 1
 
 echo.
 echo === 4/10 拼音金标准差分 ===
@@ -108,7 +110,7 @@ call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\targ
 
 echo.
 echo === 10/10 Swing 界面自检 ===
-call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -jar "app\target\excel2mysql-3.8.0.jar" ^
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -jar "app\target\excel2mysql-3.9.0.jar" ^
   --gui --selftest verify\fixtures || exit /b 1
 
 echo.

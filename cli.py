@@ -1,5 +1,5 @@
 """
-Excel -> MySQL 命令行版（Windows 7 线）
+表库工作台 Excel·SQL·MySQL 命令行版（Windows 7 线）
 =====================================
 给同一份 core/ 加的无界面入口：不依赖 Qt，可在 Python 3.8 + Win7 SP1 上运行。
 GUI 版（main.py）要求 Windows 10 1809+，两者共用推断/建表/导入的全部核心逻辑。
@@ -140,7 +140,7 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="excel2mysql-cli",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Excel/ZIP 批量导入 MySQL（命令行版，支持 Windows 7）",
+        description="表库工作台 Excel·SQL·MySQL 命令行版：Excel/ZIP 建表导入、.sql 执行到库（支持 Windows 7）",
         epilog=(
             "示例：\n"
             "  excel2mysql-cli.exe --dry-run C:\\数据            只推断并打印建表语句\n"

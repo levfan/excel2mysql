@@ -16,8 +16,19 @@ public final class AppInfo {
 
     public static final String UNKNOWN = "未知";
 
+    /**
+     * 产品的显示名，只有一个来源：窗口标题、「关于」那一格、复制出去的第一行都读它。
+     *
+     * <p>仓库名、Java 包名、exe 与 jar 的产物名（excel2mysql）是另一层，刻意不跟着改：
+     * 现场指向旧名的脚本与部署文档不能因为换个标题就失效。
+     * 与 Python 侧 appinfo.APP_NAME 逐字相同，由对撞键 dlg.about.heading 比。
+     */
+    public static final String APP_NAME = "表库工作台 Excel·SQL·MySQL";
+
     public String version = "";
     public String commit = UNKNOWN;
+    /** 40 位全号，「关于」里复制用；老产物没这一格时为空，由 {@link #fullCommit()} 退回短号。 */
+    public String commitFull = "";
     public String branch = "";
     public boolean dirty;
     public String builtAt = UNKNOWN;
@@ -48,6 +59,7 @@ public final class AppInfo {
             info.version = p.getProperty("version").trim();
             info.builtAt = toLocal(orUnknown(p.getProperty("builtAt")));
             info.commit = orUnknown(p.getProperty("commit"));
+            info.commitFull = trim(p.getProperty("commitFull"));
             info.branch = trim(p.getProperty("branch"));
             info.dirty = Boolean.parseBoolean(trim(p.getProperty("dirty")));
             info.source = "bundle";
@@ -62,10 +74,21 @@ public final class AppInfo {
             return info;
         }
         info.commit = commit;
+        info.commitFull = runGit(here, "rev-parse", "HEAD");
         info.branch = runGit(here, "rev-parse", "--abbrev-ref", "HEAD");
         info.dirty = !runGit(here, "status", "--porcelain", "-uno").isEmpty();
         info.source = "git";
         return info;
+    }
+
+    /**
+     * 可核对的完整提交号：没烧着全号的老产物退回短号，两者都没有时原样报"取不到"。
+     *
+     * <p>短号会随仓库变大自动加长（`--short` 保证不歧义），所以它不是固定 7 位；
+     * 「关于」里那一格仍显示短号，复制出去的要能一路贴到 git 里查。
+     */
+    public String fullCommit() {
+        return commitFull.isEmpty() ? commit : commitFull;
     }
 
     /** 版本只有一个来源：随包属性里的 project.version。 */
@@ -75,6 +98,11 @@ public final class AppInfo {
 
     /** 提交号一行的展示文本：带上分支与"有未提交改动"提示，仍然只占一行。 */
     public String commitDisplay() {
+        return commitDisplayFor(commit);
+    }
+
+    /** 同一套后缀，换一格提交号：「关于」正面给短号，复制出去的那一份给 40 位全号。 */
+    public String commitDisplayFor(String shown) {
         StringBuilder extra = new StringBuilder();
         if (!branch.isEmpty()) {
             extra.append(branch);
@@ -85,12 +113,12 @@ public final class AppInfo {
             }
             extra.append("工作区有未提交改动");
         }
-        return extra.length() == 0 ? commit : commit + "（" + extra + "）";
+        return extra.length() == 0 ? shown : shown + "（" + extra + "）";
     }
 
     /** 窗口标题：带版本号，不点开任何对话框也能看见跑的是哪一版。 */
     public String titleText() {
-        return "Excel → MySQL 批量导入工具 v" + versionText();
+        return APP_NAME + " v" + versionText();
     }
 
     /**
