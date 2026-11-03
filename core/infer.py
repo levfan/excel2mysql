@@ -55,6 +55,8 @@ _MASK_SEG_RE = re.compile(
 _VARCHAR_TIERS = (32, 64, 96, 128, 192, 255, 384, 512, 768, 1024, 1536, 2048,
                   3072, 4096, 6144, 8192, 12288, 16383)
 _VARCHAR_MAX_CHARS = 16383      # utf8mb4 VARCHAR 最大字符数（4 × 16383 ≈ 64KB）
+# 按名定档写死的字面 VARCHAR(n)：与按数据定档那一族同样占行内字节，第二遍要一起算
+_LITERAL_VARCHAR_RE = re.compile(r"^VARCHAR\((\d+)\)$")
 _ROW_BYTE_BUDGET = 60000        # 全表 VARCHAR 行内字节预算（留出余量防行过大）
 _COL_ROW_COST = 16              # 单个非 VARCHAR 列的行内开销估算（字节）
 _FIELD_MAX_LEN = 30             # 字段名最长 30 字符；全拼超此则整列降级为首字母
@@ -983,6 +985,11 @@ def infer_columns(df: pd.DataFrame, initials: bool = False,
         col = {"field": field, "comment": h, "type": typ, "max_len": max_len}
         if pending_n is not None:
             col["_varchar_n"] = pending_n
+        elif typ is not None and _LITERAL_VARCHAR_RE.match(typ):
+            # 按名定档给出的字面 VARCHAR（名称档 255、链接档 512、码值档 64）同样占行内字节：
+            # 不登记进预算的话，几十列空表头就把 MySQL 单行 65535 撑爆，
+            # 建表直接被 1118 Row size too large 拒掉（实测过，见清单第 128 节）
+            col["_varchar_n"] = int(_LITERAL_VARCHAR_RE.match(typ).group(1))
         if col_note:
             col["type_note"] = col_note
         cols.append(col)
@@ -999,7 +1006,12 @@ def infer_columns(df: pd.DataFrame, initials: bool = False,
             remaining -= cost
             c["type"] = f"VARCHAR({n})"
         else:
+            prev = c["type"]
             c["type"] = "TEXT"    # 预算不足退为行外存储，保证建表成功
+            if c.get("type_note"):
+                # 留痕要跟着改口：原话写着"按 VARCHAR(255) 建列"，那一列已经不是了
+                c["type_note"] = (f"该列没有值，按表头语义本可给 {prev}，但全表 VARCHAR "
+                                  f"行内字节已到单行上限（MySQL 65535），退为 TEXT 建列")
     return cols
 
 

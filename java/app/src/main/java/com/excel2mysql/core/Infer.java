@@ -28,6 +28,8 @@ public final class Infer {
     private static final int[] VARCHAR_TIERS = {32, 64, 96, 128, 192, 255, 384, 512, 768,
             1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16383};
     private static final int ROW_BYTE_BUDGET = 60000;
+    // 按名定档写死的字面 VARCHAR(n)：与按数据定档那一族同样占行内字节，第二遍要一起算
+    private static final Pattern LITERAL_VARCHAR = Pattern.compile("^VARCHAR\\((\\d+)\\)$");
     private static final int COL_ROW_COST = 16;
     private static final int MONEY_SCALE = 2;
     private static final int MONEY_PRECISION = 16;
@@ -791,6 +793,15 @@ public final class Infer {
                     col.type = needed <= 65535 ? "TEXT" : "MEDIUMTEXT";
                 }
             }
+            if (col.varcharN == null && col.type != null) {
+                java.util.regex.Matcher mk = LITERAL_VARCHAR.matcher(col.type);
+                if (mk.matches()) {
+                    // 按名定档给出的字面 VARCHAR（名称档 255、链接档 512、码值档 64）
+                    // 同样占行内字节：不登记进预算，几十列空表头就把 MySQL 单行 65535 撑爆，
+                    // 建表被 1118 Row size too large 拒掉（实测过，见清单第 128 节）
+                    col.varcharN = Integer.valueOf(Integer.parseInt(mk.group(1)));
+                }
+            }
             cols.add(col);
         }
 
@@ -805,7 +816,13 @@ public final class Infer {
                 remaining -= cost;
                 c.type = "VARCHAR(" + c.varcharN.intValue() + ")";
             } else {
+                String prev = c.type;
                 c.type = "TEXT";
+                if (c.typeNote != null) {
+                    // 留痕要跟着改口：原话写着"按 VARCHAR(255) 建列"，那一列已经不是了
+                    c.typeNote = "该列没有值，按表头语义本可给 " + prev
+                            + "，但全表 VARCHAR 行内字节已到单行上限（MySQL 65535），退为 TEXT 建列";
+                }
             }
             c.varcharN = null;
         }
