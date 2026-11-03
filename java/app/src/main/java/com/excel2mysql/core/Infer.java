@@ -21,7 +21,11 @@ import java.util.regex.Pattern;
 public final class Infer {
 
     public static final int VARCHAR_MAX_CHARS = 16383;
-    private static final int[] VARCHAR_TIERS = {64, 96, 128, 192, 255, 384, 512, 768,
+    // 32 那一档只在"全量最大字节 + 余量"确实落得下时才用：余量下限 16 字节，
+    // 能进 32 的列观测长度不超过 16，仍留着至少一倍空间给以后进来的长值。
+    // 刻意不再往下给 16：needed 的下限就是 16，那一档只有整列没值才够得着，
+    // 等于把未知列的默认档从 64 收到 16——正是"拿不准宁宽不窄"要避开的方向。
+    private static final int[] VARCHAR_TIERS = {32, 64, 96, 128, 192, 255, 384, 512, 768,
             1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16383};
     private static final int ROW_BYTE_BUDGET = 60000;
     private static final int COL_ROW_COST = 16;
@@ -84,6 +88,40 @@ public final class Infer {
             "说明", "描述", "地址", "电话", "邮箱", "单位", "方式", "标志",
             "标识", "清单", "名单", "标准", "依据"};
 
+    // ---------------- 码值语义识别（与 core/infer.py 的 _CODE_CN/_CODE_EN 同一条） ----------------
+    // 证件号、卡号、电话、邮编、序列号这类列存的是"一串用来对上的字符"，不是数：
+    // 纯值判定看到 110101199003078877 会建 BIGINT，之后带 X 的身份证号、带前导零的
+    // 工号都写不进去，导出去还变成科学计数法。与金额那一层对称：
+    // 金额是"样本恰好是整数也不能给 INT"，码值是"样本全是数字也不能给数值类型"。
+    // 只收以「号/码/证/邮编」收尾或本身即码值的词，刻意不含裸「编号」「代码」「单号」——
+    // 那些多是真自增主键，建成 INT/BIGINT 更合建表人的意图（主键选择那条也按它们认）。
+    private static final String[] CODE_CN = {
+            "身份证", "军官证", "士兵证", "文职干部证", "护照", "通行证", "驾驶证", "驾照",
+            "行驶证", "学生证", "工作证", "残疾证", "证件号", "证号",
+            "社保卡", "医保卡", "银行卡", "储蓄卡", "信用卡", "加油卡", "一卡通", "饭卡",
+            "购物卡", "卡号", "账号", "帐号",
+            "统一社会信用代码", "组织机构代码", "纳税人识别号", "营业执照号", "税务登记证号",
+            "机构信用代码", "海关编码", "商品条码",
+            "手机号", "手机号码", "电话号码", "联系电话", "电话", "传真", "邮编",
+            "邮政编码", "区号", "微信号", "QQ号", "钉钉号", "号码", "邮箱",
+            "准考证号", "考试号", "学号", "工号", "警号", "学员号",
+            "车牌号", "车牌", "车架号", "发动机号", "船检号",
+            "序列号", "流水号", "批次号", "批号", "出厂号", "条码", "二维码", "条形码",
+            "验证码", "识别码", "邀请码", "兑换码", "取件码"};
+    private static final Pattern CODE_EN = Pattern.compile(
+            "(?:^|_)(?:ssn|idcard|idno|passport|visa|license|licence|plate|vin|imei|"
+          + "msisdn|sn|serial|serialno|barcode|qrcode|isbn|issn|tin|zip|zipcode|postcode|"
+          + "phone|tel|telno|telephone|mobile|cell|fax|qq|wechat|cardno|acctno|accountno)"
+          + "(?:_|$)", Pattern.CASE_INSENSITIVE);
+    // 码值那一族的否决后缀：与金额共用的那张表里有「编号」「代码」「电话」「邮箱」，
+    // 那四个本身就是码值，套在码值上会把「统一社会信用代码」「联系电话」这类正主挡在门外。
+    // 日期/时间那几个收尾也要否决：「身份证有效期」「军官证到期日」存的是日期本身，
+    // 不是那串证号——这一层排在日期之前，不收住就把 DATE 那一档抢掉了。
+    private static final String[] CODE_VETO_SUFFIX = {
+            "名称", "姓名", "类型", "类别", "状态", "备注", "说明", "描述",
+            "地址", "单位", "方式", "标志", "标识", "清单", "名单",
+            "标准", "依据", "日期", "时间", "时刻", "有效期", "到期", "到期日"};
+
     // 空列按字段名关键字定类型（与 core/infer.py 的 _name_based_type 逐条对齐）：
     // 只在"这列一个值都没有"时参与，有值照旧走数据判定；结构定义模式人工类型不受影响
     private static final String NAME_TIME_CN = "时间";   // 含"日期时间"——先查时间才落 DATETIME
@@ -144,6 +182,17 @@ public final class Infer {
     private static final Pattern NAME_BIG_EN = Pattern.compile(
             "(?:^|_)(?:views|visits|clicks|downloads|plays|impressions|pageviews|"
           + "followers|fans|likes|comments|shares)(?:_|$)", Pattern.CASE_INSENSITIVE);
+    // 物产量单独一档（与 core/infer.py 的 _NAME_OUTPUT_CN 同一条）：产量/销量这类数带吨、
+    // 公斤、度这类单位，样本里出现 12.5 是常态，点名成 INT 会在写入时把小数位静默抹掉。
+    // 刻意不收「交易量」「成交量」：那两类数的是笔数，本来就是整数。
+    private static final String[] NAME_OUTPUT_CN = {
+            "产量", "销量", "销售量", "出货量", "进货量", "采购量", "运量",
+            "客运量", "货运量", "旅客发送量", "吞吐量", "发电量", "供水量",
+            "供热量", "供气量", "用水量", "用电量", "耗电量", "耗水量",
+            "产油量", "产煤量", "捕捞量", "收获量", "入库量", "出库量"};
+    private static final Pattern NAME_OUTPUT_EN = Pattern.compile(
+            "(?:^|_)(?:output|outputs|production|yield|yields|throughput)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
     private static final String[] NAME_INT_CN = {
             "数量", "个数", "人数", "次数", "库存", "张数", "件数", "台数", "点数", "条数",
             "户数", "笔数", "车数", "头数", "只数", "间数", "亩数", "套数", "项数", "总数",
@@ -156,8 +205,8 @@ public final class Infer {
             "份数", "宗数", "组数", "排数", "行数", "列数", "栏数", "遍数",
             "站点数", "接口数", "端口数", "会员数", "用户数", "访客数",
             "员工数", "职工数", "学生数", "教师数", "企业数", "学校数",
-            "项目数", "案件数", "订单数", "交易量", "成交量", "出货量",
-            "进货量", "销售量", "销量", "产量", "存量", "余量",
+            "项目数", "案件数", "订单数", "交易量", "成交量",
+            "存量", "余量",
             "出库数", "入库数", "在库数", "在册数", "在位数", "配发数",
             "消耗数", "报废数", "维修数", "检修数", "领用数", "归还数",
             "发放数", "盘盈数", "盘亏数", "官兵数", "兵员数", "装备数",
@@ -167,7 +216,11 @@ public final class Infer {
             // 装备车炮的计数：弹药用「发」、舰机出海用「航次」，都是整次
             "发数", "航次"};
     private static final String[] NAME_AGE_CN = {
-            "年龄", "工龄", "教龄", "党龄", "军龄", "年限", "岁数", "周岁"};
+            "年龄", "工龄", "教龄", "党龄", "军龄", "年限", "岁数", "周岁",
+            // 同一族的"干了多少年"：兵龄/警龄/婚龄/驾龄/司龄/厂龄/校龄/院龄/机龄/船龄/舰龄/房龄/车龄
+            "兵龄", "警龄", "婚龄", "驾龄", "司龄", "厂龄", "校龄", "院龄",
+            "机龄", "船龄", "舰龄", "枪龄", "炮龄", "胎龄", "孕龄", "房龄",
+            "车龄"};
     private static final String[] NAME_RANK_CN = {
             "序号", "排序", "排名", "名次", "页码", "页数", "层数", "楼层", "优先级",
             "位次", "座次", "位序", "顺位", "序位"};
@@ -179,7 +232,9 @@ public final class Infer {
     // 超长时变成截断报错，比按 VARCHAR(64) 建列更糟。
     private static final String[] NAME_URL_CN = {
             "网址", "网站", "链接", "超链接", "路径", "下载地址", "访问地址",
-            "图片地址", "附件地址", "文件地址", "主页", "官网", "域名", "短链"};
+            "图片地址", "附件地址", "文件地址", "主页", "官网", "域名", "短链",
+            // 文件名/目录名容易长过默认那一档（Windows 单个文件名就到 255 字符）
+            "文件名", "文件夹名", "目录名", "附件名", "文档名", "图片名"};
     private static final Pattern NAME_URL_EN = Pattern.compile(
             "(?:^|_)(?:url|uri|link|links|href|path|paths|permalink|domain|homepage)"
           + "(?:_|$)", Pattern.CASE_INSENSITIVE);
@@ -213,7 +268,13 @@ public final class Infer {
             "责任人", "申请人", "受理人", "创建人", "修改人", "更新人",
             "删除人", "录入人", "制单人", "复核人", "移交人", "接收人",
             "密级", "级别", "层级", "建制", "番号", "部队",
-            "课目", "驾驶员", "附件", "状态", "标记"};
+            "课目", "驾驶员", "附件", "状态", "标记",
+            // 行政区划与人口属性这类列存的都是短名，与「街道」「部队」同一族，
+            // 不该比它们窄一档留在默认 VARCHAR(64)：同一类给同一档
+            "省", "市", "县", "区", "乡镇", "村", "社区", "国籍", "民族", "籍贯",
+            "户籍", "户口", "军种", "兵种", "军兵种", "战区", "军区", "流域",
+            "河流", "性别", "学历", "学位", "婚姻", "政治面貌", "健康状况",
+            "宗教", "体质"};
     private static final Pattern NAME_TITLE_EN = Pattern.compile(
             "(?:^|_)(?:name|names|title|category|categories|type|types|kind|kinds|brand|"
           + "model|spec|specs|material|color|colour|dept|department|organization|"
@@ -328,6 +389,24 @@ public final class Infer {
         return MONEY_EN.matcher(fl).find();
     }
 
+    /**
+     * 表头中文或字段名英文命中码值语义；存类别/名字的那类后缀一律让路。
+     *
+     * <p>金额与码值同时命中时按结尾判：「账号余额」「银行卡余额」结尾是钱，存的是金额；
+     * 「流水号」结尾是号，存的是码——与时长/金额那一层同一条判法。
+     */
+    public static boolean isCode(String comment, String field) {
+        String c = comment == null ? "" : comment;
+        String fl = field == null ? "" : field;
+        if (endsWithAny(c, CODE_VETO_SUFFIX)) {
+            return false;       // 「卡号类型」「证件名称」存的是类别/名字，不是码本身
+        }
+        if (!containsAny(c, CODE_CN) && !CODE_EN.matcher(fl).find()) {
+            return false;
+        }
+        return !(endsWithAny(c, MONEY_CN) && isMoney(c, fl));
+    }
+
     /** 按名定类型的返回值：类型与留痕文案同源，别让两边写漏一边。 */
     private static String[] note(String c, String typ, String label) {
         return new String[]{typ, "该列没有值，字段名「" + c + "」含" + label + "语义，按 "
@@ -338,8 +417,8 @@ public final class Infer {
      * 空列的名字定类型：命中返回 {类型, 留痕文案}，没命中返回 null（照旧 VARCHAR）。
      * 金额复用 isMoney 的双侧匹配与比率/标识否决；英文一律按成词的词根匹配
      * （贴着下划线或首尾），所以 update、birthday 不会误中。
-     * 判定顺序即优先级：时长 &gt; 金额 &gt; 合计 &gt; 时间 &gt; 时刻 &gt; 日期 &gt; 布尔 &gt;
-     * 显式比率/系数 &gt; 评分 &gt; 经纬度 &gt; 计量 &gt; 大计数 &gt; 计数 &gt;
+     * 判定顺序即优先级：码值 &gt; 时长 &gt; 金额 &gt; 合计 &gt; 时间 &gt; 时刻 &gt; 日期 &gt; 布尔 &gt;
+     * 显式比率/系数 &gt; 评分 &gt; 经纬度 &gt; 计量 &gt; 产量 &gt; 大计数 &gt; 计数 &gt;
      * 年龄 &gt; 序号 &gt; 年份 &gt; 裸「率」 &gt; 链接/路径 &gt; 长文本 &gt; 名称类。文本三档放最后，是为了不让
      * 「描述」「名称」抢掉带数字语义的复合表头（如「数量说明」仍按计数走）。
      * 裸「率」排在所有显式词条之后：点名过的整数列（心率）不该被一个字的启发式抢走。
@@ -349,6 +428,11 @@ public final class Infer {
         String c = comment == null ? "" : Names.pyStrip(comment);
         String fl = field == null ? "" : field;
         boolean money = isMoney(c, fl);
+        // 码值排在最前：isCode 自己已把"钱在尾巴上"（账号余额）与"存的是名字"（卡号类型）
+        // 两类让出去了，剩下的就是正主，不该再被时长/金额/比率那些词根抢走
+        if (isCode(c, fl)) {
+            return note(c, "VARCHAR(64)", "证件/卡号/号码这类码值");
+        }
         // 时长与金额都能命中时看结尾：「付款周期」「结算周期」结尾是周期，存的是天/月数；
         // 「工时费」结尾是费，存的是钱
         if (nameHit(c, fl, NAME_DUR_CN, NAME_DUR_EN)
@@ -384,6 +468,9 @@ public final class Infer {
         }
         if (nameHit(c, fl, NAME_MEASURE_CN, NAME_MEASURE_EN)) {
             return note(c, "DECIMAL(18,4)", "计量");
+        }
+        if (nameHit(c, fl, NAME_OUTPUT_CN, NAME_OUTPUT_EN)) {
+            return note(c, "DECIMAL(18,4)", "产量/运量这类物质量");
         }
         if (nameHit(c, fl, NAME_BIG_CN, NAME_BIG_EN)) {
             return note(c, "BIGINT", "大计数（访问/播放量）");
@@ -620,6 +707,17 @@ public final class Infer {
             }
 
             boolean money = isMoney(h, col.field);
+            boolean code = isCode(h, col.field);
+            boolean output = nameHit(h, col.field, NAME_OUTPUT_CN, NAME_OUTPUT_EN);
+            // 码值列一律按文本：样本恰好全是数字也不能建 INT/BIGINT——带 X 的身份证号、
+            // 带前导零的工号之后都写不进去，导出去还变成科学计数法。与金额那一层对称。
+            if (code && hasValue && (allInt || allDec || allDt || allDa)) {
+                col.typeNote = "表头「" + h + "」是证件/卡号/号码这类码值，"
+                        + "样本虽为纯数字仍按文本保存";
+            }
+            if (code) {
+                allInt = allDec = allDt = allDa = false;
+            }
             // 这列一个值都没有时，值判定链全部落空；先按字段名关键字定一次类型，
             // 命中就带着留痕文案走，没命中照旧落到底下的文本分支（VARCHAR(64)）
             String[] named = hasValue ? null : nameBasedType(h, col.field);
@@ -634,6 +732,19 @@ public final class Infer {
                             + "），按文本保存";
                 } else if (allInt) {
                     col.typeNote = "表头「" + h + "」含金额语义，样本值虽为整数，仍按 "
+                            + col.type + " 而非整数类型";
+                }
+            } else if (hasValue && output && allInt && !allDa) {
+                // 产量/运量这类物质量：样本恰好是整数（销量 120 吨）也不能判成 INT，
+                // 之后进来 12.5 会被静默抹掉小数位——与金额那一层同一条判法。
+                // 小数位至少留 4 位：DECIMAL(n,0) 看着是 DECIMAL，装不进任何小数，等于白改。
+                col.type = decimalType(obsInt, Math.max(obsScale, 4), 4, false);
+                if (col.type == null) {
+                    col.typeNote = "表头「" + h + "」是产量这类物质量，但数值精度超出 MySQL DECIMAL 上限"
+                            + "（总精度 " + DECIMAL_MAX_PRECISION + "、小数 " + DECIMAL_MAX_SCALE
+                            + "），按文本保存";
+                } else {
+                    col.typeNote = "表头「" + h + "」是产量/运量这类物质量，样本值虽为整数，仍按 "
                             + col.type + " 而非整数类型";
                 }
             } else if (hasValue && allInt) {
@@ -668,6 +779,12 @@ public final class Infer {
                 // 文本列（整列都没命中的列，以及 DECIMAL 装不下的数值列）
                 long headroom = Math.max(16, maxLen / 5);
                 long needed = maxLen + headroom;
+                if (maxLen == 0) {
+                    // 整列一个值都没有：长度无从观测，按默认那一档 64 建，
+                    // 不能让 32 这种窄档把"没数据"读成"数据很短"——采集模板的空列
+                    // 之后灌进长值就是截断报错，比宽一档贵得多
+                    needed = 64;
+                }
                 if (needed <= VARCHAR_MAX_CHARS) {
                     col.varcharN = Integer.valueOf(varcharTier((int) needed));
                 } else {
