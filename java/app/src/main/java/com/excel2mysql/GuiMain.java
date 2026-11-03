@@ -6627,6 +6627,37 @@ public final class GuiMain {
             problems.add("空列按名定档没跟上：" + one(infer, "省", new Object[]{null}).type
                     + " / " + one(infer, "文件名", new Object[]{null}).type);
         }
+
+        // 宽空表：按名定档的字面 VARCHAR 也要进行内字节预算，超出的退 TEXT。
+        // 不纳预算时 80 个空的名称列是 81600 字节，MySQL 直接 1118 Row size too large
+        // 把整张表拒掉——建不出表比长度不一致更糟
+        List<Object> heads = new ArrayList<Object>();
+        for (int i = 0; i < 80; i++) {
+            heads.add((Object) ("名称" + i));
+        }
+        List<java.util.List<Object>> wideRows = new ArrayList<java.util.List<Object>>();
+        wideRows.add(new ArrayList<Object>(Arrays.asList(new Object[80])));
+        int bytes = 0;
+        int texts = 0;
+        int notes = 0;
+        for (com.excel2mysql.core.Infer.Column c : infer.inferColumns(heads, wideRows)) {
+            if (c.type != null && c.type.startsWith("VARCHAR(")) {
+                bytes += 4 * Integer.parseInt(c.type.substring(8, c.type.length() - 1));
+            } else if ("TEXT".equals(c.type)) {
+                texts++;
+                if (c.typeNote != null && c.typeNote.contains("退为 TEXT")) {
+                    notes++;
+                }
+            }
+        }
+        if (bytes > 60000 || texts == 0) {
+            problems.add("80 个空的名称列没进行内字节预算：行内字节 " + bytes
+                    + "、退成 TEXT 的列 " + texts);
+        }
+        if (texts > 0 && notes != texts) {
+            problems.add("退成 TEXT 的列里有 " + (texts - notes)
+                    + " 列没把留痕改口，还写着按 VARCHAR 建列");
+        }
     }
 
     /** 一列一判的取样写法：表头 + 若干行值，与 Python 侧 `one()` 同一形状。 */

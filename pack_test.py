@@ -3829,6 +3829,24 @@ check("L26 空列按名定档：行政区划与文件名各归同一族那一档
       one({"省": [None]})[0] == "VARCHAR(255)" and one({"文件名": [None]})[0] == "VARCHAR(512)",
       (one({"省": [None]})[0], one({"文件名": [None]})[0]))
 
+# ---- 按名定档的字面 VARCHAR 也占行内字节：不纳入预算，宽表头的空采集模板建不出表 ----
+_wide = infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(80)}))
+_wide_bytes = sum(4 * int(c["type"][8:-1]) for c in _wide
+                  if str(c["type"]).startswith("VARCHAR"))
+check("L27 80 个空的名称列：字面 VARCHAR 计入 60000 行内预算，超出的退成 TEXT",
+      _wide_bytes <= 60000 and any(c["type"] == "TEXT" for c in _wide),
+      (_wide_bytes, [c["type"] for c in _wide].count("VARCHAR(255)"),
+       [c["type"] for c in _wide].count("TEXT")))
+check("L27b 退成 TEXT 的那几列把话说清楚，不留一句自相矛盾的按 VARCHAR(255) 建列",
+      all("退为 TEXT" in c.get("type_note", "")
+          for c in _wide if c["type"] == "TEXT" and c.get("type_note")),
+      [(c["comment"], c.get("type_note")) for c in _wide
+       if c["type"] == "TEXT" and c.get("type_note")][:2])
+check("L27c 窄一点的空表（20 个名称列）仍在预算内，一档都不退",
+      all(c["type"] == "VARCHAR(255)"
+          for c in infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(20)}))),
+      [c["type"] for c in infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(20)}))])
+
 # ---------------------------------------------------------------------------
 section("M 字段命名规则（蛇形拼音 / 首字母降级 / 30 字符上限）")
 
@@ -8398,6 +8416,40 @@ else:
             _c.execute("SHOW TABLES LIKE '%s'" % _g13c)
             check("G13b 外键探针表已清理", not _g13_left and _c.fetchone() is None,
                   (_g13_left, _c.fetchone()))
+
+        # 宽表头的空采集模板：按名定档的字面 VARCHAR 也要进全表行内字节预算才建得出表。
+        # 不纳预算时 80 列 VARCHAR(255) 是 81600 字节，MySQL 报 1118 Row size too large，
+        # 整张表建不出来——这一判打的是真库，不是算式
+        # （G13 收尾时把 conn 关了，这里自己开一条，不借用已经关掉的连接）
+        _g14cols = infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(80)}))
+        _g14 = "packtest_wide_empty"
+        _g14_err = ""
+        _g14conn = connect(_cfg)
+        try:
+            create_table(_g14conn, f"DROP TABLE IF EXISTS `{_g14}`")
+            try:
+                create_table(_g14conn, build_ddl(_g14, "宽空表行字节预算探针", _g14cols, False))
+            except Exception as _g14e:
+                _g14_err = f"{type(_g14e).__name__}: {_g14e}"
+        finally:
+            _g14conn.close()
+        with connect(_cfg).cursor() as _c:
+            _c.execute("SHOW TABLES LIKE '%s'" % _g14)
+            _g14_built = _c.fetchone() is not None
+            _g14_text = -1
+            if _g14_built:
+                _c.execute("SELECT COUNT(*) FROM information_schema.COLUMNS "
+                           "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND DATA_TYPE='text'",
+                           (_cfg["database"], _g14))
+                _g14_text = _c.fetchone()[0]
+            _c.execute("DROP TABLE IF EXISTS `%s`" % _g14)
+        check("G14 80 个空的名称列真建得出表：超预算的那几列退成 TEXT 而不是把整表顶掉",
+              not _g14_err and _g14_built and _g14_text > 0,
+              (_g14_err[:150], _g14_built, _g14_text,
+               sum(1 for c in _g14cols if c["type"] == "TEXT")))
+        with connect(_cfg).cursor() as _c:
+            _c.execute("SHOW TABLES LIKE '%s'" % _g14)
+            check("G14b 宽空表探针已清理", _c.fetchone() is None, _g14)
 
     except Exception as e:
         check("G0 连接 MySQL 失败", False, f"{type(e).__name__}: {e}")
