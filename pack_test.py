@@ -4712,7 +4712,7 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtCore import QEvent
 from help_doc import SECTIONS as HELP_SECTIONS
 from ui_help import (HelpDialog, AboutDialog, build_html, AUTHOR,
-                     ABOUT_FOOT_1, ABOUT_FOOT_2)
+                     COMMIT_TIP, BUILT_TIP)
 
 import re as _re
 
@@ -7564,11 +7564,15 @@ check("T7b 作者这一行有署名，取的是 ui_help.AUTHOR（Java 侧同一�
       (ad.rows["author"].text(), AUTHOR))
 check("T8 提交号可鼠标选中复制（要贴给别人时不用手抄）",
       bool(ad.rows["commit"].textInteractionFlags()))
-check("T8c 底下那两行小字把提交号与构建日期的来源说清（含自己核该跑哪条命令）",
-      ad.foot.text() == ABOUT_FOOT_1 + "\n" + ABOUT_FOOT_2
-      and "构建戳" in ad.foot.text() and "git rev-parse --short HEAD" in ad.foot.text()
-      and bool(ad.foot.textInteractionFlags()),
-      ad.foot.text()[:40])
+check("T8c 提交号与构建日期的来源写在各自那一行的悬浮提示里（含自己核该跑哪条命令）",
+      ad.rows["commit"].toolTip() == COMMIT_TIP + "；选中后可直接贴给别人"
+      and ad.rows["built"].toolTip() == BUILT_TIP
+      and all(t in ad.rows["commit"].toolTip()
+              for t in ("构建戳", "无 git 信息", "git rev-parse --short HEAD")),
+      ad.rows["commit"].toolTip()[:40])
+# 关于框界面上只留四行结果：说明挪进悬浮提示之后，底部再长出灰字段落就是退回老样子
+check("T8d 关于框正面不铺来源说明（那段话只在提示里，不在界面里）",
+      not any("构建戳" in t for t in _labels), [t[:20] for t in _labels if t][:8])
 ad.deleteLater()
 check("T8b 构建的 dirty 判定只看已跟踪文件的改动（未跟踪遗留不算）",
       _i["dirty"] == _run_git_probe(),
@@ -7682,7 +7686,7 @@ _app.processEvents()
 _geo = _app.primaryScreen().availableGeometry()
 _suites = [("主窗口", app_main.MainWindow(), "1100x780"),
            ("使用说明", app_main.HelpDialog(), "960x700"),
-           ("关于", app_main.AboutDialog(), "380x250"),
+           ("关于", app_main.AboutDialog(), "380x200"),
            ("进度框", REAL_PROGRESS("正在解析文件…"), "480x140"),
            ("表结构预览", app_main.StructureDialog([]), "980x640"),
            ("DDL 预览", app_main.DDLDialog([], False), "900x600")]

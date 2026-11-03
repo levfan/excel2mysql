@@ -944,6 +944,24 @@ public final class GuiMain {
         return false;
     }
 
+    /** 关于框正面摊在眼前的文字（不含悬浮提示）：判断"这段话是不是又被印到界面上"用。 */
+    private static String faceText(java.awt.Container c) {
+        StringBuilder sb = new StringBuilder();
+        for (java.awt.Component k : c.getComponents()) {
+            if (k instanceof javax.swing.JLabel) {
+                sb.append(((javax.swing.JLabel) k).getText()).append('\n');
+            } else if (k instanceof javax.swing.AbstractButton) {
+                sb.append(((javax.swing.AbstractButton) k).getText()).append('\n');
+            } else if (k instanceof javax.swing.text.JTextComponent) {
+                sb.append(((javax.swing.text.JTextComponent) k).getText()).append('\n');
+            }
+            if (k instanceof java.awt.Container) {
+                sb.append(faceText((java.awt.Container) k));
+            }
+        }
+        return sb.toString();
+    }
+
     private static int inkOf(java.awt.Component c, java.awt.Color want) {
         if (c == null) {
             return -1;
@@ -4931,20 +4949,28 @@ public final class GuiMain {
                     com.excel2mysql.core.AppInfo.load().source)) {
                 problems.add("关于框既没有构建日期也没有声明来源，用户无从判断可信度");
             }
-            // 底下那两行小字：来源、取不到写什么、自己核跑哪条命令，都要当面写清
-            // （两栈逐字同形由对撞键 dlg.about.footnote 比，这里只判内容在不在）
-            String foot = ad.footnoteText();
-            if (!foot.contains("构建戳") || !foot.contains("无 git 信息")
-                    || !foot.contains("git rev-parse --short HEAD")) {
-                problems.add("关于框没把提交号与构建日期的来源说清：" + foot);
+            // 提交号与构建日期的来源写在各自那一行的悬浮提示里：正面只留四行结果
+            // （两栈同一段话各写一份，这里判内容在不在；界面铺没铺字另有下面那条判据）
+            String tip = ad.tipOf("commit");
+            if (tip == null || !tip.contains("构建戳") || !tip.contains("无 git 信息")
+                    || !tip.contains("git rev-parse --short HEAD")) {
+                problems.add("关于框的提交行没把来源说清：" + tip);
+            }
+            String builtTip = ad.tipOf("built");
+            if (builtTip == null || !builtTip.contains("构建戳")
+                    || !builtTip.contains("开发态（未打包）")) {
+                problems.add("关于框的构建日期行没把来源说清：" + builtTip);
             }
             if (!hasRule(ad.getContentPane())) {
                 problems.add("关于框标题与四行之间少了那条分隔线（信息层次那一档）");
             }
-            // 那两行小字必须真画得出来：折行的 JTextArea 在光标被抽掉时，
-            // WrappedPlainView 取选区起点会空指针——不画一次永远看不见（拍图环节就是这么抓到的）
-            if (inkOf(ad.footnoteView(), new java.awt.Color(0x66, 0x66, 0x66)) <= 0) {
-                problems.add("关于框那两行小字没画出来（灰字像素为 0）");
+            // 正面不许再铺那段说明：说明只在提示里，界面上数到"构建戳"这三个字就是退回老样子
+            if (faceText(ad.getContentPane()).contains("构建戳")) {
+                problems.add("关于框正面铺了来源说明（该只在悬浮提示里）");
+            }
+            // 整框必须真画得出来：画不出来的组件（折行文本抽掉光标那类）只有画一次才暴露
+            if (inkOf(ad.getContentPane(), new java.awt.Color(0x66, 0x66, 0x66)) <= 0) {
+                problems.add("关于框没画出灰色那一档文字（灰字像素为 0）");
             }
             // 构建时间戳：Maven 打的是 UTC，Python 打的是本机时间，显示前必须换成时区
             String shifted = com.excel2mysql.core.AppInfo.toLocal("2026-10-13 02:22:08");

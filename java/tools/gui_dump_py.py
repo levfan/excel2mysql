@@ -1056,8 +1056,6 @@ def main():
             if wd is not None and norm(wd.text()):
                 captions.append(norm(wd.text()))
     put("dlg.about.rows", "|".join(captions))
-    # 底下那两行小字也是界面事实：两栈各写一份就会漂移，逐字比
-    put("dlg.about.footnote", norm(ad.foot.text()))
     ad.deleteLater()
 
     # ---- 进度框文案 ----

@@ -884,8 +884,6 @@ public final class GuiDump {
                     put("dlg.about.want", want(ad));
                     put("env.dlg.about.size", clientSize(ad));
                     put("dlg.about.rows", join(ad.rowCaptions(), "|"));
-                    // 底下那两行小字也是界面事实：两栈各写一份就会漂移，逐字比
-                    put("dlg.about.footnote", norm(ad.footnoteText()));
                 } finally {
                     ad.dispose();
                 }
