@@ -93,7 +93,7 @@ public final class HelpDoc {
                     "<code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到" + NL +
                     "<code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.9.0.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.10.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
@@ -106,6 +106,14 @@ public final class HelpDoc {
                     "（右上角「?」或 F1）。这一等价由机器判定：两条线的窗口控件、文案、按钮启用条件、" + NL +
                     "弹窗文字、日志与写出的文件各自枚举成清单后逐键比对，规模与最近一次结果见" + NL +
                     "包内 <code>README.md</code> 的「质量闸门」一节。</p>" + NL +
+                    "" + NL +
+                    "<h3>界面上的说明文字抄得走</h3>" + NL +
+                    "<p>界面上那些只说明情况的静态文字——三页顶部那句定位说明、连接信息里每一行的名称、" + NL +
+                    "「命名规则：」「表名前缀：」「SQL 文本」「执行结果」以及顶部那条当前库状态——" + NL +
+                    "都可以按住鼠标拖选一段，再按 <code>Ctrl+C</code> 抄出去核对（要整句就先按" + NL +
+                    "<code>Ctrl+A</code> 全选）。" + NL +
+                    "这一族文字不占 Tab 位：键盘在控件间走的时候不会多停几站，方向键翻表、" + NL +
+                    "<code>Ctrl+V</code> 添加文件这些原有操作一点都不受影响。</p>" + NL +
                     "" + NL +
                     "<h3>两条 Python 线的一个硬限制：口令不能用中文</h3>" + NL +
                     "<p>pymysql 在握手前就把口令按 latin-1 编码，因此图形版与 Windows 7 命令行版只能使用" + NL +
