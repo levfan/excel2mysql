@@ -7014,6 +7014,104 @@ tooltip 改说「双击整行选中，Ctrl+C 复制」。Qt 那句「选中后�
 `--version`、产物名与包结构）全部照旧。标识那一层（仓库名、包名、exe/jar/产物目录名）
 本轮刻意没动。
 
+## 126. 三页上的静态文字改成"可选那一族"：拖得动、抄得走，但不许多占一个 Tab 位
+
+### 126.1 口径
+
+用户 2026-11-03：「3 个 tab 页中，有的文字，不影响其他交互，需要能选中，并且 ctrl c 可
+进行复制」。两条追问定下边界：Swing 侧这一族不进 Tab 顺序；拖拽区那句提示不动——它是
+点击热区，开了选区会把那一下点击吃掉。
+
+### 126.2 Qt 侧只是补一个标志
+
+`main.py` 加 `selectable(lbl)`，只开 `Qt.TextSelectableByMouse`，落在 16 处：三页顶部
+介绍条 3、连接信息五行标签 5、目标库就地提示 1、命名规则 2、表名前缀 2、
+「SQL 文本」「执行结果」「还没有执行结果」3。不开
+`TextSelectableByKeyboard`——那会把这格文字塞进焦点链，方向键就不再翻表，是"能复制"
+付出的交互税。Qt 自己给可选 `QLabel` 的焦点策略是 `ClickFocus`：点它给焦点、Tab 不停它，
+正好就是这次要的"能复制但不进 Tab 环"那一档，所以 Qt 侧没有额外机制要写。
+
+### 126.3 Swing 侧：JLabel 一个字也选不了，而 `isFocusTraversable()` 是个陷阱
+
+沿用 `HintLabel` 那一招（不可编辑 + 无边框 + 不画底色的 `JTextField`），把这层形状落成
+公共件 `gui/StaticText`；`HintLabel` 改为继承它（状态色与自绘 ⚠ 留在自己身内），
+`PageIntro.of` 返回它，16 处逐一对应 Qt 那 16 处。
+
+为什么不用 `isFocusTraversable()` 挡 Tab：真窗口 + 真 Tab 实测（JDK 1.8.0_202 + 系统外观），
+把它重写成 false 会连带 `isFocusable()` 也变成 false——件彻底拿不到焦点，Ctrl+C 那条就废了，
+代价比"少一个 Tab 站点"更大。`setRequestFocusEnabled(false)` 也不行：实测 Tab 环照旧走到它
+（`PLAIN TARGET B2 B1`）。两条都不合用，改用窗口级焦点环策略包一层：
+`StaticText.policySkipping(base)` 只在"下一站/上一站是静态文字"时多走几步，其余全数委托
+基策略，真控件之间的先后次序一个字都不改。同一趟实测：装上之后真 Tab 走
+`PLAIN B2 B1 PLAIN`（TARGET 被绕开），策略环数学也给出同一个答案；对照那一趟是
+`PLAIN TARGET B2 B1`。
+
+`JFrame` 是焦点环根，`getFocusTraversalPolicy()` 本来就非空（返回 `Container` 那份默认
+`LayoutFocusTraversalPolicy`），包装它即可；弹窗不装这一层，那些窗里的件照旧可 Tab 到。
+
+### 126.4 判据
+
+覆盖面两栈各钉一条同一份清单（`GuiMain.STATIC_TEXTS` 与 `pack_test` ST1，15 句、
+「命名规则：」「表名前缀：」各两处），少一处（某个说明条退回 `JLabel`）或多一处都红。
+两句正文随运行状态变的（顶部当前库状态行、目标库就地提示）按件排除、另由 ST4 按件判，
+Python 与 Java 排除的是同两件。
+
+- Qt 侧：ST2 不开键盘选字；ST3 焦点策略不含 `TabFocus`；ST5 三块拖拽区都没开选区；
+  ST6 真拖选 + 真 Ctrl+C 后把剪贴板读回来逐字比——先写一句哨兵自证这一轮的剪贴板
+  round-trip 得动，动不了就显式记未覆盖，不混进通过里。判完归还剪贴板原值。
+- Swing 侧：逐件判"是文本件 / 不可编辑 / 选得出整行"（复用 `dragSelectable`）、
+  `isFocusable` 与 `isRequestFocusEnabled` 都为真、`control C` 绑的是
+  `DefaultEditorKit.CopyAction`、主窗口装的就是那一层跳过策略
+  （`StaticText.skips(...)`，判对象不判类名）。焦点环的数学用一个只放三件的小容器判：
+  底座不能借 JDK 那两套——它们要容器排版过或在活窗口里，自检从不 show 窗口，
+  拿它们当底座读出的是 null，判的就不是这一层的逻辑了。
+  真按 Ctrl+C 抄进系统剪贴板那一格在自检里显式记 WARN 未覆盖（`CopyAction` 取的是焦点组件，
+  不 show 窗口就拿不到焦点），由界面探针那一趟实跑判。
+
+### 126.5 对撞键与文档
+
+新增 `static.selectable`：三页里"算这一族"的句子按 `页|句` 排序连成一串，两栈各自从活控件
+枚举（Python 按 `TextSelectableByMouse`，Java 按 `StaticText`），比的是哪些句子抄得走，
+机制由各自自检判。键数 389 → 390。
+
+`GuiDump.traverseLabels` 同步认 `StaticText`（`HintLabel` 现在是它的子类，先走 HintLabel
+那一支好让告警正文里被摘掉的 ⚠ 原文回来）；不改这里，`sqlrun.labels` 会因为 JLabel 换成
+StaticText 而假红。《使用说明》加一节「界面上的说明文字抄得走」，`HelpDoc.java` 重导。
+
+### 126.6 这一轮踩的两个坑
+
+- 这版 PySide6 不许 `int(label.textInteractionFlags())`，直接 `TypeError`；要按位与再
+  `bool()`（与既有的 U8 同一写法）。对撞器里那句是新写的，实测第一趟就炸。
+- 普通 `JPanel` 的 `getFocusTraversalPolicy()` 返回 null：`setFocusTraversalPolicy` 存了
+  也读不出来，要么它是焦点环根、要么显式 `setFocusTraversalPolicyProvider(true)`。
+  自检那条焦点环判据第一趟就是在这里 `NullPointerException`，把整段自检带停。
+
+### 126.7 闸门、变异与版本
+
+| 闸门 | 结果 |
+| --- | --- |
+| `构建验证.bat` 十步 | 全过，退出码 0；两行 WARN 记未覆盖（合成双击、静态文字 Ctrl+C 抄进剪贴板） |
+| `界面双端对撞.bat` | 390 键逐键一致，退出码 0（本轮新增 `static.selectable`） |
+| `pack_test.py`（带真库凭据） | 通过 1017 / 失败 0 / 跳过 5，退出码 0（本轮新增 ST1–ST6） |
+| 两端出图逐屏读 | 两栈 12 屏 + 两张专项（展开连接信息、第三页）：三页介绍条底板、五行标签那一列、命名规则行、「SQL 文本」「执行结果」两处表头都在同一位置同一形状，无裁字、没变成输入框外观 |
+
+变异抽查三处，各拔掉一条守卫要咬的东西，都按预期变红：
+
+- `SqlPage` 的「表名前缀：」退回 `JLabel` → 对撞红在 `static.selectable`
+  （Python 多出那一句，值不等 1 处），退出码 1；
+- 摘掉 `MainFrame` 里安装策略那一行 → 第 10 步红
+  `主窗口没装上绕开静态文字的焦点环策略，Tab 会多停几站`，退出码 1；
+- Qt 侧摘掉第一页「命名规则：」的 `selectable` → `pack_test` ST1 红（那一句从清单里掉了），
+  FAILS=1。
+
+三处都用 Edit 还原，`md5sum -c` 对 `SqlPage.java` / `MainFrame.java` / `main.py` 逐字节复核
+一致——上面那张绿表指的仍是现在这棵树。
+
+版本按 minor 记：`3.9.0 → 3.10.0`。多出的是"以前做不到、现在能做"的一件事：界面上那些
+只说明情况的句子，以前在 Swing 侧一个字也选不动，现在能拖选、能 Ctrl+C 抄出去核对；
+旧做法一项没减（Tab 顺序、方向键翻表、`Ctrl+V` 添加、拖拽区点击选文件、
+「关于」的「复制全部」全部照旧）。
+
 
 
 
