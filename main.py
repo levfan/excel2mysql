@@ -1778,27 +1778,71 @@ def _sql_naming(name, initials, upper, lower, is_table):
     return case_switch(name, upper, lower)
 
 
+def _sql_data_frame(data, orig_fields, mapping):
+    """一张表的 INSERT 结果 -> (数据帧, 要点名的说明)。
+
+    帧的列头用生成物那一侧的字段名（改过大小写的也是），值按脚本里的原列名取；
+    省略列清单的语句按建表列序对位。哪一列该取网格的第几格由写盘那一步
+    （`core.meta_export.write_table`）自己按列头找，表定义里没有的列自然写空——
+    Java 侧的 `MetaExport.columnMap` 是同一条规则，两端不必各排一次下标。
+    """
+    import pandas as pd
+
+    notes = []
+    cols = data["columns"]
+    # 列名在 MySQL 里不分大小写：脚本写 `Name`、表定义是 `name` 也要对到同一格
+    by_lower = dict((f.lower(), mapping.get(f, f)) for f in orig_fields)
+    if cols is None:
+        header = [mapping.get(f, f) for f in orig_fields]
+        kept = [row for row in data["rows"] if len(row) == len(orig_fields)]
+        dropped = len(data["rows"]) - len(kept)
+    else:
+        header = [by_lower.get(c.lower(), c) for c in cols]
+        kept = list(data["rows"])
+        dropped = 0
+        for c in cols:
+            if c.lower() not in by_lower:
+                notes.append("列 %s 不在表定义里，这一列的值不写" % c)
+    if dropped:
+        notes.append("有 %d 行的值个数与建表列数对不上，这些行不写" % dropped)
+    if data["total"] > len(data["rows"]):
+        notes.append("脚本里共 %d 行，只写入前 %d 行（上限 SQL_EXPORT_ROW_CAP）"
+                     % (data["total"], len(data["rows"])))
+    if not kept:
+        return None, notes
+    return pd.DataFrame(kept, columns=header, dtype=object), notes
+
+
+# 一张表的「数据」Sheet 最多写进行数：mysqldump 的 extended-insert 能到几百万行，
+# 全写进 xlsx 既慢又会撑爆内存，超出部分只在日志点名。Java 侧同名常量在 SqlPage。
+SQL_EXPORT_ROW_CAP = 10000
+
+
 def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False):
-    """「SQL 脚本改名」页的生成标准/简易 Excel：先从脚本正文解析表定义，再走同一套导出。
+    """「SQL 脚本改名」页的生成标准/简易 Excel：列定义取 CREATE TABLE，数据取 INSERT。
 
     items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
     所以"先批量改前缀、再生成交付件"这条路是通的——产物里的表名就是新表名。
-    脚本里只有结构没有数据，所以「数据」Sheet 只有英文字段名那一行表头，
-    给下游当可填模板用，不假装里面有数据。
+    脚本里没有 INSERT 时「数据」Sheet 仍只有英文字段名那一行表头，那是给下游填的模板；
+    有 INSERT 就把值按字面量转出来写进去，每张表最多写 SQL_EXPORT_ROW_CAP 行，
+    超出的只在日志里点名（脚本正文本来就已整份在内存里，截断省的是转值与写盘）。
     第二页的大小写开关只作用在清单、元数据视图和生成物上；脚本正文一个字不动。
     """
     from core.meta_export import export_tables, SQL_DIR_TAG
+    from core.sql_script import parse_insert_rows
 
     if upper:
         sink.log("[命名] 生成物表名与字段名：转大写")
     elif lower:
         sink.log("[命名] 生成物表名与字段名：转小写")
     tables, where, used_tables = [], {}, {}
+    taken, orphan = set(), {}
     for path, text in items:
         if sink.cancelled:
             break
         base = os.path.basename(path)
         sink.note("解析 %s 的表定义…" % base)
+        data = parse_insert_rows(text, SQL_EXPORT_ROW_CAP)
         for t in parse_create_tables(text):
             name = t["table_name"]
             if name in where:
@@ -1810,18 +1854,38 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False):
                 sink.log("! [WARN] 说明 | `%s`：%s" % (name, note))
             if not t["columns"]:
                 continue        # 为什么不可导出，上面那条说明已经讲了
+            orig_fields = [c["field"] for c in t["columns"]]
+            mapping = {f: f for f in orig_fields}
             if upper or lower:
                 t = dict(t)
                 t["table_name"] = dedup_field(
                     used_tables, _sql_naming(t["table_name"], False, upper, lower, True))
                 seen_fields = {}
-                t["columns"] = [
-                    dict(c, field=dedup_field(
-                        seen_fields,
-                        _sql_naming(c["field"], False, upper, lower, False)))
-                    for c in t["columns"]
-                ]
+                renamed = []
+                for c in t["columns"]:
+                    new_field = dedup_field(
+                        seen_fields, _sql_naming(c["field"], False, upper, lower, False))
+                    mapping[c["field"]] = new_field
+                    renamed.append(dict(c, field=new_field))
+                t["columns"] = renamed
+            rows = data.pop(name, None) if name not in taken else None
+            taken.add(name)
+            if rows is not None:
+                frame, notes = _sql_data_frame(rows, orig_fields, mapping)
+                for note in rows["notes"] + notes:
+                    sink.log("! [WARN] 说明 | `%s`：%s" % (name, note))
+                if frame is not None:
+                    t["df"] = frame
             tables.append(t)
+        for extra, rows in data.items():
+            orphan[extra] = (base, rows["total"], extra in taken)
+    for extra, (base, total, dup) in orphan.items():
+        if dup:
+            sink.log("! [WARN] 跳过 | `%s`：%s 里的 %d 行数据不写，这张表只按第一次出现的那份"
+                     "定义导出" % (extra, base, total))
+        else:
+            sink.log("! [WARN] 跳过 | `%s`：%s 里有 %d 行 INSERT 数据，但脚本里没有它的"
+                     " CREATE TABLE，没有列定义可导出，整张表不写" % (extra, base, total))
     if not tables:
         sink.log("! [WARN] 没有可导出的表：这些脚本里解析不出带列定义的 CREATE TABLE")
         return {"dir": None, "written": [], "total": 0, "cancelled": sink.cancelled}
@@ -2728,20 +2792,26 @@ class MainWindow(QWidget):
         self.btn_sql_run.setStyleSheet(PRIMARY_BUTTON_QSS)
         self.btn_sql_run.clicked.connect(self.on_sql_execute)
         # 两颗生成按钮排在「执行修改后ddl脚本到当前库」右侧：与 Excel 导入页那两颗同一排同一口径，
-        # 数据源换成了脚本里的 CREATE TABLE，产物形状不变
+        # 数据源换成了脚本正文，列定义看 CREATE TABLE、数据看 INSERT
         self.btn_sql_gen_std = QPushButton("生成标准excel文件")
         self.btn_sql_gen_std.setToolTip(
             "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-            "Sheet1「元数据」是脚本里解析出的字段定义，Sheet2「数据」只有表头\n"
-            "（脚本里不含数据行，这一张是给下游填数据的模板）\n"
-            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖")
+            "Sheet1「元数据」是脚本里解析出的字段定义，"
+            "Sheet2「数据」是表头加脚本里 INSERT 的数据\n"
+            "（每张表最多写 %d 行，超出的只在日志点名；"
+            "脚本里没有 INSERT 就只剩表头，这一张仍是给下游填数据的模板）\n"
+            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖"
+            % SQL_EXPORT_ROW_CAP)
         self.btn_sql_gen_std.setEnabled(False)
         self.btn_sql_gen_std.clicked.connect(lambda: self.on_sql_gen_excel("标准", True))
         self.btn_sql_gen_simple = QPushButton("生成简易excel文件")
         self.btn_sql_gen_simple.setToolTip(
             "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-            "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头\n"
-            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖")
+            "只留「数据」一个 Sheet，表头是脚本里那些字段的英文名，"
+            "下面是 INSERT 的数据\n"
+            "（每张表最多写 %d 行，超出的只在日志点名）\n"
+            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖"
+            % SQL_EXPORT_ROW_CAP)
         self.btn_sql_gen_simple.setEnabled(False)
         self.btn_sql_gen_simple.clicked.connect(lambda: self.on_sql_gen_excel("简易", False))
 

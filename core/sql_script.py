@@ -1409,3 +1409,296 @@ def parse_create_tables(text: str) -> list:
         seen[name] = entry
         tables.append(entry)
     return tables
+
+
+# ---------------------------------------------------------------------------
+# 脚本取数：第二页「生成标准/简易 Excel」除了 CREATE TABLE 的列定义，还要把
+# INSERT 的字面量带进「数据」Sheet。Java 侧同构实现在 core/SqlScript.java 的
+# parseInsertRows，逐条判据进 verify/golden/sql.jsonl.gz 由 SqlDiffer 逐字节对。
+
+_INSERT_HEAD_RE = re.compile(r"^\s*(INSERT|REPLACE)\b", re.IGNORECASE)
+# 表名前面这些修饰词都可能夹在中间，逐个跳过比写一条大正则好维护
+_INSERT_SKIP_WORDS = ("LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY", "IGNORE", "INTO")
+_INSERT_VALUES_RE = re.compile(r"(VALUES|VALUE)\b", re.IGNORECASE)
+_INT_RE = re.compile(r"^[+-]?[0-9]+$")
+_FLOAT_RE = re.compile(r"^[+-]?(?:[0-9]*\.[0-9]+|[0-9]+\.[0-9]*|[0-9]+)[eE][+-]?[0-9]+$"
+                       r"|^[+-]?[0-9]*\.[0-9]+$|^[+-]?[0-9]+\.[0-9]*$")
+# 有符号 64 位是两栈共同的天花板：Python 的 int 无限大，Java 的 Long 不是，
+# 超出去就一律按文本落格并点名，免得两端写出两个不同的值
+_LONG_MIN, _LONG_MAX = -(1 << 63), (1 << 63) - 1
+_SQL_ESCAPES = {"0": "\x00", "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
+                "s": " ", "Z": "\x1a", "\\": "\\", "'": "'", '"': '"',
+                "%": "%", "_": "_"}
+# openpyxl 拒绝写控制字符（POI 那边会写出打不开的包），取数这一路先把它们摘掉
+_XLSX_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _read_name(masked: str, orig: str, i: int) -> tuple:
+    """从 i 起读一个标识符（反引号 / 双引号 / 裸词），返回 (名字, 下一个下标)。
+
+    读不出来返回 ("", i)。限定名 `db`.`tbl` 由调用方连着读两段、取最后一段，
+    与 CREATE TABLE 那条正则同一口径。
+    """
+    n = len(masked)
+    while i < n and masked[i].isspace():
+        i += 1
+    if i >= n:
+        return "", i
+    quote = masked[i]
+    if quote in ("`", '"'):
+        j = i + 1
+        buf = []
+        while j < n:
+            if masked[j] == quote:
+                if j + 1 < n and masked[j + 1] == quote:
+                    buf.append(quote)
+                    j += 2
+                    continue
+                return "".join(buf), j + 1
+            buf.append(orig[j])
+            j += 1
+        return "", i
+    m = re.match(r"[A-Za-z0-9_$]+", masked[i:])
+    if not m:
+        return "", i
+    return orig[i:i + len(m.group(0))], i + len(m.group(0))
+
+
+def _decode_sql_string(piece: str):
+    """'…' / "…" -> 引号里的原文（解双写引号与反斜杠转义）；不是完整字面量返回 None。
+
+    判断"完整"靠扫：中途遇到没有成对的收尾引号，说明这块是 `'a' + 'b'` 这类表达式，
+    返回 None 让调用方按原样文本处理，不假装取到了值。
+    """
+    if len(piece) < 2 or piece[0] != piece[-1] or piece[0] not in ("'", '"'):
+        return None
+    quote = piece[0]
+    out = []
+    i, n = 1, len(piece) - 1
+    while i < n:
+        ch = piece[i]
+        if ch == "\\" and i + 1 < len(piece):
+            out.append(_SQL_ESCAPES.get(piece[i + 1], piece[i + 1]))
+            i += 2
+            continue
+        if ch == quote:
+            if i + 1 < len(piece) and piece[i + 1] == quote:
+                out.append(quote)
+                i += 2
+                continue
+            return None
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _insert_value(piece: str) -> tuple:
+    """一个字面量 -> (值, 说明或 None)。说明非空表示这一格没能按字面量转出去。
+
+    类型判定只有四档，两栈必须完全一致：NULL→空、整数→整数、小数与科学计数→浮点、
+    引号串→字符串；其余（函数、表达式、十六进制、位串、DEFAULT）一律原样文本。
+    """
+    s = piece.strip()
+    if not s:
+        return "", "空的值"
+    if s.upper() == "NULL":
+        return None, None
+    text = _decode_sql_string(s)
+    if text is not None:
+        return text, None
+    if _INT_RE.match(s):
+        num = int(s)
+        if _LONG_MIN <= num <= _LONG_MAX:
+            return num, None
+        return s, "整数 %s 超出 64 位范围" % s
+    if _FLOAT_RE.match(s):
+        return float(s), None
+    return s, "值 %s 不是字面量" % s
+
+
+def parse_insert_rows(text: str, cap: int = 0) -> dict:
+    """脚本正文 -> {表名: {"columns": [...] 或 None, "rows": [...], "total": n, "notes": [...]}}
+
+    只认 `INSERT [IGNORE] INTO t (列…) VALUES (…), (…)`、省列清单的写法，
+    以及同形状的 `REPLACE INTO`。一张表在多条语句里出现（mysqldump 的 extended-insert
+    就是这么拆的）行会连着累，`total` 报的是脚本里真实的行数。
+
+    `columns` 是第一条带列清单的语句里那份列名；后面省略列清单的语句按它的位置对位，
+    对不上（值个数与列数不等）的行不写、只记说明。整份脚本都没列清单时 `columns` 是
+    None，由调用方按 CREATE TABLE 的列序对位。
+
+    `cap` 大于 0 时最多收这么多行，超出的行只计数不再转值——写进 xlsx 的每一张表
+    都有一份上限，百万行的 dump 不至于把生成这一步变成内存黑洞。
+    """
+    result = {}
+    for stmt in split_sql_statements(text):
+        masked = _mask_comments(stmt)
+        head = _INSERT_HEAD_RE.match(masked)
+        if not head:
+            continue
+        i = head.end()
+        while True:
+            word, j = _read_name(masked, stmt, i)
+            if not word or word.upper() not in _INSERT_SKIP_WORDS:
+                break
+            i = j
+        name, i = _read_name(masked, stmt, i)
+        if not name:
+            continue
+        if masked[i:i + 1] == ".":                      # db.tbl：取最后一段
+            name, i = _read_name(masked, stmt, i + 1)
+            if not name:
+                continue
+        entry = result.setdefault(name, {"columns": None, "rows": [],
+                                         "total": 0, "notes": []})
+        while masked[i:i + 1].isspace():
+            i += 1
+        cols = None
+        if masked[i:i + 1] == "(":
+            close = _match_paren_quoted(masked, i)
+            if close == -1:
+                entry["notes"].append("列清单的括号配不上，这条 INSERT 整条不取")
+                continue
+            cols = []
+            body_masked = masked[i + 1:close]
+            for piece in _split_value_list(stmt[i + 1:close], body_masked):
+                col, _ = _read_name(piece, piece, 0)
+                if not col:
+                    cols = None
+                    break
+                cols.append(col)
+            if cols is None:
+                entry["notes"].append("列清单里认不出列名，这条 INSERT 整条不取")
+                continue
+            if entry["columns"] is None:
+                # 列清单只记第一次出现的那份：后面省略列清单的语句按它的位置对位
+                entry["columns"] = cols
+            i = close + 1
+            while masked[i:i + 1].isspace():
+                i += 1
+        vm = _INSERT_VALUES_RE.match(masked, i)
+        if not vm:
+            entry["notes"].append("没看到 VALUES（SET 写法或表达式片段不支持），这条不取")
+            continue
+        if cols is None and entry["columns"] is not None:
+            # 这条省略了列清单：按本表已知的列序对位，列数对不上就不写（在取行里判）
+            cols = entry["columns"]
+        _read_tuples(masked, stmt, vm.end(), entry, cols, cap)
+    return result
+
+
+def _match_paren_quoted(masked: str, start: int) -> int:
+    """从 masked[start] 的 '(' 找配对的 ')'，引号里的括号不算。
+
+    `_match_paren` 只数括号——列定义那一路靠括号把 ENUM('a,b') 包住就够用。
+    值这一路 `'统计(1,2)'` 太常见，不认引号就会把字符串里的括号当成结构，
+    把整行切错。屏蔽副本里引号是原样留着的，所以这里自己认。
+    """
+    depth = 0
+    i, n = start, len(masked)
+    while i < n:
+        ch = masked[i]
+        if ch in ("'", '"', "`"):
+            i = _skip_quoted(masked, i)
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _skip_quoted(masked: str, i: int) -> int:
+    """masked[i] 是引号，返回引号结束之后的下标（认 `` 双写与反斜杠转义）。"""
+    quote = masked[i]
+    n = len(masked)
+    i += 1
+    while i < n:
+        if masked[i] == "\\" and quote != "`":
+            i += 2
+            continue
+        if masked[i] == quote:
+            if i + 1 < n and masked[i + 1] == quote:
+                i += 2
+                continue
+            return i + 1
+        i += 1
+    return n
+
+
+def _split_value_list(body: str, masked: str) -> list:
+    """一行 VALUES 按顶层逗号切开：括号内与引号内的逗号都不算。"""
+    out, depth, last, i, n = [], 0, 0, 0, len(masked)
+    while i < n:
+        ch = masked[i]
+        if ch in ("'", '"', "`"):
+            i = _skip_quoted(masked, i)
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            out.append(body[last:i])
+            last = i + 1
+        i += 1
+    tail = body[last:]
+    if tail.strip():
+        out.append(tail)
+    return out
+
+
+def _read_tuples(masked: str, orig: str, i: int, entry: dict, cols, cap: int) -> None:
+    """从 VALUES 之后逐个取 (…) 组；碰到不是左括号就收口（ON DUPLICATE KEY 那一段）。"""
+    n = len(masked)
+    index = 0
+    while True:
+        while i < n and masked[i].isspace():
+            i += 1
+        if i >= n or masked[i] != "(":
+            return
+        close = _match_paren_quoted(masked, i)
+        if close == -1:
+            entry["notes"].append("第 %d 行的括号没闭合，这一行与后面的行都不取" % (index + 1))
+            return
+        index += 1
+        nxt = close + 1
+        if cap and len(entry["rows"]) >= cap:
+            entry["total"] += 1          # 到上限之后只数行，不再拆值、不再转类型
+        else:
+            body_masked = masked[i + 1:close]
+            pieces = _split_value_list(orig[i + 1:close], body_masked)
+            row, lost = [], []
+            for piece in pieces:
+                value, why = _insert_value(piece)
+                if why:
+                    lost.append(why)
+                if isinstance(value, str):
+                    cut = _XLSX_ILLEGAL_RE.sub("", value)
+                    if cut != value:
+                        lost.append("值里有 xlsx 存不下的控制字符，已摘掉")
+                    value = cut
+                row.append(value)
+            entry["total"] += 1
+            for why in lost:
+                _note_once(entry, "%s（第 %d 行）" % (why, index))
+            if cols is not None and len(row) != len(cols):
+                _note_once(entry, "第 %d 行有 %d 个值，列清单是 %d 个，这一行不写"
+                           % (index, len(row), len(cols)))
+            else:
+                entry["rows"].append(row)
+        i = nxt
+        while i < n and masked[i].isspace():
+            i += 1
+        if i >= n or masked[i] != ",":
+            return               # 不是逗号就收口：ON DUPLICATE KEY 那一段不进数据
+        i += 1
+
+
+def _note_once(entry: dict, note: str) -> None:
+    """同一条说明只点一次：一张表几万个函数值不该把日志刷满。"""
+    if note not in entry["notes"]:
+        entry["notes"].append(note)

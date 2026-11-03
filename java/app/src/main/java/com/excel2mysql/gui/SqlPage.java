@@ -200,16 +200,28 @@ public final class SqlPage extends JPanel {
     private final Host host;
     private final List<Entry> entries = new ArrayList<Entry>();
 
+    /**
+     * 一张表的「数据」Sheet 最多写进行数：mysqldump 的 extended-insert 能到几百万行，
+     * 全写进 xlsx 既慢又会撑爆内存，超出部分只在日志点名。与 Python 同名常量同值。
+     */
+    static final int SQL_EXPORT_ROW_CAP = 10000;
+
     /** 两颗生成按钮的说明与「Excel 导入」页那两颗同一口径，只是数据源换成了脚本正文。 */
-    private static final String GEN_STD_TIP =
+    private static final String GEN_STD_TIP = String.format(
             "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-                    + "Sheet1「元数据」是脚本里解析出的字段定义，Sheet2「数据」只有表头\n"
-                    + "（脚本里不含数据行，这一张是给下游填数据的模板）\n"
-                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖";
-    private static final String GEN_SIMPLE_TIP =
+                    + "Sheet1「元数据」是脚本里解析出的字段定义，"
+                    + "Sheet2「数据」是表头加脚本里 INSERT 的数据\n"
+                    + "（每张表最多写 %d 行，超出的只在日志点名；"
+                    + "脚本里没有 INSERT 就只剩表头，这一张仍是给下游填数据的模板）\n"
+                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖",
+            SQL_EXPORT_ROW_CAP);
+    private static final String GEN_SIMPLE_TIP = String.format(
             "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-                    + "只留「数据」一个 Sheet，里面只有脚本里那些字段的英文名表头\n"
-                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖";
+                    + "只留「数据」一个 Sheet，表头是脚本里那些字段的英文名，"
+                    + "下面是 INSERT 的数据\n"
+                    + "（每张表最多写 %d 行，超出的只在日志点名）\n"
+                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖",
+            SQL_EXPORT_ROW_CAP);
     private JButton genStd;
     private JButton genSimple;
     /** 保存/执行两颗动作按钮：清单空时置灰（与两颗生成按钮同一处判据）。 */
@@ -1978,20 +1990,22 @@ public final class SqlPage extends JPanel {
     }
 
     /**
-     * 任务体：逐脚本解析 CREATE TABLE → 交给 meta_export 写盘。
+     * 任务体：逐脚本解析 CREATE TABLE 取列定义、解析 INSERT 取数据行 → 交给 meta_export 写盘。
      *
      * 解析取的是页面上**改过名之后**的当前文本，所以"先批量改前缀、再生成交付件"
      * 这条路是通的，产物里的表名就是新表名。同名表只按第一处定义导出，
-     * 表达不了的类型（UNSIGNED、ENUM 等）逐列点名，脚本里没有数据行所以「数据」Sheet
-     * 只有表头——这些都是日志里要看得见的决定，不是静默近似。
+     * 表达不了的类型（UNSIGNED、ENUM 等）逐列点名，脚本里没有 INSERT 时「数据」Sheet
+     * 只剩表头——这些都是日志里要看得见的决定，不是静默近似。
      */
-    static GenResult exportFromScripts(List<Src> items, String outRoot, boolean withMeta,
-                                       boolean upper, boolean lower,
-                                       ImportParse.Sink sink) {
+    public static GenResult exportFromScripts(List<Src> items, String outRoot, boolean withMeta,
+                                              boolean upper, boolean lower,
+                                              ImportParse.Sink sink) {
         GenResult res = new GenResult();
         List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
         Map<String, String> where = new LinkedHashMap<String, String>();
         Map<String, Integer> usedTables = new LinkedHashMap<String, Integer>();
+        Set<String> taken = new LinkedHashSet<String>();
+        Map<String, Object[]> orphan = new LinkedHashMap<String, Object[]>();
         if (upper) {
             // 与 Python 的 sql_meta_export_task 同一句：生成物被改过名要能一眼看见
             sink.log("[命名] 生成物表名与字段名：转大写");
@@ -2006,6 +2020,8 @@ public final class SqlPage extends JPanel {
             // advance(0, …)：只换进度框上那行字、不推进进度（与 Python 的 sink.note 同义，
             // 总数要等全部解析完才算得出来）
             sink.advance(0, "解析 " + base + " 的表定义…");
+            Map<String, SqlScript.InsertRows> data =
+                    SqlScript.parseInsertRows(s.text, SQL_EXPORT_ROW_CAP);
             for (SqlScript.ParsedTable t : SqlScript.parseCreateTables(s.text)) {
                 String name = t.tableName;
                 if (where.containsKey(name)) {
@@ -2020,7 +2036,30 @@ public final class SqlPage extends JPanel {
                 if (t.columns.isEmpty()) {
                     continue;      // 为什么不可导出，上面那条说明已经讲了
                 }
-                work.add(ofParsed(t, upper, lower, usedTables));
+                MetaExport.Source src = ofParsed(t, upper, lower, usedTables);
+                SqlScript.InsertRows rows = taken.contains(name)
+                        ? null : data.remove(name);
+                taken.add(name);
+                if (rows != null) {
+                    attachData(src, t, rows, name, sink);
+                }
+                work.add(src);
+            }
+            for (Map.Entry<String, SqlScript.InsertRows> e : data.entrySet()) {
+                orphan.put(e.getKey(), new Object[] {base, Integer.valueOf(e.getValue().total),
+                        Boolean.valueOf(taken.contains(e.getKey()))});
+            }
+        }
+        for (Map.Entry<String, Object[]> e : orphan.entrySet()) {
+            String base = String.valueOf(e.getValue()[0]);
+            String total = String.valueOf(e.getValue()[1]);
+            if (((Boolean) e.getValue()[2]).booleanValue()) {
+                sink.log("! [WARN] 跳过 | `" + e.getKey() + "`：" + base + " 里的 " + total
+                        + " 行数据不写，这张表只按第一次出现的那份定义导出");
+            } else {
+                sink.log("! [WARN] 跳过 | `" + e.getKey() + "`：" + base + " 里有 " + total
+                        + " 行 INSERT 数据，但脚本里没有它的 CREATE TABLE，"
+                        + "没有列定义可导出，整张表不写");
             }
         }
         res.total = work.size();
@@ -2045,6 +2084,74 @@ public final class SqlPage extends JPanel {
     /** 解析结果 -> meta_export 的入参：脚本里没有数据行，rows 留空，数据 Sheet 只剩表头。 */
     static MetaExport.Source ofParsed(SqlScript.ParsedTable t) {
         return ofParsed(t, false, false, null);
+    }
+
+    /**
+     * 把一张表的 INSERT 行挂成数据网格：列头用生成物那一侧的字段名（改过大小写的也是），
+     * 值按脚本里的原列名取；哪一列该取网格的第几格由 {@code MetaExport.columnMap} 按列头找，
+     * 表定义里没有的列自然写空——与 Python 的 {@code _sql_data_frame} 同一套对位。
+     *
+     * <p>列名在 MySQL 里不分大小写：脚本写 {@code Name}、表定义是 {@code name}，
+     * 也要对到同一格。对不上位的行不硬凑，说明照旧印进日志。
+     */
+    private static void attachData(MetaExport.Source src, SqlScript.ParsedTable t,
+                                   SqlScript.InsertRows data, String name,
+                                   ImportParse.Sink sink) {
+        List<String> orig = new ArrayList<String>();
+        for (Infer.Column c : t.columns) {
+            orig.add(c.field);
+        }
+        // ofParsed 之后 src.table.columns 与 t.columns 逐位对应，改名后的名字按位取
+        Map<String, String> byLower = new LinkedHashMap<String, String>();
+        for (int i = 0; i < orig.size(); i++) {
+            byLower.put(lower(orig.get(i)), src.table.columns.get(i).field);
+        }
+        for (String note : data.notes) {
+            sink.log("! [WARN] 说明 | `" + name + "`：" + note);
+        }
+        List<Object> header = new ArrayList<Object>();
+        List<List<Object>> kept = new ArrayList<List<Object>>();
+        int dropped = 0;
+        if (data.columns == null) {
+            for (int i = 0; i < orig.size(); i++) {
+                header.add(src.table.columns.get(i).field);
+            }
+            for (List<Object> row : data.rows) {
+                if (row.size() == orig.size()) {
+                    kept.add(row);
+                } else {
+                    dropped++;
+                }
+            }
+        } else {
+            for (String c : data.columns) {
+                String field = byLower.get(lower(c));
+                if (field == null) {
+                    sink.log("! [WARN] 说明 | `" + name + "`：列 " + c
+                            + " 不在表定义里，这一列的值不写");
+                    field = c;
+                }
+                header.add(field);
+            }
+            kept.addAll(data.rows);
+        }
+        if (dropped > 0) {
+            sink.log("! [WARN] 说明 | `" + name + "`：有 " + dropped
+                    + " 行的值个数与建表列数对不上，这些行不写");
+        }
+        if (data.total > data.rows.size()) {
+            sink.log("! [WARN] 说明 | `" + name + "`：脚本里共 " + data.total + " 行，"
+                    + "只写入前 " + data.rows.size() + " 行（上限 SQL_EXPORT_ROW_CAP）");
+        }
+        if (kept.isEmpty()) {
+            return;
+        }
+        src.headers = header;
+        src.rows = kept;
+    }
+
+    private static String lower(String s) {
+        return s == null ? "" : s.toLowerCase(java.util.Locale.ROOT);
     }
 
     /** 大小写档：两档同时给时按大写，与 Names.caseSwitch、Python 侧 case_switch 同一条口径。 */

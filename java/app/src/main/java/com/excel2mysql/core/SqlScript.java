@@ -1074,6 +1074,369 @@ public final class SqlScript {
         return tables;
     }
 
+    /**
+     * 一张表从脚本 INSERT 里取到的东西：列清单（整张表都没写就是 null）、
+     * 行、脚本里真实的行数，以及要点名的说明。
+     */
+    public static final class InsertRows {
+        public List<String> columns;
+        public final List<List<Object>> rows = new ArrayList<List<Object>>();
+        public int total;
+        public final List<String> notes = new ArrayList<String>();
+    }
+
+    private static final Pattern INSERT_HEAD =
+            Pattern.compile("\\s*(?:INSERT|REPLACE)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern INSERT_VALUES =
+            Pattern.compile("(?:VALUES|VALUE)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern BARE_WORD = Pattern.compile("[A-Za-z0-9_$]+");
+    private static final Pattern INT_LIT = Pattern.compile("[+-]?[0-9]+");
+    // 三条分支的先后与 Python 的 _FLOAT_RE 逐字对齐，分类结果不许两端不一样
+    private static final Pattern FLOAT_LIT = Pattern.compile(
+            "[+-]?(?:[0-9]*\\.[0-9]+|[0-9]+\\.[0-9]*|[0-9]+)[eE][+-]?[0-9]+"
+            + "|[+-]?[0-9]*\\.[0-9]+|[+-]?[0-9]+\\.[0-9]*");
+    private static final Pattern XLSX_ILLEGAL =
+            Pattern.compile("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]");
+    private static final String[] INSERT_SKIP_WORDS = {
+        "LOW_PRIORITY", "DELAYED", "HIGH_PRIORITY", "IGNORE", "INTO"};
+
+    /**
+     * 脚本正文 -> {表名: InsertRows}，按首次出现顺序。
+     *
+     * 只认 `INSERT [IGNORE] INTO t (列…) VALUES (…), (…)`、省列清单的写法，
+     * 以及同形状的 `REPLACE INTO`；一张表在多条语句里出现（mysqldump 的
+     * extended-insert）行会连着累。`cap` 大于 0 时最多收这么多行，
+     * 超出的行只加 total、不再拆值转类型——百万行的 dump 不该把生成这一步变成内存黑洞。
+     *
+     * 值只分四档，与 Python 的 parse_insert_rows 完全一致：NULL→空、整数→Long、
+     * 小数与科学计数→Double、引号串→String；其余（函数、表达式、十六进制、位串、
+     * DEFAULT）原样落文本并记一条说明。
+     */
+    public static Map<String, InsertRows> parseInsertRows(String text, int cap) {
+        Map<String, InsertRows> result = new LinkedHashMap<String, InsertRows>();
+        for (String stmt : splitStatements(text)) {
+            String masked = maskComments(stmt);
+            Matcher head = INSERT_HEAD.matcher(masked);
+            head.region(0, masked.length());
+            if (!head.lookingAt()) {
+                continue;
+            }
+            int i = head.end();
+            while (true) {
+                NameAt word = readNameAt(masked, stmt, i);
+                if (word.name.isEmpty() || !isInsertSkipWord(word.name)) {
+                    break;
+                }
+                i = word.end;
+            }
+            NameAt name = readNameAt(masked, stmt, i);
+            if (name.name.isEmpty()) {
+                continue;
+            }
+            i = name.end;
+            if (i < masked.length() && masked.charAt(i) == '.') {     // db.tbl：取最后一段
+                name = readNameAt(masked, stmt, i + 1);
+                if (name.name.isEmpty()) {
+                    continue;
+                }
+                i = name.end;
+            }
+            InsertRows entry = result.get(name.name);
+            if (entry == null) {
+                entry = new InsertRows();
+                result.put(name.name, entry);
+            }
+            while (i < masked.length() && Character.isWhitespace(masked.charAt(i))) {
+                i++;
+            }
+            List<String> cols = null;
+            if (i < masked.length() && masked.charAt(i) == '(') {
+                int close = matchParenQuoted(masked, i);
+                if (close < 0) {
+                    addNote(entry, "列清单的括号配不上，这条 INSERT 整条不取");
+                    continue;
+                }
+                String bodyMasked = masked.substring(i + 1, close);
+                cols = new ArrayList<String>();
+                for (String piece : splitValueList(stmt.substring(i + 1, close), bodyMasked)) {
+                    String col = readNameAt(piece, piece, 0).name;
+                    if (col.isEmpty()) {
+                        cols = null;
+                        break;
+                    }
+                    cols.add(col);
+                }
+                if (cols == null) {
+                    addNote(entry, "列清单里认不出列名，这条 INSERT 整条不取");
+                    continue;
+                }
+                if (entry.columns == null) {
+                    // 列清单只记第一次出现的那份：后面省略列清单的语句按它的位置对位
+                    entry.columns = cols;
+                }
+                i = close + 1;
+                while (i < masked.length() && Character.isWhitespace(masked.charAt(i))) {
+                    i++;
+                }
+            }
+            Matcher vm = INSERT_VALUES.matcher(masked);
+            vm.region(i, masked.length());
+            if (!vm.lookingAt()) {
+                addNote(entry, "没看到 VALUES（SET 写法或表达式片段不支持），这条不取");
+                continue;
+            }
+            if (cols == null && entry.columns != null) {
+                cols = entry.columns;       // 这条省略了列清单：按本表已知列序对位
+            }
+            readTuples(masked, stmt, vm.end(), entry, cols, cap);
+        }
+        return result;
+    }
+
+    private static boolean isInsertSkipWord(String word) {
+        for (String skip : INSERT_SKIP_WORDS) {
+            if (skip.equalsIgnoreCase(word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 从 VALUES 之后逐个取 (…) 组；碰到不是左括号就收口（ON DUPLICATE KEY 那一段）。 */
+    private static void readTuples(String masked, String orig, int i, InsertRows entry,
+                                   List<String> cols, int cap) {
+        int n = masked.length();
+        int index = 0;
+        while (true) {
+            while (i < n && Character.isWhitespace(masked.charAt(i))) {
+                i++;
+            }
+            if (i >= n || masked.charAt(i) != '(') {
+                return;
+            }
+            int close = matchParenQuoted(masked, i);
+            if (close < 0) {
+                entry.notes.add("第 " + (index + 1) + " 行的括号没闭合，"
+                        + "这一行与后面的行都不取");
+                return;
+            }
+            index++;
+            int next = close + 1;
+            if (cap > 0 && entry.rows.size() >= cap) {
+                entry.total++;               // 到上限之后只数行，不再拆值、不再转类型
+            } else {
+                String bodyMasked = masked.substring(i + 1, close);
+                List<Object> row = new ArrayList<Object>();
+                List<String> lost = new ArrayList<String>();
+                for (String piece : splitValueList(orig.substring(i + 1, close), bodyMasked)) {
+                    Object[] cell = insertValue(piece);
+                    if (cell[1] != null) {
+                        lost.add(String.valueOf(cell[1]));
+                    }
+                    Object value = cell[0];
+                    if (value instanceof String) {
+                        String cut = XLSX_ILLEGAL.matcher((String) value).replaceAll("");
+                        if (!cut.equals(value)) {
+                            lost.add("值里有 xlsx 存不下的控制字符，已摘掉");
+                        }
+                        value = cut;
+                    }
+                    row.add(value);
+                }
+                entry.total++;
+                for (String why : lost) {
+                    addNote(entry, why + "（第 " + index + " 行）");
+                }
+                if (cols != null && row.size() != cols.size()) {
+                    addNote(entry, "第 " + index + " 行有 " + row.size() + " 个值，"
+                            + "列清单是 " + cols.size() + " 个，这一行不写");
+                } else {
+                    entry.rows.add(row);
+                }
+            }
+            i = next;
+            while (i < n && Character.isWhitespace(masked.charAt(i))) {
+                i++;
+            }
+            if (i >= n || masked.charAt(i) != ',') {
+                return;                      // 不是逗号就收口：ON DUPLICATE KEY 那段不进数据
+            }
+            i++;
+        }
+    }
+
+    private static void addNote(InsertRows entry, String note) {
+        // 同一条说明只点一次：一张表几万个函数值不该把日志刷满
+        if (!entry.notes.contains(note)) {
+            entry.notes.add(note);
+        }
+    }
+
+    /** 一个字面量 -> {值, 说明}；说明非空表示这一格没能按字面量转出去。 */
+    private static Object[] insertValue(String piece) {
+        String s = piece.trim();
+        if (s.isEmpty()) {
+            return new Object[] {"", "空的值"};
+        }
+        if (s.equalsIgnoreCase("NULL")) {
+            return new Object[] {null, null};
+        }
+        String text = decodeSqlString(s);
+        if (text != null) {
+            return new Object[] {text, null};
+        }
+        if (INT_LIT.matcher(s).matches()) {
+            try {
+                return new Object[] {Long.valueOf(s), null};
+            } catch (NumberFormatException e) {
+                // 超出 64 位：Python 的 int 无限大、Java 的 Long 不是，两端一律按文本落格
+                return new Object[] {s, "整数 " + s + " 超出 64 位范围"};
+            }
+        }
+        if (FLOAT_LIT.matcher(s).matches()) {
+            return new Object[] {Double.valueOf(s), null};
+        }
+        return new Object[] {s, "值 " + s + " 不是字面量"};
+    }
+
+    /**
+     * '…' / "…" -> 引号里的原文（解双写引号与反斜杠转义）；不是完整字面量返回 null。
+     *
+     * 判断"完整"靠扫：中途遇到没有成对的收尾引号，说明这块是 `'a' + 'b'` 这类表达式，
+     * 返回 null 让调用方按原样文本处理，不假装取到了值。
+     */
+    private static String decodeSqlString(String piece) {
+        if (piece.length() < 2) {
+            return null;
+        }
+        char quote = piece.charAt(0);
+        if ((quote != '\'' && quote != '"') || piece.charAt(piece.length() - 1) != quote) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder();
+        int i = 1, n = piece.length() - 1;
+        while (i < n) {
+            char ch = piece.charAt(i);
+            if (ch == '\\' && i + 1 < piece.length()) {
+                out.append(sqlEscape(piece.charAt(i + 1)));
+                i += 2;
+                continue;
+            }
+            if (ch == quote) {
+                if (i + 1 < piece.length() && piece.charAt(i + 1) == quote) {
+                    out.append(quote);
+                    i += 2;
+                    continue;
+                }
+                return null;
+            }
+            out.append(ch);
+            i++;
+        }
+        return out.toString();
+    }
+
+    /** 反斜杠转义表，与 Python 的 _SQL_ESCAPES 同值；认不出的按那个字符本身。 */
+    private static char sqlEscape(char next) {
+        switch (next) {
+            case '0': return '\u0000';
+            case 'n': return '\n';
+            case 't': return '\t';
+            case 'r': return '\r';
+            case 'b': return '\b';
+            case 'f': return '\f';
+            case 's': return ' ';
+            case 'Z': return '\u001a';
+            default: return next;
+        }
+    }
+
+    /** 从 i 起读一个标识符（反引号 / 双引号 / 裸词）；读不出来返回 {"", i}。 */
+    private static NameAt readNameAt(String masked, String orig, int i) {
+        int n = masked.length();
+        while (i < n && Character.isWhitespace(masked.charAt(i))) {
+            i++;
+        }
+        if (i >= n) {
+            return new NameAt("", i);
+        }
+        char quote = masked.charAt(i);
+        if (quote == '`' || quote == '"') {
+            StringBuilder buf = new StringBuilder();
+            int j = i + 1;
+            while (j < n) {
+                if (masked.charAt(j) == quote) {
+                    if (j + 1 < n && masked.charAt(j + 1) == quote) {
+                        buf.append(quote);
+                        j += 2;
+                        continue;
+                    }
+                    return new NameAt(buf.toString(), j + 1);
+                }
+                buf.append(orig.charAt(j));
+                j++;
+            }
+            return new NameAt("", i);
+        }
+        Matcher m = BARE_WORD.matcher(masked);
+        m.region(i, n);
+        if (!m.lookingAt()) {
+            return new NameAt("", i);
+        }
+        return new NameAt(orig.substring(i, m.end()), m.end());
+    }
+
+    /** 从 masked[start] 的 '(' 找配对的 ')'，引号里的括号不算。 */
+    private static int matchParenQuoted(String masked, int start) {
+        int depth = 0;
+        int i = start, n = masked.length();
+        while (i < n) {
+            char ch = masked.charAt(i);
+            if (ch == '\'' || ch == '"' || ch == '`') {
+                i = skipQuoted(masked, i, ch);
+                continue;
+            }
+            if (ch == '(') {
+                depth++;
+            } else if (ch == ')') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    /** 一行 VALUES 按顶层逗号切开：括号内与引号内的逗号都不算。 */
+    private static List<String> splitValueList(String body, String masked) {
+        List<String> out = new ArrayList<String>();
+        int depth = 0, last = 0;
+        int i = 0, n = masked.length();
+        while (i < n) {
+            char ch = masked.charAt(i);
+            if (ch == '\'' || ch == '"' || ch == '`') {
+                i = skipQuoted(masked, i, ch);
+                continue;
+            }
+            if (ch == '(') {
+                depth++;
+            } else if (ch == ')') {
+                depth--;
+            } else if (ch == ',' && depth == 0) {
+                out.add(body.substring(last, i));
+                last = i + 1;
+            }
+            i++;
+        }
+        String tail = body.substring(last);
+        if (!tail.trim().isEmpty()) {
+            out.add(tail);
+        }
+        return out;
+    }
+
     /** 返回与 text 等长、注释字符换成空格的副本；引号里的内容原样留着，索引一一对应。 */
     static String maskComments(String text) {
         char[] out = text.toCharArray();
