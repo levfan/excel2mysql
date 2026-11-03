@@ -93,7 +93,7 @@ public final class HelpDoc {
                     "<code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到" + NL +
                     "<code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.11.0.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.12.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
@@ -584,7 +584,10 @@ public final class HelpDoc {
                     "的做法已废弃：2 位小数的普通列占用不必要的宽度，又装不下 7 位小数的经纬度列</li>" + NL +
                     "<li><b>行内字节预算</b>：utf8mb4 下每个 <code>VARCHAR(n)</code> 计 4n 字节，" + NL +
                     "整表共享 60000 字节预算，预算不足的大文本列自动退为 <code>TEXT</code>，" + NL +
-                    "保证建表不报 Row size too large</li>" + NL +
+                    "保证建表不报 Row size too large。按表头语义给的那几档字面类型（名称 255、链接 512、" + NL +
+                    "默认 64）同样占行内字节，一起进这份预算——几十列只写了表头的宽模板，" + NL +
+                    "从前会一起把 MySQL 单行 65535 的上限顶穿、整张表建不出来，现在排到后面的列退为" + NL +
+                    "<code>TEXT</code>，表照旧建得出，日志与预览里那一列写明\"退为 TEXT 建列\"</li>" + NL +
                     "<li><b>超大整数也有去处</b>：超过 BIGINT 范围改用 <code>DECIMAL(n,0)</code>，" + NL +
                     "超过 65 位精度才退为文本并留痕，不会建出装不下数据的列、等第一条超界数据再报" + NL +
                     "<code>1264</code> 回滚。Excel 的数值单元格本身是双精度浮点，" + NL +
