@@ -259,21 +259,32 @@ def all_word_headers():
     为什么不靠人肉挑样本：词表现在有近千条，人工样本永远只覆盖点到的那几个，
     「两栈逐条同序」就成了口头承诺。全量词条进夹具后，每一条都必须在 Java 线
     给出同一个类型词，少一条词、错一个顺序、Java 漏抄一条都会在这里露出来。
+    抓取范围按名字认：`_NAME_*_CN` / `_CODE_CN` / `_MONEY_CN` 这些词表，以及
+    `_NAME_*_EN` / `_CODE_EN` / `_MONEY_EN` 里的英文词根——新增一桶不必改这里，
+    按命名走就自动进夹具。
+    两条否决规则（码值让金额、码值让名字）单独造复合表头：后缀词自己成列时
+    落进的是名称/金额桶，测不到"结尾决定归属"那一步。
     """
     import core.infer as infer
 
     words = []
     for name in sorted(dir(infer)):
-        if name == "_MONEY_CN" or (name.startswith("_NAME_") and name.endswith("_CN")):
+        if (name in ("_MONEY_CN", "_CODE_CN", "_CODE_VETO_SUFFIX", "_NAME_ID_SUFFIX")
+                or (name.startswith("_NAME_") and name.endswith("_CN"))):
             value = getattr(infer, name)
             words.extend([value] if isinstance(value, str) else list(value))
     for name in sorted(dir(infer)):
-        if name in ("_MONEY_EN", "_RATE_EN") or (
+        if name in ("_MONEY_EN", "_RATE_EN", "_CODE_EN") or (
                 name.startswith("_NAME_") and name.endswith("_EN")):
             for hit in re.finditer(r"\?:([a-z_|]+)\)", getattr(infer, name).pattern):
                 words.extend(hit.group(1).split("|"))
+    # 复合表头：码值词 + 金额尾巴 / 码值词 + 名字尾巴，两条否决各压一遍
+    composites = [u"卡号" + w for w in infer._CODE_VETO_SUFFIX]
+    composites += [u"账号" + w for w in infer._MONEY_CN]
+    composites += [u"身份证" + w for w in (u"日期", u"有效期", u"照片", u"正面")]
+    composites += [u"销量" + w for w in (u"额", u"额度")]
     seen, out = set(), []
-    for w in words:
+    for w in words + composites:
         w = str(w).strip()
         if w and w not in seen:
             seen.add(w)
@@ -287,6 +298,32 @@ def make_name_words(path):
     ws = wb.active
     ws.title = "数据"
     ws.append(all_word_headers())
+    wb.save(path)
+
+
+def make_semantic(path):
+    """有值列的表头语义修正：一条列只压一条规则，两栈必须逐列给同一个类型词。
+
+    压的四条：码值列样本全是数字也按文本（建成 BIGINT 后带 X 的身份证号写不进去）、
+    产量类物质量样本为整数也给 DECIMAL 且小数位不为 0、笔数类仍按 INT、
+    钱在尾巴上的（账号余额）仍按金额而不是码值。
+    另给一列日期串压反向判据：码值词 + 日期尾巴（身份证有效期）不该被抢成文本。
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = u"语义修正"
+    rows = [
+        [u"身份证号", u"手机号", u"邮政编码", u"账号余额", u"销量", u"产量",
+         u"交易量", u"身份证有效期", u"流水号"],
+        [u"110101199003078877", u"13800138000", u"100000", 100, 120, 120, 300,
+         u"2030-01-01", 100001],
+        [u"32031119990101001X", u"13900139000", u"266000", 200.5, 300, 12.5, 400,
+         u"2031-02-03", 100002],
+        [u"11010119900307888", u"8613800138000", u"518000", 0, 7, 900, 5,
+         u"2032-12-31", 100003],
+    ]
+    for r in rows:
+        ws.append(r)
     wb.save(path)
 
 
@@ -362,6 +399,7 @@ FIXTURES = [
     (u"空采集模板（ods_t_star_tpl）.xlsx", make_star_template),
     (u"空列词表（ods_t_name_kinds）.xlsx", make_name_kinds),
     (u"空列词表全量（ods_t_name_words）.xlsx", make_name_words),
+    (u"类型语义修正（ods_t_semantic）.xlsx", make_semantic),
     (u"表头带注释（ods_t_head_note）.xlsx", make_head_note),
     (u"两行合并表头（ods_t_merged_header）.xlsx", make_merged_header),
     (u"超长拼音名统计（a_very_long_table_name_that_keeps_going_and_going_x）.xlsx",
