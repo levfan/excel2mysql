@@ -93,7 +93,7 @@ public final class HelpDoc {
                     "<code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到" + NL +
                     "<code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-3.12.0.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-4.0.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
@@ -912,6 +912,200 @@ public final class HelpDoc {
                     "现场改完再执行；本页执行的就是提交的语句，<code>DROP</code> / <code>TRUNCATE</code>" + NL +
                     "不另设确认，删除前先看清结果区里那句</li>" + NL +
                     "</ul>"
+        ),
+        new Section("dmcomment", "达梦注释搬到 MySQL",
+                "<h2>达梦的注释搬到 MySQL：两条通道怎么选</h2>" + NL +
+                    "<p>本节管一件事：达梦 DM8 里已经写好的<b>表注释</b>和<b>列注释</b>，要原样搬到 MySQL" + NL +
+                    "里已存在的同名表上。工具只连 MySQL，达梦那两段 SQL 在 DM 客户端（或 DBeaver 的达梦连接）里跑；" + NL +
+                    "MySQL 那几段可以直接整段贴进本页第三个页签<b>「SQL 执行器」</b>的编辑区执行，" + NL +
+                    "也可以存成 <code>.sql</code> 丢进脚本清单按顺序批量跑。</p>" + NL +
+                    "<p>两条通道的分别只在<b>怎么把注释搬到 MySQL 的中转表</b>：" + NL +
+                    "通道 A 让达梦自己拼出 <code>INSERT</code> 语句，通道 B 把结果集导成 CSV 再" + NL +
+                    "<code>LOAD DATA</code> 灌进去。中转表一旦填好，后面核对、生成 <code>ALTER</code>、" + NL +
+                    "快照、校验、清理五步两条通道完全共用同一段。</p>" + NL +
+                    "" + NL +
+                    "<p><b>先摸底，再决定走哪条</b>——这一段两条通道都要先跑，四个数字抄下来：</p>" + NL +
+                    "<pre>SELECT '表注释' k, COUNT(*) cnt, MAX(LENGTH(c.comments)) max_len," + NL +
+                    "       SUM(INSTR(c.comments, CHR(92))) bs, SUM(INSTR(c.comments, CHR(10))) lf" + NL +
+                    "FROM   all_tab_comments c" + NL +
+                    "WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})" + NL +
+                    "  AND  c.comments IS NOT NULL" + NL +
+                    "UNION ALL" + NL +
+                    "SELECT '列注释', COUNT(*), MAX(LENGTH(c.comments))," + NL +
+                    "       SUM(INSTR(c.comments, CHR(92))), SUM(INSTR(c.comments, CHR(10)))" + NL +
+                    "FROM   all_col_comments c" + NL +
+                    "WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})" + NL +
+                    "  AND  c.comments IS NOT NULL;</pre>" + NL +
+                    "<table class=\"t\">" + NL +
+                    "<tr><th>摸底看到的</th><th>走哪条</th></tr>" + NL +
+                    "<tr><td><code>lf</code> 大于 0，注释里有换行</td><td>只能走通道 B。换行塞进拼出来的" + NL +
+                    "<code>INSERT</code> 字面量里，注释会被截断或整条语句语法错</td></tr>" + NL +
+                    "<tr><td><code>bs</code> 大于 0，注释里有反斜杠</td><td>通道 A 可用，但达梦侧那两处" + NL +
+                    "<code>REPLACE</code> 要换成先叠反斜杠的写法（见通道 A 的 ②'）；不放心就换通道 B</td></tr>" + NL +
+                    "<tr><td><code>max_len</code> 超 2048 字节</td><td>通道 B。中转表的 <code>cm</code>" + NL +
+                    "是 <code>TEXT</code>，CSV 灌进去不受这层限制</td></tr>" + NL +
+                    "<tr><td>表在几十张以内、注释总行数几千行以内</td><td>通道 A。拼出来的" + NL +
+                    "<code>INSERT</code> 文本不会顶到客户端缓冲上限</td></tr>" + NL +
+                    "<tr><td>MySQL 侧不让用 <code>local_infile</code>，或没有服务器文件系统的写权限" + NL +
+                    "（云 RDS 没开 CSV 导入）</td><td>通道 A</td></tr>" + NL +
+                    "<tr><td>要留物理凭证给人复核、要按表分批增量搬、导出和导入不是同一个人在做</td>" + NL +
+                    "<td>通道 B。那份 CSV 就是可归档、可比对的中间产物</td></tr>" + NL +
+                    "</table>" + NL +
+                    "" + NL +
+                    "<p><b>参数占位符</b>：下面所有段落里出现的花括号名都要先全局替换完再执行——" + NL +
+                    "<code>{DM_SCHEMA}</code> 达梦模式名（大写，不带引号）、<code>{DM_TABLES}</code>" + NL +
+                    "达梦表名列表（带单引号逗号分隔）、<code>{DB}</code> MySQL 目标库名、" + NL +
+                    "<code>{MY_TABLES}</code> MySQL 表名列表、<code>{CSV_PATH}</code> CSV 的绝对路径" + NL +
+                    "（正斜杠写法，用反斜杠要写成两个）。</p>" + NL +
+                    "" + NL +
+                    "<p><b>通道 A 的达梦侧</b>：摸底之后再生成 <code>INSERT</code>，把结果集那一整列" + NL +
+                    "<code>s</code> 复制出来存成 <code>dm_insert.sql</code>（UTF-8 无 BOM）。" + NL +
+                    "表注释用空串占 <code>cn</code>，靠它区分表级和列级：</p>" + NL +
+                    "<pre>SELECT 'INSERT INTO tmp_dm_comment(tn,cn,cm) VALUES ('" + NL +
+                    "       || CHR(39) || LOWER(c.table_name) || CHR(39) || ','" + NL +
+                    "       || CHR(39) || LOWER(c.column_name) || CHR(39) || ','" + NL +
+                    "       || CHR(39) || REPLACE(c.comments, CHR(39), CHR(39)||CHR(39)) || CHR(39) || ');' s" + NL +
+                    "FROM   all_col_comments c" + NL +
+                    "WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})" + NL +
+                    "  AND  c.comments IS NOT NULL" + NL +
+                    "UNION ALL" + NL +
+                    "SELECT 'INSERT INTO tmp_dm_comment(tn,cn,cm) VALUES ('" + NL +
+                    "       || CHR(39) || LOWER(c.table_name) || CHR(39) || ','" + NL +
+                    "       || CHR(39) || CHR(39) || ','" + NL +
+                    "       || CHR(39) || REPLACE(c.comments, CHR(39), CHR(39)||CHR(39)) || CHR(39) || ');'" + NL +
+                    "FROM   all_tab_comments c" + NL +
+                    "WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})" + NL +
+                    "  AND  c.comments IS NOT NULL;</pre>" + NL +
+                    "<p>②' 注释里查出反斜杠（<code>bs</code> 大于 0）时，把上面两处" + NL +
+                    "<code>REPLACE(c.comments, CHR(39), CHR(39)||CHR(39))</code> 都换成" + NL +
+                    "<code>REPLACE(REPLACE(c.comments, CHR(92), CHR(92)||CHR(92)), CHR(39), CHR(39)||CHR(39))</code>" + NL +
+                    "——先把反斜杠叠一层，再处理单引号。用 <code>CHR(39)</code> 而不是直接写单引号，" + NL +
+                    "是为了让这段 SQL 本身不因为引号嵌套而难读、难改。</p>" + NL +
+                    "" + NL +
+                    "<p><b>通道 B 的达梦侧</b>：同样先摸底，然后把结果集导出成 CSV，" + NL +
+                    "列名固定 <code>tn,cn,cm</code>；导出选项是分隔符 <code>,</code>、文本限定符" + NL +
+                    "<code>\"</code>、Windows 行尾 <code>\\r\\n</code>（Linux/mac 用 <code>\\n</code>）、" + NL +
+                    "UTF-8 无 BOM、含表头。<b>别用 Excel 另存为 CSV</b>——编码和转义会被它改掉。</p>" + NL +
+                    "<pre>SELECT LOWER(c.table_name) tn, LOWER(c.column_name) cn, c.comments cm" + NL +
+                    "FROM   all_col_comments c" + NL +
+                    "WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})" + NL +
+                    "  AND  c.comments IS NOT NULL" + NL +
+                    "UNION ALL" + NL +
+                    "SELECT LOWER(c.table_name), '', c.comments" + NL +
+                    "FROM   all_tab_comments c" + NL +
+                    "WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})" + NL +
+                    "  AND  c.comments IS NOT NULL;</pre>" + NL +
+                    "" + NL +
+                    "<p><b>共用段（都在 MySQL 上跑，按 ③→⑨ 的顺序）</b>。③ 建中转表，" + NL +
+                    "<code>cm</code> 用 <code>TEXT</code> 就是为了让超长注释不被截断：</p>" + NL +
+                    "<pre>DROP TABLE IF EXISTS tmp_dm_comment;" + NL +
+                    "CREATE TABLE tmp_dm_comment (" + NL +
+                    "  tn VARCHAR(128) NOT NULL, cn VARCHAR(128) NOT NULL," + NL +
+                    "  cm TEXT NOT NULL, UNIQUE KEY uk_dmcm (tn, cn)" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci" + NL +
+                    "  COMMENT='DM注释中转，用完删除';</pre>" + NL +
+                    "<p>④ 把注释灌进中转表。通道 A 在这里执行 <code>dm_insert.sql</code>；" + NL +
+                    "通道 B 用 <code>LOAD DATA</code>，前提是 <code>local_infile</code> 开着" + NL +
+                    "（云库要先在控制台开，会话里改不了全局就停在这一步换通道 A）：</p>" + NL +
+                    "<pre>SET GLOBAL local_infile = 1;" + NL +
+                    "LOAD DATA LOCAL INFILE '{CSV_PATH}'" + NL +
+                    "INTO TABLE tmp_dm_comment" + NL +
+                    "CHARACTER SET utf8mb4" + NL +
+                    "FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '\"'" + NL +
+                    "ESCAPED BY '\\\\'" + NL +
+                    "LINES TERMINATED BY '\\r\\n'" + NL +
+                    "IGNORE 1 LINES" + NL +
+                    "(tn, cn, cm);</pre>" + NL +
+                    "<p>④ 完立刻核对行数，两个数要和摸底那两条的 <code>cnt</code> 分别对上，" + NL +
+                    "对不上就停在这里查 CSV，不要往下走：</p>" + NL +
+                    "<pre>SELECT COUNT(*) 总行, SUM(cn='') 表行, SUM(cn&lt;&gt;'') 列行, MAX(CHAR_LENGTH(cm)) 最长" + NL +
+                    "FROM tmp_dm_comment;</pre>" + NL +
+                    "<p>⑤ 再核一次\"能不能对上号\"：中转表里的表名、列名必须在目标库里找得到，" + NL +
+                    "两个匹配数分别等于 ④ 的表行与列行，否则说明 MySQL 侧的表还没建或名字不一致：</p>" + NL +
+                    "<pre>SELECT (SELECT COUNT(*) FROM information_schema.tables t" + NL +
+                    "        JOIN tmp_dm_comment d ON d.tn=t.TABLE_NAME AND d.cn=''" + NL +
+                    "        WHERE t.TABLE_SCHEMA='{DB}') 表匹配," + NL +
+                    "       (SELECT COUNT(*) FROM information_schema.columns c" + NL +
+                    "        JOIN tmp_dm_comment d ON d.tn=c.TABLE_NAME AND d.cn=c.COLUMN_NAME" + NL +
+                    "        WHERE c.TABLE_SCHEMA='{DB}') 列匹配;</pre>" + NL +
+                    "<p>⑥ 生成注释语句。列注释走 <code>ALTER COLUMN ... SET COMMENT</code>" + NL +
+                    "（MySQL 8.0.13 起才有），它只改注释、不重述列定义，因此不会把" + NL +
+                    "<code>UNSIGNED</code>、字符集、默认值这些属性写丢；生成列和" + NL +
+                    "<code>CURRENT_TIMESTAMP</code> 这类默认值的列不接受这个语法，" + NL +
+                    "留给 ⑥补 用 <code>MODIFY COLUMN</code> 整条重述。两个条件正好互补，" + NL +
+                    "同一条注释不会既出现在 ⑥ 又出现在 ⑥补：</p>" + NL +
+                    "<pre>SELECT CONCAT('ALTER TABLE `', t.TABLE_NAME, '` COMMENT ', QUOTE(d.cm), ';') ddl" + NL +
+                    "FROM information_schema.tables t" + NL +
+                    "JOIN tmp_dm_comment d ON d.tn=t.TABLE_NAME AND d.cn=''" + NL +
+                    "WHERE t.TABLE_SCHEMA='{DB}' AND IFNULL(t.TABLE_COMMENT,'') &lt;&gt; d.cm" + NL +
+                    "ORDER BY t.TABLE_NAME;" + NL +
+                    "" + NL +
+                    "SELECT CONCAT('ALTER TABLE `', c.TABLE_NAME, '` ALTER COLUMN `', c.COLUMN_NAME," + NL +
+                    "              '` SET COMMENT ', QUOTE(d.cm), ';') ddl" + NL +
+                    "FROM information_schema.columns c" + NL +
+                    "JOIN tmp_dm_comment d ON d.tn=c.TABLE_NAME AND d.cn=c.COLUMN_NAME" + NL +
+                    "WHERE c.TABLE_SCHEMA='{DB}' AND IFNULL(c.COLUMN_COMMENT,'') &lt;&gt; d.cm" + NL +
+                    "  AND c.GENERATION_EXPRESSION='' AND c.EXTRA NOT LIKE '%GENERATED%'" + NL +
+                    "  AND IFNULL(c.COLUMN_DEFAULT,'') NOT LIKE 'CURRENT_TIMESTAMP%'" + NL +
+                    "  AND IFNULL(c.COLUMN_DEFAULT,'') NOT LIKE 'now()%'" + NL +
+                    "  AND IFNULL(c.COLUMN_DEFAULT,'') NOT LIKE 'current_timestamp()%'" + NL +
+                    "ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION;</pre>" + NL +
+                    "<p>⑥补 特殊列的那一条，把 <code>QUOTE</code> 用在默认值上，" + NL +
+                    "是为了让字符串默认值带着正确的引号回来；字符集与 <code>EXTRA</code>" + NL +
+                    "也一起重述，避免 <code>MODIFY COLUMN</code> 把它们抹平：</p>" + NL +
+                    "<pre>SELECT CONCAT(" + NL +
+                    "    'ALTER TABLE `', c.TABLE_NAME, '` MODIFY COLUMN `', c.COLUMN_NAME, '` '," + NL +
+                    "    c.COLUMN_TYPE," + NL +
+                    "    CASE WHEN c.CHARACTER_SET_NAME IS NOT NULL" + NL +
+                    "         THEN CONCAT(' CHARACTER SET ', c.CHARACTER_SET_NAME," + NL +
+                    "                     IF(c.COLLATION_NAME IS NOT NULL," + NL +
+                    "                        CONCAT(' COLLATE ', c.COLLATION_NAME), ''))" + NL +
+                    "         ELSE '' END," + NL +
+                    "    CASE WHEN c.IS_NULLABLE='NO' THEN ' NOT NULL' ELSE ' NULL' END," + NL +
+                    "    CASE WHEN c.EXTRA &lt;&gt; '' THEN CONCAT(' ', c.EXTRA) ELSE '' END," + NL +
+                    "    CASE WHEN c.COLUMN_DEFAULT IS NULL AND c.IS_NULLABLE='YES' THEN ' DEFAULT NULL'" + NL +
+                    "         WHEN c.COLUMN_DEFAULT IS NOT NULL THEN CONCAT(' DEFAULT ', QUOTE(c.COLUMN_DEFAULT))" + NL +
+                    "         ELSE '' END," + NL +
+                    "    ' COMMENT ', QUOTE(d.cm), ';'" + NL +
+                    ") AS ddl" + NL +
+                    "FROM information_schema.columns c" + NL +
+                    "JOIN tmp_dm_comment d ON d.tn=c.TABLE_NAME AND d.cn=c.COLUMN_NAME" + NL +
+                    "WHERE c.TABLE_SCHEMA='{DB}' AND IFNULL(c.COLUMN_COMMENT,'') &lt;&gt; d.cm" + NL +
+                    "  AND ( c.GENERATION_EXPRESSION &lt;&gt; '' OR c.EXTRA LIKE '%GENERATED%'" + NL +
+                    "     OR IFNULL(c.COLUMN_DEFAULT,'') LIKE 'CURRENT_TIMESTAMP%'" + NL +
+                    "     OR IFNULL(c.COLUMN_DEFAULT,'') LIKE 'now()%'" + NL +
+                    "     OR IFNULL(c.COLUMN_DEFAULT,'') LIKE 'current_timestamp()%' )" + NL +
+                    "ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION;</pre>" + NL +
+                    "<p>⑥ 与 ⑥补 生成的是<b>结果集里的一列文本</b>，不是已经执行过的语句：" + NL +
+                    "把 <code>ddl</code> 那一整列复制出来存成 <code>dm_alter.sql</code>，" + NL +
+                    "再回到<b>「SQL 执行器」</b>把它执行掉。⑦ 在改动之前先留快照，" + NL +
+                    "这份 <code>tn,cn,cm</code> 就是唯一的回滚依据——注释不是数据，改错了" + NL +
+                    "没有 binlog 之外的补救，所以这一句不能跳；⑧ 校验两个都得是 0，" + NL +
+                    "且必须在 ⑨ 删中转表<b>之前</b>跑：</p>" + NL +
+                    "<pre>-- ⑦ 快照：结果另存为 快照.csv" + NL +
+                    "SELECT LOWER(t.TABLE_NAME) tn, '' cn, IFNULL(t.TABLE_COMMENT,'') cm" + NL +
+                    "FROM information_schema.tables t" + NL +
+                    "WHERE t.TABLE_SCHEMA='{DB}' AND t.TABLE_NAME IN ({MY_TABLES})" + NL +
+                    "UNION ALL" + NL +
+                    "SELECT LOWER(c.TABLE_NAME), LOWER(c.COLUMN_NAME), IFNULL(c.COLUMN_COMMENT,'')" + NL +
+                    "FROM information_schema.columns c" + NL +
+                    "WHERE c.TABLE_SCHEMA='{DB}' AND c.TABLE_NAME IN ({MY_TABLES});" + NL +
+                    "" + NL +
+                    "-- ⑧ 校验：两行都必须是 0" + NL +
+                    "SELECT '表差异' k, COUNT(*) FROM information_schema.tables t" + NL +
+                    "JOIN tmp_dm_comment d ON d.tn=t.TABLE_NAME AND d.cn=''" + NL +
+                    "WHERE t.TABLE_SCHEMA='{DB}' AND IFNULL(t.TABLE_COMMENT,'') &lt;&gt; d.cm" + NL +
+                    "UNION ALL" + NL +
+                    "SELECT '列差异', COUNT(*) FROM information_schema.columns c" + NL +
+                    "JOIN tmp_dm_comment d ON d.tn=c.TABLE_NAME AND d.cn=c.COLUMN_NAME" + NL +
+                    "WHERE c.TABLE_SCHEMA='{DB}' AND IFNULL(c.COLUMN_COMMENT,'') &lt;&gt; d.cm;" + NL +
+                    "" + NL +
+                    "-- ⑨ 清理：校验过了再删" + NL +
+                    "DROP TABLE IF EXISTS tmp_dm_comment;</pre>" + NL +
+                    "<p>动手前对目标库做一次元数据备份（<code>mysqldump --no-data</code>，" + NL +
+                    "只留 DDL 就够），先在一两张表上把整套顺序走通再铺量。" + NL +
+                    "本页那两条 <code>ALTER</code> 语句都不动数据，但建表语句一旦写丢属性，" + NL +
+                    "只能靠这份备份和快照回。</p>"
         ),
         new Section("log", "日志与报错",
                 "<h2>日志与报错</h2>" + NL +
