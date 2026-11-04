@@ -77,7 +77,7 @@ SECTIONS = [
 <code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到
 <code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给
 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-4.0.0.jar --check</code>。
+<code>jre\\bin\\java.exe -jar excel2mysql-4.0.1.jar --check</code>。
 双击 jar 文件本身没有任何反应。</li>
 </ul>
 
@@ -906,16 +906,14 @@ dump 里认 <code>DELIMITER</code> 指令，触发器与存储过程的整句不
 
     ("dmcomment", "达梦注释搬到 MySQL", """
 <h2>达梦的注释搬到 MySQL：两条通道怎么选</h2>
-<p>本节管一件事：达梦 DM8 里已经写好的<b>表注释</b>和<b>列注释</b>，要原样搬到 MySQL
-里已存在的同名表上。工具只连 MySQL，达梦那两段 SQL 在 DM 客户端（或 DBeaver 的达梦连接）里跑；
-MySQL 那几段可以直接整段贴进本页第三个页签<b>「SQL 执行器」</b>的编辑区执行，
-也可以存成 <code>.sql</code> 丢进脚本清单按顺序批量跑。</p>
-<p>两条通道的分别只在<b>怎么把注释搬到 MySQL 的中转表</b>：
-通道 A 让达梦自己拼出 <code>INSERT</code> 语句，通道 B 把结果集导成 CSV 再
-<code>LOAD DATA</code> 灌进去。中转表一旦填好，后面核对、生成 <code>ALTER</code>、
-快照、校验、清理五步两条通道完全共用同一段。</p>
+<p>本节管一件事：达梦 DM8 里已经写好的<b>表注释</b>和<b>列注释</b>，原样搬到 MySQL 里
+<b>已存在的同名表</b>上（表结构不动，只补注释）。工具只连 MySQL：达梦那几步在 DM 客户端
+或 DBeaver 的达梦连接里跑，MySQL 那几步可以整段贴进第三个页签<b>「SQL 执行器」</b>执行。</p>
+<p>两条通道的差别只有一处：<b>注释怎么送进 MySQL 的中转表</b>。方案 A 让达梦自己拼出
+<code>INSERT</code> 语句、贴进 MySQL 执行；方案 B 把结果集导成 CSV、用 <code>LOAD DATA</code>
+灌进去。摸底那一步两条通道都要先跑，四个数字决定走哪条。</p>
 
-<p><b>先摸底，再决定走哪条</b>——这一段两条通道都要先跑，四个数字抄下来：</p>
+<p><b>先摸底（两条通道都是这一步开头）</b>：</p>
 <pre>SELECT '表注释' k, COUNT(*) cnt, MAX(LENGTH(c.comments)) max_len,
        SUM(INSTR(c.comments, CHR(92))) bs, SUM(INSTR(c.comments, CHR(10))) lf
 FROM   all_tab_comments c
@@ -927,31 +925,42 @@ SELECT '列注释', COUNT(*), MAX(LENGTH(c.comments)),
 FROM   all_col_comments c
 WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})
   AND  c.comments IS NOT NULL;</pre>
+
+<p><b>怎么选</b>（把上面四个数字对着这张表看，从上往下第一条命中就定）：</p>
 <table class="t">
-<tr><th>摸底看到的</th><th>走哪条</th></tr>
-<tr><td><code>lf</code> 大于 0，注释里有换行</td><td>只能走通道 B。换行塞进拼出来的
-<code>INSERT</code> 字面量里，注释会被截断或整条语句语法错</td></tr>
-<tr><td><code>bs</code> 大于 0，注释里有反斜杠</td><td>通道 A 可用，但达梦侧那两处
-<code>REPLACE</code> 要换成先叠反斜杠的写法（见通道 A 的 ②'）；不放心就换通道 B</td></tr>
-<tr><td><code>max_len</code> 超 2048 字节</td><td>通道 B。中转表的 <code>cm</code>
-是 <code>TEXT</code>，CSV 灌进去不受这层限制</td></tr>
-<tr><td>表在几十张以内、注释总行数几千行以内</td><td>通道 A。拼出来的
-<code>INSERT</code> 文本不会顶到客户端缓冲上限</td></tr>
-<tr><td>MySQL 侧不让用 <code>local_infile</code>，或没有服务器文件系统的写权限
-（云 RDS 没开 CSV 导入）</td><td>通道 A</td></tr>
-<tr><td>要留物理凭证给人复核、要按表分批增量搬、导出和导入不是同一个人在做</td>
-<td>通道 B。那份 CSV 就是可归档、可比对的中间产物</td></tr>
+<tr><th>情况</th><th>走哪条</th></tr>
+<tr><td><code>lf</code> 大于 0，注释里有换行符</td><td>只能方案 B。换行塞进拼出来的 INSERT
+里，注释会被截断或整条语句语法错</td></tr>
+<tr><td><code>max_len</code> 超 2048 字节</td><td>方案 B。方案 A 的 <code>INSERT</code>
+文本会被达梦的字符串上限截掉</td></tr>
+<tr><td><code>bs</code> 大于 0（有反斜杠）、且你不打算改拼接写法</td><td>方案 B。
+方案 A 要用 ②' 那个变体先把反斜杠叠一层，改错了就是注释变形</td></tr>
+<tr><td>要留物理凭证给人复核、要按表分批增量搬、导出与导入不是同一个人在做</td><td>方案 B。
+那份 CSV 就是可比对、可归档、可交接的中间产物</td></tr>
+<tr><td>MySQL 侧不让用 <code>local_infile</code>，或云 RDS 没开本地文件导入、
+你没有服务器文件系统写权限</td><td>方案 A。方案 B 的 <code>LOAD DATA LOCAL</code> 走不通</td></tr>
+<tr><td>表在几十张以内、注释合计几千行、注释里没有换行和反斜杠</td><td>方案 A。
+不产生中间文件，一条链跑完</td></tr>
+<tr><td>你熟 DM8 的字符串函数，能在源端把引号、反斜杠处理干净</td><td>方案 A</td></tr>
 </table>
 
-<p><b>参数占位符</b>：下面所有段落里出现的花括号名都要先全局替换完再执行——
-<code>{DM_SCHEMA}</code> 达梦模式名（大写，不带引号）、<code>{DM_TABLES}</code>
-达梦表名列表（带单引号逗号分隔）、<code>{DB}</code> MySQL 目标库名、
-<code>{MY_TABLES}</code> MySQL 表名列表、<code>{CSV_PATH}</code> CSV 的绝对路径
-（正斜杠写法，用反斜杠要写成两个）。</p>
+<p><b>参数占位符（两条通道同一套）</b>：执行前先把花括号名全局替换完再动手——
+<code>{DM_SCHEMA}</code> 达梦模式名（大写，不带引号，例 <code>GAMEDATA</code>）、
+<code>{DM_TABLES}</code> 达梦表名列表（带单引号逗号分隔，例 <code>'DIM_A','DIM_B'</code>）、
+<code>{DB}</code> MySQL 目标库名（例 <code>game_meta</code>）、
+<code>{MY_TABLES}</code> MySQL 表名列表（例 <code>'dim_a','dim_b'</code>）、
+<code>{CSV_PATH}</code> 仅方案 B 用：CSV 的绝对路径，正斜杠写法
+（<code>D:/work/dm.csv</code>；要用反斜杠得写成两个）。</p>
+<p><b>执行前</b>先对目标库做一次元数据备份 <code>mysqldump --no-data</code>；
+两条通道里的"快照"那一步是唯一回滚依据，不能跳；普通列的
+<code>ALTER COLUMN ... SET COMMENT</code> 需要 MySQL 8.0.13 以上，先用
+<code>SELECT VERSION()</code> 核实。</p>
 
-<p><b>通道 A 的达梦侧</b>：摸底之后再生成 <code>INSERT</code>，把结果集那一整列
-<code>s</code> 复制出来存成 <code>dm_insert.sql</code>（UTF-8 无 BOM）。
-表注释用空串占 <code>cn</code>，靠它区分表级和列级：</p>
+<p><b>方案 A（SQL 直连）· 完整九步</b>　顺序：① ② 在达梦，③~⑨ 在 MySQL。</p>
+<p>A-① 摸底：用上面那条，记下 <code>cnt</code>（表、列各一行）、<code>bs</code>、
+<code>lf</code>、<code>max_len</code>。<code>lf</code> 大于 0 就停，改走方案 B。</p>
+<p>A-② 在达梦生成 <code>INSERT</code> 语句。表注释那一支用空串占 <code>cn</code>，
+后面靠它区分表级和列级：</p>
 <pre>SELECT 'INSERT INTO tmp_dm_comment(tn,cn,cm) VALUES ('
        || CHR(39) || LOWER(c.table_name) || CHR(39) || ','
        || CHR(39) || LOWER(c.column_name) || CHR(39) || ','
@@ -967,64 +976,37 @@ SELECT 'INSERT INTO tmp_dm_comment(tn,cn,cm) VALUES ('
 FROM   all_tab_comments c
 WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})
   AND  c.comments IS NOT NULL;</pre>
-<p>②' 注释里查出反斜杠（<code>bs</code> 大于 0）时，把上面两处
-<code>REPLACE(c.comments, CHR(39), CHR(39)||CHR(39))</code> 都换成
-<code>REPLACE(REPLACE(c.comments, CHR(92), CHR(92)||CHR(92)), CHR(39), CHR(39)||CHR(39))</code>
-——先把反斜杠叠一层，再处理单引号。用 <code>CHR(39)</code> 而不是直接写单引号，
-是为了让这段 SQL 本身不因为引号嵌套而难读、难改。</p>
-
-<p><b>通道 B 的达梦侧</b>：同样先摸底，然后把结果集导出成 CSV，
-列名固定 <code>tn,cn,cm</code>；导出选项是分隔符 <code>,</code>、文本限定符
-<code>"</code>、Windows 行尾 <code>\\r\\n</code>（Linux/mac 用 <code>\\n</code>）、
-UTF-8 无 BOM、含表头。<b>别用 Excel 另存为 CSV</b>——编码和转义会被它改掉。</p>
-<pre>SELECT LOWER(c.table_name) tn, LOWER(c.column_name) cn, c.comments cm
-FROM   all_col_comments c
-WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})
-  AND  c.comments IS NOT NULL
-UNION ALL
-SELECT LOWER(c.table_name), '', c.comments
-FROM   all_tab_comments c
-WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})
-  AND  c.comments IS NOT NULL;</pre>
-
-<p><b>共用段（都在 MySQL 上跑，按 ③→⑨ 的顺序）</b>。③ 建中转表，
-<code>cm</code> 用 <code>TEXT</code> 就是为了让超长注释不被截断：</p>
+<p>把结果里 <code>s</code> 这一整列复制出来，存成 <code>dm_insert.sql</code>
+（UTF-8 无 BOM）。用 <code>CHR(39)</code> 而不是直接写单引号，是为了让这段 SQL 不因为
+引号嵌套而难读难改。</p>
+<p>A-②' 仅当 <code>bs</code> 大于 0：把上面两处
+<code>REPLACE(c.comments, CHR(39), CHR(39)||CHR(39))</code> 都换成下面这个写法
+（先叠反斜杠，再处理单引号，顺序不能反）：</p>
+<pre>REPLACE(REPLACE(c.comments, CHR(92), CHR(92)||CHR(92)),
+        CHR(39), CHR(39)||CHR(39))</pre>
+<p>A-③ 在 MySQL 建中转表。<code>cm</code> 用 <code>TEXT</code>，别让 2048 截断注释：</p>
 <pre>DROP TABLE IF EXISTS tmp_dm_comment;
 CREATE TABLE tmp_dm_comment (
   tn VARCHAR(128) NOT NULL, cn VARCHAR(128) NOT NULL,
   cm TEXT NOT NULL, UNIQUE KEY uk_dmcm (tn, cn)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
   COMMENT='DM注释中转，用完删除';</pre>
-<p>④ 把注释灌进中转表。通道 A 在这里执行 <code>dm_insert.sql</code>；
-通道 B 用 <code>LOAD DATA</code>，前提是 <code>local_infile</code> 开着
-（云库要先在控制台开，会话里改不了全局就停在这一步换通道 A）：</p>
-<pre>SET GLOBAL local_infile = 1;
-LOAD DATA LOCAL INFILE '{CSV_PATH}'
-INTO TABLE tmp_dm_comment
-CHARACTER SET utf8mb4
-FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
-ESCAPED BY '\\\\'
-LINES TERMINATED BY '\\r\\n'
-IGNORE 1 LINES
-(tn, cn, cm);</pre>
-<p>④ 完立刻核对行数，两个数要和摸底那两条的 <code>cnt</code> 分别对上，
-对不上就停在这里查 CSV，不要往下走：</p>
+<p>A-④ 执行 <code>dm_insert.sql</code>（整份贴进「SQL 执行器」批量执行），然后核对行数：
+<b>表行必须等于 A-① 的表注释 <code>cnt</code>，列行必须等于列注释 <code>cnt</code></b>，
+对不上就停在这里查，别往下走。</p>
 <pre>SELECT COUNT(*) 总行, SUM(cn='') 表行, SUM(cn&lt;&gt;'') 列行, MAX(CHAR_LENGTH(cm)) 最长
 FROM tmp_dm_comment;</pre>
-<p>⑤ 再核一次"能不能对上号"：中转表里的表名、列名必须在目标库里找得到，
-两个匹配数分别等于 ④ 的表行与列行，否则说明 MySQL 侧的表还没建或名字不一致：</p>
+<p>A-⑤ 核对外部的库能不能对上号。两个匹配数要分别等于 A-④ 的表行与列行；
+不相等说明 MySQL 侧表还没建、或者表名列名不一致：</p>
 <pre>SELECT (SELECT COUNT(*) FROM information_schema.tables t
         JOIN tmp_dm_comment d ON d.tn=t.TABLE_NAME AND d.cn=''
         WHERE t.TABLE_SCHEMA='{DB}') 表匹配,
        (SELECT COUNT(*) FROM information_schema.columns c
         JOIN tmp_dm_comment d ON d.tn=c.TABLE_NAME AND d.cn=c.COLUMN_NAME
         WHERE c.TABLE_SCHEMA='{DB}') 列匹配;</pre>
-<p>⑥ 生成注释语句。列注释走 <code>ALTER COLUMN ... SET COMMENT</code>
-（MySQL 8.0.13 起才有），它只改注释、不重述列定义，因此不会把
-<code>UNSIGNED</code>、字符集、默认值这些属性写丢；生成列和
-<code>CURRENT_TIMESTAMP</code> 这类默认值的列不接受这个语法，
-留给 ⑥补 用 <code>MODIFY COLUMN</code> 整条重述。两个条件正好互补，
-同一条注释不会既出现在 ⑥ 又出现在 ⑥补：</p>
+<p>A-⑥ 生成注释语句。列注释走 <code>SET COMMENT</code>：它只改注释、不重述列定义，
+所以不会把 <code>UNSIGNED</code>、字符集、默认值写丢。两个条件互补，同一条注释
+只会出现在 ⑥ 或 ⑥补 其中一处：</p>
 <pre>SELECT CONCAT('ALTER TABLE `', t.TABLE_NAME, '` COMMENT ', QUOTE(d.cm), ';') ddl
 FROM information_schema.tables t
 JOIN tmp_dm_comment d ON d.tn=t.TABLE_NAME AND d.cn=''
@@ -1041,9 +1023,9 @@ WHERE c.TABLE_SCHEMA='{DB}' AND IFNULL(c.COLUMN_COMMENT,'') &lt;&gt; d.cm
   AND IFNULL(c.COLUMN_DEFAULT,'') NOT LIKE 'now()%'
   AND IFNULL(c.COLUMN_DEFAULT,'') NOT LIKE 'current_timestamp()%'
 ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION;</pre>
-<p>⑥补 特殊列的那一条，把 <code>QUOTE</code> 用在默认值上，
-是为了让字符串默认值带着正确的引号回来；字符集与 <code>EXTRA</code>
-也一起重述，避免 <code>MODIFY COLUMN</code> 把它们抹平：</p>
+<p>A-⑥补 生成列与带动态默认值的列不接受 <code>SET COMMENT</code>，只能整条
+<code>MODIFY COLUMN</code> 重述，因此把字符集、可空、默认值、<code>EXTRA</code>
+一起带上，避免重述时抹平：</p>
 <pre>SELECT CONCAT(
     'ALTER TABLE `', c.TABLE_NAME, '` MODIFY COLUMN `', c.COLUMN_NAME, '` ',
     c.COLUMN_TYPE,
@@ -1067,38 +1049,76 @@ WHERE c.TABLE_SCHEMA='{DB}' AND IFNULL(c.COLUMN_COMMENT,'') &lt;&gt; d.cm
      OR IFNULL(c.COLUMN_DEFAULT,'') LIKE 'now()%'
      OR IFNULL(c.COLUMN_DEFAULT,'') LIKE 'current_timestamp()%' )
 ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION;</pre>
-<p>⑥ 与 ⑥补 生成的是<b>结果集里的一列文本</b>，不是已经执行过的语句：
-把 <code>ddl</code> 那一整列复制出来存成 <code>dm_alter.sql</code>，
-再回到<b>「SQL 执行器」</b>把它执行掉。⑦ 在改动之前先留快照，
-这份 <code>tn,cn,cm</code> 就是唯一的回滚依据——注释不是数据，改错了
-没有 binlog 之外的补救，所以这一句不能跳；⑧ 校验两个都得是 0，
-且必须在 ⑨ 删中转表<b>之前</b>跑：</p>
-<pre>-- ⑦ 快照：结果另存为 快照.csv
-SELECT LOWER(t.TABLE_NAME) tn, '' cn, IFNULL(t.TABLE_COMMENT,'') cm
+<p>A-⑥ 与 A-⑥补 出来的是<b>结果集里的一列文本</b>，不是已经执行的语句：
+把 <code>ddl</code> 那一整列复制成 <code>dm_alter.sql</code>，回到「SQL 执行器」执行掉。</p>
+<p>A-⑦ 改之前留快照（在 A-⑥ 那些 ALTER 执行<b>之前</b>取），结果另存为 <code>快照.csv</code>：</p>
+<pre>SELECT LOWER(t.TABLE_NAME) tn, '' cn, IFNULL(t.TABLE_COMMENT,'') cm
 FROM information_schema.tables t
 WHERE t.TABLE_SCHEMA='{DB}' AND t.TABLE_NAME IN ({MY_TABLES})
 UNION ALL
 SELECT LOWER(c.TABLE_NAME), LOWER(c.COLUMN_NAME), IFNULL(c.COLUMN_COMMENT,'')
 FROM information_schema.columns c
-WHERE c.TABLE_SCHEMA='{DB}' AND c.TABLE_NAME IN ({MY_TABLES});
-
--- ⑧ 校验：两行都必须是 0
-SELECT '表差异' k, COUNT(*) FROM information_schema.tables t
+WHERE c.TABLE_SCHEMA='{DB}' AND c.TABLE_NAME IN ({MY_TABLES});</pre>
+<p>A-⑧ 校验：两行都必须是 0，且必须在删中转表之前跑：</p>
+<pre>SELECT '表差异' k, COUNT(*) FROM information_schema.tables t
 JOIN tmp_dm_comment d ON d.tn=t.TABLE_NAME AND d.cn=''
 WHERE t.TABLE_SCHEMA='{DB}' AND IFNULL(t.TABLE_COMMENT,'') &lt;&gt; d.cm
 UNION ALL
 SELECT '列差异', COUNT(*) FROM information_schema.columns c
 JOIN tmp_dm_comment d ON d.tn=c.TABLE_NAME AND d.cn=c.COLUMN_NAME
-WHERE c.TABLE_SCHEMA='{DB}' AND IFNULL(c.COLUMN_COMMENT,'') &lt;&gt; d.cm;
+WHERE c.TABLE_SCHEMA='{DB}' AND IFNULL(c.COLUMN_COMMENT,'') &lt;&gt; d.cm;</pre>
+<p>A-⑨ 清理：<code>DROP TABLE IF EXISTS tmp_dm_comment;</code>。
+方案 A 全程不产生中间数据文件，只有一份 <code>dm_insert.sql</code>、
+一份 <code>dm_alter.sql</code> 和一份 <code>快照.csv</code>。</p>
 
--- ⑨ 清理：校验过了再删
-DROP TABLE IF EXISTS tmp_dm_comment;</pre>
-<p>动手前对目标库做一次元数据备份（<code>mysqldump --no-data</code>，
-只留 DDL 就够），先在一两张表上把整套顺序走通再铺量。
-本页那两条 <code>ALTER</code> 语句都不动数据，但建表语句一旦写丢属性，
-只能靠这份备份和快照回。</p>
+<p><b>方案 B（CSV 中转）· 完整九步</b>　顺序：① ② 在达梦，③~⑨ 在 MySQL。
+注释里有换行、超长，或者你不想在达梦折腾转义，就走这条。</p>
+<p>B-① 摸底：与 A-① 同一条 SQL。这里 <code>lf</code> 大于 0 不是停线，
+而正是选方案 B 的理由。</p>
+<p>B-② 在达梦把注释取出来，结果集右键<b>「导出为 CSV」</b>存成 <code>{CSV_PATH}</code>：</p>
+<pre>SELECT LOWER(c.table_name) tn, LOWER(c.column_name) cn, c.comments cm
+FROM   all_col_comments c
+WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})
+  AND  c.comments IS NOT NULL
+UNION ALL
+SELECT LOWER(c.table_name), '', c.comments
+FROM   all_tab_comments c
+WHERE  c.owner = '{DM_SCHEMA}' AND c.table_name IN ({DM_TABLES})
+  AND  c.comments IS NOT NULL;</pre>
+<p>导出选项必须这样设，少一项就会在下一步灌出乱码或错列：分隔符 <code>,</code>；
+文本限定符 <code>"</code>；换行 Windows 用 <code>\\r\\n</code>、Linux/mac 用
+<code>\\n</code>；编码 UTF-8 无 BOM；含表头 <code>tn,cn,cm</code>。
+<b>别用 Excel 打开后另存为 CSV</b>——它会改编码、吃掉引号转义，注释里的
+换行和制表符就被破坏了。</p>
+<p>B-③ 在 MySQL 建中转表，与 A-③ 同一条：</p>
+<pre>DROP TABLE IF EXISTS tmp_dm_comment;
+CREATE TABLE tmp_dm_comment (
+  tn VARCHAR(128) NOT NULL, cn VARCHAR(128) NOT NULL,
+  cm TEXT NOT NULL, UNIQUE KEY uk_dmcm (tn, cn)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+  COMMENT='DM注释中转，用完删除';</pre>
+<p>B-④ 灌入 CSV 并核对行数。<code>ESCAPED BY</code> 那一项要和导出时的文本限定符配套，
+DBeaver 默认导出是双引号包字段、内部不做反斜杠转义，所以这里写
+<code>ESCAPED BY ''</code>；如果它对注释里的引号做了 <code>""</code> 式转义，
+保持默认 <code>ESCAPED BY '\\\\'</code> 反而会多出一层反斜杠，先灌一张小表核对再铺量。
+行数核对与 A-④ 同一条 SQL，两个数对不上就停：</p>
+<pre>SET GLOBAL local_infile = 1;      -- 云库要先在控制台开；这里改不动就停，改走方案 A
+LOAD DATA LOCAL INFILE '{CSV_PATH}'
+INTO TABLE tmp_dm_comment
+CHARACTER SET utf8mb4
+FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
+ESCAPED BY '\\\\'
+LINES TERMINATED BY '\\r\\n'      -- Linux/mac 导出改成 '\\n'
+IGNORE 1 LINES
+(tn, cn, cm);</pre>
+<p>B-⑤ 核对匹配数、B-⑥ 生成 ALTER、B-⑥补 生成特殊列的 <code>MODIFY COLUMN</code>、
+B-⑦ 快照、B-⑧ 校验、B-⑨ 清理，这五步与方案 A 的 A-⑤ 到 A-⑨ <b>逐条相同</b>，
+把上面 A-⑤、A-⑥、A-⑥补、A-⑦、A-⑧ 那五段原样贴过来执行即可；
+差别只在于：方案 B 的注释是 CSV 原样搬过来的，换行、制表符、Emoji、生僻字都在，
+所以生成 ALTER 时一律走 <code>QUOTE()</code>，不要自己拼引号。</p>
+<p>方案 B 多出来的成本是要管一个文件（编码、行尾、路径），换来的是<b>注释内容不被
+转义规则吃掉</b>，而且这份 CSV 可以直接当迁移凭证归档、按表分批补跑。</p>
 """),
-
     ("log", "日志与报错", """
 <h2>日志与报错</h2>
 <p>三个页签各有一个独立日志区（Excel 导入页底部、SQL 脚本改名页底部、
