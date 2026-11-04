@@ -360,7 +360,7 @@ check("V10 DDL 文本逐字符稳定（utf8mb4_general_ci / InnoDB）",
       and "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci" in ddl
       and "PRIMARY KEY (`ding_dan_bian_hao`)" in ddl, ddl.replace("\n", "\\n")[:120])
 check("V11 主键列被写成 NOT NULL",
-      "`ding_dan_bian_hao` VARCHAR(64) NOT NULL" in ddl)
+      "`ding_dan_bian_hao` VARCHAR(32) NOT NULL" in ddl)
 
 v_dec = make_xlsx("库容（dim_rong）.xlsx", pd.DataFrame({
     "编码": ["A1", "A2", "A3"],
