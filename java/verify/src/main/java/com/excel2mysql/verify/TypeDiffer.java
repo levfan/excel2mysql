@@ -93,6 +93,10 @@ public final class TypeDiffer {
             }
 
             List<Infer.Column> got = infer.inferColumns(keptHeaders, keptRows);
+            // 金标准那侧的期望值取的是 Python 的 build_table_def 产物，而组装那一步带行上限体检
+            // （超长列退 TEXT、次长列降档）。这里也只调 inferColumns，所以同一层要补上体检，
+            // 否则比的是"Java 未过线的原始档位"对"Python 过线后的档位"。
+            com.excel2mysql.core.RowFit.fit(got, 16384);
             String[] pk = infer.selectPrimaryKey(keptHeaders, keptRows, got);
             for (Infer.Column c : got) {
                 if (c.field.equals(pk[0])) {

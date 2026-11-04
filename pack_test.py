@@ -208,6 +208,8 @@ from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
     select_primary_key, infer_columns, sanitize_table_name,
     parse_table_name_and_comment, _varchar_tier,
+    SERVER_ROW_LIMIT, INNODB_MAX_COLUMNS, _col_row_bytes, fit_row_limits, row_plan,
+    row_fit_notice,
 )
 from core.sql_script import (
     extract_create_tables, apply_table_prefix_sql, split_sql_statements,
@@ -618,8 +620,9 @@ check("B23 超 65535 字节 → MEDIUMTEXT", infer_columns(df_huge)[0]["type"] =
 wide = pd.DataFrame({**{f"短列{i}": ["abcdefgh"] for i in range(2)},
                      **{f"长列{i}": ["啊" * 4000] for i in range(6)}})
 wt = infer_columns(wide)
+fit_row_limits(wt)
 kinds = [c["type"] for c in wt]
-check("B24 VARCHAR 行内预算不足时退为 TEXT（保证建表不报 Row size too large）",
+check("B24 单列就 65534 字节的长文本列：体检全退成 TEXT，短列一档不动",
       kinds.count("TEXT") == 6 and all(k.startswith("VARCHAR") for k in kinds[:2]),
       f"前 2 列={kinds[:2]} 后 6 列={kinds[2:]}")
 check("B25 8 位纯数字编码列按数值处理不误判 DATE",
@@ -3829,12 +3832,13 @@ check("L26 空列按名定档：行政区划与文件名各归同一族那一档
       one({"省": [None]})[0] == "VARCHAR(255)" and one({"文件名": [None]})[0] == "VARCHAR(512)",
       (one({"省": [None]})[0], one({"文件名": [None]})[0]))
 
-# ---- 按名定档的字面 VARCHAR 也占行内字节：不纳入预算，宽表头的空采集模板建不出表 ----
+# ---- 按名定档的字面 VARCHAR 也要过行上限体检：宽表头的空采集模板从前建不出表 ----
 _wide = infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(80)}))
-_wide_bytes = sum(4 * int(c["type"][8:-1]) for c in _wide
-                  if str(c["type"]).startswith("VARCHAR"))
-check("L27 80 个空的名称列：字面 VARCHAR 计入 60000 行内预算，超出的退成 TEXT",
-      _wide_bytes <= 60000 and any(c["type"] == "TEXT" for c in _wide),
+fit_row_limits(_wide)
+_wide_bytes = sum(_col_row_bytes(c)[0] for c in _wide)
+check("L27 80 个空的名称列：体检把超过 server 行上限的那几列退成 TEXT，留下的仍在 65535 内",
+      _wide_bytes <= SERVER_ROW_LIMIT and [c["type"] for c in _wide].count("TEXT") == 17
+      and [c["type"] for c in _wide].count("VARCHAR(255)") == 63,
       (_wide_bytes, [c["type"] for c in _wide].count("VARCHAR(255)"),
        [c["type"] for c in _wide].count("TEXT")))
 check("L27b 退成 TEXT 的那几列把话说清楚，不留一句自相矛盾的按 VARCHAR(255) 建列",
@@ -3842,10 +3846,128 @@ check("L27b 退成 TEXT 的那几列把话说清楚，不留一句自相矛盾�
           for c in _wide if c["type"] == "TEXT" and c.get("type_note")),
       [(c["comment"], c.get("type_note")) for c in _wide
        if c["type"] == "TEXT" and c.get("type_note")][:2])
-check("L27c 窄一点的空表（20 个名称列）仍在预算内，一档都不退",
-      all(c["type"] == "VARCHAR(255)"
-          for c in infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(20)}))),
-      [c["type"] for c in infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(20)}))])
+_narrow = fit_row_limits(infer_columns(
+    pd.DataFrame({("名称%d" % i): [None] for i in range(20)})), page_size=16384)["plan"]
+check("L27c 窄一点的空表（20 个名称列）体检就判过，一档都不退",
+      _narrow["ok"] and _narrow["server"] == 20 * 1022 and _narrow["columns"] == 20,
+      (_narrow["server"], _narrow["local"], _narrow["ok"]))
+# ---------------------------------------------------------------------------
+section("RS 行上限体检：建模出的列宽必须满足 MySQL/InnoDB 的三条硬上限")
+
+# 三条上限与 row_plan / fit_row_limits 已在 L 段那一份 import 里拿过——同一份模块，
+# 两处各自 import 会掩盖"到底用的是哪一个实现"，只留一处。
+
+# 三条上限都是本机 MySQL 8.0.46（16K 页 / DYNAMIC / strict_mode=ON）实测翻转点：
+# 124 列 VARCHAR(16) 过、125 列报 >8126；16 列 VARCHAR(1000) 过、17 列报 65535；
+# 1017 列过、1018 列报 1117 Too many columns。常数写错就等于承诺作废，先钉住。
+check("RS1 三条上限的常数就是实测那三个数",
+      SERVER_ROW_LIMIT == 65535 and INNODB_MAX_COLUMNS == 1017
+      and row_plan([])["local_limit"] == 8126,
+      (SERVER_ROW_LIMIT, INNODB_MAX_COLUMNS, row_plan([])["local_limit"]))
+
+
+def _cols(spec):
+    """spec: [(表头, 样本值 or None), ...] → infer_columns 的那一份列。"""
+    return infer_columns(pd.DataFrame({h: ([v] if v is not None else [None])
+                                       for h, v in spec}))
+
+
+def _fit(spec, page_size=16384):
+    cs = _cols(spec)
+    return cs, fit_row_limits(cs, page_size=page_size)
+
+
+# 用户报的那一类现场：十几个千字文本列 + 几百个高精度小数列。
+# 定长列自己就堆满半页（900×9=8100），退 TEXT 与降档都救不回来 → 必须拦下，
+# 而不是发一条让库回 1118 的建表语句。
+_heavy = _fit([("说明%d" % i, "字" * 1000) for i in range(15)]
+              + [("测值%d" % i, "1234567890.123456") for i in range(900)])
+check("RS2 定长列堆满半页时拦下，理由说的是定长列而不是文本列",
+      _heavy[1]["refuse"] is not None
+      and "定长列" in _heavy[1]["refuse"]["reason"],
+      (_heavy[1]["refuse"] or {}).get("reason", "没拦下"),
+      )
+check("RS2b 拦下要同时给拆分建议：至少两段，每段都算得出列数与字节",
+      _heavy[1]["refuse"] and len(_heavy[1]["refuse"]["split"]) >= 2
+      and all(s["columns"] > 0 and s["local"] <= _heavy[1]["plan"]["local_limit"]
+              for s in _heavy[1]["refuse"]["split"]),
+      _heavy[1]["refuse"])
+
+# 同一批文本列，定长列少一些（600 个 DECIMAL(18,6)），退掉最长的几列就建得出。
+_light = _fit([("说明%d" % i, "字" * 1000) for i in range(15)]
+              + [("测值%d" % i, "1234567890.123456") for i in range(600)])
+check("RS3 退完最长的文本列就要过线：不拦、且确有降级留痕",
+      _light[1]["refuse"] is None and len(_light[1]["conversions"]) > 0
+      and row_plan(_light[0])["ok"],
+      (_light[1]["refuse"], len(_light[1]["conversions"]), row_plan(_light[0])))
+check("RS3b 降级必须在列上留痕，日志才说得出是哪一列为什么退",
+      all(c.get("type_note") for c in _light[0] if c["field"] in
+          [x["field"] for x in _light[1]["conversions"]]),
+      [(c["field"], c["type"], c.get("type_note")) for c in _light[0]
+       if c["field"] in [x["field"] for x in _light[1]["conversions"]]][:2])
+
+# 降级顺序：先退最长的那几列（每列省的字节最多），不能从短的先开刀。
+_order = _fit([("甲%d" % i, "x" * 3000) for i in range(30)]
+              + [("乙%d" % i, "y" * 20) for i in range(30)])
+_order_fields = {x["field"] for x in _order[1]["conversions"]}
+_order_jia = [c for c in _order[0] if c["comment"].startswith("甲")]
+_order_yi = [c for c in _order[0] if c["comment"].startswith("乙")]
+check("RS4 先退最长的列：30 个三千字列里必须动到，20 字的短列一档都不许动",
+      len(_order_fields) > 0
+      and all(c["field"] not in _order_fields for c in _order_yi)
+      and any(c["field"] in _order_fields for c in _order_jia),
+      (len(_order_fields), [c["type"] for c in _order_jia][:4],
+       [c["type"] for c in _order_yi][:2]))
+check("RS4b 降级后的这一份 DDL，体检必须三项全过",
+      _order[1]["refuse"] is None and row_plan(_order[0])["ok"],
+      row_plan(_order[0]))
+
+# 需行外的列数超过半页能装的个数（实测 196 个 TEXT 是上限），降类型救不回来 → 拦下
+_widetxt = _fit([("列%d" % i, "z" * 300) for i in range(240)])
+check("RS5 240 个三百字文本列：退 TEXT 也装不进半页，必须拦下并报列数与建议",
+      _widetxt[1]["refuse"] is not None and _widetxt[1]["refuse"]["columns"] == 240,
+      _widetxt[1]["refuse"])
+
+# 列数上限 1017 与类型无关：全是短整数也要拦。
+_toocols = _fit([("数%d" % i, 1) for i in range(1018)])
+check("RS6 1018 列直接超 InnoDB 每表列数上限，拦下的理由要点名 1017",
+      _toocols[1]["refuse"] is not None and "1017" in _toocols[1]["refuse"]["reason"],
+      _toocols[1]["refuse"])
+_okcols = _fit([("数%d" % i, 1) for i in range(1017)])
+check("RS6b 1017 列正好在建表线内，不许多拦一列",
+      _okcols[1]["refuse"] is None, _okcols[1]["refuse"])
+
+# 页大小换算：8K 页的库半页只剩 4030，同一批列在 16K 页能过、在 8K 页要拦。
+_page8 = _fit([("测值%d" % i, "1234567890.123456") for i in range(450)], page_size=8192)
+_page16 = _fit([("测值%d" % i, "1234567890.123456") for i in range(450)])
+check("RS7 半页上限随 innodb_page_size 换算：450 个 9 字节列在 16K 过、在 8K 拦",
+      _page16[1]["refuse"] is None and _page8[1]["refuse"] is not None
+      and _page8[1]["plan"]["local_limit"] == 4030,
+      (_page16[1]["refuse"], _page8[1]["plan"]["local_limit"]))
+
+# 结构定义模式里人工写的类型是使用者写死的：体检只报拦下，绝不擅自改类型。
+_manual_cols = [{"field": "c%d" % i, "comment": "", "type": "VARCHAR(4000)",
+                 "max_len": 0, "nullable": True, "primary_key": False}
+                for i in range(20)]
+_manual_fit = fit_row_limits(_manual_cols)
+check("RS8 人工写死的类型只报拦下、一个都不改：结构定义模式优先于体检降级",
+      _manual_fit["refuse"] is not None
+      and all(c["type"] == "VARCHAR(4000)" for c in _manual_cols)
+      and not _manual_fit["conversions"],
+      (_manual_fit["refuse"], _manual_cols[0]["type"]))
+
+# 建模入口必须自带体检：不然用户看到的还是那份建不出来的 DDL。
+_rs9path = make_xlsx("重表（ods_t_heavy）.xlsx", {"Sheet1": pd.DataFrame({
+    **{("说明%d" % i): ["字" * 1000] for i in range(15)},
+    **{("测值%d" % i): ["1234567890.123456"] for i in range(900)}})})
+_rs9 = build_table_def(_rs9path)
+check("RS9 build_table_def 出来就带体检结论：这张表过不了线要当场报拦下",
+      _rs9["row_fit"]["refuse"] is not None,
+      (_rs9["row_fit"]["refuse"] or {}).get("reason", "没拦下"))
+check("RS9b 拦下说明要能直接照抄：点名拆几段、每段几列几字节",
+      all(k in row_fit_notice(_rs9["row_fit"]["refuse"])
+          for k in ("拆成", "列", "字节")),
+      row_fit_notice(_rs9["row_fit"]["refuse"]))
 
 # ---------------------------------------------------------------------------
 section("M 字段命名规则（蛇形拼音 / 首字母降级 / 30 字符上限）")
@@ -8417,11 +8539,12 @@ else:
             check("G13b 外键探针表已清理", not _g13_left and _c.fetchone() is None,
                   (_g13_left, _c.fetchone()))
 
-        # 宽表头的空采集模板：按名定档的字面 VARCHAR 也要进全表行内字节预算才建得出表。
-        # 不纳预算时 80 列 VARCHAR(255) 是 81600 字节，MySQL 报 1118 Row size too large，
+        # 宽表头的空采集模板：按名定档的字面 VARCHAR 也要过行上限体检才建得出表。
+        # 不体检时 80 列 VARCHAR(255) 是 81760 字节，MySQL 报 1118 Row size too large，
         # 整张表建不出来——这一判打的是真库，不是算式
         # （G13 收尾时把 conn 关了，这里自己开一条，不借用已经关掉的连接）
         _g14cols = infer_columns(pd.DataFrame({("名称%d" % i): [None] for i in range(80)}))
+        fit_row_limits(_g14cols)
         _g14 = "packtest_wide_empty"
         _g14_err = ""
         _g14conn = connect(_cfg)
@@ -8450,6 +8573,52 @@ else:
         with connect(_cfg).cursor() as _c:
             _c.execute("SHOW TABLES LIKE '%s'" % _g14)
             check("G14b 宽空表探针已清理", _c.fetchone() is None, _g14)
+
+        # G15 模型与真库对拍：模型说建得出的，真库必须建得出；模型说拦下的，真库确实会拒。
+        # 这一判是行字节模型的验收——算式对得再漂亮，真库回 1118 就是承诺作废。
+        _g15_shapes = [
+            ("15 千字文本 + 600 个 18 位小数",
+             [(("说明%d" % i), ("字" * 1000)) for i in range(15)]
+             + [(("测值%d" % i), "1234567890.123456") for i in range(600)], True),
+            ("15 千字文本 + 900 个 18 位小数（定长列堆满半页）",
+             [(("说明%d" % i), ("字" * 1000)) for i in range(15)]
+             + [(("测值%d" % i), "1234567890.123456") for i in range(900)], False),
+            ("1017 个短整数列（正好卡在列数上限）",
+             [(("数%d" % i), 1) for i in range(1017)], True),
+            ("30 个三千字文本 + 30 个短文本",
+             [(("甲%d" % i), "x" * 3000) for i in range(30)]
+             + [(("乙%d" % i), "y" * 20) for i in range(30)], True),
+        ]
+        _g15_bad = []
+        _g15conn = connect(_cfg)
+        try:
+            for _si, (_label, _spec, _should_build) in enumerate(_g15_shapes):
+                _cols = infer_columns(pd.DataFrame(
+                    {h: ([v] if v is not None else [None]) for h, v in _spec}))
+                _fit = fit_row_limits(_cols)
+                _name = "packtest_fit%d" % _si
+                create_table(_g15conn, "DROP TABLE IF EXISTS `%s`" % _name)
+                _err = ""
+                try:
+                    create_table(_g15conn, build_ddl(_name, "行体检对拍", _cols, False))
+                except Exception as _e:
+                    _err = str(_e)[:120]
+                finally:
+                    create_table(_g15conn, "DROP TABLE IF EXISTS `%s`" % _name)
+                if _should_build and (_fit["refuse"] or _err):
+                    _g15_bad.append("%s：模型判过但 %s"
+                                    % (_label, _err or "模型自己报了拦下"))
+                if not _should_build and not _err:
+                    _g15_bad.append("%s：模型判拦（%s）但真库居然建得出来"
+                                    % (_label, _fit["refuse"]["reason"][:60]))
+        finally:
+            _g15conn.close()
+        check("G15 行字节模型与真库对拍：判过的三形状全建得出、判拦的那形状真库也拒",
+              not _g15_bad, _g15_bad)
+        with connect(_cfg).cursor() as _c:
+            _c.execute("SHOW TABLES LIKE 'packtest_fit%'")
+            _g15_left = [list(r)[0] for r in _c.fetchall()]
+            check("G15b 对拍探针表全部清理", not _g15_left, _g15_left)
 
     except Exception as e:
         check("G0 连接 MySQL 失败", False, f"{type(e).__name__}: {e}")

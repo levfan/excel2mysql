@@ -5247,8 +5247,8 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
         try {
-            if (hd.tocCount() != 15) {
-                problems.add("说明目录应有 15 章（与 help_doc.py 同步，改了要重导 HelpDoc.java），"
+            if (hd.tocCount() != 16) {
+                problems.add("说明目录应有 16 章（与 help_doc.py 同步，改了要重导 HelpDoc.java），"
                         + "实际 " + hd.tocCount());
             }
             if (hd.bodyLength() < 2000) {
@@ -6628,36 +6628,120 @@ public final class GuiMain {
                     + " / " + one(infer, "文件名", new Object[]{null}).type);
         }
 
-        // 宽空表：按名定档的字面 VARCHAR 也要进行内字节预算，超出的退 TEXT。
-        // 不纳预算时 80 个空的名称列是 81600 字节，MySQL 直接 1118 Row size too large
-        // 把整张表拒掉——建不出表比长度不一致更糟
+        // 行上限体检：三条上限都是真库实测翻转点，Python 侧 RS 组判同一批。
+        // 旧的"60000 预算"只对齐了 server 那条，漏了 InnoDB 半页与每表列数——
+        // 用户就是在那儿撞上"建模完成、库里回 1118/1117"的。
         List<Object> heads = new ArrayList<Object>();
         for (int i = 0; i < 80; i++) {
             heads.add((Object) ("名称" + i));
         }
         List<java.util.List<Object>> wideRows = new ArrayList<java.util.List<Object>>();
         wideRows.add(new ArrayList<Object>(Arrays.asList(new Object[80])));
-        int bytes = 0;
+        List<com.excel2mysql.core.Infer.Column> wideCols = infer.inferColumns(heads, wideRows);
+        com.excel2mysql.core.RowFit.Fit wideFit = com.excel2mysql.core.RowFit.fit(wideCols, 16384);
         int texts = 0;
+        int keeps = 0;
         int notes = 0;
-        for (com.excel2mysql.core.Infer.Column c : infer.inferColumns(heads, wideRows)) {
-            if (c.type != null && c.type.startsWith("VARCHAR(")) {
-                bytes += 4 * Integer.parseInt(c.type.substring(8, c.type.length() - 1));
-            } else if ("TEXT".equals(c.type)) {
+        for (com.excel2mysql.core.Infer.Column c : wideCols) {
+            if ("TEXT".equals(c.type)) {
                 texts++;
                 if (c.typeNote != null && c.typeNote.contains("退为 TEXT")) {
                     notes++;
                 }
+            } else if ("VARCHAR(255)".equals(c.type)) {
+                keeps++;
             }
         }
-        if (bytes > 60000 || texts == 0) {
-            problems.add("80 个空的名称列没进行内字节预算：行内字节 " + bytes
-                    + "、退成 TEXT 的列 " + texts);
+        if (com.excel2mysql.core.RowFit.SERVER_ROW_LIMIT != 65535
+                || com.excel2mysql.core.RowFit.INNODB_MAX_COLUMNS != 1017
+                || com.excel2mysql.core.RowFit.rowPlan(
+                        new ArrayList<com.excel2mysql.core.Infer.Column>(), 16384).localLimit != 8126) {
+            problems.add("行上限的三条常数与实测不符");
+        }
+        if (texts != 17 || keeps != 63 || !wideFit.plan.ok) {
+            problems.add("80 个空的名称列体检结果不对：退 TEXT " + texts
+                    + " 列、留 VARCHAR(255) " + keeps + " 列、过线=" + wideFit.plan.ok);
         }
         if (texts > 0 && notes != texts) {
             problems.add("退成 TEXT 的列里有 " + (texts - notes)
                     + " 列没把留痕改口，还写着按 VARCHAR 建列");
         }
+
+        // 降级顺序：先退最长的那一列，短列一档都不许动
+        List<Object> mixHeads = new ArrayList<Object>();
+        for (int i = 0; i < 30; i++) {
+            mixHeads.add((Object) ("甲" + i));
+        }
+        for (int i = 0; i < 30; i++) {
+            mixHeads.add((Object) ("乙" + i));
+        }
+        java.util.List<Object> mixRow = new ArrayList<Object>();
+        for (int i = 0; i < 30; i++) {
+            mixRow.add(repeat('x', 3000));
+        }
+        for (int i = 0; i < 30; i++) {
+            mixRow.add(repeat('y', 20));
+        }
+        List<java.util.List<Object>> mixRows = new ArrayList<java.util.List<Object>>();
+        mixRows.add(mixRow);
+        List<com.excel2mysql.core.Infer.Column> mix = infer.inferColumns(mixHeads, mixRows);
+        com.excel2mysql.core.RowFit.Fit mixFit = com.excel2mysql.core.RowFit.fit(mix, 16384);
+        boolean shortTouched = false;
+        for (String[] mv : mixFit.conversions) {
+            if (mv[1].startsWith("yi_")) {
+                shortTouched = true;
+            }
+        }
+        if (mixFit.refuse != null || !mixFit.plan.ok || shortTouched || mixFit.conversions.isEmpty()) {
+            problems.add("最长列先退这条没守住：降级 " + mixFit.conversions.size()
+                    + " 列、短列被动=" + shortTouched + "、拦下=" + (mixFit.refuse != null));
+        }
+
+        // 拦下两类：需行外的列数堆满半页；列数超 1017
+        List<Object> manyHeads = new ArrayList<Object>();
+        java.util.List<Object> manyRow = new ArrayList<Object>();
+        for (int i = 0; i < 240; i++) {
+            manyHeads.add((Object) ("列" + i));
+            manyRow.add(repeat('z', 300));
+        }
+        List<java.util.List<Object>> manyRows = new ArrayList<java.util.List<Object>>();
+        manyRows.add(manyRow);
+        com.excel2mysql.core.RowFit.Fit manyFit = com.excel2mysql.core.RowFit.fit(
+                infer.inferColumns(manyHeads, manyRows), 16384);
+        if (manyFit.refuse == null || manyFit.refuse.columns != 240
+                || manyFit.refuse.split.size() < 2) {
+            problems.add("240 个三百字文本列没被拦下（或没给拆分建议）："
+                    + (manyFit.refuse == null ? "不拦" : manyFit.refuse.reason));
+        }
+        if (com.excel2mysql.core.RowFit.fit(shortIntCols(infer, 1018), 16384).refuse == null) {
+            problems.add("1018 列超 InnoDB 每表列数上限却没拦下");
+        }
+        if (com.excel2mysql.core.RowFit.fit(shortIntCols(infer, 1017), 16384).refuse != null) {
+            problems.add("1017 列本在建表线内却被多拦了一列");
+        }
+    }
+
+    /** n 个短整数列：只看列数上限那一条，类型固定是 INT。 */
+    private static List<com.excel2mysql.core.Infer.Column> shortIntCols(
+            com.excel2mysql.core.Infer infer, int n) {
+        List<com.excel2mysql.core.Infer.Column> cols =
+                new ArrayList<com.excel2mysql.core.Infer.Column>();
+        for (int i = 0; i < n; i++) {
+            com.excel2mysql.core.Infer.Column c = new com.excel2mysql.core.Infer.Column();
+            c.field = "c" + i;
+            c.comment = "数" + i;
+            c.type = "INT";
+            cols.add(c);
+        }
+        return cols;
+    }
+
+    private static String repeat(char ch, int n) {
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) {
+            sb.append(ch);
+        }
+        return sb.toString();
     }
 
     /** 一列一判的取样写法：表头 + 若干行值，与 Python 侧 `one()` 同一形状。 */
