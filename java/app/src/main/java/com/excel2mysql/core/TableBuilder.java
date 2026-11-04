@@ -48,6 +48,8 @@ public final class TableBuilder {
     /** 表定义 + 建库要写入的数据网格。 */
     public static final class Result {
         public TableOps.Table table;
+        /** 建模收尾的行上限体检结论：类型已就地降级，refuse 非空表示这张表建不出来。 */
+        public RowFit.Fit rowFit;
         public List<Object> headers = new ArrayList<Object>();
         public List<List<Object>> rows = new ArrayList<List<Object>>();
         public String pkReason;
@@ -193,6 +195,7 @@ public final class TableBuilder {
                 c.primaryKey = pk[0].equals(c.field);
             }
         }
+        r.rowFit = RowFit.fit(r.table.columns, 16384);
         return r;
     }
 
@@ -399,6 +402,7 @@ public final class TableBuilder {
                 r.pkReason += "；注意：" + bad;
             }
         }
+        r.rowFit = RowFit.fit(r.table.columns, 16384);
         return r;
     }
 

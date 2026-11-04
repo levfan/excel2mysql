@@ -25,12 +25,8 @@ public final class Infer {
     // 能进 32 的列观测长度不超过 16，仍留着至少一倍空间给以后进来的长值。
     // 刻意不再往下给 16：needed 的下限就是 16，那一档只有整列没值才够得着，
     // 等于把未知列的默认档从 64 收到 16——正是"拿不准宁宽不窄"要避开的方向。
-    private static final int[] VARCHAR_TIERS = {32, 64, 96, 128, 192, 255, 384, 512, 768,
+    static final int[] VARCHAR_TIERS = {32, 64, 96, 128, 192, 255, 384, 512, 768,
             1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16383};
-    private static final int ROW_BYTE_BUDGET = 60000;
-    // 按名定档写死的字面 VARCHAR(n)：与按数据定档那一族同样占行内字节，第二遍要一起算
-    private static final Pattern LITERAL_VARCHAR = Pattern.compile("^VARCHAR\\((\\d+)\\)$");
-    private static final int COL_ROW_COST = 16;
     private static final int MONEY_SCALE = 2;
     private static final int MONEY_PRECISION = 16;
     private static final BigDecimal INT_MAX = BigDecimal.valueOf(2147483647L);
@@ -788,44 +784,15 @@ public final class Infer {
                     needed = 64;
                 }
                 if (needed <= VARCHAR_MAX_CHARS) {
-                    col.varcharN = Integer.valueOf(varcharTier((int) needed));
+                    col.type = "VARCHAR(" + varcharTier((int) needed) + ")";
                 } else {
                     col.type = needed <= 65535 ? "TEXT" : "MEDIUMTEXT";
                 }
             }
-            if (col.varcharN == null && col.type != null) {
-                java.util.regex.Matcher mk = LITERAL_VARCHAR.matcher(col.type);
-                if (mk.matches()) {
-                    // 按名定档给出的字面 VARCHAR（名称档 255、链接档 512、码值档 64）
-                    // 同样占行内字节：不登记进预算，几十列空表头就把 MySQL 单行 65535 撑爆，
-                    // 建表被 1118 Row size too large 拒掉（实测过，见清单第 128 节）
-                    col.varcharN = Integer.valueOf(Integer.parseInt(mk.group(1)));
-                }
-            }
             cols.add(col);
         }
-
-        int remaining = ROW_BYTE_BUDGET;
-        for (Column c : cols) {
-            if (c.varcharN == null) {
-                remaining -= COL_ROW_COST;
-                continue;
-            }
-            int cost = 4 * c.varcharN.intValue();
-            if (cost <= remaining) {
-                remaining -= cost;
-                c.type = "VARCHAR(" + c.varcharN.intValue() + ")";
-            } else {
-                String prev = c.type;
-                c.type = "TEXT";
-                if (c.typeNote != null) {
-                    // 留痕要跟着改口：原话写着"按 VARCHAR(255) 建列"，那一列已经不是了
-                    c.typeNote = "该列没有值，按表头语义本可给 " + prev
-                            + "，但全表 VARCHAR 行内字节已到单行上限（MySQL 65535），退为 TEXT 建列";
-                }
-            }
-            c.varcharN = null;
-        }
+        // 全表行上限不在这里管：那一层是"体检 + 降级"，见 RowFit.fit，
+        // 由组装表定义那一步（TableBuilder）统一过一遍。
         return cols;
     }
 

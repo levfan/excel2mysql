@@ -109,6 +109,16 @@ public final class ImportRun {
                 final int[] loaded = {0};
                 sink.log(headerLine(i + 1, work.size(), name, total));
                 Row row = new Row(name, t.filepath);
+                if (r.rowFit != null && r.rowFit.refuse != null) {
+                    // 建模阶段就判得出这条 DDL 会被库拒（1118/1117），不发出去：
+                    // 建表是隐式提交，半途报错既回滚不了也说不清，现场只会看到"导入失败"
+                    row.message = r.rowFit.refuse.reason;
+                    sink.logError("建表前拦下 " + name + "："
+                            + RowFit.notice(r.rowFit.refuse).replace("\n", " / "));
+                    results.add(row);
+                    sink.advance(1 + total, "跳过 `" + name + "`");
+                    continue;
+                }
                 String ddl = Ddl.buildDdl(name, t.tableComment, t.columns, dropIfExists);
                 sink.log(ddlLog(ddl));
                 try {

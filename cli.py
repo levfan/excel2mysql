@@ -52,6 +52,7 @@ from core.conn_config import (  # noqa: E402
 from core.conn_config import default_config_paths as conn_config_paths
 from core.infer import (  # noqa: E402
     build_table_def, make_unique_names, apply_table_prefix, replace_first_segment,
+    row_fit_notice,
 )
 from core.log_text import DDL_NO_ROLLBACK_NOTE, describe_db_error
 from core.merge_check import MergedCellsError
@@ -555,12 +556,22 @@ def do_check(cfg, log):
 
 def do_dry_run(tables, args, log):
     """不连库：打印每张表的建表语句，供现场核对与人工执行。"""
+    blocked = 0
     for t in tables:
         ddl = build_ddl(t["table_name"], t["table_comment"], t["columns"],
                         args.drop_if_exists)
         log.info("建表语句预览 | `%s`（%d 行数据）" % (t["table_name"], len(t["df"])))
         log.detail(ddl)
-    log.ok("dry-run 完成 | 共 %d 张表未写入数据库（本次没有连接 MySQL）" % len(tables))
+        refuse = (t.get("row_fit") or {}).get("refuse")
+        if refuse:
+            blocked += 1
+            log.warn("行上限体检 | `%s` 这条建表语句发进库里会被拒，先别执行"
+                     % t["table_name"])
+            for line in row_fit_notice(refuse).split("\n"):
+                log.detail(line, level="warn")
+    log.ok("dry-run 完成 | 共 %d 张表未写入数据库（本次没有连接 MySQL）"
+           "%s" % (len(tables),
+                   "；其中 %d 张行上限体检不过线" % blocked if blocked else ""))
     return EXIT_OK
 
 
@@ -578,6 +589,15 @@ def do_import(tables, args, cfg, log):
             name = t["table_name"]
             total = len(t["df"])
             log.info("开始处理 | [%d/%d] 表 `%s`（%d 行）" % (idx, len(tables), name, total))
+            refuse = (t.get("row_fit") or {}).get("refuse")
+            if refuse:
+                # 建模阶段就判得出这条 DDL 会被库拒（1118/1117），不发出去：
+                # 隐式提交的 DDL 回滚不了，半途报错只会让现场看到"导入失败"却不知所以
+                bad_names.append(name)
+                log.error("建表前拦下 | `%s` | %s" % (name, refuse["reason"]))
+                for line in row_fit_notice(refuse).split("\n")[1:]:
+                    log.detail(line, level="error")
+                continue
             conn.begin()
             ddl = build_ddl(name, t["table_comment"], t["columns"], args.drop_if_exists)
             try:

@@ -326,6 +326,16 @@ public final class Main {
         try {
             for (TableOps.Table t : tables) {
                 TableBuilder.Result r = byTable.get(t);
+                if (r != null && r.rowFit != null && r.rowFit.refuse != null) {
+                    // 与 Python 的命令行同口径：建表前就拦下，不把 1118/1117 丢给库去报
+                    importFailed++;
+                    System.out.println("x [ERROR] IMPORT | `" + t.tableName
+                            + "` | 建表前拦下 | " + r.rowFit.refuse.reason);
+                    for (String line : com.excel2mysql.core.RowFit.notice(r.rowFit.refuse).split("\n")) {
+                        detail(line);
+                    }
+                    continue;
+                }
                 try {
                     db.createTable(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, false));
                     long written = db.insertData(t.tableName, t.columns, r.headers, r.rows,

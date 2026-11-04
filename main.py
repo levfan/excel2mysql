@@ -60,7 +60,7 @@ from core.log_text import (
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
     replace_first_segment, sanitize_table_name, _col_to_field, dedup_field,
-    table_name_problem, case_switch,
+    table_name_problem, case_switch, row_fit_notice,
 )
 from core.sql_execute import executable_statements, run as run_sql_statements
 from core.sql_script import (
@@ -1958,6 +1958,15 @@ class ImportWorker(QThread):
                 loaded = [0]                       # 已计入进度的行数（回调里要能改）
                 rep.log(f"===== [{idx}/{len(self.tables)}] 处理表 `{name}`（{total} 行）=====")
                 result = {"name": name, "file": t.get("filepath", ""), "ok": False, "rows": 0, "msg": ""}
+                refuse = (t.get("row_fit") or {}).get("refuse")
+                if refuse:
+                    # 建模阶段就判得出这条 DDL 会被库拒（1118/1117），不发出去：
+                    # 建表是隐式提交，半途报错既回滚不了也说不清，现场只会看到"导入失败"
+                    result["msg"] = refuse["reason"]
+                    rep.log_error("[建表前拦下] 表 `%s`\n%s"
+                                  % (name, row_fit_notice(refuse)))
+                    results.append(result)
+                    continue
                 # 每张表一个事务：先开启，成功提交，失败回滚
                 #（autocommit=False 下首个语句即开启事务；建表 DDL 受 MySQL
                 #  隐式提交限制无法回滚，数据插入可整体回滚）
@@ -5039,6 +5048,10 @@ class DDLDialog(QDialog):
         self.tabs = style_tab_scroll(QTabWidget())
         for t in tables:
             ddl = build_ddl(t["table_name"], t["table_comment"], t["columns"], drop_if_exists)
+            refuse = (t.get("row_fit") or {}).get("refuse")
+            if refuse:
+                # 预览里先把话说在前面：这份 DDL 发进库会被拒，注释行就是拦下理由与拆法
+                ddl = "-- " + row_fit_notice(refuse).replace("\n", "\n-- ") + "\n" + ddl
             te = QPlainTextEdit()
             te.setReadOnly(True)
             te.setFont(QFont("Menlo"))

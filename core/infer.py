@@ -45,9 +45,7 @@ _MASK_SEG_RE = re.compile(
     u"(?<![0-9A-Za-z])[yYmMdDhHsS]{2,}(?:[-/\u2013_.:\uFF1A][0-9yYmMdDhHsS]+)*(?![0-9A-Za-z])"
 )
 
-# VARCHAR 长度算法：常用档位 + 全表字节预算
-# utf8mb4 下 VARCHAR(n) 计入 MySQL 65535 字节行上限按 4n 字节算（n 为字符数），
-# 全表 VARCHAR 总量不加控制会导致 CREATE TABLE 报 Row size too large
+# VARCHAR 长度算法：常用档位（全表行上限另有体检，见下面的 row_plan / fit_row_limits）
 # 32 那一档只在"全量最大字节 + 余量"确实落得下时才用：余量下限是 16 字节，
 # 所以能进 32 的列观测长度不超过 16，仍留着至少一倍的空间给以后进来的长值。
 # 刻意不再往下给 16：needed 的下限就是 16，16 这一档只有"整列一个值都没有"才够得着，
@@ -55,10 +53,38 @@ _MASK_SEG_RE = re.compile(
 _VARCHAR_TIERS = (32, 64, 96, 128, 192, 255, 384, 512, 768, 1024, 1536, 2048,
                   3072, 4096, 6144, 8192, 12288, 16383)
 _VARCHAR_MAX_CHARS = 16383      # utf8mb4 VARCHAR 最大字符数（4 × 16383 ≈ 64KB）
-# 按名定档写死的字面 VARCHAR(n)：与按数据定档那一族同样占行内字节，第二遍要一起算
-_LITERAL_VARCHAR_RE = re.compile(r"^VARCHAR\((\d+)\)$")
-_ROW_BYTE_BUDGET = 60000        # 全表 VARCHAR 行内字节预算（留出余量防行过大）
-_COL_ROW_COST = 16              # 单个非 VARCHAR 列的行内开销估算（字节）
+
+# ---------------------------------------------------------------------------
+# 行上限体检：三条都是本机 MySQL 8.0.46（16K 页 / ROW_FORMAT=DYNAMIC /
+# innodb_strict_mode=ON）实测翻转点，不是抄文档数字——见清单第 129 节。
+#   · server 级：不含 BLOB 的行最大 65535 字节，VARCHAR 按 4n+长度字节全额计
+#   · InnoDB：一行本地部分不得超半个页（16K→8126）；够长的变长列可整列走行外，
+#     本地只留引用（摊 41 字节），短列（行内 ≤250）走不了行外，只能全额留在本地
+#   · InnoDB 每表列数 1017（1018 列报 1117 Too many columns，与类型无关）
+# 拟合用的六组边界：VARCHAR(16) 124/125、VARCHAR(32) 62/63、VARCHAR(48) 41/42、
+# VARCHAR(64) 196/197、TEXT 196/197、DECIMAL(18,6) 887/888。
+# ---------------------------------------------------------------------------
+SERVER_ROW_LIMIT = 65535
+INNODB_MAX_COLUMNS = 1017
+_INNODB_HALF_PAGE_SLACK = 66    # 半页可用额度 = page_size/2 - 66（实测 16K→8126）
+_INNODB_ROW_FIXED = 30          # 行头与格式开销（含 NULL 位图另计）
+_EXT_COLUMN_BYTES = 41          # 整列走行外时每列留在行内的字节（六组边界拟合值）
+_INLINE_MAX_BYTES = 250         # 行内字节 ≤250 的变长列不走行外（实测 226 不走、258 走）
+_SERVER_BLOB_BYTES = 12         # server 行上限里每个 TEXT/BLOB 只摊 9~12，按 12 计
+_DEC_DIGIT_BYTES = (0, 1, 1, 2, 2, 3, 3, 4, 4)   # 每 9 位 4 字节，余数查这张表
+_FIXED_TYPE_BYTES = {"TINYINT": 1, "SMALLINT": 2, "MEDIUMINT": 3, "INT": 4,
+                     "INTEGER": 4, "BIGINT": 8, "NUMERIC": 6, "FLOAT": 4,
+                     "DOUBLE": 8, "REAL": 8, "BIT": 1, "BOOL": 1, "BOOLEAN": 1,
+                     "DATE": 3, "DATETIME": 5, "TIMESTAMP": 4, "TIME": 3,
+                     "YEAR": 1, "TINYTEXT": 12, "MEDIUMTEXT": 20, "LONGTEXT": 40,
+                     "BLOB": 12, "TINYBLOB": 12, "MEDIUMBLOB": 20, "LONGBLOB": 40,
+                     "JSON": 40}
+_TEXTISH_RE = re.compile(r"^(TINYTEXT|MEDIUMTEXT|LONGTEXT|TEXT|TINYBLOB|"
+                         r"MEDIUMBLOB|LONGBLOB|BLOB)\b")
+_VARCHAR_BYTES_RE = re.compile(r"^VARCHAR\((\d+)\)$")
+_CHAR_BYTES_RE = re.compile(r"^CHAR\((\d+)\)$")
+_DECIMAL_BYTES_RE = re.compile(r"^DECIMAL\((\d+)(?:,(\d+))?\)$")
+
 _FIELD_MAX_LEN = 30             # 字段名最长 30 字符；全拼超此则整列降级为首字母
 _TABLE_MAX_LEN = 64             # 表名最长 64 字符（MySQL 标识符上限）；全拼超此同样降级为首字母
 
@@ -892,7 +918,6 @@ def infer_columns(df: pd.DataFrame, initials: bool = False,
                 all_dt = False
             if all_da and not _looks_date(v):
                 all_da = False
-        pending_n = None
         col_note = None
         money = _is_money(h, field)
         code = _is_code(h, field)
@@ -979,40 +1004,196 @@ def infer_columns(df: pd.DataFrame, initials: bool = False,
                 # 之后灌进长值就是截断报错，比宽一档贵得多
                 needed = 64
             if needed <= _VARCHAR_MAX_CHARS:
-                pending_n = _varchar_tier(needed)
+                typ = "VARCHAR(%d)" % _varchar_tier(needed)
             else:
                 typ = "TEXT" if needed <= 65535 else "MEDIUMTEXT"
         col = {"field": field, "comment": h, "type": typ, "max_len": max_len}
-        if pending_n is not None:
-            col["_varchar_n"] = pending_n
-        elif typ is not None and _LITERAL_VARCHAR_RE.match(typ):
-            # 按名定档给出的字面 VARCHAR（名称档 255、链接档 512、码值档 64）同样占行内字节：
-            # 不登记进预算的话，几十列空表头就把 MySQL 单行 65535 撑爆，
-            # 建表直接被 1118 Row size too large 拒掉（实测过，见清单第 128 节）
-            col["_varchar_n"] = int(_LITERAL_VARCHAR_RE.match(typ).group(1))
         if col_note:
             col["type_note"] = col_note
         cols.append(col)
 
-    # 第二遍：VARCHAR 行内字节预算分配（utf8mb4 每 VARCHAR(n) 计 4n 字节）
-    remaining = _ROW_BYTE_BUDGET
-    for c in cols:
-        n = c.pop("_varchar_n", None)
-        if n is None:
-            remaining -= _COL_ROW_COST
-            continue
-        cost = 4 * n
-        if cost <= remaining:
-            remaining -= cost
-            c["type"] = f"VARCHAR({n})"
-        else:
-            prev = c["type"]
-            c["type"] = "TEXT"    # 预算不足退为行外存储，保证建表成功
-            if c.get("type_note"):
-                # 留痕要跟着改口：原话写着"按 VARCHAR(255) 建列"，那一列已经不是了
-                c["type_note"] = (f"该列没有值，按表头语义本可给 {prev}，但全表 VARCHAR "
-                                  f"行内字节已到单行上限（MySQL 65535），退为 TEXT 建列")
+    # 全表行上限不在这里管：那一层是"体检 + 降级"，见 fit_row_limits。
+    # 这里只负责按数据/按表头语义把每一列定到它自己该上的那一档。
     return cols
+
+
+# ---------------------------------------------------------------------------
+# 行上限体检与降级
+# ---------------------------------------------------------------------------
+
+def _decimal_bin_bytes(precision, scale):
+    """DECIMAL(p,s) 的二进制存储：每 9 位十进制 4 字节，余数查 _DEC_DIGIT_BYTES。"""
+    ip = precision - scale
+    return (4 * (ip // 9) + _DEC_DIGIT_BYTES[ip % 9]
+            + 4 * (scale // 9) + _DEC_DIGIT_BYTES[scale % 9])
+
+
+def _varchar_n(col):
+    m = _VARCHAR_BYTES_RE.match(str(col.get("type") or "").strip().upper())
+    return int(m.group(1)) if m else None
+
+
+def _col_row_bytes(col):
+    """这一列在两条行上限下各占多少字节，返回 (server 计入, InnoDB 本地计入)。
+
+    认不出来的写法按 TEXT 那一档估（宁可估多，也别把建不出的表说成能建）。
+    """
+    t = str(col.get("type") or "").strip().upper()
+    m = _VARCHAR_BYTES_RE.match(t)
+    if m:
+        inline = 4 * int(m.group(1))
+        inline += 2 if inline > 255 else 1
+        return inline, (inline if inline <= _INLINE_MAX_BYTES else _EXT_COLUMN_BYTES)
+    m = _CHAR_BYTES_RE.match(t)
+    if m:
+        inline = 4 * int(m.group(1))
+        return inline, inline
+    if _TEXTISH_RE.match(t):
+        return _SERVER_BLOB_BYTES, _EXT_COLUMN_BYTES
+    m = _DECIMAL_BYTES_RE.match(t)
+    if m:
+        n = _decimal_bin_bytes(int(m.group(1)), int(m.group(2) or 0))
+        return n, n
+    base = t.split("(")[0].strip()
+    if base in _FIXED_TYPE_BYTES:
+        n = _FIXED_TYPE_BYTES[base]
+        return n, n
+    return _SERVER_BLOB_BYTES, _EXT_COLUMN_BYTES
+
+
+def row_plan(cols, page_size=16384):
+    """这一组列在真库里的行字节预算：两条上限各算一份，再报能不能建表。"""
+    server = local = 0
+    for c in cols:
+        pair = _col_row_bytes(c)
+        server += pair[0]
+        local += pair[1]
+    local_limit = page_size // 2 - _INNODB_HALF_PAGE_SLACK
+    # 位图按每 8 列 1 字节，行头另有固定开销（实测这两项合起来才对得上翻转点）
+    local_total = local + _INNODB_ROW_FIXED + -(-len(cols) // 8)
+    return {"server": server, "local": local_total, "columns": len(cols),
+            "server_limit": SERVER_ROW_LIMIT, "local_limit": local_limit,
+            "ok": (server <= SERVER_ROW_LIMIT and local_total <= local_limit
+                   and len(cols) <= INNODB_MAX_COLUMNS)}
+
+
+def _degrade_once(cols, plan):
+    """改一列：先退最长的那一列成 TEXT，没有可退的再把最长那一档降一档。
+
+    排序键是"这一列能省多少字节"，同分时按列序——列序在两栈里都是数组下标，
+    换成按字段名排就会在拼音列名上分叉（Java 与 Python 的比较器不完全同）。
+    """
+    best = None
+    for i, c in enumerate(cols):
+        if "nullable" in c or _varchar_n(c) is None:
+            continue                    # 结构定义里人工写的类型与已经是 TEXT 的列都不动
+        pair = _col_row_bytes(c)
+        save = max(pair[0] - _SERVER_BLOB_BYTES, pair[1] - _EXT_COLUMN_BYTES)
+        if save > 0 and (best is None or save > best[0]):
+            best = (save, i, c["type"], "TEXT")
+    if best is not None:
+        _, i, frm, to = best
+        cols[i]["type"] = to
+        cols[i]["type_note"] = (
+            f"这一列本可给 {frm}，但全表行内字节超过 MySQL 上限"
+            f"（server {plan['server_limit']}、InnoDB 半页 {plan['local_limit']}），"
+            f"退为 TEXT 建列")
+        return ("text", cols[i]["field"], frm, to)
+
+    best = None
+    for i, c in enumerate(cols):
+        if "nullable" in c:
+            continue
+        n = _varchar_n(c)
+        if n is None:
+            continue
+        lower = [t for t in _VARCHAR_TIERS if t < n]
+        if not lower:
+            continue
+        to = "VARCHAR(%d)" % lower[-1]
+        save = max(_col_row_bytes(c)[0] - _col_row_bytes({"type": to})[0],
+                   _col_row_bytes(c)[1] - _col_row_bytes({"type": to})[1])
+        if save > 0 and (best is None or save > best[0]):
+            best = (save, i, c["type"], to)
+    if best is None:
+        return None
+    _, i, frm, to = best
+    cols[i]["type"] = to
+    cols[i]["type_note"] = (
+        f"这一列本可给 {frm}，为过 MySQL 行上限降到 {to}"
+        f"（server {plan['server_limit']}、InnoDB 半页 {plan['local_limit']}）；"
+        f"以后灌进更长的值会被截断报错")
+    return ("tier", cols[i]["field"], frm, to)
+
+
+def _split_advice(cols, page_size):
+    """按列序贪心装箱，给出"这张表至少拆成几段、每段多少列多少字节"。"""
+    segs, cur = [], []
+    for c in cols:
+        trial = cur + [c]
+        if row_plan(trial, page_size)["ok"] or not cur:
+            cur = trial
+            continue
+        p = row_plan(cur, page_size)
+        segs.append({"columns": p["columns"], "server": p["server"], "local": p["local"]})
+        cur = [c]
+    if cur:
+        p = row_plan(cur, page_size)
+        segs.append({"columns": p["columns"], "server": p["server"], "local": p["local"]})
+    return segs
+
+
+def _refuse_reason(cols, plan):
+    """说清楚为什么救不回来：是定长列堆满半页，还是需行外的列数本身就超半页。"""
+    fixed = 0
+    external = 0
+    for c in cols:
+        pair = _col_row_bytes(c)
+        if pair[1] == _EXT_COLUMN_BYTES:
+            external += 1
+        else:
+            fixed += pair[1]
+    bitmap = -(-len(cols) // 8)
+    if fixed + _INNODB_ROW_FIXED + bitmap > plan["local_limit"]:
+        return ("定长列（数值、日期这一类）行内已占 %d 字节，超过 InnoDB 半页 %d —— "
+                "退成 TEXT 与降长度都救不回来，只能拆表或删列"
+                % (fixed, plan["local_limit"]))
+    if plan["server"] > plan["server_limit"]:
+        return ("全表行内字节 %d 仍超过 server 上限 %d（TEXT/BLOB 也省不出来了）"
+                % (plan["server"], plan["server_limit"]))
+    return ("需要整列走行外的列有 %d 个，每个至少占行内 %d 字节，"
+            "半页 %d 字节装不下，只能拆表"
+            % (external, _EXT_COLUMN_BYTES, plan["local_limit"]))
+
+
+def fit_row_limits(cols, page_size=16384):
+    """体检这一组列能不能建成表；能就就地降级到过线，不能就给拦下理由与拆分建议。
+
+    返回 {"conversions": [...], "refuse": None 或 {...}, "plan": 最后一版体检结果}。
+    降级只动工具自己推断出来的列——结构定义模式里人工写的类型是承诺，不许改。
+    """
+    conversions = []
+    plan = row_plan(cols, page_size)
+    if plan["columns"] > INNODB_MAX_COLUMNS:
+        return {"conversions": conversions, "plan": plan,
+                "refuse": {"reason": "这张表 %d 列，超过 InnoDB 每表列数上限 %d"
+                                      "（报 1117 Too many columns，与列的类型无关）"
+                                      % (plan["columns"], INNODB_MAX_COLUMNS),
+                           "columns": plan["columns"], "server": plan["server"],
+                           "local": plan["local"], "split": _split_advice(cols, page_size)}}
+    while not plan["ok"]:
+        moved = _degrade_once(cols, plan)
+        if moved is None:
+            break
+        conversions.append({"field": moved[1], "from": moved[2], "to": moved[3],
+                            "level": moved[0]})
+        plan = row_plan(cols, page_size)
+    refuse = None
+    if not plan["ok"]:
+        refuse = {"reason": _refuse_reason(cols, plan), "columns": plan["columns"],
+                  "server": plan["server"], "local": plan["local"],
+                  "split": _split_advice(cols, page_size)}
+    return {"conversions": conversions, "refuse": refuse, "plan": plan}
 
 
 # ---------------- 主键自动选择 ----------------
@@ -1489,6 +1670,30 @@ def _flatten_merged_header(filepath: str, sheet_name: str, plan: dict) -> pd.Dat
     return data
 
 
+def row_fit_notice(refuse):
+    """拦下时给现场照抄的那段话：结论一句，拆分建议逐段一句。"""
+    if not refuse:
+        return ""
+    lines = ["行上限体检不通过：%s" % refuse["reason"]]
+    segs = refuse.get("split") or []
+    if segs:
+        lines.append("建议拆成 %d 段（每段都单独过线）：" % len(segs))
+        for i, s in enumerate(segs, 1):
+            lines.append("    第 %d 段：%d 列，行内约 %d 字节"
+                         % (i, s["columns"], s["local"]))
+    return "\n".join(lines)
+
+
+def _attach_row_fit(td):
+    """建模收尾必过的行上限体检：就地降级到过线，过不了就在 td["row_fit"] 里给拦下理由。
+
+    只动工具自己推断的列；结构定义里人工写死的类型照原样发（改那一列是毁掉使用者的承诺），
+    所以人工类型过不了线时给的是 refuse，由调用方在建表之前拦下。
+    """
+    td["row_fit"] = fit_row_limits(td["columns"])
+    return td
+
+
 def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
                     upper: bool = False, lower: bool = False) -> dict:
     """
@@ -1543,7 +1748,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         td = _build_structured(filepath, sheets, initials=initials, upper=upper,
                                lower=lower)
         td["merged_header"] = merged_info
-        return td
+        return _attach_row_fit(td)
     df = next(iter(sheets.values()))
     # 具名但整列没值的字段要保留（采集模板里必填项还没填），只丢"表头没写字"的格式化空列；
     # 全空行照旧丢掉，免得 Excel 尾部格式化出来的空行整行 NULL 入库
@@ -1578,7 +1783,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     if pk_field:
         for c in columns:
             c["primary_key"] = (c["field"] == pk_field)
-    return {
+    return _attach_row_fit({
         "filepath": filepath,
         "table_name": table_name,
         # 未加前缀的基础表名，供「批量应用前缀」重复计算使用
@@ -1597,7 +1802,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         # 顶部两行合并表头展开信息（sheet/depth）；没展开时为 None，
         # GUI/CLI 的 [已解析] 行据此说明"表头是几行压出来的"
         "merged_header": merged_info,
-    }
+    })
 
 
 def make_unique_names(tables: list) -> list:
