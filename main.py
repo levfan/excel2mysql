@@ -84,17 +84,10 @@ from core.zip_import import (
 from core.merge_check import MergedCellsError
 from ui_help import HelpDialog, AboutDialog, fit_client
 from appinfo import build_info, title_text
+from assetpath import resource_path
 from version import APP_VERSION
 
 IMPORT_EXTS = EXCEL_EXTS + (".zip",)   # 拖拽区与文件选择框共同接受的扩展名
-
-
-def resource_path(rel: str) -> str:
-    """打包后资源在 PyInstaller 解包目录，开发态在项目根目录。"""
-    base = getattr(sys, "_MEIPASS", None)
-    if base is None:
-        base = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, rel)
 
 
 def program_dir() -> str:
