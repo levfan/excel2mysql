@@ -66,6 +66,18 @@
         <targetPath>fonts</targetPath>
         <filtering>false</filtering>
       </resource>
+      <!--
+        「关于」那一行的两张小图：文件只有一份，住在仓库 assets/（Python 那条线读同一个
+        文件），这里只挑这两张抄进 jar 根目录，别不把 assets 整目录拖进来。
+      -->
+      <resource>
+        <directory>../../assets</directory>
+        <filtering>false</filtering>
+        <includes>
+          <include>github_mark.png</include>
+          <include>external_link.png</include>
+        </includes>
+      </resource>
     </resources>
     <plugins>
       <plugin>

@@ -960,6 +960,12 @@ public final class GuiDump {
                     // 产品名与复制按钮那两种字都是两栈各写一份的串，逐字比才知道有没有漂
                     put("dlg.about.heading", norm(ad.headingText()));
                     put("dlg.about.copy", norm(ad.copyLabels()));
+                    // 仓库那一行：地址、此刻的字、四档回执、缺图取证（与 Qt 那侧同键同判）
+                    putExact("dlg.about.repo.url", ad.repoUrl());
+                    putExact("dlg.about.repo.tip", ad.repoTip());
+                    put("dlg.about.repo.text", norm(ad.repoText()));
+                    put("dlg.about.repo.states", norm(ad.repoStates()));
+                    put("dlg.about.repo.icons", norm(ad.repoIconsMissing()));
                 } finally {
                     ad.dispose();
                 }
@@ -1435,6 +1441,16 @@ public final class GuiDump {
 
     private static void put(String key, String value) {
         D.put(key, norm(value));
+    }
+
+    /**
+     * 逐字记的一格：不折路径。
+     *
+     * <p>norm 里那条"盘符路径"正则只认"字母+冒号+斜杠"，https://… 正好撞进去被折成
+     * &lt;P&gt;仓库名——两边都只剩尾巴，写错用户名或换错仓库也照样绿，等于没比这一格。
+     */
+    private static void putExact(String key, String value) {
+        D.put(key, value == null ? "" : value.replace("\r", "").trim());
     }
 
     /**

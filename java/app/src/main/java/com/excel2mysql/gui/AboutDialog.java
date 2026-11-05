@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 「关于」小框：版本 / 提交 / 构建日期 / 作者四行，值全部来自 AppInfo。
+ * 「关于」小框：版本 / 提交 / 构建日期 / 作者四行，加一行仓库链接，值全部来自 AppInfo。
  * 对应 ui_help.py 的 AboutDialog。
  *
  * 提交号与构建日期是打包时烧进产物的（目标机没有 git），开发态现场问一次；
@@ -51,10 +51,34 @@ public final class AboutDialog extends JDialog {
     /** 值那一行的取用方式：JTextField 拖选是真能选，双击只负责把整行选上，不吹"即复制"。 */
     static final String COPY_HINT = "双击整行选中，Ctrl+C 复制";
 
+    /**
+     * 「关于」里那一行仓库链接的文案。四档都是两栈各写一份的串，
+     * 由对撞键 dlg.about.repo.* 逐字比；地址本身只有一个来源（core/AppInfo.REPO_URL）。
+     */
+    public static final String REPO_LABEL = "GitHub";
+    public static final String REPO_OPENED_LABEL = "已在浏览器打开";
+    public static final String REPO_COPIED_LABEL = "打不开浏览器，地址已复制";
+    public static final String REPO_FAIL_LABEL = "打不开浏览器，也没能写进剪贴板";
+    public static final String REPO_TIP = "仓库 " + AppInfo.REPO_URL
+            + "：单击用系统默认浏览器打开。"
+            + "本机打不开浏览器时（内网、没装浏览器、被安全软件拦下），地址会写进剪贴板";
+    /**
+     * 两张随包小图：GitHub 轮廓与行尾外链箭头。
+     *
+     * <p>文件只有一份，住在仓库 assets/ 下（Python 那条线读同一个文件），pom 把这两张
+     * 抄进 jar 根目录；生成办法见 java/tools/export_repo_icons.py。不靠系统主题图标，
+     * 也不拿文字画箭头——那又会回到"这台机器上有没有这个字形"。
+     */
+    public static final String REPO_ICON_FILE = "/github_mark.png";
+    public static final String REPO_ARROW_FILE = "/external_link.png";
+    public static final int REPO_ICON_PX = 18;    // 左边那枚：与正文那一档字号差不多高
+    public static final int REPO_ARROW_PX = 15;   // 行尾那枚：略小一档，免得抢正文的字
+
     private final Map<String, HintLabel> rows = new LinkedHashMap<String, HintLabel>();
     private final List<String> captions = new ArrayList<String>();
     private JButton copyButton;
     private JLabel headingLabel;
+    private RepoLinkRow repoRow;
 
     public AboutDialog(Frame owner) {
         this(owner, AppInfo.load());
@@ -62,6 +86,22 @@ public final class AboutDialog extends JDialog {
 
     /** 自检用：喂一份指定构建信息，覆盖“提交号带着长分支名”这类现场值。 */
     public AboutDialog(Frame owner, AppInfo info) {
+        this(owner, info, new java.util.function.Function<String, Boolean>() {
+            @Override
+            public Boolean apply(String url) {
+                return RepoLinkRow.openInBrowser(url);
+            }
+        });
+    }
+
+    /**
+     * 主构造：浏览器那一步交给注入进来的 opener。
+     *
+     * <p>自检与离屏渲染传一个假的进来——真开浏览器会把开发机的窗口搞乱，
+     * 而那并不是这一行要验的东西；生产入口走上面那个重载，真的交给系统外壳。
+     */
+    public AboutDialog(Frame owner, AppInfo info,
+                       java.util.function.Function<String, Boolean> opener) {
         super(owner, "关于", true);
         WindowIcons.apply(this);
 
@@ -85,10 +125,15 @@ public final class AboutDialog extends JDialog {
         rows.get("commit").setToolTipText(COMMIT_TIP + "；" + COPY_HINT);
         rows.get("built").setToolTipText(BUILT_TIP);
 
+        // 仓库那一行不在 grid 里：grid 第 0 列是行名，对撞键 dlg.about.rows 按那一列比，
+        // 把它塞进去会让四行变五行，而它本来就不是"一行信息"，是一颗链接
+        repoRow = new RepoLinkRow(AppInfo.REPO_URL, opener);
+        repoRow.setToolTipText(REPO_TIP);
+
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
         JButton copy = new JButton(COPY_LABEL);
-        copy.setToolTipText("把上面四行一次放进剪贴板（提交号给 40 位完整值）");
+        copy.setToolTipText("把上面五行一次放进剪贴板（提交号给 40 位完整值、仓库给完整地址）");
         copy.addActionListener(e -> {
             String text = copyText();
             boolean ok = false;
@@ -123,8 +168,12 @@ public final class AboutDialog extends JDialog {
         JPanel head = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(6)));
         head.add(title, BorderLayout.NORTH);
         head.add(rule, BorderLayout.SOUTH);
+        JPanel body = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(6)));
+        body.setOpaque(false);
+        body.add(grid, BorderLayout.NORTH);
+        body.add(repoRow, BorderLayout.CENTER);
         top.add(head, BorderLayout.NORTH);
-        top.add(grid, BorderLayout.CENTER);
+        top.add(body, BorderLayout.CENTER);
         root.add(top, BorderLayout.NORTH);
         root.add(row, BorderLayout.SOUTH);
         setContentPane(root);
@@ -143,9 +192,8 @@ public final class AboutDialog extends JDialog {
             }
         });
         // 尺寸要等组件都摆好再算：pack 之前设尺寸等于跟布局抢活
-        // 230 那档是垫了分隔线、底下又多出「复制全部」那一行之后要的：
-        // 仍按客户区给，换字号只会变高不会裁字
-        Windows.clientSize(getContentPane(), this, 380, 230);
+        // 262 = 原来那 230 再加一行仓库链接（行高 26 + 行距 6），与 Qt 那一版同数
+        Windows.clientSize(getContentPane(), this, 380, 262);
     }
 
     /** 自检用：某一行的悬浮提示文字（来源说明挂在提示里，界面不再铺小字）。 */
@@ -168,11 +216,46 @@ public final class AboutDialog extends JDialog {
         return copyButtonText() + "|" + COPIED_LABEL + "|" + CLIP_FAIL_LABEL;
     }
 
+    /** 自检与对撞用：仓库那一行此刻的字、点出去那串地址、四档回执。 */
+    public String repoText() {
+        return repoRow == null ? "" : repoRow.rowText();
+    }
+
+    public String repoUrl() {
+        return repoRow == null ? "" : repoRow.rowUrl();
+    }
+
+    public String repoStates() {
+        return REPO_LABEL + "|" + REPO_OPENED_LABEL + "|" + REPO_COPIED_LABEL
+                + "|" + REPO_FAIL_LABEL;
+    }
+
+    /** 自检用：两张随包小图有没有真读进来（缺图不算失败，但要能被发现）。 */
+    public String repoIconsMissing() {
+        return repoRow == null ? "no-row" : repoRow.iconsMissing();
+    }
+
+    /** 自检用：这一行是不是真能点。 */
+    public boolean repoClickable() {
+        return repoRow != null && repoRow.clickable();
+    }
+
+    /** 自检用：把这一行按指定 opener 走一遍，返回它给出的状态字。 */
+    public String repoActivate() {
+        return repoRow == null ? "" : repoRow.activate();
+    }
+
+    /** 自检用：那一行的悬浮提示（完整地址就在这一串里）。 */
+    public String repoTip() {
+        return repoRow == null ? "" : repoRow.getToolTipText();
+    }
+
     /**
      * 「复制全部」放进剪贴板的那一份文本，与 Python 侧 {@code copy_text()} 同一形状。
      *
      * <p>正面那一格仍是短号（一行放得下、也够人眼看），贴出去的要能一路粘进 git 里查，
      * 所以这里给 40 位；老产物没烧全号时退回短号，不写一个空值出去。
+     * 仓库那一行界面上只写「GitHub」，完整地址在这一份里给全，抄出去就能直接贴。
      */
     public String copyText() {
         return copyText(AppInfo.load());
@@ -185,7 +268,8 @@ public final class AboutDialog extends JDialog {
         sb.append("版本：v").append(info.versionText()).append('\n');
         sb.append("提交：").append(info.commitDisplayFor(info.fullCommit())).append('\n');
         sb.append("构建日期：").append(info.builtAt).append('\n');
-        sb.append("作者：").append(AUTHOR);
+        sb.append("作者：").append(AUTHOR).append('\n');
+        sb.append("仓库：").append(AppInfo.REPO_URL);
         return sb.toString();
     }
 

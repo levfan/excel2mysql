@@ -110,6 +110,15 @@ def put(key, value):
     D[key] = norm(value)
 
 
+def put_exact(key, value):
+    """逐字记的一格：不折路径。
+
+    norm 里那条"盘符路径"正则只认"字母+冒号+斜杠"，https://… 正好撞进去被折成
+    <P>仓库名——两边都只剩尾巴，写错用户名或换错仓库也照样绿，等于没比这一格。
+    """
+    D[key] = ("" if value is None else str(value)).replace("\r", "").strip()
+
+
 def tip_of(w):
     try:
         return w.toolTip()
@@ -1125,6 +1134,12 @@ def main():
     # 产品名与复制按钮那两种字都是两栈各写一份的串，逐字比才知道有没有漂
     put("dlg.about.heading", norm(ad.heading_text()))
     put("dlg.about.copy", norm(ad.copy_labels()))
+    # 仓库那一行：地址、此刻的字、四档回执、缺图取证。文案两栈各写一份，逐字比
+    put_exact("dlg.about.repo.url", ad.repo_url())
+    put_exact("dlg.about.repo.tip", ad.repo_tip())
+    put("dlg.about.repo.text", norm(ad.repo_text()))
+    put("dlg.about.repo.states", norm(ad.repo_states()))
+    put("dlg.about.repo.icons", norm(ad.repo_icons_missing()))
     ad.deleteLater()
 
     # ---- 进度框文案 ----

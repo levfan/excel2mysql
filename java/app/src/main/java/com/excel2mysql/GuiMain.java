@@ -1042,7 +1042,7 @@ public final class GuiMain {
             System.out.println("! [WARN] GUI-SELFTEST | 剪贴板开不了，"
                     + "「复制全部」写进系统剪贴板这一判本轮未覆盖（按钮已如实报「剪贴板打不开」）");
         } else if (!want.equals(got)) {
-            problems.add("点「复制全部」后剪贴板里不是那五行：" + brief(got));
+            problems.add("点「复制全部」后剪贴板里不是那六行：" + brief(got));
         }
         String sha = "";
         String[] lines = want.split("\n");
@@ -1088,6 +1088,89 @@ public final class GuiMain {
                 System.out.println("! [WARN] GUI-SELFTEST | 合成鼠标事件在这台 JDK 上"
                         + "带不出 clickCount，「双击整行选中」这一判本轮未覆盖"
                         + "（选到的是：" + brief(selected) + "）");
+            }
+        }
+    }
+
+    /**
+     * 「关于」里那一行仓库链接：先核框面上那一行本身，再真走一遍单击，两种结局都要说实话。
+     *
+     * <p>浏览器那一步交给注入进来的假 opener——自检真开浏览器会把桌上的窗口搞乱，
+     * 而这一判要的是"点了有没有可见回执"，不是"浏览器起没起"；真那条路另有出包冒烟。
+     * 剪贴板是桌上借来的东西：先捕获原值，判完原样归还。
+     */
+    private static void checkRepoLink(com.excel2mysql.gui.AboutDialog ad,
+                                      List<String> problems) {
+        String miss = ad.repoIconsMissing();
+        if (!miss.isEmpty()) {
+            problems.add("关于框那行仓库链接的随包图没读进来：" + miss
+                    + "（出包时 assets 里那两张要连着走）");
+        }
+        if (!com.excel2mysql.core.AppInfo.REPO_URL.equals(ad.repoUrl())
+                || !ad.repoUrl().startsWith("https://")) {
+            problems.add("关于框那一行的地址不是单源那串 https：" + ad.repoUrl());
+        }
+        if (!com.excel2mysql.gui.AboutDialog.REPO_LABEL.equals(ad.repoText())
+                || !ad.repoClickable()) {
+            problems.add("关于框那一行开场不是「GitHub」或不是真能点：" + ad.repoText());
+        }
+        final List<String> seen = new ArrayList<String>();
+        com.excel2mysql.gui.AboutDialog opened = new com.excel2mysql.gui.AboutDialog(
+                null, com.excel2mysql.core.AppInfo.load(),
+                new java.util.function.Function<String, Boolean>() {
+                    @Override
+                    public Boolean apply(String url) {
+                        seen.add(url);
+                        return Boolean.TRUE;
+                    }
+                });
+        try {
+            String st = opened.repoActivate();
+            if (!"opened".equals(st) || seen.size() != 1
+                    || !com.excel2mysql.core.AppInfo.REPO_URL.equals(seen.get(0))) {
+                problems.add("点仓库那一行没把完整地址交给浏览器：" + st + " / " + seen);
+            }
+            if (!com.excel2mysql.gui.AboutDialog.REPO_OPENED_LABEL.equals(opened.repoText())) {
+                problems.add("仓库那一行点开成功后没有可见回执：" + opened.repoText());
+            }
+            if (!com.excel2mysql.gui.AboutDialog.REPO_TIP.equals(opened.repoTip())) {
+                problems.add("仓库那一行的悬浮提示与单源文案不一致："
+                        + brief(opened.repoTip()));
+            }
+        } finally {
+            opened.dispose();
+        }
+        String prev = clipboardText();
+        com.excel2mysql.gui.AboutDialog failed = new com.excel2mysql.gui.AboutDialog(
+                null, com.excel2mysql.core.AppInfo.load(),
+                new java.util.function.Function<String, Boolean>() {
+                    @Override
+                    public Boolean apply(String url) {
+                        return Boolean.FALSE;
+                    }
+                });
+        try {
+            String st = failed.repoActivate();
+            boolean copied = "copied".equals(st);
+            if (!(copied || "failed".equals(st))) {
+                problems.add("打不开浏览器时那一行既没复制也没如实报：" + st);
+            } else if (!copied) {
+                System.out.println("! [WARN] GUI-SELFTEST | 剪贴板开不了，"
+                        + "「打不开浏览器就把地址复制进剪贴板」这一判本轮未覆盖"
+                        + "（那一行已如实报「" + failed.repoText() + "」）");
+            } else if (!com.excel2mysql.core.AppInfo.REPO_URL.equals(clipboardText())) {
+                problems.add("那一行说地址已复制，剪贴板里却不是那串地址："
+                        + brief(clipboardText()));
+            }
+            String want = copied ? com.excel2mysql.gui.AboutDialog.REPO_COPIED_LABEL
+                    : com.excel2mysql.gui.AboutDialog.REPO_FAIL_LABEL;
+            if (!want.equals(failed.repoText())) {
+                problems.add("仓库那一行的回执文字与状态不符：" + failed.repoText());
+            }
+        } finally {
+            failed.dispose();
+            if (prev != null) {
+                writeClipboard(prev);
             }
         }
     }
@@ -5652,7 +5735,7 @@ public final class GuiMain {
                     com.excel2mysql.core.AppInfo.load().source)) {
                 problems.add("关于框既没有构建日期也没有声明来源，用户无从判断可信度");
             }
-            // 提交号与构建日期的来源写在各自那一行的悬浮提示里：正面只留四行结果
+            // 提交号与构建日期的来源写在各自那一行的悬浮提示里：正面只留四行结果加一行链接
             // （两栈同一段话各写一份，这里判内容在不在；界面铺没铺字另有下面那条判据）
             String tip = ad.tipOf("commit");
             if (tip == null || !tip.contains("构建戳") || !tip.contains("无 git 信息")
@@ -5676,6 +5759,7 @@ public final class GuiMain {
                 problems.add("关于框没画出灰色那一档文字（灰字像素为 0）");
             }
             checkAboutCopy(ad, problems);
+            checkRepoLink(ad, problems);
             // 构建时间戳：Maven 打的是 UTC，Python 打的是本机时间，显示前必须换成时区
             String shifted = com.excel2mysql.core.AppInfo.toLocal("2026-10-13 02:22:08");
             java.util.Calendar utc = java.util.Calendar.getInstance(

@@ -18,6 +18,11 @@ UNKNOWN = "未知"
 # Java 侧镜像在 core/AppInfo.java 的 APP_NAME，由对撞键 dlg.about.heading 逐字比。
 APP_NAME = "表库工作台 Excel·SQL·MySQL"
 
+# 仓库地址也只有一个来源：「关于」那一行显示的、悬浮提示里写的、点出去用的、
+# 「复制全部」带走的都是这一串。Java 侧镜像在 core/AppInfo.java 的 REPO_URL，
+# 由对撞键 dlg.about.repo.url 逐字比。
+REPO_URL = "https://github.com/levfan/excel2mysql"
+
 
 def _run_git(args, cwd):
     """跑一条 git 命令拿输出；没有 git、不是仓库、超时都返回空串，不抛异常。"""

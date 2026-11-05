@@ -25,6 +25,14 @@ public final class AppInfo {
      */
     public static final String APP_NAME = "表库工作台 Excel·SQL·MySQL";
 
+    /**
+     * 仓库地址也只有一个来源：「关于」那一行显示的、悬浮提示里写的、点出去用的、
+     * 「复制全部」带走的都是这一串。
+     *
+     * <p>与 Python 侧 appinfo.REPO_URL 逐字相同，由对撞键 dlg.about.repo.url 比。
+     */
+    public static final String REPO_URL = "https://github.com/levfan/excel2mysql";
+
     public String version = "";
     public String commit = UNKNOWN;
     /** 40 位全号，「关于」里复制用；老产物没这一格时为空，由 {@link #fullCommit()} 退回短号。 */

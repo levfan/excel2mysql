@@ -5041,7 +5041,10 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtCore import QEvent
 from help_doc import SECTIONS as HELP_SECTIONS
 from ui_help import (HelpDialog, AboutDialog, build_html, AUTHOR,
-                     COMMIT_TIP, BUILT_TIP)
+                     COMMIT_TIP, BUILT_TIP, REPO_LABEL, REPO_OPENED_LABEL,
+                     REPO_COPIED_LABEL, REPO_FAIL_LABEL, REPO_TIP,
+                     REPO_ICON_FILES, open_in_browser)
+from appinfo import REPO_URL
 
 import re as _re
 
@@ -8112,10 +8115,11 @@ import appinfo as _ai2
 _copy = ad.copy_text()
 _lines = _copy.splitlines()
 _sha = _lines[2].split("：", 1)[1].split("（")[0] if len(_lines) > 2 else ""
-check("T8e 「复制全部」那一份文本四行齐备，首行是产品名",
-      len(_lines) == 5 and _lines[0] == _ai2.APP_NAME
+check("T8e 「复制全部」那一份文本六行齐备，首行是产品名、末行给完整仓库地址",
+      len(_lines) == 6 and _lines[0] == _ai2.APP_NAME
       and _lines[1].startswith("版本：v") and _lines[2].startswith("提交：")
-      and _lines[3].startswith("构建日期：") and _lines[4] == "作者：" + AUTHOR,
+      and _lines[3].startswith("构建日期：") and _lines[4] == "作者：" + AUTHOR
+      and _lines[5] == "仓库：" + REPO_URL,
       _lines[:2])
 check("T8f 复制出去的提交号是 40 位十六进制（正面那一格仍是短号）",
       _re.fullmatch(r"[0-9a-f]{40}", _sha) is not None
@@ -8192,6 +8196,87 @@ if getattr(sys, "frozen", False):
 else:
     skip("T14 冻结态提交号取证", "开发态跑不到 exe 环境，打包闸门里会跑")
 
+# ---- 关于框那一行仓库链接：图标、地址、点了有没有回执 ----
+from PySide6.QtCore import QEvent as _RpQE, QUrl as _RpUrl, Qt as _RpQt
+
+_rp_seen = []
+
+
+def _rp_opener_ok(u):
+    _rp_seen.append(u)
+    return True
+
+
+_rp_dlg = _real_about(None, repo_opener=_rp_opener_ok)
+_rp_dlg.show()
+_app.processEvents()
+check("T18 那一行开场写「GitHub」，地址来自 appinfo 单源且是合法 https",
+      _rp_dlg.repo_text() == REPO_LABEL and _rp_dlg.repo_url() == REPO_URL
+      and REPO_URL.startswith("https://") and _RpUrl(REPO_URL).isValid(),
+      (_rp_dlg.repo_text(), _rp_dlg.repo_url()))
+check("T18b 两张随包小图真读进来了（缺图=界面少一枚，光看代码看不出来）",
+      _rp_dlg.repo_icons_missing() == ""
+      and all(os.path.exists(app_main.resource_path(rel)) for rel in REPO_ICON_FILES),
+      (_rp_dlg.repo_icons_missing(),
+       [app_main.resource_path(rel) for rel in REPO_ICON_FILES]))
+check("T18c 整行是可点的热点：手型光标、能 Tab 到、悬浮提示给完整地址",
+      _rp_dlg.repo_row.cursor().shape() == _RpQt.PointingHandCursor
+      and _rp_dlg.repo_row.focusPolicy() == _RpQt.TabFocus
+      and REPO_URL in _rp_dlg.repo_row.toolTip()
+      and _rp_dlg.repo_row.toolTip() == REPO_TIP,
+      (_rp_dlg.repo_row.cursor().shape(), _rp_dlg.repo_row.focusPolicy()))
+_rp_status = _rp_dlg.repo_row.activate_link()
+check("T18d 单击把完整地址交给浏览器，回执当场看得见",
+      _rp_status == "opened" and _rp_seen == [REPO_URL]
+      and _rp_dlg.repo_text() == REPO_OPENED_LABEL, (_rp_status, _rp_seen))
+_rp_dlg.repo_row.keyPressEvent(
+    QKeyEvent(_RpQE.KeyPress, _RpQt.Key_Space, _RpQt.NoModifier))
+check("T18e 空格走的是同一条路，不是只有鼠标能点", _rp_seen == [REPO_URL, REPO_URL], _rp_seen)
+_rp_deadline = _time.time() + 3.0
+while _time.time() < _rp_deadline and _rp_dlg.repo_text() != REPO_LABEL:
+    _app.processEvents()
+    _time.sleep(0.05)
+check("T18f 回执两秒后自己收回，那一行回到「GitHub」",
+      _rp_dlg.repo_text() == REPO_LABEL, _rp_dlg.repo_text())
+_rp_dlg.close()
+_rp_dlg.deleteLater()
+_app.processEvents()
+
+# 打不开浏览器那一支：现场那类内网机器上这是常态，静默不响应等于没这一行。
+# 剪贴板是桌上借来的东西，判完原样归还
+_rp_prev_clip = _app.clipboard().text()
+_rp_fail = _real_about(None, repo_opener=lambda u: False)
+_rp_fail.show()
+_app.processEvents()
+_rp_st2 = _rp_fail.repo_row.activate_link()
+_rp_got = _app.clipboard().text()
+check("T18g 打不开浏览器时地址进剪贴板并如实回执（这台机器开不了剪贴板就报开不了）",
+      _rp_st2 in ("copied", "failed")
+      and _rp_fail.repo_text() == (REPO_COPIED_LABEL if _rp_st2 == "copied"
+                                   else REPO_FAIL_LABEL)
+      and (_rp_got == REPO_URL if _rp_st2 == "copied" else True),
+      (_rp_st2, _rp_fail.repo_text(), (_rp_got or "")[:44]))
+if _rp_prev_clip is not None:
+    _app.clipboard().setText(_rp_prev_clip)
+check("T18h 四档回执的字面逐字钉住（两栈各写一份就会漂，对撞键比同一串）",
+      _rp_fail.repo_states() == "|".join(
+          (REPO_LABEL, REPO_OPENED_LABEL, REPO_COPIED_LABEL, REPO_FAIL_LABEL)),
+      _rp_fail.repo_states())
+_rp_fail.close()
+_rp_fail.deleteLater()
+_app.processEvents()
+# 默认那条路是真的交给系统外壳：这里只验生产对话框接的是那一个，不在用例里真开浏览器
+_rp_plain = _real_about(None)
+_rp_plain.show()
+_app.processEvents()
+check("T18i 不注入 opener 时，那一行走的是真入口 QDesktopServices，不是自己起进程",
+      _rp_plain.repo_row.opener is open_in_browser
+      and "QDesktopServices" in open_in_browser.__code__.co_names,
+      (_rp_plain.repo_row.opener, open_in_browser.__code__.co_names))
+_rp_plain.close()
+_rp_plain.deleteLater()
+_app.processEvents()
+
 section("U 弹窗尺寸与折行（首次打开就得看得见全部文字）")
 
 # 折行不再自己算：正文原样交给弹窗，折点由内容区的实际宽度决定，装不下就出滚动条。
@@ -8247,7 +8332,7 @@ _app.processEvents()
 _geo = _app.primaryScreen().availableGeometry()
 _suites = [("主窗口", app_main.MainWindow(), "1100x780"),
            ("使用说明", app_main.HelpDialog(), "960x700"),
-           ("关于", app_main.AboutDialog(), "380x230"),
+           ("关于", app_main.AboutDialog(), "380x262"),
            ("进度框", REAL_PROGRESS("正在解析文件…"), "480x140"),
            ("表结构预览", app_main.StructureDialog([]), "980x640"),
            ("DDL 预览", app_main.DDLDialog([], False), "900x600")]
