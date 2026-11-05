@@ -1447,13 +1447,11 @@ check("F20c 界面字体来自随包那一份思源黑体，不再跟系统挑�
       (app_main.APP_FONT_FAMILY,
        _QFontInfo(w.file_table.font()).family(),
        app_main.resource_path(app_main.APP_FONT_FILE)))
+_ofl = app_main.resource_path(os.path.join("assets", "fonts", "LICENSE-OFL.txt"))
 check("F20d 随包字体带的是 SIL OFL 许可文本（分发要连着许可一起走）",
-      os.path.exists(os.path.join(os.path.dirname(os.path.abspath(app_main.__file__)),
-                                 "assets", "fonts", "LICENSE-OFL.txt"))
-      and "SIL OPEN FONT LICENSE" in open(os.path.join(
-          os.path.dirname(os.path.abspath(app_main.__file__)),
-          "assets", "fonts", "LICENSE-OFL.txt"), encoding="utf-8").read(),
-      app_main.resource_path(os.path.join("assets", "fonts")))
+      os.path.exists(_ofl)
+      and "SIL OPEN FONT LICENSE" in open(_ofl, encoding="utf-8").read(),
+      _ofl)
 check("F20b 编辑区与结果区同一支等宽字体、字号与第一页日志同档",
       w.sql_run_log.font().family() == w.sql_run_input.font().family()
       and w.sql_run_log.font().pointSize() == w.sql_run_input.font().pointSize()
