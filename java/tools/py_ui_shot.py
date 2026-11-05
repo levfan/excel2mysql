@@ -27,6 +27,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import main as m  # noqa: E402
 
 app = QApplication(sys.argv)
+# 界面字体要用产品那一份（随包思源黑体）：这一步不做，拍出来的中文全是空方框，
+# 那张图就当不了"逐屏看过"的证据——Java 侧的 UiShot 走 UiScale.apply() 拿的是同一支字
+m.load_app_font(app)
 m.MODAL_PROGRESS = False
 for _name in ("information", "warning", "critical", "question"):
     setattr(m.QMessageBox, _name, staticmethod(lambda *a, **k: 0))
