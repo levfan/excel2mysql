@@ -209,11 +209,11 @@ from core.infer import (
     select_primary_key, infer_columns, sanitize_table_name,
     parse_table_name_and_comment, _varchar_tier,
     SERVER_ROW_LIMIT, INNODB_MAX_COLUMNS, _col_row_bytes, fit_row_limits, row_plan,
-    row_fit_notice,
+    row_fit_notice, apply_auto_pk, AUTO_PK_FIELD,
 )
 from core.sql_script import (
     extract_create_tables, apply_table_prefix_sql, split_sql_statements,
-    has_executable_content as has_exec, prepend_drop_tables,
+    has_executable_content as has_exec, prepend_drop_tables, add_auto_pk_create,
 )
 from core.sql_execute import executable_statements
 from core.mysql_io import (
@@ -3264,10 +3264,11 @@ _op_items = [_op.itemAt(i).widget() for i in range(_op.count())]
 _run_box = _op_items[-1]
 _run_row = _run_box.widget().layout()
 _run_items = [_run_row.itemAt(i).widget() for i in range(_run_row.count())]
-check("K21 底部动作条：覆盖开关在最左，保存/执行/生成四颗在最右（与第一页同一形状）",
-      _op.count() == 2
+check("K21 底部动作条：两颗执行选项在最左，保存/执行/生成四颗在最右（与第一页同一形状）",
+      _op.count() == 3
       and _op_items[0] is w.chk_sql_drop
-      and all(x is None for x in _op_items[1:-1])
+      and _op_items[1] is w.chk_sql_auto_pk
+      and all(x is None for x in _op_items[2:-1])
       and all(x is None for x in _run_items[:-4])
       and _run_items[-4:] == [w.btn_sql_save, w.btn_sql_run,
                               w.btn_sql_gen_std, w.btn_sql_gen_simple],
@@ -3308,11 +3309,12 @@ check("K25 两张主表格都有斑马纹，序号列收窄到 44px",
 _el = _excel_page.layout()
 _hline1 = _el.itemAt(_el.count() - 2).widget()
 _xop = w.excel_action_bar.layout()
-check("K26 Excel 底部三层：分隔线 + 左列只有覆盖开关（页内不再摆进度条）+ 右侧动作按钮",
+check("K26 Excel 底部三层：分隔线 + 左列两颗执行选项（页内不再摆进度条）+ 右侧动作按钮",
       _hline1 is not None and _hline1.height() == 1
       and _xop.itemAt(0).widget() is w.chk_drop
+      and _xop.itemAt(1).widget() is w.chk_auto_pk
       and not hasattr(w, "progress")
-      and _xop.itemAt(1).widget() is None
+      and _xop.itemAt(2).widget() is None
       and [_xop.itemAt(i).widget() for i in range(_xop.count() - 4, _xop.count())]
           == [w.btn_stop, w.btn_import, w.btn_gen_std, w.btn_gen_simple],
       (_hline1.height() if _hline1 is not None else "缺",

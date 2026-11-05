@@ -35,6 +35,12 @@ public final class TableBuilder {
 
     private final Infer infer;
     private final Names names;
+    /** 「自动补全主键」开关：与 Python 侧 build_table_def 的 auto_pk 入参同一件事。 */
+    private boolean autoPk;
+
+    public void setAutoPk(boolean autoPk) {
+        this.autoPk = autoPk;
+    }
 
     public TableBuilder(Infer infer, Names names) {
         this.infer = infer;
@@ -195,8 +201,24 @@ public final class TableBuilder {
                 c.primaryKey = pk[0].equals(c.field);
             }
         }
+        applyAutoPk(r);
         r.rowFit = RowFit.fit(r.table.columns, 16384);
         return r;
+    }
+
+    /**
+     * 开关打开时补的那一列（core/infer.py 的 apply_auto_pk 那一步）。
+     * 补完还要过一次行上限体检——多一列就多占 32 字节，靠调用方紧接着算 rowFit。
+     */
+    private void applyAutoPk(Result r) {
+        if (!autoPk) {
+            return;
+        }
+        Infer.AutoPk ap = Infer.applyAutoPk(r.table, r.headers, r.rows, true,
+                names.isUpperOnly(), names.isLowerOnly());
+        if (ap.moved) {
+            r.pkReason = Infer.AUTO_PK_REASON;
+        }
     }
 
     /**
@@ -402,6 +424,7 @@ public final class TableBuilder {
                 r.pkReason += "；注意：" + bad;
             }
         }
+        applyAutoPk(r);
         r.rowFit = RowFit.fit(r.table.columns, 16384);
         return r;
     }

@@ -1,6 +1,7 @@
 """读取 Excel 并推断表结构：表名取括号内英文或由中文转拼音，表注释=文件名（或括号前中文），字段注释=中文表头。"""
 import os
 import re
+import uuid
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 # PEP 604 的 `dict | None` 在 Python 3.8 导入时求值会 TypeError，Win7 线用 typing 写法
@@ -1694,8 +1695,62 @@ def _attach_row_fit(td):
     return td
 
 
+# 「自动补全主键」开关补出来的那一列的固定形状，判据全在 apply_auto_pk
+AUTO_PK_FIELD = "business_id"
+AUTO_PK_TYPE = "VARCHAR(32)"
+AUTO_PK_COMMENT = "业务主键"
+AUTO_PK_REASON = "自动补全主键"
+
+
+def apply_auto_pk(td: dict, add: bool, upper: bool = False,
+                  lower: bool = False) -> tuple:
+    """打开时在字段首位补一个 business_id 主键，并按数据行数逐行填 32 位十六进制 UUID。
+
+    补的是"这张表压根没有主键"那一类，三种情况都不动：已经有主键字段的（再补只会把原
+    主键挤成组合主键）、表里已经写着 business_id 的（建表直接重名报错）、关闭时这张表
+    本来就没有自动补入列的。列上带 auto_pk 标记，关闭时按标记回收自己补的那一列，
+    人工勾的主键一个都不碰。
+
+    df 与 columns 必须同位置改：导入走 df.values 按列序号取数，错一格整表数据就串列。
+    返回 (动过没有, 一句说明)，说明给界面日志用，被跳过的那张表要看得见的理由。
+    """
+    cols = td.get("columns") or []
+    df = td.get("df")
+    rows = 0 if df is None else len(df)
+
+    if not add:
+        auto = [c for c in cols if c.get("auto_pk")]
+        if not auto:
+            return False, "这张表没有自动补入的主键列"
+        field = auto[0]["field"]
+        td["columns"] = [c for c in cols if not c.get("auto_pk")]
+        td["primary_key"] = None
+        if df is not None and field in df.columns:
+            df.drop(columns=[field], inplace=True)
+        return True, "已撤掉补入的 %s（连带 %d 行值）" % (field, rows)
+
+    pk = [c["field"] for c in cols if c.get("primary_key")]
+    if pk:
+        return False, "已有主键 %s，不补" % "、".join("`%s`" % f for f in pk)
+    if any(str(c.get("field") or "").lower() == AUTO_PK_FIELD for c in cols):
+        return False, "表里已有字段 %s，补进去会重名，不补" % AUTO_PK_FIELD
+    field = case_switch(AUTO_PK_FIELD, upper, lower)
+    # nullable=False 同时管两件事：建表给 NOT NULL，且行上限体检不许把它退成 TEXT
+    # （TEXT 当不了主键），这一列的形状是工具对使用者的承诺
+    td["columns"] = [{"field": field, "comment": AUTO_PK_COMMENT, "type": AUTO_PK_TYPE,
+                      "max_len": 32, "primary_key": True, "nullable": False,
+                      "auto_pk": True}] + cols
+    td["primary_key"] = field
+    td["pk_reason"] = AUTO_PK_REASON
+    if df is not None and rows:
+        df.insert(0, field, [uuid.uuid4().hex for _ in range(rows)])
+        return True, "补 %s，%d 行各给一个唯一值" % (field, rows)
+    return True, "补 %s（这张表没有数据行，只补字段定义）" % field
+
+
 def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
-                    upper: bool = False, lower: bool = False) -> dict:
+                    upper: bool = False, lower: bool = False,
+                    auto_pk: bool = False) -> dict:
     """
     读取单个 Excel，自动识别两类格式并返回表定义：
       第 1 类（普通数据表）：单个数据 Sheet，表名/注释来自文件名，字段从数据推断；
@@ -1704,7 +1759,8 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     返回 dict：filepath / table_name / base_table_name / table_comment / columns / df /
     primary_key / pk_reason / source("normal"|"structured") 等。
     initials=True 取拼音首字母（结构定义模式手写的字段名不受它影响）；
-    upper=True 表名与字段名转大写、lower=True 转小写，结构定义模式里手写的字段名也一样转。
+    upper=True 表名与字段名转大写、lower=True 转小写，结构定义模式里手写的字段名也一样转；
+    auto_pk=True 走「自动补全主键」，没有主键的表补一个 business_id（见 apply_auto_pk）。
     """
     def _note(text):
         # 大文件读盘与推断要好几秒，逐阶段报一句，进度框上能看到"还在动"
@@ -1748,6 +1804,8 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         td = _build_structured(filepath, sheets, initials=initials, upper=upper,
                                lower=lower)
         td["merged_header"] = merged_info
+        if auto_pk:
+            apply_auto_pk(td, True, upper=upper, lower=lower)
         return _attach_row_fit(td)
     df = next(iter(sheets.values()))
     # 具名但整列没值的字段要保留（采集模板里必填项还没填），只丢"表头没写字"的格式化空列；
@@ -1783,7 +1841,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     if pk_field:
         for c in columns:
             c["primary_key"] = (c["field"] == pk_field)
-    return _attach_row_fit({
+    td = {
         "filepath": filepath,
         "table_name": table_name,
         # 未加前缀的基础表名，供「批量应用前缀」重复计算使用
@@ -1802,7 +1860,10 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
         # 顶部两行合并表头展开信息（sheet/depth）；没展开时为 None，
         # GUI/CLI 的 [已解析] 行据此说明"表头是几行压出来的"
         "merged_header": merged_info,
-    })
+    }
+    if auto_pk:
+        apply_auto_pk(td, True, upper=upper, lower=lower)
+    return _attach_row_fit(td)
 
 
 def make_unique_names(tables: list) -> list:

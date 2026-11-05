@@ -612,6 +612,104 @@ public final class SqlScript {
         return out;
     }
 
+    /** 「自动补全主键」在预览副本里写出的类型词：跟着脚本正文的小写走。 */
+    static final String AUTO_PK_TYPE_TEXT = "varchar(32)";
+    static final String AUTO_PK_COMMENT_TEXT = "业务主键";
+
+    /** 一次补列的结局：正文 + 状态（added / kept / failed）+ 给日志看的那句说明。 */
+    public static final class PkEdit {
+        public String text = "";
+        public String status = "failed";
+        public String reason = "";
+    }
+
+    /**
+     * core/sql_script.py 的 add_auto_pk_create：给「预览 DDL」那一页的副本补一个
+     * business_id 主键列，脚本正文不走这条路。
+     *
+     * 判"这句有没有主键"与 parseCreateTables 同一口径：表级 PRIMARY KEY 约束或某一列行内
+     * 写了 PRIMARY KEY 都算有，有就原样返回（kept）。补法是两处插入——列定义体开括号后插一列、
+     * 闭括号前插一句 PRIMARY KEY；补不出可插入的形状就返回 failed，由调用方点名，
+     * 不拿"看着差不多"的正文顶替。
+     * 这一侧的类型与字段名跟着脚本正文走（小写 varchar），元数据 Sheet 那一侧仍是
+     * VARCHAR(32) 加「长度」一格——同一件事在两种载体上的写法本来就不同。
+     */
+    public static PkEdit addAutoPkCreate(String text, String field) {
+        PkEdit out = new PkEdit();
+        out.text = text == null ? "" : text;
+        String src = out.text;
+        String masked = maskComments(src);
+        Matcher m = CREATE_TABLE.matcher(masked);
+        if (!m.find()) {
+            out.status = "failed";
+            out.reason = "这一页的正文里没有 CREATE TABLE";
+            return out;
+        }
+        int open = masked.indexOf('(', m.end());
+        if (open < 0) {
+            out.status = "failed";
+            out.reason = "CREATE TABLE 后面没有列定义体（LIKE 或 AS SELECT 写法）";
+            return out;
+        }
+        int close = matchParen(masked, open);
+        if (close < 0) {
+            out.status = "failed";
+            out.reason = "列定义体的括号配不上";
+            return out;
+        }
+        String body = src.substring(open + 1, close);
+        for (String piece : splitTopLevel(body, masked.substring(open + 1, close))) {
+            String headMasked = lstrip(maskComments(piece));
+            if (CONSTRAINT_HEAD.matcher(headMasked).find()) {
+                if (PRIMARY_KEY_HEAD.matcher(headMasked).find()) {
+                    out.status = "kept";
+                    out.reason = "这句已经写了 PRIMARY KEY 约束";
+                    return out;
+                }
+            } else if (INLINE_PRIMARY_KEY.matcher(headMasked).find()) {
+                out.status = "kept";
+                out.reason = "这句的列里已经写了 PRIMARY KEY";
+                return out;
+            }
+        }
+        if (body.trim().isEmpty()) {
+            out.status = "failed";
+            out.reason = "列定义体是空的，没有可插入的位置";
+            return out;
+        }
+        int nl = body.indexOf('\n');
+        String indent = "  ";
+        if (nl >= 0) {
+            Matcher lead = LINE_INDENT.matcher(body.substring(nl + 1));
+            if (lead.find()) {
+                indent = lead.group();
+            }
+        }
+        // 闭括号前那段原样的换行与缩进要留在补的那句之后，不然整段的排版会往左挪一格
+        String pre = src.substring(0, close);
+        String stripped = rstrip(pre);
+        String gap = src.substring(stripped.length(), close);
+        if (gap.isEmpty()) {
+            gap = "\n" + indent;
+        }
+        String pkLine = indent + "PRIMARY KEY (`" + field + "`)";
+        String base = stripped.endsWith(",") ? stripped : stripped + ",";
+        String patched = base + gap + pkLine + gap + src.substring(close);
+        String colLine = indent + "`" + field + "` " + AUTO_PK_TYPE_TEXT
+                + " NOT NULL COMMENT '" + AUTO_PK_COMMENT_TEXT + "',";
+        out.text = patched.substring(0, open + 1) + "\n" + colLine
+                + patched.substring(open + 1);
+        out.status = "added";
+        out.reason = "补 " + field + " 与 PRIMARY KEY（" + AUTO_PK_TYPE_TEXT + "）";
+        return out;
+    }
+
+    private static final Pattern PRIMARY_KEY_HEAD = Pattern.compile(
+            "^PRIMARY\\s+KEY\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+    private static final Pattern INLINE_PRIMARY_KEY = Pattern.compile(
+            "\\bPRIMARY\\s+KEY\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS);
+    private static final Pattern LINE_INDENT = Pattern.compile("^[ \\t]+");
+
     /**
      * 按分号切语句，正确跳过 '...' / "..." 字符串（支持反斜杠与双写引号转义）、
      * `...` 反引号标识符、-- 与 # 行注释、块注释。不支持 DELIMITER 存储过程脚本——

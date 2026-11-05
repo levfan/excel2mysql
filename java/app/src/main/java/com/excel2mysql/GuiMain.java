@@ -397,6 +397,8 @@ public final class GuiMain {
                 // 命名开关（全拼/首字母、小写/大写）与空列按字段名定类型：勾了再添加就要当场生效。
                 // 放在最后跑：它会往列表里加临时表，前面的用例都按下标取夹具表，不能被插队
                 naming_switches(frame, problems);
+                // 「自动补全主键」：与命名开关同一档——勾上就要在清单、建表语句与数据网格同时看得见
+                autoPkSwitches(frame, problems);
                 // 添加文件弹窗：文件名框里敲文件夹路径回车必须进目录，不能把目录当文件带回来
                 folder_path_entry(problems);
                 // 日志的红色与行数上限：错误没标红、或日志无限涨，都只会在现场翻车时才发现
@@ -4078,6 +4080,7 @@ public final class GuiMain {
             problems.add("读含 U+FFFD 的 UTF-8 脚本失败：" + e);
         }
         sqlDataExport(problems);
+        autoPkSql(problems);
     }
 
     /** 第二页取数那一份脚本：列定义走 CREATE TABLE，数据行走 INSERT。 */
@@ -4121,7 +4124,7 @@ public final class GuiMain {
         items.add(new com.excel2mysql.gui.SqlPage.Src(script.getPath(), SD_SCRIPT));
         Recorder rec = new Recorder();
         com.excel2mysql.gui.SqlPage.GenResult res = com.excel2mysql.gui.SqlPage
-                .exportFromScripts(items, root.getPath(), true, false, false, rec);
+                .exportFromScripts(items, root.getPath(), true, false, false, false, rec);
         java.io.File file = new java.io.File(new java.io.File(root,
                 "sql_meta_data_file_" + today()), "用户表（t_user）.xlsx");
         if (res.written != 1 || !file.isFile()) {

@@ -122,6 +122,7 @@ public final class GuiDump {
                 dumpWidget("prefix", frame.prefixField());
                 dumpWidget("sql_prefix", frame.sqlPage().prefixField());
                 dumpWidget("drop_existing", frame.dropExistingBox());
+                dumpWidget("auto_pk", frame.autoPkBox());
                 dumpWidget("initials", frame.initialsBox());
                 dumpWidget("upper", frame.upperBox());
                 dumpWidget("lower", frame.lowerBox());
@@ -141,6 +142,23 @@ public final class GuiDump {
                 dumpWidget("sql_upper", frame.sqlPage().upperBox());
                 dumpWidget("sql_lower", frame.sqlPage().lowerBox());
                 dumpWidget("sql_drop_existing", frame.sqlPage().dropExistingBox());
+                dumpWidget("sql_auto_pk", frame.sqlPage().autoPkBox());
+                // 「自动补全主键」两页各一颗，切换日志是它唯一的对外说明：不列进键表就没人比这两句
+                frame.autoPkBox().doClick();
+                String atl = frame.logPanel().text();
+                int ata = atl.lastIndexOf("[提示] 自动补全主键切换为");
+                put("auto_pk.toggle.log", ata < 0 ? "(没留痕)" : atl.substring(ata).split("\n")[0]);
+                frame.autoPkBox().doClick();
+                String atl2 = frame.logPanel().text();
+                int ata2 = atl2.lastIndexOf("[提示] 自动补全主键切换为");
+                put("auto_pk.toggle.log.off",
+                        ata2 < 0 ? "(没留痕)" : atl2.substring(ata2).split("\n")[0]);
+                frame.sqlPage().autoPkBox().doClick();
+                String satl = frame.sqlPage().logPanel().text();
+                int sat = satl.lastIndexOf("[提示] 自动补全主键切换为");
+                put("sql_auto_pk.toggle.log",
+                        sat < 0 ? "(没留痕)" : satl.substring(sat).split("\n")[0]);
+                frame.sqlPage().autoPkBox().doClick();
                 dumpButtons();
                 dumpTable("file", frame.fileTable());
                 dumpSqlTable();
@@ -801,6 +819,49 @@ public final class GuiDump {
                 frame.dropExistingBox().setSelected(false);
                 frame.refreshPreview();
 
+                // ---- 「自动补全主键」：勾上之后清单那一格、建表语句与切换日志要一起变 ----
+                // 挑清单里第一张「主键」那一格写着「无」的表：只有这种表才是这一颗管得到的对象，
+                // 拿一张本来有主键的表来比，两边都会是"没动"，绿着也没比到东西。
+                // 走 doClick 而不是 setSelected：Swing 的 setSelected 不发监听器，
+                // 补列这件事整个长在监听器里，按下去才算走过用户那条路。
+                int apkRow = -1;
+                for (int ri = 0; ri < frame.fileTable().getRowCount(); ri++) {
+                    if ("无".equals(frame.fileTable().getValueAt(ri, 6))) {
+                        apkRow = ri;
+                        break;
+                    }
+                }
+                put("auto_pk.pick", String.valueOf(apkRow) + "|" + (apkRow < 0 ? ""
+                        : String.valueOf(frame.fileTable().getValueAt(apkRow, 2))));
+                frame.autoPkBox().doClick();
+                String aplog = frame.logPanel().text();
+                int ap1 = aplog.lastIndexOf("[提示] 自动补全主键切换为");
+                put("auto_pk.on.summary",
+                        ap1 < 0 ? "(没留痕)" : aplog.substring(ap1).split("\n")[0]);
+                put("auto_pk.on.cell", apkRow < 0 ? ""
+                        : String.valueOf(frame.fileTable().getValueAt(apkRow, 6)));
+                DDLDialog apOn = new DDLDialog(frame, frame.tables(), false);
+                try {
+                    put("auto_pk.on.ddl", apkRow < 0 || apOn.tabCount() <= apkRow ? ""
+                            : apOn.tabText(apkRow));
+                } finally {
+                    apOn.dispose();
+                }
+                frame.autoPkBox().doClick();
+                String aplog2 = frame.logPanel().text();
+                int ap2 = aplog2.lastIndexOf("[提示] 自动补全主键切换为");
+                put("auto_pk.off.summary",
+                        ap2 < 0 ? "(没留痕)" : aplog2.substring(ap2).split("\n")[0]);
+                put("auto_pk.off.cell", apkRow < 0 ? ""
+                        : String.valueOf(frame.fileTable().getValueAt(apkRow, 6)));
+                DDLDialog apOff = new DDLDialog(frame, frame.tables(), false);
+                try {
+                    put("auto_pk.off.ddl", apkRow < 0 || apOff.tabCount() <= apkRow ? ""
+                            : apOff.tabText(apkRow));
+                } finally {
+                    apOff.dispose();
+                }
+
                 // 第二页那个「DDL 预览」从前没有任何对撞键：只在第一页那扇比过，这一页改了没人会红。
                 // 这里不重跑脚本解析那条链（枚举器从不加载 .sql），两边喂同一条一行到底的建表语句，
                 // 比显示排成了什么形状、那句说明写了什么、角色段切在哪里——正是本轮改的三件。
@@ -1179,6 +1240,82 @@ public final class GuiDump {
         } catch (Exception e) {
             put("sqlgen.roundtrip", "读不回 " + e.getClass().getSimpleName());
         }
+        // ---- 「自动补全主键」在第二页的两个出口：预览副本三态 + 生成任务补列与逐行值 ----
+        // 两边都直接喂同一段脚本给各自的生产任务体，比"补出来的正文长什么样、生成件逐格写了什么"；
+        // UUID 是随机的，落进键值前一律换成 UUID32
+        com.excel2mysql.core.SqlScript.PkEdit pkAdded =
+                com.excel2mysql.core.SqlScript.addAutoPkCreate(
+                        "CREATE TABLE `t` (\n  `x` int DEFAULT NULL\n) ENGINE=InnoDB;",
+                        "business_id");
+        com.excel2mysql.core.SqlScript.PkEdit pkKept = com.excel2mysql.core.SqlScript
+                .addAutoPkCreate("CREATE TABLE t (a INT, PRIMARY KEY (a));", "business_id");
+        com.excel2mysql.core.SqlScript.PkEdit pkFail = com.excel2mysql.core.SqlScript
+                .addAutoPkCreate("CREATE TABLE t LIKE u;", "business_id");
+        put("sqlpk.added", pkAdded.status + "|" + pkAdded.text);
+        put("sqlpk.kept", pkKept.status + "|" + pkKept.reason + "|" + pkKept.text);
+        put("sqlpk.failed", pkFail.status + "|" + pkFail.reason + "|" + pkFail.text);
+        String pkScript = "CREATE TABLE `t_ap` (\n"
+                + "  `code` varchar(16) DEFAULT NULL COMMENT '代码',\n"
+                + "  `name` varchar(32) DEFAULT NULL COMMENT '名称'\n"
+                + ") ENGINE=InnoDB COMMENT='补主键检查表';\n"
+                + "INSERT INTO `t_ap` (`code`, `name`) VALUES ('c1', 'n1'), ('c2', 'n2');\n"
+                + "CREATE TABLE `t_pk` (\n"
+                + "  `id` bigint DEFAULT NULL COMMENT '编号',\n"
+                + "  PRIMARY KEY (`id`)\n"
+                + ") ENGINE=InnoDB COMMENT='已有主键表';\n";
+        final List<String> pkLines = new ArrayList<String>();
+        com.excel2mysql.core.ImportParse.Sink pkSink =
+                new com.excel2mysql.core.ImportParse.Sink() {
+                    @Override
+                    public void setTotal(int total) {
+                    }
+
+                    @Override
+                    public void step(String label) {
+                    }
+
+                    @Override
+                    public void advance(int units, String label) {
+                    }
+
+                    @Override
+                    public void log(String text) {
+                        pkLines.add(text);
+                    }
+
+                    @Override
+                    public void logError(String text) {
+                        pkLines.add(text);
+                    }
+
+                    @Override
+                    public boolean cancelled() {
+                        return false;
+                    }
+                };
+        File pkRoot = new File(gdir, "pk");
+        pkRoot.mkdirs();
+        List<com.excel2mysql.gui.SqlPage.Src> pkItems =
+                new ArrayList<com.excel2mysql.gui.SqlPage.Src>();
+        pkItems.add(new com.excel2mysql.gui.SqlPage.Src("probe_pk.sql", pkScript));
+        com.excel2mysql.gui.SqlPage.exportFromScripts(
+                pkItems, pkRoot.getPath(), true, false, false, true, pkSink);
+        put("sqlgen.pk.log", joinLines(pkLines).replaceAll("[0-9a-f]{32}", "UUID32"));
+        File pkDir = firstDir(pkRoot, "sql_meta_data_file_");
+        put("sqlgen.pk.content", pkDir == null ? ""
+                : dumpFolder(pkDir).replaceAll("[0-9a-f]{32}", "UUID32"));
+    }
+
+    /** 逐行收集到的日志拼成一段文本（与 Python 侧 "\n".join 同形）。 */
+    private static String joinLines(List<String> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (String l : lines) {
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(l);
+        }
+        return sb.toString();
     }
 
     private static void cleared() throws Exception {

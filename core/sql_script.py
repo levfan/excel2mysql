@@ -412,6 +412,60 @@ def edit_column(text: str, table_name: str, field: str, new_field: str = None,
 
 
 
+AUTO_PK_TYPE_TEXT = "varchar(32)"
+
+
+def add_auto_pk_create(text: str, field: str = "business_id",
+                       comment: str = "业务主键") -> tuple:
+    """给「预览 DDL」那一页的副本补一个 business_id 主键列；脚本正文不走这条路。
+
+    判"这句有没有主键"与 parse_create_tables 同一口径：表级 PRIMARY KEY 约束或某一列
+    行内写了 PRIMARY KEY 都算有，有就原样返回。补法是两处插入——列定义体开括号后插一列、
+    闭括号前插一句 PRIMARY KEY；括号配不上、找不到 CREATE TABLE 就返回未改，
+    由调用方在日志里点名，不拿"看着差不多"的正文顶替。
+    这一侧的类型与字段名跟着脚本正文走（小写 varchar），元数据 Sheet 那一侧仍是
+    VARCHAR(32) 加「长度」一格——同一件事在两种载体上的写法本来就不同。
+    返回 (新正文, 状态, 说明)，状态是 added（补过了）/ kept（这句本来就有主键，原样留着）
+    / failed（补不出可插入的形状，由调用方点名）。
+    """
+    masked = _mask_comments(text)
+    m = _CREATE_TABLE_RE.search(masked)
+    if not m:
+        return text, "failed", "这一页的正文里没有 CREATE TABLE"
+    open_at = masked.find("(", m.end())
+    if open_at == -1:
+        return text, "failed", "CREATE TABLE 后面没有列定义体（LIKE 或 AS SELECT 写法）"
+    close = _match_paren(masked, open_at)
+    if close == -1:
+        return text, "failed", "列定义体的括号配不上"
+    body = text[open_at + 1:close]
+    for piece in _split_top_level(body, masked[open_at + 1:close]):
+        mp = _mask_comments(piece).lstrip()
+        if _CONSTRAINT_HEAD_RE.match(mp):
+            if re.match(r"^PRIMARY\s+KEY\b", mp, re.IGNORECASE):
+                return text, "kept", "这句已经写了 PRIMARY KEY 约束"
+        elif re.search(r"\bPRIMARY\s+KEY\b", mp, re.IGNORECASE):
+            return text, "kept", "这句的列里已经写了 PRIMARY KEY"
+    if not body.strip():
+        return text, "failed", "列定义体是空的，没有可插入的位置"
+    nl = body.find("\n")
+    indent = "  "
+    if nl != -1:
+        lead = re.match(r"[ \t]+", body[nl + 1:])
+        if lead:
+            indent = lead.group(0)
+    # 闭括号前那段原样的换行与缩进要留在补的那句之后，不然整段的排版会往左挪一格
+    pre = text[:close]
+    stripped = pre.rstrip()
+    gap = stripped and text[len(stripped):close] or "\n" + indent
+    pk_line = "%sPRIMARY KEY (`%s`)" % (indent, field)
+    base = stripped if stripped.endswith(",") else stripped + ","
+    out = base + gap + pk_line + gap + text[close:]
+    col_line = "%s`%s` %s NOT NULL COMMENT '%s'," % (indent, field, AUTO_PK_TYPE_TEXT, comment)
+    out = out[:open_at + 1] + "\n" + col_line + out[open_at + 1:]
+    return out, "added", "补 %s 与 PRIMARY KEY（%s）" % (field, AUTO_PK_TYPE_TEXT)
+
+
 def split_sql_statements(text: str) -> list:
     """
     按分号切分 SQL 语句，正确跳过以下内容中的分号：

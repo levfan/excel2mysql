@@ -9,6 +9,7 @@ import com.excel2mysql.core.MetaExport;
 import com.excel2mysql.core.Names;
 import com.excel2mysql.core.PinyinLoader;
 import com.excel2mysql.core.Prefix;
+import com.excel2mysql.core.RowFit;
 import com.excel2mysql.core.TableBuilder;
 import com.excel2mysql.core.TableOps;
 import com.excel2mysql.core.ZipImport;
@@ -220,6 +221,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private javax.swing.JCheckBox upperBox;
     private javax.swing.JCheckBox lowerBox;
     private javax.swing.JCheckBox dropExisting;
+    private javax.swing.JCheckBox autoPkBox;
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
     private final Map<TableOps.Table, TableBuilder.Result> byTable =
             new java.util.LinkedHashMap<TableOps.Table, TableBuilder.Result>();
@@ -704,6 +706,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 主按钮用强调色，停止与两颗生成按钮保持普通样式，一屏里只留一个视觉重点
         dropExisting = new javax.swing.JCheckBox("覆盖已存在表（先 DROP 再建）");
         dropExisting.addActionListener(e -> refreshPreview());
+        autoPkBox = new javax.swing.JCheckBox("自动补全主键");
+        // Qt 的 tooltip 认 "\n"，Swing 只认 HTML 换行，所以话术与 Python 侧逐字同形、换行换个写法
+        autoPkBox.setToolTipText("<html>勾选后，一个主键字段都没有的表会在字段顺序首位补一个 business_id 主键字段<br>"
+                + "（VARCHAR(32)、注释「业务主键」），有数据行的每行各给一个 32 位十六进制 UUID；<br>"
+                + "已有主键的表不动，表里已经写着 business_id 的也不动（补进去建表会重名报错）；<br>"
+                + "一行数据都没有的空表只补字段定义，没有值可填。<br>"
+                + "取消勾选就收回补进去的那一列，人工勾选的主键一个都不碰；<br>"
+                + "对清单里已加载的文件即时生效，勾上之后再添加的文件同样按这一档处理。</html>");
+        autoPkBox.addActionListener(e -> onAutoPkToggled());
         importBtn = new JButton("开始导入");
         importBtn.setEnabled(false);
         Buttons.primary(importBtn);
@@ -731,17 +742,20 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         opRight.add(importBtn);
         opRight.add(genStd);
         opRight.add(genSimple);
+        JPanel opLeft = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
+        opLeft.add(dropExisting);
+        opLeft.add(autoPkBox);
 
         // 页内进度条已经拿掉：导入弹的是那个非模态进度框（每张表 + 每行数据都计项），
         // 同一条进度不在窗口里再摆一份；而解析 / 前缀 / 生成 / SQL 页任务期间
         // 这条恒为 0 的杠只会让人以为界面坏了，第二、三页本来也没有它。
-        dropExisting.setAlignmentX(0f);
-        dropExisting.setMaximumSize(new Dimension(
-                Integer.MAX_VALUE, dropExisting.getPreferredSize().height));
+        // 两颗执行选项并排站在左侧，与 Qt 侧 QHBoxLayout 依次 addWidget 的同一排布
+        opLeft.setOpaque(false);
         opRight.setOpaque(false);
         excelActionBar = new ActionBar(new BorderLayout());
         JPanel op = excelActionBar;
-        op.add(dropExisting, BorderLayout.CENTER);
+        op.add(opLeft, BorderLayout.CENTER);
         op.add(opRight, BorderLayout.EAST);
         JPanel south = new JPanel(new BorderLayout(0, UiScale.px(2)));
         // 执行层与上方表格区之间的细分隔线：底部动作条不再和表格内容糊成一片
@@ -1884,11 +1898,57 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         progress.open();
     }
 
-    /** 开关状态在主线程取好再进解析线程：解析线程不碰控件，只读 Names 上的三个布尔。 */
+    /** 开关状态在主线程取好再进解析线程：解析线程不碰控件，只读 Names 上的三个布尔和建模器的补主键档。 */
     private void applyNamingSwitches() {
         names.setInitialsOnly(initialsBox != null && initialsBox.isSelected());
         names.setUpperOnly(upperBox != null && upperBox.isSelected());
         names.setLowerOnly(lowerBox != null && lowerBox.isSelected());
+        builder.setAutoPk(autoPkBox != null && autoPkBox.isSelected());
+    }
+
+    /**
+     * 「自动补全主键」切换：补列与撤列当场落到清单上。
+     *
+     * 清单的「字段数」「主键」两列、结构预览、预览 DDL 与导入读的是同一份表定义，
+     * 只在出口那侧补就会出现"清单说没主键、建表语句里有主键"的分裂，
+     * 所以这里改的是表定义本身（与 Qt 侧 on_auto_pk_toggled 同一做法）。
+     */
+    private void onAutoPkToggled() {
+        boolean add = autoPkBox.isSelected();
+        String state = add ? "开" : "关";
+        if (tables.isEmpty()) {
+            log("[提示] 自动补全主键切换为：" + state + "（清单里没有文件，没有表可动）");
+            return;
+        }
+        boolean upper = upperBox != null && upperBox.isSelected();
+        boolean lower = lowerBox != null && lowerBox.isSelected();
+        List<String[]> done = new ArrayList<String[]>();
+        List<String[]> skipped = new ArrayList<String[]>();
+        for (TableOps.Table t : tables) {
+            TableBuilder.Result r = byTable.get(t);
+            Infer.AutoPk ap = Infer.applyAutoPk(t, r == null ? null : r.headers,
+                    r == null ? null : r.rows, add, upper, lower);
+            if (ap.moved) {
+                if (r != null) {
+                    // 多一列就多占 32 字节：过不了线的要在这张表上拦下，与建模收尾同一道闸
+                    r.rowFit = RowFit.fit(t.columns, 16384);
+                    r.pkReason = Infer.AUTO_PK_REASON;
+                }
+                done.add(new String[]{t.tableName, ap.text});
+            } else if (add) {
+                skipped.add(new String[]{t.tableName, ap.text});
+            }
+        }
+        fileModel.refresh();
+        refreshPreview();
+        log("[提示] 自动补全主键切换为：" + state + "（动了 " + done.size()
+                + " 张，跳过 " + skipped.size() + " 张，清单里共 " + tables.size() + " 张表）");
+        for (String[] d : done) {
+            log("+ [OK] 补主键 | `" + d[0] + "`：" + d[1]);
+        }
+        for (String[] s : skipped) {
+            log("! [WARN] 跳过 | `" + s[0] + "`：" + s[1]);
+        }
     }
 
     /**
@@ -2454,6 +2514,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public javax.swing.JCheckBox dropExistingBox() {
         return dropExisting;
+    }
+
+    public javax.swing.JCheckBox autoPkBox() {
+        return autoPkBox;
     }
 
     public javax.swing.JCheckBox initialsBox() {

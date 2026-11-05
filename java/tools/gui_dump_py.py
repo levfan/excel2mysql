@@ -400,6 +400,8 @@ def main():
     dump_widget("sql_prefix", win.ed_sql_prefix)
     dump_widget("drop_existing", win.chk_drop)
     dump_widget("sql_drop_existing", win.chk_sql_drop)
+    dump_widget("auto_pk", win.chk_auto_pk)
+    dump_widget("sql_auto_pk", win.chk_sql_auto_pk)
     dump_widget("initials", win.chk_initials)
     dump_widget("upper", win.chk_upper)
     dump_widget("lower", win.chk_lower)
@@ -422,6 +424,24 @@ def main():
     app.processEvents()
     dump_widget("sql_upper", win.chk_sql_upper)
     dump_widget("sql_lower", win.chk_sql_lower)
+    # 「自动补全主键」两页各一颗，切换日志就是它唯一的对外说明：不列进键表就没人比这两句
+    win.chk_auto_pk.toggle()
+    app.processEvents()
+    _atf = win.log.toPlainText()
+    _ata = _atf.rfind(u"[提示] 自动补全主键切换为")
+    put("auto_pk.toggle.log", _atf[_ata:].splitlines()[0] if _ata >= 0 else u"(没留痕)")
+    win.chk_auto_pk.toggle()
+    app.processEvents()
+    _atb = win.log.toPlainText()
+    _atb2 = _atb.rfind(u"[提示] 自动补全主键切换为")
+    put("auto_pk.toggle.log.off", _atb[_atb2:].splitlines()[0] if _atb2 >= 0 else u"(没留痕)")
+    win.chk_sql_auto_pk.toggle()
+    app.processEvents()
+    _sat = win.sql_log.toPlainText()
+    _sat2 = _sat.rfind(u"[提示] 自动补全主键切换为")
+    put("sql_auto_pk.toggle.log", _sat[_sat2:].splitlines()[0] if _sat2 >= 0 else u"(没留痕)")
+    win.chk_sql_auto_pk.toggle()
+    app.processEvents()
     dump_buttons(win)
     dump_table("file", win.file_table)
     dump_table("sql", win.sql_table)
@@ -958,6 +978,36 @@ def main():
     dlg2.deleteLater()
     win.chk_drop.setChecked(False)
 
+    # ---- 「自动补全主键」：勾上之后清单那一格、建表语句与切换日志要一起变 ----
+    # 挑清单里第一张「主键」那一格写着「无」的表：只有这种表才是这一颗管得到的对象，
+    # 拿一张本来有主键的表来比，两边都会是"没动"，绿着也没比到东西
+    _apk_row = -1
+    for _ri in range(win.file_table.rowCount()):
+        if win.file_table.item(_ri, 6).text() == u"无":
+            _apk_row = _ri
+            break
+    put("auto_pk.pick", u"%d|%s" % (_apk_row,
+                                    win.file_table.item(_apk_row, 2).text()
+                                    if _apk_row >= 0 else u""))
+    win.chk_auto_pk.setChecked(True)
+    app.processEvents()
+    _aplog = win.log.toPlainText()
+    _ap1 = _aplog.rfind(u"[提示] 自动补全主键切换为")
+    put("auto_pk.on.summary", _aplog[_ap1:].splitlines()[0] if _ap1 >= 0 else u"(没留痕)")
+    put("auto_pk.on.cell", win.file_table.item(_apk_row, 6).text() if _apk_row >= 0 else u"")
+    _apdlg = m.DDLDialog(win.tables, False, win)
+    put("auto_pk.on.ddl", _apdlg.tabs.widget(_apk_row).toPlainText() if _apk_row >= 0 else u"")
+    _apdlg.deleteLater()
+    win.chk_auto_pk.setChecked(False)
+    app.processEvents()
+    _aplog2 = win.log.toPlainText()
+    _ap2 = _aplog2.rfind(u"[提示] 自动补全主键切换为")
+    put("auto_pk.off.summary", _aplog2[_ap2:].splitlines()[0] if _ap2 >= 0 else u"(没留痕)")
+    put("auto_pk.off.cell", win.file_table.item(_apk_row, 6).text() if _apk_row >= 0 else u"")
+    _apdlg3 = m.DDLDialog(win.tables, False, win)
+    put("auto_pk.off.ddl", _apdlg3.tabs.widget(_apk_row).toPlainText() if _apk_row >= 0 else u"")
+    _apdlg3.deleteLater()
+
     # 第二页那个「DDL 预览」从前没有任何对撞键：只在第一页那扇比过，这一页改了 nobody 会红。
     # 这里不重跑脚本解析那条链（枚举器从不加载 .sql），而是两边喂同一条一行到底的建表语句，
     # 比"显示排成了什么形状、那句说明写了什么、角色段切在哪里"——这三件正是本轮改的东西。
@@ -1210,6 +1260,40 @@ def main():
         put("sqlgen.roundtrip", "|".join(line))
     except Exception as e:
         put("sqlgen.roundtrip", "读不回 " + type(e).__name__)
+
+    # ---- 「自动补全主键」在第二页的两个出口：预览副本三态 + 生成任务补列与逐行值 ----
+    # 枚举器不加载 .sql，这两条都直接喂同一段脚本给两栈各自的生产任务体，
+    # 比"补出来的正文长什么样、生成件逐格写了什么"——UUID 是随机的，落进键值前一律换成 UUID32
+    _pk_added, _pk_s1, _pk_r1 = m.add_auto_pk_create(
+        u"CREATE TABLE `t` (\n  `x` int DEFAULT NULL\n) ENGINE=InnoDB;", u"business_id")
+    _pk_kept, _pk_s2, _pk_r2 = m.add_auto_pk_create(
+        u"CREATE TABLE t (a INT, PRIMARY KEY (a));", u"business_id")
+    _pk_fail, _pk_s3, _pk_r3 = m.add_auto_pk_create(
+        u"CREATE TABLE t LIKE u;", u"business_id")
+    put("sqlpk.added", u"%s|%s" % (_pk_s1, _pk_added))
+    put("sqlpk.kept", u"%s|%s|%s" % (_pk_s2, _pk_r2, _pk_kept))
+    put("sqlpk.failed", u"%s|%s|%s" % (_pk_s3, _pk_r3, _pk_fail))
+    _pk_script = (u"CREATE TABLE `t_ap` (\n"
+                  u"  `code` varchar(16) DEFAULT NULL COMMENT '代码',\n"
+                  u"  `name` varchar(32) DEFAULT NULL COMMENT '名称'\n"
+                  u") ENGINE=InnoDB COMMENT='补主键检查表';\n"
+                  u"INSERT INTO `t_ap` (`code`, `name`) VALUES ('c1', 'n1'), ('c2', 'n2');\n"
+                  u"CREATE TABLE `t_pk` (\n"
+                  u"  `id` bigint DEFAULT NULL COMMENT '编号',\n"
+                  u"  PRIMARY KEY (`id`)\n"
+                  u") ENGINE=InnoDB COMMENT='已有主键表';\n")
+    _pk_root = os.path.join(TMP, "sqlgen_pk")
+    os.makedirs(_pk_root)
+    _pk_lines = []
+    _pk_sink = m.ProgressSink(on_log=_pk_lines.append, on_log_error=_pk_lines.append)
+    m.sql_meta_export_task([("probe_pk.sql", _pk_script)], _pk_root, True, False,
+                           _pk_sink, auto_pk=True)
+    _pk_dir = [d for d in sorted(os.listdir(_pk_root))
+               if d.startswith("sql_meta_data_file_")]
+    put("sqlgen.pk.log", re.sub(r"[0-9a-f]{32}", "UUID32", "\n".join(_pk_lines)))
+    put("sqlgen.pk.content", re.sub(r"[0-9a-f]{32}", "UUID32",
+                                    dump_xlsx(os.path.join(_pk_root, _pk_dir[0])))
+        if _pk_dir else u"")
 
     win.on_clear()
     app.processEvents()

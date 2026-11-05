@@ -9,8 +9,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -343,6 +345,8 @@ public final class Infer {
         public Integer varcharN;
         public boolean primaryKey;
         public Boolean nullable;
+        /** 由「自动补全主键」补入的那一列才有这个标记：关闭开关时按它回收，人工勾的主键一个不碰。 */
+        public boolean autoPk;
 
         /** 结构弹窗用的副本：校验通过前先在副本上改，避免无效主键污染表定义。 */
         public Column copied() {
@@ -355,6 +359,7 @@ public final class Infer {
             n.varcharN = varcharN;
             n.primaryKey = primaryKey;
             n.nullable = nullable;
+            n.autoPk = autoPk;
             return n;
         }
 
@@ -864,6 +869,115 @@ public final class Infer {
             return PyNumber.repr(((Number) v).doubleValue());
         }
         return Names.pyStrip(String.valueOf(v));
+    }
+
+    /** 「自动补全主键」开关补出来的那一列的固定形状，判据全在 applyAutoPk。 */
+    public static final String AUTO_PK_FIELD = "business_id";
+    public static final String AUTO_PK_TYPE = "VARCHAR(32)";
+    public static final String AUTO_PK_COMMENT = "业务主键";
+    public static final String AUTO_PK_REASON = "自动补全主键";
+
+    /** 一次补列/撤列的结局：动过没有 + 给日志看的那句说明。 */
+    public static final class AutoPk {
+        public final boolean moved;
+        public final String text;
+
+        AutoPk(boolean moved, String text) {
+            this.moved = moved;
+            this.text = text;
+        }
+    }
+
+    /**
+     * core/infer.py 的 apply_auto_pk：打开时在字段顺序首位补一个 business_id 主键，
+     * 并按数据行数逐行填 32 位十六进制 UUID。
+     *
+     * 补的是"这张表一个主键都没有"那一类，三种情况都不动：已经有主键字段的（再补只会把
+     * 原主键挤成组合主键）、表里已经写着 business_id 的（建表直接重名报错）、关闭时这张表
+     * 本来就没有自动补入列的。列上带 autoPk 标记，关闭时按标记回收自己补的那一列，
+     * 人工勾选的主键一个都不碰。
+     * headers/rows 与 columns 必须同位置改：写盘与入库都按「字段名先在表头里找第几列」取数
+     * （MetaExport.columnMap 与 Python 侧 df 的列头同一规则），只补值不补表头就会写出空列。
+     * nullable 给 FALSE 同时管两件事：建表 NOT NULL，且行上限体检不许把它退成 TEXT。
+     */
+    public static AutoPk applyAutoPk(TableOps.Table table, List<Object> headers,
+                                     List<List<Object>> rows, boolean add,
+                                     boolean upper, boolean lower) {
+        List<Column> cols = table.columns;
+        int n = rows == null ? 0 : rows.size();
+        if (!add) {
+            Column auto = null;
+            for (Column c : cols) {
+                if (c.autoPk) {
+                    auto = c;
+                    break;
+                }
+            }
+            if (auto == null) {
+                return new AutoPk(false, "这张表没有自动补入的主键列");
+            }
+            List<Column> keep = new ArrayList<Column>();
+            for (Column c : cols) {
+                if (!c.autoPk) {
+                    keep.add(c);
+                }
+            }
+            table.columns = keep;
+            if (headers != null && !headers.isEmpty()) {
+                headers.remove(0);
+            }
+            if (rows != null) {
+                for (List<Object> r : rows) {
+                    if (!r.isEmpty()) {
+                        r.remove(0);
+                    }
+                }
+            }
+            return new AutoPk(true, "已撤掉补入的 " + auto.field + "（连带 " + n + " 行值）");
+        }
+        List<String> pk = new ArrayList<String>();
+        for (Column c : cols) {
+            if (c.primaryKey) {
+                pk.add(c.field);
+            }
+        }
+        if (!pk.isEmpty()) {
+            StringBuilder names = new StringBuilder();
+            for (String f : pk) {
+                if (names.length() > 0) {
+                    names.append("、");
+                }
+                names.append('`').append(f).append('`');
+            }
+            return new AutoPk(false, "已有主键 " + names + "，不补");
+        }
+        for (Column c : cols) {
+            if (AUTO_PK_FIELD.equalsIgnoreCase(c.field)) {
+                return new AutoPk(false,
+                        "表里已有字段 " + AUTO_PK_FIELD + "，补进去会重名，不补");
+            }
+        }
+        String field = upper ? AUTO_PK_FIELD.toUpperCase(Locale.ROOT)
+                : (lower ? AUTO_PK_FIELD.toLowerCase(Locale.ROOT) : AUTO_PK_FIELD);
+        Column auto = new Column();
+        auto.field = field;
+        auto.comment = AUTO_PK_COMMENT;
+        auto.type = AUTO_PK_TYPE;
+        auto.maxLen = 32;
+        auto.primaryKey = true;
+        auto.nullable = Boolean.FALSE;
+        auto.autoPk = true;
+        cols.add(0, auto);
+        if (headers != null && !headers.isEmpty()) {
+            headers.add(0, field);
+        }
+        if (rows != null && n > 0) {
+            for (List<Object> r : rows) {
+                r.add(0, UUID.randomUUID().toString().replace("-", ""));
+            }
+            return new AutoPk(true, "补 " + field + "，" + n + " 行各给一个唯一值");
+        }
+        return new AutoPk(true, "补 " + field + "（这张表没有数据行，只补字段定义）");
     }
 
     public String[] selectPrimaryKey(List<Object> headers, List<List<Object>> rows,

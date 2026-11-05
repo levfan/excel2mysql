@@ -233,6 +233,8 @@ public final class SqlPage extends JPanel {
     private final JCheckBox lowerBox = new JCheckBox("表名与字段名转小写");
     /** 覆盖开关：勾选后执行副本先 DROP 脚本要建的表；只影响执行，不改正文。 */
     private final JCheckBox dropExisting = new JCheckBox("覆盖已存在表（先 DROP 再建）");
+    /** 补主键开关：只作用在三个读元数据的出口上，脚本正文一个字不改。 */
+    private final JCheckBox autoPkBox = new JCheckBox("自动补全主键");
     private final List<String> rowPath = new ArrayList<String>();
     private final List<String> rowOrigin = new ArrayList<String>();
     private final List<String> rowActual = new ArrayList<String>();
@@ -424,7 +426,21 @@ public final class SqlPage extends JPanel {
                 + "补一句<br>DROP TABLE IF EXISTS；只认整句以 CREATE TABLE 开头的语句，<br>"
                 + "注释或字符串里出现的建表不会触发删除。只影响执行，不改脚本正文，<br>"
                 + "也不影响保存与生成两条出口；默认不勾选。</html>");
-        op.add(dropExisting, BorderLayout.WEST);
+        autoPkBox.setToolTipText("<html>勾选后，脚本里没写 PRIMARY KEY 的表会在字段顺序首位补一个 "
+                + "business_id 主键字段<br>（VARCHAR(32)、注释「业务主键」）："
+                + "「表元数据」弹窗与生成的 Excel 都带上它，<br>数据 Sheet 按脚本里 INSERT 的行数"
+                + "各给一个 32 位十六进制 UUID<br>（脚本里没有 INSERT 就只补字段定义）；<br>"
+                + "「预览 DDL」在副本里同步补出这一列，脚本正文一个字不动，<br>"
+                + "「保存修改后ddl脚本」与「执行修改后ddl脚本到当前库」仍按脚本原文走。<br>"
+                + "已经写了 PRIMARY KEY 的表不补；取消勾选恢复原样，默认不勾选。</html>");
+        autoPkBox.addActionListener(e -> onAutoPkToggled());
+        // 两颗执行选项并排站在左侧，与 Qt 侧 QHBoxLayout 依次 addWidget 的同一排布
+        JPanel opWest = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
+        opWest.setOpaque(false);
+        opWest.add(dropExisting);
+        opWest.add(autoPkBox);
+        op.add(opWest, BorderLayout.WEST);
         op.add(runBtns, BorderLayout.EAST);
 
         // 命名规则工具条贴表格上沿（与第一页同一位置）：管的是"表名/字段名怎么起"
@@ -823,6 +839,21 @@ public final class SqlPage extends JPanel {
         return dropExisting;
     }
 
+    public JCheckBox autoPkBox() {
+        return autoPkBox;
+    }
+
+    /**
+     * 第二页这一颗不改脚本正文，只作用在三个读元数据的出口上。
+     *
+     * 切换要留痕：「预览 DDL」里忽然多出一列，得能对上是自己勾的这颗（与 Qt 侧同一条留痕）。
+     * 清单不刷新（这一页没有主键列），弹窗与预览都是点下去才现算。
+     */
+    private void onAutoPkToggled() {
+        log("[提示] 自动补全主键切换为：" + (autoPkBox.isSelected() ? "开" : "关")
+                + "（作用于表元数据弹窗、预览 DDL 副本与两条生成出口，脚本正文不动）");
+    }
+
     /** 自检入口：不靠模拟鼠标，直接核对行数据、单元格可编辑性与改名/元数据动作。 */
     public int sqlRowCount() {
         return rowActual.size();
@@ -1152,9 +1183,19 @@ public final class SqlPage extends JPanel {
                 String name = String.valueOf(t.get("name"));
                 StringBuilder sb = bodies.get(name);
                 String body = sb == null ? "" : sb.toString();
-                if (!body.isEmpty()) {
-                    pages.add(new String[]{displayName(name), body});
+                if (body.isEmpty()) {
+                    continue;
                 }
+                if (autoPkBox.isSelected()) {
+                    // 只补在这份预览副本上：正文里已有 PRIMARY KEY 就一句不动（kept），
+                    // 补不出可插入形状时点名原因、原样显示，不拿"看着差不多"的句子顶替
+                    SqlScript.PkEdit pe = SqlScript.addAutoPkCreate(body, Infer.AUTO_PK_FIELD);
+                    body = pe.text;
+                    if ("failed".equals(pe.status)) {
+                        log("! [WARN] 跳过 | `" + name + "`：" + pe.reason + "，这张表的预览按原样显示");
+                    }
+                }
+                pages.add(new String[]{displayName(name), body});
             }
         }
         return pages;
@@ -1849,11 +1890,37 @@ public final class SqlPage extends JPanel {
                 + "（已写进脚本；未落盘）");
     }
 
+    /**
+     * 弹窗看的那一份表定义：勾了「自动补全主键」就在副本上补出 business_id。
+     *
+     * 传进来的可能是 Entry 里缓存的那一份解析结果，被补一列就等于骗过了保存与执行
+     * 两条出口的判据，所以补之前先抄一份（与 Qt 侧 _sql_metadata_view 同一做法）。
+     */
+    private SqlScript.ParsedTable metadataView(SqlScript.ParsedTable parsed) {
+        if (parsed == null || !autoPkBox.isSelected()) {
+            return parsed;
+        }
+        SqlScript.ParsedTable view = new SqlScript.ParsedTable();
+        view.tableName = parsed.tableName;
+        view.tableComment = parsed.tableComment;
+        view.notes.addAll(parsed.notes);
+        for (Infer.Column c : parsed.columns) {
+            view.columns.add(c.copied());
+        }
+        TableOps.Table holder = new TableOps.Table();
+        holder.tableName = parsed.tableName;
+        holder.tableComment = parsed.tableComment;
+        holder.columns = view.columns;
+        Infer.applyAutoPk(holder, null, null, true,
+                upperBox.isSelected(), lowerBox.isSelected());
+        return view;
+    }
+
     private void showMetadataAtRow(int row) {
         if (row < 0 || row >= rowActual.size()) {
             return;
         }
-        SqlScript.ParsedTable parsed = metadataAtRow(row);
+        SqlScript.ParsedTable parsed = metadataView(metadataAtRow(row));
         if (parsed == null) {
             log("[元数据] 未找到表 " + rowActual.get(row) + " 的定义（可能被后续语句改写）");
             return;
@@ -1976,8 +2043,9 @@ public final class SqlPage extends JPanel {
                 + " 个，输出根目录 " + outRoot + "）=====");
         final boolean upper = upperBox.isSelected();
         final boolean lower = lowerBox.isSelected();
+        final boolean autoPk = autoPkBox.isSelected();
         host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
-                sink -> exportFromScripts(items, outRoot, withMeta, upper, lower, sink),
+                sink -> exportFromScripts(items, outRoot, withMeta, upper, lower, autoPk, sink),
                 out -> finishGenerate((GenResult) out));
     }
 
@@ -1998,7 +2066,7 @@ public final class SqlPage extends JPanel {
      * 只剩表头——这些都是日志里要看得见的决定，不是静默近似。
      */
     public static GenResult exportFromScripts(List<Src> items, String outRoot, boolean withMeta,
-                                              boolean upper, boolean lower,
+                                              boolean upper, boolean lower, boolean autoPk,
                                               ImportParse.Sink sink) {
         GenResult res = new GenResult();
         List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
@@ -2006,11 +2074,17 @@ public final class SqlPage extends JPanel {
         Map<String, Integer> usedTables = new LinkedHashMap<String, Integer>();
         Set<String> taken = new LinkedHashSet<String>();
         Map<String, Object[]> orphan = new LinkedHashMap<String, Object[]>();
+        int addedPk = 0;
+        int keptPk = 0;
         if (upper) {
             // 与 Python 的 sql_meta_export_task 同一句：生成物被改过名要能一眼看见
             sink.log("[命名] 生成物表名与字段名：转大写");
         } else if (lower) {
             sink.log("[命名] 生成物表名与字段名：转小写");
+        }
+        if (autoPk) {
+            sink.log("[主键] 自动补全主键：开（没有主键的表在字段首位补 "
+                    + Infer.AUTO_PK_FIELD + "，脚本里有 INSERT 的按行填唯一值）");
         }
         for (Src s : items) {
             if (sink.cancelled()) {
@@ -2043,6 +2117,17 @@ public final class SqlPage extends JPanel {
                 if (rows != null) {
                     attachData(src, t, rows, name, sink);
                 }
+                if (autoPk) {
+                    // 数据先挂上再补列：applyAutoPk 按行数逐行给唯一值，
+                    // 脚本里没有 INSERT 时这一张就只补字段定义
+                    Infer.AutoPk ap = Infer.applyAutoPk(src.table, src.headers, src.rows,
+                            true, upper, lower);
+                    if (ap.moved) {
+                        addedPk++;
+                    } else {
+                        keptPk++;
+                    }
+                }
                 work.add(src);
             }
             for (Map.Entry<String, SqlScript.InsertRows> e : data.entrySet()) {
@@ -2061,6 +2146,10 @@ public final class SqlPage extends JPanel {
                         + " 行 INSERT 数据，但脚本里没有它的 CREATE TABLE，"
                         + "没有列定义可导出，整张表不写");
             }
+        }
+        if (autoPk) {
+            sink.log("[主键] 本轮补 " + addedPk + " 张，" + keptPk
+                    + " 张已有主键或已有同名字段不动");
         }
         res.total = work.size();
         if (work.isEmpty()) {

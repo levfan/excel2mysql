@@ -60,7 +60,8 @@ from core.log_text import (
 from core.infer import (
     build_table_def, make_unique_names, apply_table_prefix, validate_primary_key,
     replace_first_segment, sanitize_table_name, _col_to_field, dedup_field,
-    table_name_problem, case_switch, row_fit_notice,
+    table_name_problem, case_switch, row_fit_notice, apply_auto_pk, _attach_row_fit,
+    AUTO_PK_FIELD,
 )
 from core.sql_execute import executable_statements, run as run_sql_statements
 from core.sql_script import (
@@ -68,7 +69,7 @@ from core.sql_script import (
     parse_create_tables, rename_table_sql, apply_display_renames,
     set_table_comment, prepend_drop_tables,
     is_dump_script, dump_statements, dump_skip_reason, dump_database_switch,
-    edit_column, format_sql, format_refusal,
+    edit_column, format_sql, format_refusal, add_auto_pk_create,
     SQL_FORMAT_KEYWORDS, SQL_FORMAT_TYPES,
 )
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
@@ -1078,7 +1079,7 @@ _PARSE_UNITS = 5
 
 
 def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
-                       initials=False, upper=False, lower=False):
+                       initials=False, upper=False, lower=False, auto_pk=False):
     """ZIP 展开 + 逐文件解析表结构，返回待导入列表与汇总计数。
 
     进度总项数先按「每个压缩包 1 项 + 包内每个 Excel 解出 1 项 + 每个待解析 Excel
@@ -1157,7 +1158,7 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
 
         try:
             td = build_table_def(f, progress_cb=phase, initials=initials,
-                                 upper=upper, lower=lower)
+                                 upper=upper, lower=lower, auto_pk=auto_pk)
             tables.append(td)
             (added_zip if f in from_zip else added_loose).append(f)
             pk = td.get("primary_key")
@@ -1829,7 +1830,8 @@ def _sql_data_frame(data, orig_fields, mapping):
 SQL_EXPORT_ROW_CAP = 10000
 
 
-def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False):
+def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False,
+                         auto_pk=False):
     """「SQL 脚本改名」页的生成标准/简易 Excel：列定义取 CREATE TABLE，数据取 INSERT。
 
     items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
@@ -1848,6 +1850,10 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False):
         sink.log("[命名] 生成物表名与字段名：转小写")
     tables, where, used_tables = [], {}, {}
     taken, orphan = set(), {}
+    added_pk = kept_pk = 0
+    if auto_pk:
+        sink.log("[主键] 自动补全主键：开（没有主键的表在字段首位补 %s，"
+                 "脚本里有 INSERT 的按行填唯一值）" % AUTO_PK_FIELD)
     for path, text in items:
         if sink.cancelled:
             break
@@ -1887,6 +1893,14 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False):
                     sink.log("! [WARN] 说明 | `%s`：%s" % (name, note))
                 if frame is not None:
                     t["df"] = frame
+            if auto_pk:
+                # 数据先挂上再补列：apply_auto_pk 按 df 的行数逐行给唯一值，
+                # 脚本里没有 INSERT 时 df 还不存在，这一张就只补字段定义
+                moved, _why = apply_auto_pk(t, True, upper=upper, lower=lower)
+                if moved:
+                    added_pk += 1
+                else:
+                    kept_pk += 1
             tables.append(t)
         for extra, rows in data.items():
             orphan[extra] = (base, rows["total"], extra in taken)
@@ -1897,6 +1911,9 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False):
         else:
             sink.log("! [WARN] 跳过 | `%s`：%s 里有 %d 行 INSERT 数据，但脚本里没有它的"
                      " CREATE TABLE，没有列定义可导出，整张表不写" % (extra, base, total))
+    if auto_pk:
+        sink.log("[主键] 本轮补 %d 张，%d 张已有主键或已有同名字段不动"
+                 % (added_pk, kept_pk))
     if not tables:
         sink.log("! [WARN] 没有可导出的表：这些脚本里解析不出带列定义的 CREATE TABLE")
         return {"dir": None, "written": [], "total": 0, "cancelled": sink.cancelled}
@@ -2428,6 +2445,17 @@ class MainWindow(QWidget):
         op.setContentsMargins(10, 6, 10, 6)
         self.chk_drop = QCheckBox("覆盖已存在表（先 DROP 再建）")
         op.addWidget(self.chk_drop)
+        self.chk_auto_pk = QCheckBox("自动补全主键")
+        self.chk_auto_pk.setToolTip(
+            "勾选后，一个主键字段都没有的表会在字段顺序首位补一个 %s 主键字段\n"
+            "（VARCHAR(32)、注释「业务主键」），有数据行的每行各给一个 32 位十六进制 UUID；\n"
+            "已有主键的表不动，表里已经写着 %s 的也不动（补进去建表会重名报错）；\n"
+            "一行数据都没有的空表只补字段定义，没有值可填。\n"
+            "取消勾选就收回补进去的那一列，人工勾选的主键一个都不碰；\n"
+            "对清单里已加载的文件即时生效，勾上之后再添加的文件同样按这一档处理。"
+            % (AUTO_PK_FIELD, AUTO_PK_FIELD))
+        self.chk_auto_pk.toggled.connect(self.on_auto_pk_toggled)
+        op.addWidget(self.chk_auto_pk)
         op.addStretch(1)
         op.addSpacing(12)
         self.btn_import = QPushButton("开始导入")
@@ -2890,6 +2918,17 @@ class MainWindow(QWidget):
             "注释或字符串里出现的建表不会触发删除。只影响执行，不改脚本正文，\n"
             "也不影响保存与生成两条出口；默认不勾选。")
         op.addWidget(self.chk_sql_drop)
+        self.chk_sql_auto_pk = QCheckBox("自动补全主键")
+        self.chk_sql_auto_pk.setToolTip(
+            "勾选后，脚本里没写 PRIMARY KEY 的表会在字段顺序首位补一个 %s 主键字段\n"
+            "（VARCHAR(32)、注释「业务主键」）：「表元数据」弹窗与生成的 Excel 都带上它，\n"
+            "数据 Sheet 按脚本里 INSERT 的行数各给一个 32 位十六进制 UUID\n"
+            "（脚本里没有 INSERT 就只补字段定义）；\n"
+            "「预览 DDL」在副本里同步补出这一列，脚本正文一个字不动，\n"
+            "「保存修改后ddl脚本」与「执行修改后ddl脚本到当前库」仍按脚本原文走。\n"
+            "已经写了 PRIMARY KEY 的表不补；取消勾选恢复原样，默认不勾选。" % AUTO_PK_FIELD)
+        self.chk_sql_auto_pk.toggled.connect(self.on_sql_auto_pk_toggled)
+        op.addWidget(self.chk_sql_auto_pk)
         # 四颗按钮的总宽比第一页多两颗，直接摊在一行会把主窗口的最小宽度顶到屏幕外：
         # 套一层横向滚动区，正常宽度下照样贴右排开，窄屏才出滚动条，窗口仍能缩回屏幕内
         run_box = QWidget()
@@ -2989,11 +3028,24 @@ class MainWindow(QWidget):
             append_log(self.sql_log, 
                 "[元数据] 未找到表 %s 的定义（可能被后续语句改写）" % row["actual"])
             return None
-        return SqlMetadataDialog(table, row["display"],
+        return SqlMetadataDialog(self._sql_metadata_view(table), row["display"],
                                  upper=self.chk_sql_upper.isChecked(),
                                  lower=self.chk_sql_lower.isChecked(), parent=self,
                                  on_edit=functools.partial(self._apply_sql_field_edit,
                                                            row_index))
+
+    def _sql_metadata_view(self, table):
+        """弹窗看的那一份表定义：勾了「自动补全主键」就在副本上补出 business_id。
+
+        取的是 parsed 缓存里那一份，必须先看一眼能否补、再在副本上补——parsed 是脚本
+        当前正文的解析结果，被补一列就等于骗过了保存与执行两条出口的判据。
+        """
+        if not self.chk_sql_auto_pk.isChecked():
+            return table
+        view = dict(table)
+        apply_auto_pk(view, True, upper=self.chk_sql_upper.isChecked(),
+                      lower=self.chk_sql_lower.isChecked())
+        return view
 
     def _apply_sql_field_edit(self, row_index, field, **kw):
         """表元数据弹窗改了一格：把这一列的新写法写进脚本正文那句 CREATE TABLE。
@@ -3146,6 +3198,16 @@ class MainWindow(QWidget):
         self._refresh_sql_table()
         self._log_sql_case_switch()
 
+    def on_sql_auto_pk_toggled(self, checked):
+        """第二页这一颗不改脚本正文，只作用在三个读元数据的出口上。
+
+        切换要留痕：「预览 DDL」里忽然多出一列，得能对上是自己勾的这颗；
+        清单不刷新（这一页没有主键列），弹窗与预览都是点下去才现算。
+        """
+        append_log(self.sql_log,
+                   "[提示] 自动补全主键切换为：%s（作用于表元数据弹窗、预览 DDL 副本与"
+                   "两条生成出口，脚本正文不动）" % ("开" if checked else "关"))
+
     def on_sql_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, "选择 SQL 脚本", "", "SQL 脚本 (*.sql);;所有文件 (*)")
@@ -3258,8 +3320,17 @@ class MainWindow(QWidget):
                     bodies.setdefault(name, []).append(one)
             for t in extract_create_tables(text):
                 body = "\n\n".join(bodies.get(t["name"], ()))
-                if body:
-                    pages.append((self._sql_display_name(t["name"]), body))
+                if not body:
+                    continue
+                if self.chk_sql_auto_pk.isChecked():
+                    # 只补在这份预览副本上：正文里有 PRIMARY KEY 就一句不动（kept），
+                    # 补不出可插入形状时点名原因、原样显示，不拿"看着差不多"的句子顶替
+                    body, status, why = add_auto_pk_create(body)
+                    if status == "failed":
+                        append_log(self.sql_log,
+                                   "! [WARN] 跳过 | `%s`：%s，这张表的预览按原样显示"
+                                   % (t["name"], why))
+                pages.append((self._sql_display_name(t["name"]), body))
         return pages
 
     def on_sql_preview_ddl(self):
@@ -3523,7 +3594,8 @@ class MainWindow(QWidget):
         # 位置参数末尾，upper 一旦也被 partial 绑走，sink 就撞上它（同 3969 行那条教训）
         self._run_modal("正在生成%sexcel文件…" % label,
                         functools.partial(sql_meta_export_task,
-                                          lower=self.chk_sql_lower.isChecked()),
+                                          lower=self.chk_sql_lower.isChecked(),
+                                          auto_pk=self.chk_sql_auto_pk.isChecked()),
                         (items, out_root, with_meta, self.chk_sql_upper.isChecked()),
                         on_done=self._finish_sql_gen_excel, log_view=self.sql_log)
 
@@ -4307,6 +4379,37 @@ class MainWindow(QWidget):
             "[提示] 表名与字段名大小写切换为：%s（对之后添加的文件生效，"
             "结构定义 Sheet 里手写的字段名%s）" % (case, hand))
 
+    def on_auto_pk_toggled(self, checked):
+        """补列与撤列当场落到清单上。
+
+        清单的「字段数」「主键」两列、结构预览、预览 DDL 与导入读的是同一份表定义，
+        只在出口那侧补就会出现"清单说没主键、建表语句里有主键"的分裂；
+        所以这一颗改的是 self.tables 本身，改完刷新清单。
+        """
+        state = "开" if checked else "关"
+        if not self.tables:
+            append_log(self.log,
+                       "[提示] 自动补全主键切换为：%s（清单里没有文件，没有表可动）" % state)
+            return
+        upper = self.chk_upper.isChecked()
+        lower = self.chk_lower.isChecked()
+        done, skipped = [], []
+        for t in self.tables:
+            moved, why = apply_auto_pk(t, checked, upper=upper, lower=lower)
+            if moved:
+                _attach_row_fit(t)          # 多一列就多占 32 字节，过不了线要在这张表上拦下
+                done.append((t, why))
+            elif checked:
+                skipped.append((t, why))
+        self._refresh_file_table()
+        append_log(self.log,
+                   "[提示] 自动补全主键切换为：%s（动了 %d 张，跳过 %d 张，清单里共 %d 张表）"
+                   % (state, len(done), len(skipped), len(self.tables)))
+        for t, why in done:
+            append_log(self.log, "+ [OK] 补主键 | `%s`：%s" % (t["table_name"], why))
+        for t, why in skipped:
+            append_log(self.log, "! [WARN] 跳过 | `%s`：%s" % (t["table_name"], why))
+
     def on_add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, "选择 Excel 文件或 ZIP 压缩包", "",
@@ -4402,7 +4505,8 @@ class MainWindow(QWidget):
             functools.partial(parse_import_files,
                               initials=self.chk_initials.isChecked(),
                               upper=self.chk_upper.isChecked(),
-                              lower=self.chk_lower.isChecked()),
+                              lower=self.chk_lower.isChecked(),
+                              auto_pk=self.chk_auto_pk.isChecked()),
             (files, {t.get("filepath") for t in self.tables},
              self._zip_dir() if has_zip else None, len(self._zip_origin)),
             on_done=self._finish_add_files)
