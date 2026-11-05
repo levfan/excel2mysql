@@ -200,7 +200,7 @@ def copy_project_doc(dist):
     以前随包的是打包时渲染的 README.txt（正文在项目侧 java/assets/README.txt）与
     export_manual_txt 渲染的使用说明.txt：仓库里看不见产物那份、产物里看不见仓库改的那份，
     两份会分叉。现在项目里只有一份文档，包里就是它，逐字节相同；文档标题挂了图标，
-    所以把 assets/app_icon.png 放到包内的同名相对路径下，图片才解析得出来。
+    所以把 assets/app_icon.svg 放到包内的同名相对路径下，图片才解析得出来。
     代价要说清：包里那份不再带"本包剔了几个桩、多大"这类现场数——那些是构建时才知道的数，
     由本脚本打印在构建日志里，不再混进唯一的文档正文。
     """
@@ -209,8 +209,8 @@ def copy_project_doc(dist):
         fail("项目里唯一的那份文档不在：%s" % src)
     with io.open(src, encoding="utf-8") as fh:
         text = fh.read()
-    if 'src="assets/app_icon.png"' not in text:
-        fail("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.png")
+    if 'src="assets/app_icon.svg"' not in text:
+        fail("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.svg")
     if not README_LEN_RANGE[0] < len(text) < README_LEN_RANGE[1]:
         fail("README.md %d 字符，不在 %d–%d 这一档：短了是被砍成空壳，长了是构建细节又长回用户向文档"
              % ((len(text),) + README_LEN_RANGE))
@@ -220,16 +220,16 @@ def copy_project_doc(dist):
     dst = os.path.join(dist, "README.md")
     with open(dst, "wb") as fh:
         fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
-    icon_src = os.path.join(ROOT, "assets", "app_icon.png")
+    icon_src = os.path.join(ROOT, "assets", "app_icon.svg")
     if not os.path.isfile(icon_src):
-        fail("随包文档要用的图标 assets/app_icon.png 不在仓库里")
-    icon_dst = os.path.join(dist, "assets", "app_icon.png")
+        fail("随包文档要用的图标 assets/app_icon.svg 不在仓库里")
+    icon_dst = os.path.join(dist, "assets", "app_icon.svg")
     if not os.path.isdir(os.path.dirname(icon_dst)):
         os.makedirs(os.path.dirname(icon_dst))
     shutil.copy2(icon_src, icon_dst)
     if os.path.getsize(dst) != len(text.encode("utf-8")) + text.count("\n"):
         fail("包里的 README.md 与仓库那份字节数不对不上（行尾转换算进去也不该差）")
-    ok("README.md %d 字符（与仓库同源）+ assets/app_icon.png" % len(text))
+    ok("README.md %d 字符（与仓库同源）+ assets/app_icon.svg" % len(text))
     return text
 
 
@@ -395,10 +395,10 @@ def main():
     size = human(dir_size(dist))
     doc = copy_project_doc(dist)
 
-    for want in ("conn.ini", "README.md", os.path.join("assets", "app_icon.png")):
+    for want in ("conn.ini", "README.md", os.path.join("assets", "app_icon.svg")):
         if not os.path.isfile(os.path.join(dist, want)):
             fail("产物里缺 %s" % want)
-    ok("产物含 conn.ini、README.md 与 assets/app_icon.png")
+    ok("产物含 conn.ini、README.md 与 assets/app_icon.svg")
     # 文档里的开关名必须真是这个 jar 认的：Python 命令行版那套 --run-sql / --swap-prefix
     # 抄到这里会让现场敲出一条"未知选项"。只核能照抄的那几行（含 java.exe -jar 或 启动.bat
     # 的示例）——"本包没有 --run-sql"这种提醒也得允许写出来，否则守卫会把解释当成错误

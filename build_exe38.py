@@ -151,7 +151,7 @@ def check_env():
             "（6.x 官方只支持 Windows 8+，bootloader 不为 Win7 构建）")
     missing = [p for p in ("excel2mysql_cli38.spec", "packtest38.spec", "pack_test38.py",
                            "cli.py", "_pack_common.py", "requirements38.txt",
-                           "version.py", "README.md", "assets/app_icon.png",
+                           "version.py", "README.md", "assets/app_icon.svg",
                            "assets/app_icon.ico", "assets/conn.ini",
                            os.path.join("core", "infer.py"), os.path.join("core", "mysql_io.py"),
                            os.path.join("core", "zip_import.py"), os.path.join("core", "infer.py"),

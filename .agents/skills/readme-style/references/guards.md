@@ -13,7 +13,7 @@ README 不是自由文本，它被下面这些断言按字面串核。改文档�
 | W31b | `pack_test38.py` | 出现字面串 `下划线自己写` |
 | W31c | `pack_test38.py` | `KB2999226`、`DLL load failed`、`只拷 exe`、`跑不起来`、`win7_sp1_patch`、`3.check_win7.bat`、`4.install_minimal.bat` 全要在——现场要能从文档知道修复脚本就在包里 |
 | W31d | `pack_test38.py` | `Java 版`、`Windows 10 1809`、`三个包共用同一套`、`RELEASE.md` 在 README；并且 `api-ms-win-crt`、`pack_test38.py` 真落在 RELEASE.md 里（搬出去的内容不能只是删掉） |
-| 出包文档步骤 | `build_exe.py`、`java/tools/build_java_dist.py` | 读同一份常量核产物里那一份 README：字符区间 + 八节齐 + 标题挂了 `assets/app_icon.png` + 与仓库逐字节一致 |
+| 出包文档步骤 | `build_exe.py`、`java/tools/build_java_dist.py` | 读同一份常量核产物里那一份 README：字符区间 + 八节齐 + 标题挂了 `assets/app_icon.svg`（矢量，位图放大发虚）+ 与仓库逐字节一致 |
 | 出包 must 清单 | `java/tools/build_java_dist.py` | `java.exe -jar` / `启动.bat` 那几行不许出现本包不认的开关（`--run-sql`、`--swap-prefix`、`--drop-if-exists`、`--keep-temp`）；`--no-sql`、`--no-excel`、`--gui`、`Windows 7`、`KB2999226`、`退出码` 要写到；同样禁版本号形态 |
 | T15 | `pack_test.py` | 写死的版本号与 `version.py` 同值。README 已从站点表里删掉（2026-10-29），别加回去 |
 

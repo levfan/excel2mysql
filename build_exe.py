@@ -213,14 +213,15 @@ def copy_project_doc():
     现场拿到包的顺序是"先翻文件、再决定要不要双击 exe"，所以包里必须有一份可读文档。
     以前是打包时由 help_doc.py 渲染一份 README.txt——仓库里看不见产物那份、产物里看不见
     仓库改的那份，两份会分叉；现在随包的就是仓库那一份，逐字节相同。
-    标题那行挂了图标，所以连 `assets/app_icon.png` 一起放进包里的同名相对路径，
-    否则文档里的图片在现场解析不出来。
+    标题那行挂了图标，所以连 `assets/app_icon.svg` 一起放进包里的同名相对路径，
+    否则文档里的图片在现场解析不出来。图标用矢量那一份：位图放大就发虚，
+    而 README 会被人在各种字号下看。
     """
     src = os.path.join(ROOT, "README.md")
     with open(src, encoding="utf-8") as fh:
         text = fh.read()
-    if 'src="assets/app_icon.png"' not in text:
-        raise RuntimeError("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.png")
+    if 'src="assets/app_icon.svg"' not in text:
+        raise RuntimeError("README.md 的标题没挂图标，或图标路径不是 assets/app_icon.svg")
     if not README_LEN_RANGE[0] < len(text) < README_LEN_RANGE[1]:
         raise RuntimeError("README.md %d 字符，不在 %d–%d 这一档：短了是被砍成空壳，"
                            "长了是构建细节又长回用户向文档"
@@ -231,16 +232,16 @@ def copy_project_doc():
     out = os.path.join(APP_DIST, "README.md")
     with open(out, "wb") as fh:
         fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
-    icon_src = os.path.join(ROOT, "assets", "app_icon.png")
+    icon_src = os.path.join(ROOT, "assets", "app_icon.svg")
     if not os.path.isfile(icon_src):
-        raise RuntimeError("随包文档用的图标 assets/app_icon.png 不在仓库里")
-    icon_dst = os.path.join(APP_DIST, "assets", "app_icon.png")
+        raise RuntimeError("随包文档用的图标 assets/app_icon.svg 不在仓库里")
+    icon_dst = os.path.join(APP_DIST, "assets", "app_icon.svg")
     if not os.path.isdir(os.path.dirname(icon_dst)):
         os.makedirs(os.path.dirname(icon_dst))
     shutil.copy2(icon_src, icon_dst)
     if os.path.getsize(out) != len(text.encode("utf-8")) + text.count("\n"):
         raise RuntimeError("包里的 README.md 字节数与仓库那份对不上（行尾转换算进去也不该差）")
-    return "README.md %d 字符（与仓库逐字节一致）+ assets/app_icon.png" % len(text)
+    return "README.md %d 字符（与仓库逐字节一致）+ assets/app_icon.svg" % len(text)
 
 
 def build_and_run_frozen_tests():
