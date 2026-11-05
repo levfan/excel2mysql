@@ -2021,15 +2021,18 @@ public final class GuiMain {
             problems.add("客户区没按 DPI 折算到 " + wantClientW + "x" + wantClientH
                     + "（实际 " + client + "），整窗会比 Python 小一圈");
         }
-        // Python 的应用默认字体是 Microsoft YaHei UI 9pt：144dpi 下 18px。
-        // 不装这一档时 Swing 会退回 SimSun，字形明显更瘦更小。
+        // 界面字体是随包的思源黑体，9pt 在 144dpi 下折成 18px（Python 侧同一档字号）。
         java.awt.Font uiFont = UIManager.getFont("Label.font");
         int wantUiPx = (int) Math.round(9 * dpi / 72.0);
-        if (uiFont == null || uiFont.getSize() != wantUiPx
-                || !uiFont.getFamily().contains("YaHei")) {
-            problems.add("界面默认字体没对齐 Python 的 Microsoft YaHei UI 9pt/"
-                    + wantUiPx + "px：" + uiFont);
+        if (uiFont == null || uiFont.getSize() != wantUiPx) {
+            problems.add("界面默认字体没对齐 9pt/" + wantUiPx + "px：" + uiFont);
         }
+        // 契约是"画得出汉字"：2026-11-05 Win7 现场那次就是字体那一档落到了没有中文字形的
+        // Segoe UI 上，整页中文成方框而界面一个字都不报错
+        if (uiFont != null && !uiFont.canDisplay('中')) {
+            problems.add("界面默认字体画不出汉字（中文会成一排方框）：" + uiFont);
+        }
+        cjkFontChoice(problems);
         if (!work.contains(frame.getBounds())) {
             problems.add("主窗口超出屏幕可用区：" + frame.getBounds() + " 可用 " + work);
         }
@@ -3825,8 +3828,9 @@ public final class GuiMain {
             problems.add("SQL 页表格没有斑马纹");
         }
         if (page.tableWidget().getColumnModel().getColumn(0).getPreferredWidth()
-                != wantPx(44)) {
-            problems.add("SQL 页序号列宽不是 " + wantPx(44) + "，实际 "
+                != wantPx(com.excel2mysql.gui.Tables.SERIAL_COL_PX)) {
+            problems.add("SQL 页序号列宽不是 "
+                    + wantPx(com.excel2mysql.gui.Tables.SERIAL_COL_PX) + "，实际 "
                     + page.tableWidget().getColumnModel().getColumn(0).getPreferredWidth());
         }
         if (!"primary".equals(com.excel2mysql.gui.Buttons.role(page.runButton()))) {
@@ -4165,6 +4169,303 @@ public final class GuiMain {
         }
         if (!rec.saw("t_orphan", false)) {
             problems.add("只有 INSERT、没有 CREATE TABLE 的表没被点名跳过");
+        }
+    }
+
+    /**
+     * 「自动补全主键」在界面上必须同时看得见三件事：清单那一格、建表语句、数据网格的首列。
+     * 任一处漏了都是"界面说补了、产物里没补"的假话；关闭时又要一格不差地收回去。
+     */
+    private static void autoPkSwitches(MainFrame frame, List<String> problems) {
+        javax.swing.JCheckBox apk = frame.autoPkBox();
+        javax.swing.JCheckBox sapk = frame.sqlPage().autoPkBox();
+        if (apk == null || sapk == null) {
+            problems.add("界面上缺少「自动补全主键」开关");
+            return;
+        }
+        if (!"自动补全主键".equals(apk.getText()) || !"自动补全主键".equals(sapk.getText())) {
+            problems.add("补主键开关文案不对：" + apk.getText() + " / " + sapk.getText());
+            return;
+        }
+        if (apk.isSelected() || sapk.isSelected()) {
+            problems.add("「自动补全主键」默认就该是关的");
+        }
+        if (!SwingUtilities.isDescendingFrom(apk, frame.excelActionBar())
+                || !SwingUtilities.isDescendingFrom(sapk, frame.sqlPage().actionBar())) {
+            problems.add("补主键开关没有站在两页的底部动作条里");
+        }
+        File tmp = null;
+        try {
+            tmp = java.nio.file.Files.createTempDirectory("e2m-autopk-selftest").toFile();
+            frame.clearAll();
+            File a = writeAutoPkFixture(tmp, "无主键表（t_ap_nopk）.xlsx",
+                    new String[]{"备注", "说明"},
+                    new Object[][] {{"x", "a"}, {"x", "b"}});
+            File b = writeAutoPkFixture(tmp, "有主键表（t_ap_has）.xlsx",
+                    new String[]{"编号", "名称"},
+                    new Object[][] {{"A1", "n1"}, {"A2", "n2"}});
+            File c = writeAutoPkFixture(tmp, "同名字段表（t_ap_same）.xlsx",
+                    new String[]{"business_id", "名称"},
+                    new Object[][] {{"z", "n1"}, {"z", "n2"}});
+            frame.addFiles(java.util.Arrays.asList(a.getPath(), b.getPath(), c.getPath()));
+            com.excel2mysql.core.TableBuilder.Result rn = resultNamed(frame, "t_ap_nopk");
+            com.excel2mysql.core.TableBuilder.Result rh = resultNamed(frame, "t_ap_has");
+            com.excel2mysql.core.TableBuilder.Result rs = resultNamed(frame, "t_ap_same");
+            if (rn == null || rh == null || rs == null) {
+                problems.add("补主键自检的三张夹具表没全加载出来");
+                return;
+            }
+            int before = rn.table.columns.size();
+            Object head0 = rn.rows.get(0).get(0);
+            boolean hasPk = false;
+            for (com.excel2mysql.core.Infer.Column col : rh.table.columns) {
+                if (col.primaryKey) {
+                    hasPk = true;
+                }
+            }
+            if (!hasPk) {
+                problems.add("夹具「有主键表」没被自动选上主键，这条测不到不补那一路");
+            }
+            frame.autoPkBox().doClick();
+            com.excel2mysql.core.Infer.Column auto = rn.table.columns.get(0);
+            if (!"business_id".equals(auto.field) || !"VARCHAR(32)".equals(auto.type)
+                    || !auto.primaryKey || !Boolean.FALSE.equals(auto.nullable) || !auto.autoPk) {
+                problems.add("无主键表没补出 business_id：" + auto.field + " / " + auto.type
+                        + " / pk=" + auto.primaryKey + " / nullable=" + auto.nullable);
+            }
+            if (rn.table.columns.size() != before + 1) {
+                problems.add("补列没让字段数 +1：" + before + " → " + rn.table.columns.size());
+            }
+            String v0 = String.valueOf(rn.rows.get(0).get(0));
+            String v1 = String.valueOf(rn.rows.get(1).get(0));
+            if (!v0.matches("[0-9a-f]{32}") || !v1.matches("[0-9a-f]{32}") || v0.equals(v1)) {
+                problems.add("数据行首格不是两个 32 位十六进制唯一值：" + v0 + " / " + v1);
+            }
+            if ("business_id".equals(rh.table.columns.get(0).field)
+                    || rh.table.columns.get(0).autoPk) {
+                problems.add("已有主键的表被补了 business_id");
+            }
+            if (rs.table.columns.get(0).autoPk) {
+                problems.add("表里已经写着 business_id 的还被补了一列");
+            }
+            int rowIdx = fileRowOf(frame, "t_ap_nopk");
+            Object pkCell = rowIdx < 0 ? null : frame.fileTable().getValueAt(rowIdx, 6);
+            if (!"business_id".equals(pkCell)) {
+                problems.add("清单「主键」那一格没跟着变：" + pkCell);
+            }
+            String log = frame.logPanel().text();
+            if (!log.contains("[提示] 自动补全主键切换为：开（动了 1 张，跳过 2 张，清单里共 3 张表）")) {
+                problems.add("补主键切换没留一句汇总痕：" + tailOf(log));
+            }
+            if (!log.contains("补进去会重名") || !log.contains("已有主键")) {
+                problems.add("被跳过的那两张没逐张点名原因");
+            }
+            if (!frame.ddlText().contains("`business_id` VARCHAR(32) NOT NULL COMMENT '业务主键'")
+                    || !frame.ddlText().contains("PRIMARY KEY (`business_id`)")) {
+                problems.add("预览 DDL 里没有补出来的那一列与主键约束");
+            }
+            frame.autoPkBox().doClick();
+            // 只看这一张：清单里另一张夹具表本来就带一个 business_id 字段，
+            // 拿整页 DDL 判"收回去了"会把那张真字段也算进去
+            if (rn.table.columns.size() != before || !head0.equals(rn.rows.get(0).get(0))
+                    || rn.table.columns.get(0).autoPk
+                    || !"无".equals(frame.fileTable().getValueAt(fileRowOf(frame, "t_ap_nopk"), 6))) {
+                problems.add("关闭开关没把补的那一列与逐行值收干净：" + rn.table.columns.size()
+                        + " / " + rn.rows.get(0).get(0));
+            }
+            frame.sqlPage().autoPkBox().doClick();
+            if (!frame.sqlPage().logPanel().text().contains(
+                    "[提示] 自动补全主键切换为：开（作用于表元数据弹窗、预览 DDL 副本与"
+                            + "两条生成出口，脚本正文不动）")) {
+                problems.add("第二页补主键切换没留痕");
+            }
+            frame.sqlPage().autoPkBox().doClick();
+            frame.clearAll();
+        } catch (Exception e) {
+            problems.add("补主键自检没跑完：" + e);
+        } finally {
+            deleteTree(tmp);
+        }
+    }
+
+    /** 一行一行的数据夹具：补主键要看得见"每行一个唯一值"，单行夹具测不出来。 */
+    private static File writeAutoPkFixture(File dir, String name, String[] headers,
+                                           Object[][] rows) throws Exception {
+        org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+        org.apache.poi.ss.usermodel.Sheet sh = wb.createSheet("数据");
+        org.apache.poi.ss.usermodel.Row head = sh.createRow(0);
+        for (int i = 0; i < headers.length; i++) {
+            head.createCell(i).setCellValue(headers[i]);
+        }
+        for (int r = 0; r < rows.length; r++) {
+            org.apache.poi.ss.usermodel.Row row = sh.createRow(r + 1);
+            for (int i = 0; i < rows[r].length; i++) {
+                if (rows[r][i] instanceof Number) {
+                    row.createCell(i).setCellValue(((Number) rows[r][i]).doubleValue());
+                } else {
+                    row.createCell(i).setCellValue(String.valueOf(rows[r][i]));
+                }
+            }
+        }
+        File f = new File(dir, name);
+        writeWorkbook(wb, f);
+        return f;
+    }
+
+    /** 按表名取清单里那一份解析结果（自检往清单里加过别的表，按下标取会拿错）。 */
+    private static com.excel2mysql.core.TableBuilder.Result resultNamed(MainFrame frame, String name) {
+        for (com.excel2mysql.core.TableBuilder.Result r : frame.results()) {
+            if (r != null && r.table != null && name.equals(r.table.tableName)) {
+                return r;
+            }
+        }
+        return null;
+    }
+
+    private static int fileRowOf(MainFrame frame, String name) {
+        javax.swing.JTable t = frame.fileTable();
+        for (int i = 0; i < t.getRowCount(); i++) {
+            if (name.equals(t.getValueAt(i, 2))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 第二页三个出口的补列判据：预览副本三态、生成件的元数据与数据行、脚本正文一字不改。 */
+    private static void autoPkSql(List<String> problems) {
+        com.excel2mysql.core.SqlScript.PkEdit added = com.excel2mysql.core.SqlScript.addAutoPkCreate(
+                "CREATE TABLE `t` (\n  `x` int DEFAULT NULL\n) ENGINE=InnoDB;", "business_id");
+        if (!"added".equals(added.status)
+                || !added.text.contains("`business_id` varchar(32) NOT NULL COMMENT '业务主键'")
+                || !added.text.contains("PRIMARY KEY (`business_id`)")) {
+            problems.add("预览副本没补出列与约束：" + added.status + " / " + brief(added.text));
+        }
+        String keptSrc = "CREATE TABLE t (a INT, PRIMARY KEY (a));";
+        com.excel2mysql.core.SqlScript.PkEdit kept = com.excel2mysql.core.SqlScript.addAutoPkCreate(keptSrc, "business_id");
+        if (!"kept".equals(kept.status) || !keptSrc.equals(kept.text)) {
+            problems.add("已有 PRIMARY KEY 的那句被改了：" + kept.status + " / " + brief(kept.text));
+        }
+        String likeSrc = "CREATE TABLE t LIKE u;";
+        com.excel2mysql.core.SqlScript.PkEdit failed = com.excel2mysql.core.SqlScript.addAutoPkCreate(likeSrc, "business_id");
+        if (!"failed".equals(failed.status) || !likeSrc.equals(failed.text)
+                || failed.reason.isEmpty()) {
+            problems.add("补不出形状的没有原样退回并点名：" + failed.status);
+        }
+        File dir = null;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-autopk-sql").toFile();
+            String script = "CREATE TABLE `t_ap` (\n"
+                    + "  `code` varchar(16) DEFAULT NULL COMMENT '代码',\n"
+                    + "  `name` varchar(32) DEFAULT NULL COMMENT '名称'\n"
+                    + ") ENGINE=InnoDB COMMENT='补主键检查表';\n"
+                    + "INSERT INTO `t_ap` (`code`, `name`) VALUES ('c1', 'n1'), ('c2', 'n2');\n"
+                    + "CREATE TABLE `t_pk` (\n"
+                    + "  `id` bigint DEFAULT NULL COMMENT '编号',\n"
+                    + "  PRIMARY KEY (`id`)\n"
+                    + ") ENGINE=InnoDB COMMENT='已有主键表';\n";
+            List<com.excel2mysql.gui.SqlPage.Src> items = new ArrayList<com.excel2mysql.gui.SqlPage.Src>();
+            items.add(new com.excel2mysql.gui.SqlPage.Src(new File(dir, "ap.sql").getPath(), script));
+            Recorder rec = new Recorder();
+            com.excel2mysql.gui.SqlPage.GenResult res = com.excel2mysql.gui.SqlPage.exportFromScripts(
+                    items, dir.getPath(), true, false, false, true, rec);
+            if (res.written != 2) {
+                problems.add("补主键的生成件张数不对：" + res.written);
+                return;
+            }
+            if (!rec.saw("本轮补 1 张，1 张已有主键或已有同名字段不动", false)) {
+                problems.add("生成出口没写补了几张、几张不动");
+            }
+            List<com.excel2mysql.core.MetaExport.Dump> dumps = com.excel2mysql.core.MetaExport.dump(
+                    new File(new File(dir, "sql_meta_data_file_" + today()),
+                            "补主键检查表（t_ap）.xlsx").getPath());
+            List<List<Object>> meta = sheetCells(dumps, "元数据");
+            List<List<Object>> data = sheetCells(dumps, "数据");
+            if (meta == null || meta.size() != 4 || meta.get(1).size() < 7) {
+                problems.add("元数据 Sheet 不是表头加两列："
+                        + (meta == null ? "(没有这一页)" : meta.size()));
+            } else {
+                List<Object> first = meta.get(1);
+                if (!"business_id".equals(String.valueOf(first.get(1)))
+                        || !"业务主键".equals(String.valueOf(first.get(2)))
+                        || !"VARCHAR".equals(String.valueOf(first.get(3)))
+                        || !"32".equals(String.valueOf(first.get(4)))
+                        || !"是".equals(String.valueOf(first.get(5)))
+                        || !"否".equals(String.valueOf(first.get(6)))) {
+                    problems.add("补出来的那一列在元数据 Sheet 里形状不对：" + first);
+                }
+            }
+            if (data == null || data.size() != 3) {
+                problems.add("数据 Sheet 不是表头加两行："
+                        + (data == null ? "(没有这一页)" : String.valueOf(data.size())));
+            } else {
+                String u0 = String.valueOf(data.get(1).get(0));
+                String u1 = String.valueOf(data.get(2).get(0));
+                if (!"business_id".equals(String.valueOf(data.get(0).get(0)))
+                        || !u0.matches("[0-9a-f]{32}") || !u1.matches("[0-9a-f]{32}")
+                        || u0.equals(u1)) {
+                    problems.add("数据 Sheet 的首列不是两个 32 位十六进制唯一值：" + u0 + " / " + u1);
+                }
+            }
+            List<List<Object>> pkMeta = sheetCells(com.excel2mysql.core.MetaExport.dump(
+                    new File(new File(dir, "sql_meta_data_file_" + today()),
+                            "已有主键表（t_pk）.xlsx").getPath()), "元数据");
+            if (pkMeta != null && pkMeta.toString().contains("business_id")) {
+                problems.add("已有主键那张的生成件被补了列");
+            }
+        } catch (Exception e) {
+            problems.add("补主键的生成件读不回来：" + e);
+        } finally {
+            deleteTree(dir);
+        }
+    }
+
+    private static List<List<Object>> sheetCells(List<com.excel2mysql.core.MetaExport.Dump> dumps, String sheet) {
+        if (dumps == null) {
+            return null;
+        }
+        for (com.excel2mysql.core.MetaExport.Dump d : dumps) {
+            if (sheet.equals(d.sheet)) {
+                return d.cells;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 界面字体必须来自随包那一份文件：客户机器上装了什么字体，不该决定中文看不看得见。
+     *
+     * <p>2026-11-05 用户在 Win7 专业版上碰到整页中文成空方框——旧写法按英文字面名在系统清单里
+     * 挑档，而中文系统枚举出来的是「微软雅黑」（英文名列在另一份 locale 的清单里），挑不中就落到
+     * Segoe UI，JDK 8 对实体字族又不做字形回退。现在界面字体是随包的思源黑体
+     * （Noto Sans SC，SIL OFL），挑档那套已经删掉；这一条守三件事：资源真在包里、字体真画得出
+     * 汉字（字形号非 0，不是 .notdef）、界面各处用的是**同一个 Font 对象**——机器上恰好装着
+     * 同名字体时，按族名重新 new 一支就会撞进系统那一支，"内置"就成了假的。
+     */
+    private static void cjkFontChoice(List<String> problems) {
+        if (!UiScale.bundledLoaded()) {
+            problems.add("classpath 里没取到随包字体 " + UiScale.FONT_RESOURCE
+                    + "，界面退回对话框字体（中文就可能画不出）");
+            return;
+        }
+        java.awt.Font base = UiScale.font(java.awt.Font.PLAIN, 18);
+        java.awt.font.FontRenderContext frc =
+                new java.awt.font.FontRenderContext(null, true, true);
+        int gid = base.createGlyphVector(frc, "中").getGlyphCode(0);
+        if (!base.canDisplay('中') || gid == 0) {
+            problems.add("随包字体画不出「中」：canDisplay=" + base.canDisplay('中')
+                    + " 字形号=" + gid);
+        }
+        if (!"Noto Sans SC".equals(UiScale.fontFamily())) {
+            problems.add("随包字体的族名不是预期的 Noto Sans SC：" + UiScale.fontFamily());
+        }
+        java.awt.Font ui = UIManager.getFont("Label.font");
+        if (ui == null || !ui.getFamily().equals(UiScale.fontFamily())) {
+            problems.add("UIManager 上的界面字体不是随包那一支：" + ui);
+        }
+        if (!com.excel2mysql.gui.Tables.font().getFamily().equals(UiScale.fontFamily())) {
+            problems.add("表格字体与界面字体分叉：" + com.excel2mysql.gui.Tables.font());
         }
     }
 
@@ -5272,10 +5573,12 @@ public final class GuiMain {
                 problems.add("说明正文字号没折成 " + wantBodyPx
                         + "：Swing 会把物理像素再放大 4/3");
             }
-            // 字符串对不代表画出来对：量首段第一行，把 4/3 放大真的咬住
+            // 字符串对不代表画出来对：量首段第一行，把 4/3 放大真的咬住。
+            // 量的必须是界面真正在用的那一个 Font 对象：写死族名去 new 一支，
+            // 机器上装着同名字体时会量到系统那一支，行高就成了一种"看运气"的判据
             int helpLine = hd.bodyLineHeight();
-            int wantHelpLine = hd.getFontMetrics(new java.awt.Font(
-                    "Microsoft YaHei", java.awt.Font.PLAIN, helpTarget)).getHeight();
+            int wantHelpLine = hd.getFontMetrics(
+                    UiScale.font(java.awt.Font.PLAIN, helpTarget)).getHeight();
             if (helpLine < 0 || Math.abs(helpLine - wantHelpLine) > 4) {
                 problems.add("说明正文渲染行高 " + helpLine + "px，应接近 "
                         + helpTarget + "px 字号的 " + wantHelpLine + "px");
@@ -7081,7 +7384,7 @@ public final class GuiMain {
             dropping.dispose();
         }
 
-        int[] want = {44, 320, 200, 280, 80, 90, 160};
+        int[] want = {com.excel2mysql.gui.Tables.SERIAL_COL_PX, 320, 200, 280, 80, 90, 160};
         javax.swing.table.TableColumnModel cols = frame.fileTable().getColumnModel();
         if (cols.getColumnCount() != want.length) {
             problems.add("文件表应有 7 列（序号 + 原 6 列），实际 " + cols.getColumnCount());

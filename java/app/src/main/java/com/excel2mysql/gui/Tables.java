@@ -23,6 +23,16 @@ public final class Tables {
     public static final int POINT_SIZE = 11;
 
     /**
+     * 「序号」那一列的列宽（设计档），三张主表格同一个数，Python 侧 main.py 的
+     * SERIAL_COL_PX 同值。
+     *
+     * <p>原先是 44：换成随包字体后 Qt 的表头最小宽度（minimumSectionSize）量到 49，
+     * 写 44 会被它静默抬到 49，而 Swing 没有这道下限、照 44 画——两栈就差了 5px。
+     * 统一按字体量出来的那一档写死，两边一致。
+     */
+    public static final int SERIAL_COL_PX = 49;
+
+    /**
      * 「SQL 示例」目录那一栏的字号、行距与缩进——都是设计值，与 Python 侧
      * main.py 的 SAMPLE_TREE_* 同数（摆窗时再经 UiScale 折成物理像素）。
      * 配色复用介绍条那一组冷色，分组行像章节标题、条目行像正文。
@@ -207,10 +217,9 @@ public final class Tables {
     private Tables() {
     }
 
-    public static Font font() {
-        Font base = javax.swing.UIManager.getFont("Table.font");
-        String family = base == null ? Font.SANS_SERIF : base.getFamily();
-        return new Font(family, Font.PLAIN, UiScale.fontPt(POINT_SIZE));
+    public static Font font() {        // 直接派生随包那一个 Font 对象：按 UIManager 里的族名再 new 一次，
+        // 机器上恰好装着一支同名字体时就会撞进系统那一支，"内置"就成了假的
+        return UiScale.font(Font.PLAIN, UiScale.fontPt(POINT_SIZE));
     }
 
     /** 设内容字体、表头字体与行高；返回同一个表方便链式调用。 */

@@ -288,7 +288,7 @@ public final class SqlPage extends JPanel {
         Tables.style(table);
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.getTableHeader().setReorderingAllowed(false);
-        table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(44));
+        table.getColumnModel().getColumn(0).setPreferredWidth(UiScale.px(Tables.SERIAL_COL_PX));
         table.getColumnModel().getColumn(1).setPreferredWidth(UiScale.px(300));
         table.getColumnModel().getColumn(2).setPreferredWidth(UiScale.px(260));
         table.getColumnModel().getColumn(3).setPreferredWidth(UiScale.px(200));

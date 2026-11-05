@@ -1438,6 +1438,22 @@ check("F20 编辑区开场就是那句连通检查，长句按词折行",
       w.sql_run_input.toPlainText() == app_main.SQL_RUN_DEFAULT
       and w.sql_run_input.lineWrapMode() == app_main.QTextEdit.WidgetWidth,
       w.sql_run_input.toPlainText())
+from PySide6.QtGui import QFontInfo as _QFontInfo
+check("F20c 界面字体来自随包那一份思源黑体，不再跟系统挑档",
+      app_main.APP_FONT_FAMILY == "Noto Sans SC"
+      and app_main.QApplication.instance().font().family() == app_main.APP_FONT_FAMILY
+      and _QFontInfo(w.file_table.font()).family() == app_main.APP_FONT_FAMILY
+      and os.path.exists(app_main.resource_path(app_main.APP_FONT_FILE)),
+      (app_main.APP_FONT_FAMILY,
+       _QFontInfo(w.file_table.font()).family(),
+       app_main.resource_path(app_main.APP_FONT_FILE)))
+check("F20d 随包字体带的是 SIL OFL 许可文本（分发要连着许可一起走）",
+      os.path.exists(os.path.join(os.path.dirname(os.path.abspath(app_main.__file__)),
+                                 "assets", "fonts", "LICENSE-OFL.txt"))
+      and "SIL OPEN FONT LICENSE" in open(os.path.join(
+          os.path.dirname(os.path.abspath(app_main.__file__)),
+          "assets", "fonts", "LICENSE-OFL.txt"), encoding="utf-8").read(),
+      app_main.resource_path(os.path.join("assets", "fonts")))
 check("F20b 编辑区与结果区同一支等宽字体、字号与第一页日志同档",
       w.sql_run_log.font().family() == w.sql_run_input.font().family()
       and w.sql_run_log.font().pointSize() == w.sql_run_input.font().pointSize()
@@ -3299,11 +3315,11 @@ check("K24 命名规则工具条贴表格上沿（Excel 页），不再挤在前
       [_name_lay.itemAt(i).widget().__class__.__name__
        if _name_lay.itemAt(i).widget() is not None else "弹簧"
        for i in range(_name_lay.count())] if _name_lay is not None else "命名行不在首位")
-check("K25 两张主表格都有斑马纹，序号列收窄到 44px",
+check("K25 两张主表格都有斑马纹，序号列按随包字体那一档收窄",
       w.file_table.alternatingRowColors()
       and w.sql_table.alternatingRowColors()
-      and w.file_table.columnWidth(0) == 44
-      and w.sql_table.columnWidth(0) == 44,
+      and w.file_table.columnWidth(0) == app_main.SERIAL_COL_PX
+      and w.sql_table.columnWidth(0) == app_main.SERIAL_COL_PX,
       (w.file_table.alternatingRowColors(), w.sql_table.alternatingRowColors(),
        w.file_table.columnWidth(0), w.sql_table.columnWidth(0)))
 _el = _excel_page.layout()
@@ -7693,6 +7709,208 @@ check("R81f 生成件走小写档：日志点明这一档，产物文件名按�
        [os.path.basename(p) for p in _lc_written]))
 cw.close()
 
+# ---- 「自动补全主键」：两页各一颗，默认关；只补一个主键都没有的表 ----
+_ap_no = make_xlsx(u"无主键表（t_nopk）.xlsx", {"S": pd.DataFrame(
+    {u"备注": [u"x", u"x"], u"说明": [u"a", u"b"]})})
+_ap_has = make_xlsx(u"有主键表（t_haspk）.xlsx", {"S": pd.DataFrame(
+    {u"编号": [u"A1", u"A2"], u"名称": [u"a", u"b"]})})
+_ap_same = make_xlsx(u"同名字段表（t_samename）.xlsx", {"S": pd.DataFrame(
+    {"business_id": [u"z", u"z"], u"名称": [u"a", u"b"]})})
+aw = app_main.MainWindow()
+td_no = build_table_def(_ap_no, initials=True)
+td_has = build_table_def(_ap_has, initials=True)
+td_same = build_table_def(_ap_same, initials=True)
+_no_head = [c["field"] for c in td_no["columns"]]
+_no_df = list(td_no["df"].columns)
+_has_head = [c["field"] for c in td_has["columns"]]
+_same_n = len(td_same["columns"])
+check("R82 两页各有一颗「自动补全主键」，默认不勾选，站在各自底部动作条里",
+      aw.chk_auto_pk.text() == u"自动补全主键" and not aw.chk_auto_pk.isChecked()
+      and aw.chk_sql_auto_pk.text() == u"自动补全主键"
+      and not aw.chk_sql_auto_pk.isChecked()
+      and aw.excel_action_bar.isAncestorOf(aw.chk_auto_pk)
+      and aw.sql_action_bar.isAncestorOf(aw.chk_sql_auto_pk))
+aw.tables = [td_no, td_has, td_same]
+aw._refresh_file_table()
+aw.chk_auto_pk.setChecked(True)
+_alog = aw.log.toPlainText()
+check("R83 打开后无主键那张在首位补 business_id，另外两张一个字不动",
+      td_no["columns"][0]["field"] == "business_id"
+      and td_no["columns"][0]["type"] == "VARCHAR(32)"
+      and td_no["columns"][0]["primary_key"] is True
+      and td_no["columns"][0]["nullable"] is False
+      and td_no["columns"][0].get("auto_pk") is True
+      and [c["field"] for c in td_no["columns"]][1:] == _no_head
+      and [c["field"] for c in td_has["columns"]] == _has_head
+      and len(td_same["columns"]) == _same_n,
+      [c["field"] for c in td_no["columns"]])
+check("R84 清单那一格跟着变，数据帧同位置补列且每行一个 32 位十六进制唯一值",
+      aw.file_table.item(0, 6).text() == "business_id"
+      and list(td_no["df"].columns)[0] == "business_id"
+      and len(set(td_no["df"]["business_id"])) == 2
+      and all(re.match(r"^[0-9a-f]{32}$", str(v))
+              for v in td_no["df"]["business_id"]),
+      list(td_no["df"].columns))
+_ddl_win = app_main.DDLDialog(aw.tables, False, aw)
+_ddl_txt = _ddl_win.tabs.widget(0).toPlainText()
+_ddl_win.deleteLater()
+check("R85 预览 DDL 里这一列写进建表语句并挂上 PRIMARY KEY（NOT NULL 由主键规则给）",
+      "`business_id` VARCHAR(32) NOT NULL COMMENT '业务主键'" in _ddl_txt
+      and "PRIMARY KEY (`business_id`)" in _ddl_txt,
+      _ddl_txt.splitlines()[:3])
+check("R86 切换留一句汇总痕，跳过的那两张逐张点名原因",
+      "[提示] 自动补全主键切换为：开（动了 1 张，跳过 2 张，清单里共 3 张表）" in _alog
+      and any("已有主键" in l for l in _alog.splitlines())
+      and any("补进去会重名" in l for l in _alog.splitlines()),
+      [l for l in _alog.splitlines() if "自动补全" in l or "跳过" in l])
+aw.chk_auto_pk.setChecked(False)
+check("R87 关闭开关收回补的那一列与逐行值，清单那一格回到「无」",
+      [c["field"] for c in td_no["columns"]] == _no_head
+      and list(td_no["df"].columns) == _no_df
+      and td_no["primary_key"] is None
+      and aw.file_table.item(0, 6).text() == u"无",
+      (len(td_no["columns"]), aw.file_table.item(0, 6).text()))
+_ap_auto = build_table_def(_ap_no, initials=True, auto_pk=True)
+check("R88 添加文件时就勾着：解析收尾直接补上，主键来源写「自动补全主键」",
+      _ap_auto["columns"][0]["field"] == "business_id"
+      and _ap_auto["primary_key"] == "business_id"
+      and _ap_auto["pk_reason"] == "自动补全主键"
+      and len(_ap_auto["df"]) == 2
+      and len(set(_ap_auto["df"]["business_id"])) == 2,
+      (_ap_auto["pk_reason"], len(_ap_auto["df"])))
+_meta_nopk = pd.DataFrame({
+    u"序号": [1, 2], u"字段名(英文)": ["code", "name"],
+    u"字段注释(中文)": [u"代码", u"名称"], u"数据类型": ["VARCHAR", "VARCHAR"],
+    u"长度": ["20", "20"], u"是否主键": ["", ""], u"是否可为空": ["", ""]})
+_data_nopk = pd.DataFrame({"code": ["c1", "c2"], "name": ["n1", "n2"]})
+_p_struct = make_xlsx(u"结构定义无主键（t_struct）.xlsx",
+                      {u"字段定义": _meta_nopk, u"数据": _data_nopk})
+_st_auto = build_table_def(_p_struct, auto_pk=True)
+# 声明了主键的那一张另建一份：脚本后半段把 t3 重新绑成了脚本正文，复用它会撞名
+_meta_pk2 = pd.DataFrame({
+    u"序号": [1, 2], u"字段名(英文)": ["id", "name"],
+    u"字段注释(中文)": [u"主键ID", u"名称"], u"数据类型": ["INT", "VARCHAR"],
+    u"长度": ["", "20"], u"是否主键": [u"是", ""], u"是否可为空": [u"否", ""]})
+_data_pk2 = pd.DataFrame({"id": [1, 2], "name": ["n1", "n2"]})
+_st2 = build_table_def(make_xlsx(u"结构定义有主键（t_structpk）.xlsx",
+                                 {u"字段定义": _meta_pk2, u"数据": _data_pk2}))
+check("R89 结构定义模式没声明主键的照样补、声明了主键的不补，两种数据都按行给值",
+      _st_auto["source"] == "structured"
+      and _st_auto["columns"][0]["field"] == "business_id"
+      and list(_st_auto["df"].columns)[0] == "business_id"
+      and len(set(_st_auto["df"]["business_id"])) == 2
+      and _st2["columns"][0]["field"] == "id"
+      and apply_auto_pk(_st2, True)[0] is False,
+      (_st_auto["source"], _st2["columns"][0]["field"]))
+aw.chk_upper.setChecked(True)
+_td_up = build_table_def(_ap_no, initials=True, upper=True, auto_pk=True)
+aw.chk_upper.setChecked(False)
+check("R90 补出来的字段名跟随大小写档（转大写那一档就是 BUSINESS_ID）",
+      _td_up["columns"][0]["field"] == "BUSINESS_ID"
+      and list(_td_up["df"].columns)[0] == "BUSINESS_ID",
+      _td_up["columns"][0]["field"])
+_ap_sql = ("CREATE TABLE `t_ap` (\n"
+           "  `code` varchar(16) DEFAULT NULL COMMENT '代码',\n"
+           "  `name` varchar(32) DEFAULT NULL COMMENT '名称'\n"
+           ") ENGINE=InnoDB COMMENT='补主键检查表';\n"
+           "INSERT INTO `t_ap` (`code`, `name`) VALUES ('c1', 'n1'), ('c2', 'n2');\n"
+           "CREATE TABLE `t_pk` (\n"
+           "  `id` bigint DEFAULT NULL COMMENT '编号',\n"
+           "  PRIMARY KEY (`id`)\n"
+           ") ENGINE=InnoDB COMMENT='已有主键表';\n")
+apsql = os.path.join(_tmpdir, "auto_pk_probe.sql")
+with open(apsql, "w", encoding="utf-8") as _afh:
+    _afh.write(_ap_sql)
+sw = app_main.MainWindow()
+_orig_gofn9 = app_main.QFileDialog.getOpenFileNames
+app_main.QFileDialog.getOpenFileNames = staticmethod(lambda *a, **k: ([apsql], "SQL (*.sql)"))
+try:
+    sw.on_sql_add_files()
+finally:
+    app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn9)
+_new_page, _st1, _rs1 = add_auto_pk_create(
+    "CREATE TABLE `t` (\n  `x` int DEFAULT NULL\n) ENGINE=InnoDB;")
+_kept_page, _st2, _rs2 = add_auto_pk_create(
+    "CREATE TABLE t (a INT, PRIMARY KEY (a));")
+_bad_page, _st3, _rs3 = add_auto_pk_create("CREATE TABLE t LIKE u;")
+check("R91 预览副本的补列三态：没有主键补出列与约束、已有 PRIMARY KEY 原样留、补不出形状点名失败",
+      _st1 == "added" and "`business_id` varchar(32) NOT NULL COMMENT '业务主键'" in _new_page
+      and "PRIMARY KEY (`business_id`)" in _new_page
+      and _st2 == "kept" and _kept_page == "CREATE TABLE t (a INT, PRIMARY KEY (a));"
+      and _st3 == "failed" and _bad_page == "CREATE TABLE t LIKE u;" and _rs3,
+      (_st1, _st2, _rs3))
+POPUPS.clear()
+sw.chk_sql_auto_pk.setChecked(True)
+_spages = dict(sw._sql_ddl_pages())
+check("R92 第二页勾上后预览 DDL 补出这一列，已有主键那张不动，脚本正文一个字不改",
+      "`business_id` varchar(32)" in _spages.get("t_ap", "")
+      and "PRIMARY KEY (`business_id`)" in _spages.get("t_ap", "")
+      and "business_id" not in _spages.get("t_pk", "")
+      and "business_id" not in sw.sql_files[0]["text"]
+      and "[提示] 自动补全主键切换为：开（作用于表元数据弹窗、预览 DDL 副本与"
+          "两条生成出口，脚本正文不动）" in sw.sql_log.toPlainText(),
+      _spages.get("t_ap", ""))
+_adlg = sw._build_sql_metadata_dialog(0)
+check("R93 表元数据弹窗看的是补完的那一份，脚本解析缓存里仍是原列",
+      _adlg is not None and _adlg.field_table.item(0, 0).text() == "business_id"
+      and _adlg.field_table.item(0, 1).text() == u"业务主键"
+      and _adlg.field_table.item(0, 2).text() == "VARCHAR(32)"
+      and _adlg.field_table.item(0, 3).text() == u"是"
+      and _adlg.field_table.item(0, 4).text() == u"否"
+      and [c["field"] for c in sw.sql_files[0]["parsed"]["t_ap"]["columns"]][0] == "code",
+      _adlg.field_table.item(0, 0).text() if _adlg else "没有弹窗")
+_ap_out = os.path.join(_tmpdir, "sqlgen_pk_out")
+_pdir9 = app_main.program_dir
+app_main.program_dir = lambda: _ap_out
+POPUPS.clear()
+try:
+    sw.btn_sql_gen_std.click()
+finally:
+    app_main.program_dir = _pdir9
+_ap_dir = [d for d in _lsd(_ap_out) if d.startswith("sql_meta_data_file_")]
+_ap_std = os.path.join(_ap_out, _ap_dir[0]) if _ap_dir else ""
+_ap_file = os.path.join(_ap_std, "补主键检查表（t_ap）.xlsx")
+_ap_meta = (pd.read_excel(_ap_file, sheet_name=u"元数据", dtype=object)
+            if os.path.isfile(_ap_file) else None)
+_ap_data = (pd.read_excel(_ap_file, sheet_name=u"数据", dtype=object)
+            if os.path.isfile(_ap_file) else None)
+check("R94 第二页生成件：元数据首行 business_id/是/否，数据 Sheet 每行一个 32 位十六进制唯一值",
+      _ap_meta is not None
+      and list(_ap_meta.columns) == [u"序号", u"字段名(英文)", u"字段注释(中文)",
+                                     u"数据类型", u"长度", u"是否主键", u"是否可为空"]
+      and _ap_meta.iloc[0]["字段名(英文)"] == "business_id"
+      and _ap_meta.iloc[0]["数据类型"] == "VARCHAR"
+      and str(_ap_meta.iloc[0]["长度"]) == "32"
+      and _ap_meta.iloc[0][u"是否主键"] == u"是" and _ap_meta.iloc[0][u"是否可为空"] == u"否"
+      and _ap_data is not None and len(_ap_data) == 2
+      and all(re.match(r"^[0-9a-f]{32}$", str(v)) for v in _ap_data["business_id"])
+      and _ap_data["business_id"].nunique() == 2
+      and _ap_meta.iloc[1][u"字段名(英文)"] == "code",
+      None if _ap_meta is None else _ap_meta.head(2).to_dict("records"))
+check("R95 已有主键那张在生成出口也不补，日志把两类计数各写一句",
+      os.path.isfile(os.path.join(_ap_std, "已有主键表（t_pk）.xlsx"))
+      and "[主键] 自动补全主键：开（没有主键的表在字段首位补 business_id，"
+          "脚本里有 INSERT 的按行填唯一值）" in sw.sql_log.toPlainText()
+      and "[主键] 本轮补 1 张，1 张已有主键或已有同名字段不动" in sw.sql_log.toPlainText(),
+      [l for l in sw.sql_log.toPlainText().splitlines() if "[主键]" in l])
+sw.chk_sql_auto_pk.setChecked(False)
+_ap_out2 = os.path.join(_tmpdir, "sqlgen_off_out")
+app_main.program_dir = lambda: _ap_out2
+POPUPS.clear()
+try:
+    sw.btn_sql_gen_std.click()
+finally:
+    app_main.program_dir = _pdir9
+_off_dir = [d for d in _lsd(_ap_out2) if d.startswith("sql_meta_data_file_")]
+_off_file = (os.path.join(_ap_out2, _off_dir[0], "补主键检查表（t_ap）.xlsx")
+             if _off_dir else "")
+_off_meta = (pd.read_excel(_off_file, sheet_name=u"元数据", dtype=object)
+             if os.path.isfile(_off_file) else None)
+check("R96 取消勾选后生成件恢复原样：默认这一档不改变任何既有产物形状",
+      _off_meta is not None and list(_off_meta[u"字段名(英文)"]) == ["code", "name"],
+      None if _off_meta is None else list(_off_meta[u"字段名(英文)"]))
+sw.close()
+
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 
 from core.infer import parse_table_name_and_comment as _PT, _col_to_field as _CF
@@ -8060,13 +8278,19 @@ check("U8 结果弹窗正文可用鼠标选中并 Ctrl+C 复制",
       (_copy_body.text()[:12], str(_copy_body.textInteractionFlags())))
 from PySide6.QtWidgets import QScrollArea as _QScrollArea
 _copy_scroll = _copy_box.findChild(_QScrollArea)
+# 设计宽度与"最长那一行要多宽"都从真控件上量回来，不写死数：
+# 随包字体换了，同一条路径的自然宽度从顶到 880 上限变成 666，写死的期望值会假红
+_want_w = int(str(_copy_box.property("e2mWant")).split("x")[0])
+_need_w = max(_copy_body.fontMetrics().horizontalAdvance(ln)
+              for ln in _copy_path.split("\n"))
 # 弹窗改成"按正文要多大给多大"之后，这条判据从"至少 820x420"换成
 # "产物路径那一行不许被挤断、也不带用不上的滚动条"——那块地板正是
 # 一句话提示也摊开半屏空白、滚动条常驻的来路（与 Java 自检同一组判据）
-check("U8b 结果弹窗按正文给尺寸：长路径把宽度顶到 880，且没有用不上的滚动条",
-      str(_copy_box.property("e2mWant")).startswith("880x")
+check("U8b 结果弹窗按正文给尺寸：长路径那一行放得下，也不顶一块用不上的地板",
+      app_main.POPUP_MIN_WIDTH <= _want_w < app_main.POPUP_WANT_WIDTH
+      and _copy_body.width() >= _need_w
       and not _copy_scroll.verticalScrollBar().isVisible(),
-      (_copy_box.property("e2mWant"), _copy_box.width(), _copy_box.height(),
+      (_copy_box.property("e2mWant"), _need_w, _copy_body.width(),
        _copy_scroll.verticalScrollBar().isVisible()))
 _copy_box.close()
 _copy_box.deleteLater()

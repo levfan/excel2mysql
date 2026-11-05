@@ -18,7 +18,7 @@ a = Analysis(
     ["pack_test.py"],
     pathex=["."],
     binaries=[],
-    datas=[("assets/app_icon.ico", "assets")],
+    datas=[("assets/app_icon.ico", "assets"), ("assets/fonts/NotoSansSC-Regular.ttf", "assets/fonts")],
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},

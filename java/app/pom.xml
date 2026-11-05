@@ -57,6 +57,15 @@
           <exclude>appinfo.properties</exclude>
         </excludes>
       </resource>
+      <!--
+        随包界面字体：文件只有一份，住在仓库 assets/fonts/（Python 那条线读同一个文件），
+        这里当资源目录抄进 jar 的 /fonts/。对字体开过滤会按 ${} 替换二进制内容，必须关着。
+      -->
+      <resource>
+        <directory>../../assets/fonts</directory>
+        <targetPath>fonts</targetPath>
+        <filtering>false</filtering>
+      </resource>
     </resources>
     <plugins>
       <plugin>

@@ -7,6 +7,7 @@
 # 二进制资源不要做任何换行/编码改写
 *.ico binary
 *.png binary
+*.ttf binary
 *.xls binary
 *.xlsx binary
 *.zip binary

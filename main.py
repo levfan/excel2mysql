@@ -39,7 +39,8 @@ import re
 
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QFileInfo, QTimer, QObject, QEvent, QSize, QRectF, QPointF
 from PySide6.QtGui import (
-    QDragEnterEvent, QDropEvent, QFont, QIcon, QColor, QTextCursor, QTextCharFormat,
+    QDragEnterEvent, QDropEvent, QFont, QFontInfo, QIcon, QColor, QTextCursor,
+    QTextCharFormat,
     QTextBlockFormat, QPainter, QPen, QPainterPath, QBrush, QPixmap,
 )
 from PySide6.QtWidgets import (
@@ -163,6 +164,10 @@ TABLE_FONT_SIZE = 11
 # 表格行高按字高加一点留白算出来，不写死像素：写死 30px 会让 18 号字顶满一行，
 # 换成 11 号又显得空，字号与行距就对不上了。
 TABLE_ROW_PADDING = 6
+# 「序号」那一列的列宽（三张主表格同一个数，Java 侧 Tables.SERIAL_COL_PX 同值）。
+# 原先写 44：Qt 的表头最小宽度（minimumSectionSize）在随包字体下量到 49，写 44 会被静默抬到 49，
+# 而 Swing 没有这道下限、照 44 画——两栈就差了 5px。统一按字体量出来的那一档写死，两边一致。
+SERIAL_COL_PX = 49
 
 # 「SQL 示例」目录那一栏：它是这框里唯一要逐条读的东西，原先吃界面基准 9 号、
 # 分组与条目除了缩进毫无差别，读起来累。字号并入表格那一档，行高同一条算法。
@@ -2199,7 +2204,26 @@ class MainWindow(QWidget):
         # 三页虚线区那句"复制文件后按 Ctrl+V 直接添加"就成了空话。
         # 过滤在最前面，先看剪贴板里是不是文件，是就一律归"添加文件"，不看焦点。
         self.paste_filter = install_paste_filter(QApplication.instance())
+        self._log_font_choice()
         self._load_default_conn()
+
+    def _log_font_choice(self):
+        """开局说一句界面字体是哪一支、画不画得出汉字。
+
+        与 Java 侧 MainFrame.logFontChoice 同一句：这一档坏掉时界面一个字都不报错，
+        现场（2026-11-05 Win7 那次整页中文成空方框）只能靠抄这一行定案。
+        读的是真控件上的字体与真字形判据，不是再抄一遍常量。
+        """
+        font = self.file_table.font()
+        family = QFontInfo(font).family() or APP_FONT_FAMILY or font.family()
+        shows = self.file_table.fontMetrics().inFont(u"中")
+        append_log(self.log, "[界面] 字体：%s（%s）"
+                   % (family, "可显示中文" if shows else "画不出中文"))
+        if not shows:
+            append_log(self.log,
+                       "! [WARN] 界面 | 界面字体没有中文字形，中文会显示成空方框："
+                       "随包字体没进包或被裁掉，请核对包内 %s" % APP_FONT_FILE,
+                       error=True)
 
     # -------------------- UI --------------------
     def _build_ui(self):
@@ -2350,7 +2374,7 @@ class MainWindow(QWidget):
         header = self.file_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.file_table.setColumnWidth(0, 44)
+        self.file_table.setColumnWidth(0, SERIAL_COL_PX)
         self.file_table.setColumnWidth(1, 320)
         self.file_table.setColumnWidth(2, 200)
         self.file_table.setColumnWidth(3, 280)
@@ -2778,7 +2802,7 @@ class MainWindow(QWidget):
         header = self.sql_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.sql_table.setColumnWidth(0, 44)
+        self.sql_table.setColumnWidth(0, SERIAL_COL_PX)
         self.sql_table.setColumnWidth(1, 300)
         self.sql_table.setColumnWidth(2, 260)
         self.sql_table.setColumnWidth(3, 200)
@@ -3646,7 +3670,7 @@ class MainWindow(QWidget):
         header = self.sql_run_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
-        self.sql_run_table.setColumnWidth(0, 44)
+        self.sql_run_table.setColumnWidth(0, SERIAL_COL_PX)
         self.sql_run_table.setColumnWidth(1, 300)
         self.sql_run_table.setColumnWidth(2, 100)
         self.sql_run_table.setColumnWidth(3, 140)
@@ -5790,6 +5814,40 @@ class SqlSamplesDialog(QDialog):
 # ---------------------------------------------------------------------------
 # 打包/开发态共用的应用级设置
 # ---------------------------------------------------------------------------
+APP_FONT_FILE = os.path.join("assets", "fonts", "NotoSansSC-Regular.ttf")
+# 装进 Qt 之后的实际族名；自检与对撞读的是它，不是再抄一遍字面量
+APP_FONT_FAMILY = ""
+
+
+def load_app_font(app: QApplication) -> str:
+    """把随包的界面字体装进 Qt，并让应用默认字体就用它。
+
+    界面字体不再跟系统挑：2026-11-05 用户在 Win7 专业版上碰到整页中文成空方框，坏在 Java 线
+    "按英文字面名在系统字体清单里挑一档"——中文系统枚举出来的是「微软雅黑」，英文名列在另一份
+    locale 的清单里，挑不中就落到没有中文字形的 Segoe UI，而 JDK 8 对实体字族不做字形回退。
+    两条线现在共用仓库里那一份思源黑体（Noto Sans SC，SIL OFL），客户机器上装了什么字体
+    都影响不到渲染。字号仍走平台默认那一档：各控件自己写的字号一个字都不动。
+    """
+    global APP_FONT_FAMILY
+    from PySide6.QtGui import QFontDatabase
+
+    APP_FONT_FAMILY = ""
+    path = resource_path(APP_FONT_FILE)
+    if not os.path.exists(path):
+        print("! [WARN] GUI | 包里没有随包字体 %s，界面沿用系统默认字体" % path)
+        return ""
+    fid = QFontDatabase.addApplicationFont(path)
+    families = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
+    if not families:
+        print("! [WARN] GUI | 随包字体装不进 Qt（%s），界面沿用系统默认字体" % path)
+        return ""
+    APP_FONT_FAMILY = families[0]
+    font = app.font()
+    font.setFamily(APP_FONT_FAMILY)
+    app.setFont(font)
+    return APP_FONT_FAMILY
+
+
 def setup_app(app: QApplication) -> None:
     """应用级设置。
 
@@ -5797,6 +5855,7 @@ def setup_app(app: QApplication) -> None:
     放在 __main__ 里就只有人手双击才能验到。
     """
     app.setWindowIcon(QIcon(resource_path(os.path.join("assets", "app_icon.ico"))))
+    load_app_font(app)
 
 
 def window_icon_side(widget):

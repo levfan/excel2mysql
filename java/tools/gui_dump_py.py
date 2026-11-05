@@ -450,6 +450,10 @@ def main():
     put("table.sql.title", title_of_table(win.sql_table))
     # 字号也是界面事实：比的是设计稿那一档（pt），不是各台机器上的物理像素
     put("font.table.pt", str(win.file_table.font().pointSize()))
+    # 界面字体族的来源：两条线现在都读随包那一份思源黑体，所以这一把第一次可以逐字比
+    # （以前比不了：两边各看系统挑档，同一段文字在两台机器上就不是同一支字体）
+    from PySide6.QtGui import QFontInfo
+    put("font.family.ui", norm(QFontInfo(win.file_table.font()).family()))
     put("font.log.pt", str(win.log.font().pointSize()))
     # 连接区：跑业务时收起成一条状态栏，只报当前是哪个库（用户口径）
     put("conn.state", win.lbl_conn_state.text())

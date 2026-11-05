@@ -170,6 +170,9 @@ public final class GuiDump {
                         frame.fileTable().getFont().getSize())));
                 put("font.log.pt", String.valueOf(UiScale.fontPxToPt(
                         frame.logPanel().getFont().getSize())));
+                // 界面字体族的来源：两条线现在都读随包那一份思源黑体，所以这一把第一次可以逐字比
+                // （以前比不了：两边各看系统挑档，同一段文字在两台机器上就不是同一支字体）
+                put("font.family.ui", norm(frame.fileTable().getFont().getFamily()));
                 // 示例目录那一栏的观感：字号 + 分组格真正渲染出来的字重与配色。
                 // 只比分组行的颜色——条目行两边都不显式设色，一边报默认值一边报空没法比
                 frame.showSqlSamples();

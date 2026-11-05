@@ -270,6 +270,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 切页也要刷新：顶部状态栏报的是"现在是哪个库"，切页或改库都要跟上新库
         tabs.addChangeListener(e -> refreshDbLabels());
         bindHelpKey();
+        logFontChoice();
         refreshDbLabels();
         loadDefaultConn();
         // 窗口真显示出来之后再自动连：构造期间连库（对端不在线要等到超时）会让首屏迟迟不出来
@@ -283,6 +284,27 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 照抄数字会让这边的内容区比 Python 小掉一条标题栏加边框，
         // 表格与日志就那么被挤矮了。客户区尺寸、屏幕夹取与居中统一走 Windows.clientSize。
         Windows.clientSize(getContentPane(), this, 1100, 780);
+    }
+
+    /**
+     * 开局把界面真正生效的那一档字体报出来：读的是 UIManager 上被 {@link UiScale} 换过的真值，
+     * 不是常量抄写。
+     *
+     * <p>这一行是给现场留的定案依据：选错实体字族不会抛错、也不会红任何用例，只会让整页中文
+     * 变成空方框（2026-11-05 用户在 Win7 专业版上碰到的就是这个），日志里说一句比让人猜靠谱。
+     */
+    private void logFontChoice() {
+        java.awt.Font f = javax.swing.UIManager.getFont("Label.font");
+        if (f == null) {
+            log("[界面] 字体：取不到默认字体（Label.font 为空）");
+            return;
+        }
+        boolean cjk = f.canDisplay('中');
+        log("[界面] 字体：" + f.getFamily() + "（" + (cjk ? "可显示中文" : "画不出中文") + "）");
+        if (!cjk) {
+            log("! [WARN] 界面 | 界面字体没有中文字形，中文会显示成空方框："
+                    + "随包字体没进包或被裁掉，请核对包内 " + UiScale.FONT_RESOURCE);
+        }
     }
 
     /**
@@ -559,7 +581,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 deleteSelectedFiles();
             }
         });
-        int[] widths = {44, 320, 200, 280, 80, 90, 160};
+        int[] widths = {Tables.SERIAL_COL_PX, 320, 200, 280, 80, 90, 160};
         for (int i = 0; i < widths.length && i < table.getColumnCount(); i++) {
             table.getColumnModel().getColumn(i).setPreferredWidth(UiScale.px(widths[i]));
         }
@@ -2858,7 +2880,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         Tables.style(sqlRunFilesTable);
         sqlRunFilesTable.setFillsViewportHeight(true);
         sqlRunFilesTable.getTableHeader().setReorderingAllowed(false);
-        int[] widths = {44, 300, 100, 140, 90};
+        int[] widths = {Tables.SERIAL_COL_PX, 300, 100, 140, 90};
         for (int i = 0; i < widths.length; i++) {
             sqlRunFilesTable.getColumnModel().getColumn(i)
                     .setPreferredWidth(UiScale.px(widths[i]));
