@@ -996,7 +996,8 @@ else:
           "KB2999226" in doc and "DLL load failed" in doc
           and "只拷 exe" in doc and "跑不起来" in doc
           and "win7_sp1_patch" in doc and "3.check_win7.bat" in doc
-          and "4.install_minimal.bat" in doc,
+          and "4.install_minimal.bat" in doc
+          and "5.install_win7_prereq.bat" in doc,
           "文档要点到 win7_sp1_patch 里那几支脚本，现场才知道修复工具就在包里；"
           "「只拷 exe 跑不起来」这条坑也必须写在用户手上那份文档里")
     _rel_path = os.path.join(ROOT, "RELEASE.md")

@@ -441,7 +441,8 @@ def summary():
         f"标题带图标，用装了 Markdown 排版器的编辑器打开更好读），发机器时连 assets/ 一起拷过去")
     if os.path.isdir(PREREQ_DST):
         say(f"  补丁：产物内 {os.path.join('win7_sp1_patch', 'win7_prereq_files')} 是 Win7 专业版"
-            f"那类缺 UCRT/补丁的机器的现场修法（自检 3.check_win7.bat、最小安装 4.install_minimal.bat），"
+            f"那类缺 UCRT/补丁的机器的现场修法（自检 3.check_win7.bat、最小安装 4.install_minimal.bat、"
+            f"四卷全装 5.install_win7_prereq.bat），写进了产物那份 README 第 6 节，"
             f"装完重启再跑 --version")
     else:
         say(f"{YELLOW}  补丁：本次产物**没带** win7_sp1_patch（仓库里没有那个目录）——"

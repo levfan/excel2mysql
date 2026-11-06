@@ -83,7 +83,7 @@ if errorlevel 5 echo 脚本失败，去看 导入.log
 
 ## 6. 在 Win7 上起不来
 
-九成是系统缺 UCRT（补丁 KB2999226）：症状是 `--version` 都打不出来、弹 `ImportError: DLL load failed` 之类的报错。先跑包里 `win7_sp1_patch\3.check_win7.bat` 自检，再以管理员运行 `4.install_minimal.bat` 补齐，重启后回到 `--version` 这一步。能出版本号但 `--check` 报错且带 MySQL 错误码，那是网络或口令，跟机器无关。
+九成是系统缺 UCRT（补丁 KB2999226）：症状是 `--version` 都打不出来、弹 `ImportError: DLL load failed` 之类的报错。先跑包里 `win7_sp1_patch\3.check_win7.bat` 自检，再以管理员运行 `4.install_minimal.bat` 补齐，重启后回到 `--version` 这一步。缺得多，或最小那支不管用，就运行同目录的 `5.install_win7_prereq.bat`，四卷补丁和运行库一次装齐，同样要重启。能出版本号但 `--check` 报错且带 MySQL 错误码，那是网络或口令，跟机器无关。
 
 ## 7. 再往深
 
