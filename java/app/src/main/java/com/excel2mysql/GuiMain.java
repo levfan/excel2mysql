@@ -401,6 +401,7 @@ public final class GuiMain {
                 autoPkSwitches(frame, problems);
                 // 添加文件弹窗：文件名框里敲文件夹路径回车必须进目录，不能把目录当文件带回来
                 folder_path_entry(problems);
+                lookin_path_entry(problems);
                 // 日志的红色与行数上限：错误没标红、或日志无限涨，都只会在现场翻车时才发现
                 frame.logError("自检错误行");
                 frame.log("自检普通行");
@@ -2019,6 +2020,96 @@ public final class GuiMain {
         } catch (Exception e) {
             problems.add("文件夹路径回车自检抛异常：" + e);
         } finally {
+            if (tmp != null) {
+                deleteTree(tmp);
+            }
+        }
+    }
+
+    /**
+     * 「查找范围」那一格：既能下拉选目录，也能敲一段路径回车跳过去。
+     *
+     * <p>JDK8 的 Windows 外观把这一格做成只出不进的下拉（模型只收 File，敲进去的字符串
+     * 会抛 ClassCastException），所以 FolderAwareChooser 把它接过来自己管。这一判走的就是
+     * 回车那条真路（typeLookIn 填文本 + 触发接线好的 ActionListener），不另搭桥。
+     * 换 JDK 或换外观找不到那一格时记为未覆盖，不拿环境当产品缺陷判红。
+     */
+    private static void lookin_path_entry(List<String> problems) {
+        File tmp = null;
+        try {
+            tmp = java.nio.file.Files.createTempDirectory("e2m-lookin-selftest").toFile();
+            File folder = new File(tmp, "数据目录");
+            if (!folder.mkdir()) {
+                problems.add("查找范围自检：建临时目录失败");
+                return;
+            }
+            File xlsx = new File(folder, "样本.xlsx");
+            if (!xlsx.createNewFile()) {
+                problems.add("查找范围自检：建临时文件失败");
+                return;
+            }
+            final List<String> notes = new ArrayList<String>();
+            com.excel2mysql.gui.FolderAwareChooser.setNoteSink(
+                    new com.excel2mysql.gui.FolderAwareChooser.Note() {
+                        @Override
+                        public void show(java.awt.Component parent, String text) {
+                            notes.add(text);
+                        }
+                    });
+            com.excel2mysql.gui.FolderAwareChooser chooser =
+                    new com.excel2mysql.gui.FolderAwareChooser();
+            chooser.setMultiSelectionEnabled(true);
+            chooser.setCurrentDirectory(tmp);
+            chooser.wireForSelftest();
+            if (!chooser.lookInEditable()) {
+                System.out.println("! [WARN] GUI-SELFTEST | 这台 JDK/外观下没找到「查找范围」"
+                        + "那一格，敲路径回车跳转这一判本轮未覆盖（保持原样，只能下拉选）");
+                return;
+            }
+            // 1) 敲目录回车：进去，而不是停在原处
+            chooser.typeLookIn(folder.getAbsolutePath());
+            if (!folder.equals(chooser.getCurrentDirectory())) {
+                problems.add("查找范围敲目录回车后没进去：" + chooser.getCurrentDirectory());
+            }
+            // 2) 带引号那种（资源管理器「复制文件地址」）：同样要能跳
+            chooser.setCurrentDirectory(tmp);
+            chooser.typeLookIn("\"" + folder.getAbsolutePath() + "\"");
+            if (!folder.equals(chooser.getCurrentDirectory())) {
+                problems.add("查找范围里带引号的目录路径没跳：" + chooser.getCurrentDirectory());
+            }
+            // 3) 敲文件：进它的父目录并把这个文件带进已选清单
+            chooser.setCurrentDirectory(tmp);
+            chooser.typeLookIn(xlsx.getAbsolutePath());
+            if (!folder.equals(chooser.getCurrentDirectory())) {
+                problems.add("查找范围敲文件路径没进它的父目录：" + chooser.getCurrentDirectory());
+            }
+            File[] picked = chooser.getSelectedFiles();
+            if (picked == null || picked.length != 1 || !xlsx.equals(picked[0])) {
+                problems.add("查找范围敲进去的文件没进已选清单："
+                        + (picked == null ? "null" : picked.length));
+            }
+            // 4) 相对路径按当前目录解析
+            chooser.setCurrentDirectory(tmp);
+            chooser.typeLookIn("数据目录");
+            if (!folder.equals(chooser.getCurrentDirectory())) {
+                problems.add("查找范围的相对路径没按当前目录解析："
+                        + chooser.getCurrentDirectory());
+            }
+            // 5) 不存在：当前目录不动，且必须给一句可见提示，不能静默
+            notes.clear();
+            chooser.setCurrentDirectory(tmp);
+            chooser.typeLookIn(new File(tmp, "没这个目录").getAbsolutePath());
+            if (!tmp.equals(chooser.getCurrentDirectory())) {
+                problems.add("查找范围敲了不存在的路径却换了目录："
+                        + chooser.getCurrentDirectory());
+            }
+            if (notes.isEmpty() || !notes.get(0).contains("找不到")) {
+                problems.add("查找范围敲了不存在的路径却没提示：" + notes);
+            }
+        } catch (Exception e) {
+            problems.add("查找范围自检抛异常：" + e);
+        } finally {
+            com.excel2mysql.gui.FolderAwareChooser.setNoteSink(null);
             if (tmp != null) {
                 deleteTree(tmp);
             }
