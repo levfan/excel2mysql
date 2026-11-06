@@ -37,6 +37,13 @@ public final class LogPanel extends javax.swing.JTextPane {
     public static final int LOG_MIN_LINES = 4;
 
     private final Deque<Entry> entries = new ArrayDeque<Entry>();
+    /**
+     * 一次渲染要把整篇文档重排（上限 2000 行），几百条日志各排一个渲染事件时，事件分发线程
+     * 单是重排就积压七秒——界面真卡住，而日志一行都没少。排队里已经有一个就不再排第二个，
+     * 那一次会把当时收到的行一起画出来。先清标记再渲染：中间挤进来的行自有下一次接手。
+     */
+    private final java.util.concurrent.atomic.AtomicBoolean renderQueued =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private static final class Entry {
         private final String text;
@@ -95,12 +102,15 @@ public final class LogPanel extends javax.swing.JTextPane {
                 entries.removeFirst();
             }
         }
-        SwingUtilities.invokeLater(new Runnable() {
-            @Override
-            public void run() {
-                render();
-            }
-        });
+        if (renderQueued.compareAndSet(false, true)) {
+            SwingUtilities.invokeLater(new Runnable() {
+                @Override
+                public void run() {
+                    renderQueued.set(false);
+                    render();
+                }
+            });
+        }
     }
 
     /** info 不上色：一屏里绝大多数行都是它，全染上颜色等于全没染。 */

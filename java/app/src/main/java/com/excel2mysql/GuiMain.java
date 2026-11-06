@@ -8278,6 +8278,8 @@ public final class GuiMain {
             long p0 = System.currentTimeMillis();
             invokeUi(() -> { });
             final long pingMs = System.currentTimeMillis() - p0;
+            System.out.println("- [INFO] GUI-SELFTEST | 两条任务在跑时事件分发线程回应一次要 "
+                    + pingMs + " 毫秒");
             Thread.sleep(1200);
             int pa2 = a.getDone();
             int pb2 = b.getDone();
@@ -8293,6 +8295,9 @@ public final class GuiMain {
             // 六百张表元数据的日志与重绘，队列深度本身能到几十秒（一次采样里量到 31100）。
             // 判据要防的是"界面冻死"，那是另一个数量级：进度框退回模态量出 5221 毫秒、
             // 把抓屏塞进这个时间窗量出 10181 毫秒，两条都仍在门槛之上。
+            // 2026-11-06 这一判在 4.3.0 同款代码上连红四次（6579 / 7127 / 7411 / 13680 毫秒），
+            // 采样栈指着 gui/LogPanel.render：每条日志各排一次"整篇重排"，六百张表一刷就是
+            // 上千次重排。改成排队里只留一次渲染之后实测 352 毫秒，门槛照旧 3000。
             if (pingMs > 3000) {
                 problems.add("两条任务在跑时事件分发线程回应一次要 " + pingMs
                         + " 毫秒（界面等于没转）");
