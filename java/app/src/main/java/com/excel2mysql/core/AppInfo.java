@@ -20,10 +20,11 @@ public final class AppInfo {
      * 产品的显示名，只有一个来源：窗口标题、「关于」那一格、复制出去的第一行都读它。
      *
      * <p>仓库名、Java 包名、exe 与 jar 的产物名（excel2mysql）是另一层，刻意不跟着改：
-     * 现场指向旧名的脚本与部署文档不能因为换个标题就失效。
+     * 现场指向旧名的脚本与部署文档不能因为换个标题就失效。名字里的 ⇄ 说的是双向——
+     * Excel 进库，也从库里出交付件；改名重生成与执行器都是"怎么搬"的手段，不进名字。
      * 与 Python 侧 appinfo.APP_NAME 逐字相同，由对撞键 dlg.about.heading 比。
      */
-    public static final String APP_NAME = "表库工作台 Excel·SQL·MySQL";
+    public static final String APP_NAME = "Excel ⇄ MySQL";
 
     /**
      * 仓库地址也只有一个来源：「关于」那一行显示的、悬浮提示里写的、点出去用的、

@@ -980,8 +980,8 @@ import appinfo          # 显示名的唯一来源，标题判据按它比，不
 check("F1 MainWindow 构造成功，标题带版本号",
       w.windowTitle().startswith(appinfo.APP_NAME + " v")
       and app_main.APP_VERSION in w.windowTitle(), w.windowTitle())
-check("F1b 产品显示名只有一个来源，且不再是最早期那条通道的名字",
-      appinfo.APP_NAME == "表库工作台 Excel·SQL·MySQL"
+check("F1b 产品显示名只有一个来源，且与仓库名是两层（换显示名不动产物名）",
+      appinfo.APP_NAME == "Excel ⇄ MySQL"
       and "批量导入工具" not in appinfo.APP_NAME, appinfo.APP_NAME)
 check("F2 前两个页签齐全", [w.main_tabs.tabText(i) for i in range(2)]
       == ["Excel 导入", "SQL 脚本改名"])

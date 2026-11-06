@@ -1,6 +1,6 @@
 """
-表库工作台 Excel·SQL·MySQL 命令行版（Windows 7 线）
-=====================================
+Excel ⇄ MySQL 命令行版（Windows 7 线）
+===============================
 给同一份 core/ 加的无界面入口：不依赖 Qt，可在 Python 3.8 + Win7 SP1 上运行。
 GUI 版（main.py）要求 Windows 10 1809+，两者共用推断/建表/导入的全部核心逻辑。
 
@@ -46,6 +46,7 @@ warnings.filterwarnings("ignore", message=".*no longer supported by the Python c
 
 # 这几个名字是从 core/conn_config 转出来的：Win7 线的配置用例按 cli.CONFIG_SECTIONS /
 # cli.CONFIG_KEYS / cli.read_config_file 取，实现搬走后出口得留着
+from appinfo import APP_NAME  # noqa: E402
 from core.conn_config import (  # noqa: E402
     CONFIG_KEYS, CONFIG_SECTIONS, DEFAULTS, ENV_KEYS, read_config_file,
 )
@@ -137,11 +138,27 @@ class Log:
 # ---------------------------------------------------------------------------
 # 参数与连接配置
 # ---------------------------------------------------------------------------
+def console_safe(text: str) -> str:
+    """按当前控制台编码给一份写得出去的文本。
+
+    中文 Windows 的 cmd 默认码页是 cp936，里面没有 ⇄（U+21C4）：argparse 打印 --help
+    时会抛 UnicodeEncodeError，整个命令直接崩掉，操作员一行说明都看不到。所以这一个
+    字符在码页装不下时退成 ASCII 的 <->；GUI 与「关于」里仍是 ⇄，名字本身没有第二个来源。
+    """
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(enc)
+        return text
+    except (UnicodeEncodeError, LookupError, ValueError):
+        return text.replace("⇄", "<->")
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="excel2mysql-cli",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="表库工作台 Excel·SQL·MySQL 命令行版：Excel/ZIP 建表导入、.sql 执行到库（支持 Windows 7）",
+        description=console_safe(APP_NAME
+                                 + " 命令行版：Excel/ZIP 建表导入、.sql 执行到库（支持 Windows 7）"),
         epilog=(
             "示例：\n"
             "  excel2mysql-cli.exe --dry-run C:\\数据            只推断并打印建表语句\n"

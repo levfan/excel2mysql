@@ -691,8 +691,46 @@ def log_lines(text):
     return [re.sub(r"^\[[0-9\-: ]+\] ", "", ln) for ln in text.splitlines() if ln.strip()]
 
 
+def _gbk_console(argv):
+    """在 cp936 码页下跑一次 cli，返回 (退出码, 按 cp936 解出来的控制台文本)。
+
+    中文 Windows 的 cmd 默认就是这个码页，而它没有 ⇄（U+21C4）：这一格不测，
+    现场跑 --help 会直接 UnicodeEncodeError 崩掉，本机用 UTF-8 终端却怎么跑都是绿的。
+    """
+    buf = io.BytesIO()
+    holder = {}
+
+    class _Writer:
+        encoding = "cp936"
+        errors = "strict"
+
+        def write(self, s):
+            buf.write(s.encode("cp936", "strict"))
+            return len(s)
+
+        def flush(self):
+            holder["bytes"] = buf.getvalue()
+
+    sys.stdout = _Writer()
+    try:
+        code = cli_mod.run(list(argv))
+    except Exception as e:
+        # 写不出那个字符时 argparse 直接抛 UnicodeEncodeError。这里把它当返回值记下来，
+        # 让下面那条 check 报 FAIL 而不是把整轮用例带成异常中止——崩了是这一判要抓的事，
+        # 不该由它把别人的用例也一起打断
+        code = "异常 " + type(e).__name__
+    finally:
+        holder.setdefault("bytes", buf.getvalue())
+        sys.stdout = sys.__stdout__
+    return code, holder["bytes"].decode("cp936", "replace")
+
+
 code, _o, console = run_cli(["--help"])
 check("W1 --help 走正常返回而不是把 SystemExit 抛出去", code == cli_mod.EXIT_OK, code)
+_g_code, _g_text = _gbk_console(["--help"])
+check("W1a2 码页装不下 ⇄ 时 --help 不许崩，名字退成 ASCII 的 <->",
+      _g_code == cli_mod.EXIT_OK and "Excel <-> MySQL" in _g_text
+      and "⇄" not in _g_text, (_g_code, _g_text[:40]))
 check("W1b --help 里三种动作与配置项都列全了",
       all(k in console for k in ("--dry-run", "--check", "--config", "--prefix",
                                  "--swap-prefix", "--drop-if-exists", "--log")),

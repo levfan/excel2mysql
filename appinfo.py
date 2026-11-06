@@ -15,8 +15,10 @@ UNKNOWN = "未知"
 # 产品的显示名，只有一个来源：窗口标题、「关于」那一格、复制出去的第一行都读它。
 # 仓库名、包名、exe 与 jar 的产物名是另一层（excel2mysql），刻意不跟着改——
 # 现场指向旧名的脚本与部署文档不能因为换个标题就失效。
+# 名字里的 ⇄ 说的是双向：Excel 进库，也从库里出交付件；改名重生成与执行器都是
+# "怎么搬"的手段，不进名字。这个字符在随包字体与系统雅黑/宋体里都有字形（实测）。
 # Java 侧镜像在 core/AppInfo.java 的 APP_NAME，由对撞键 dlg.about.heading 逐字比。
-APP_NAME = "表库工作台 Excel·SQL·MySQL"
+APP_NAME = "Excel ⇄ MySQL"
 
 # 仓库地址也只有一个来源：「关于」那一行显示的、悬浮提示里写的、点出去用的、
 # 「复制全部」带走的都是这一串。Java 侧镜像在 core/AppInfo.java 的 REPO_URL，
