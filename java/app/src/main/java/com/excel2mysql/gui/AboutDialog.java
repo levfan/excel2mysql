@@ -19,66 +19,53 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 「关于」小框：版本 / 提交 / 构建日期 / 作者四行，加一行仓库链接，值全部来自 AppInfo。
+ * 「关于」小框：版本 / 提交 / 构建日期 / 作者四行，值全部来自 AppInfo。
  * 对应 ui_help.py 的 AboutDialog。
  *
  * 提交号与构建日期是打包时烧进产物的（目标机没有 git），开发态现场问一次；
- * 问不到就显示"开发态（未打包）"或"无 git 信息"，不编。来源这一层不占界面，
- * 挂在「提交」「构建日期」两行的悬浮提示上，说明文字与 Python 侧逐字同形。
+ * 问不到就显示"开发态（未打包）"或"无 git 信息"，不编。来源那套说明既不铺在界面
+ * 上、也不挂悬浮提示，只写在《使用说明》里；作者那一格本身是仓库链接，见
+ * {@link InlineLink}。
  */
 public final class AboutDialog extends JDialog {
 
-    /** 「关于」里那一行作者，与 Python 侧 ui_help.AUTHOR 同一份（对撞键 dlg.about.rows 比行名）。 */
+    /** 「关于」里那一行作者，与 Python 侧 ui_help.AUTHOR 同一份（对撞键 dlg.about.rows 比行名）。
+     * 这一格本身就是仓库链接，见 {@link InlineLink}。 */
     public static final String AUTHOR = "刘帆";
 
     /**
-     * 「提交」这一行的来源说明：这一格哪来的、取不到会写什么、自己核该跑哪条命令。
-     * 与 Python 侧 ui_help.COMMIT_TIP 逐字相同；各栈只在末尾接自己那套取用方式
-     * （Qt 鼠标选中、Swing 双击整行），两侧自检都按同样的三个关键词判。
+     * 框里既不铺说明文字，也不挂悬浮提示：提交号与构建日期从哪来、怎么自己核，
+     * 那段话写在《使用说明》里（右上角「?」或 F1）。Python 侧 ui_help 同一口径，
+     * 两侧自检都按"框面上不许出现提示文字"判（见 {@link #faceTips()}）。
      */
-    public static final String COMMIT_TIP =
-            "提交号取自构建戳：交付包里是打包那一刻烧进去的那一份，"
-            + "直接跑源码时现场问 git；问不到写「无 git 信息」，不编一个号出来。"
-            + "要核当前源码版本，在仓库目录里跑 git rev-parse --short HEAD";
-    /** 「构建日期」这一行的来源说明，与 Python 侧 ui_help.BUILT_TIP 逐字相同。 */
-    public static final String BUILT_TIP =
-            "构建日期同样取自构建戳：交付包里写的是打包完成那一刻，"
-            + "直接跑源码时这一格显示「开发态（未打包）」";
     /** 「复制全部」那颗按钮的三种状态，与 Python 侧 ui_help 的同名常量逐字相同（对撞比）。 */
     public static final String COPY_LABEL = "复制全部";
     public static final String COPIED_LABEL = "已复制";
     public static final String CLIP_FAIL_LABEL = "剪贴板打不开";
-    /** 值那一行的取用方式：JTextField 拖选是真能选，双击只负责把整行选上，不吹"即复制"。 */
-    static final String COPY_HINT = "双击整行选中，Ctrl+C 复制";
 
     /**
-     * 「关于」里那一行仓库链接的文案。四档都是两栈各写一份的串，
-     * 由对撞键 dlg.about.repo.* 逐字比；地址本身只有一个来源（core/AppInfo.REPO_URL）。
+     * 作者那一格（仓库链接）的回执文案。四档都是两栈各写一份的串，
+     * 由对撞键 dlg.about.link.* 逐字比；地址本身只有一个来源（core/AppInfo.REPO_URL）。
+     * 第一档就是署名本身，回执两秒后落回它。
      */
-    public static final String REPO_LABEL = "GitHub";
     public static final String REPO_OPENED_LABEL = "已在浏览器打开";
     public static final String REPO_COPIED_LABEL = "打不开浏览器，地址已复制";
     public static final String REPO_FAIL_LABEL = "打不开浏览器，也没能写进剪贴板";
-    public static final String REPO_TIP = "仓库 " + AppInfo.REPO_URL
-            + "：单击用系统默认浏览器打开。"
-            + "本机打不开浏览器时（内网、没装浏览器、被安全软件拦下），地址会写进剪贴板";
     /**
-     * 两张随包小图：GitHub 轮廓与行尾外链箭头。
+     * 署名右侧那枚很小的外链箭头。
      *
-     * <p>文件只有一份，住在仓库 assets/ 下（Python 那条线读同一个文件），pom 把这两张
-     * 抄进 jar 根目录；生成办法见 java/tools/export_repo_icons.py。不靠系统主题图标，
+     * <p>文件只有一份，住在仓库 assets/ 下（Python 那条线读同一个文件），pom 把它抄进
+     * jar 根目录；生成办法见 java/tools/export_repo_icons.py。不靠系统主题图标，
      * 也不拿文字画箭头——那又会回到"这台机器上有没有这个字形"。
      */
-    public static final String REPO_ICON_FILE = "/github_mark.png";
-    public static final String REPO_ARROW_FILE = "/external_link.png";
-    public static final int REPO_ICON_PX = 18;    // 左边那枚：与正文那一档字号差不多高
-    public static final int REPO_ARROW_PX = 15;   // 行尾那枚：略小一档，免得抢正文的字
+    public static final String LINK_ARROW_FILE = "/external_link.png";
+    public static final int LINK_ARROW_PX = 12;   // 比正文小一档：是个记号，不是主角
 
     private final Map<String, HintLabel> rows = new LinkedHashMap<String, HintLabel>();
     private final List<String> captions = new ArrayList<String>();
     private JButton copyButton;
     private JLabel headingLabel;
-    private RepoLinkRow repoRow;
+    private InlineLink authorLink;
 
     public AboutDialog(Frame owner) {
         this(owner, AppInfo.load());
@@ -89,7 +76,7 @@ public final class AboutDialog extends JDialog {
         this(owner, info, new java.util.function.Function<String, Boolean>() {
             @Override
             public Boolean apply(String url) {
-                return RepoLinkRow.openInBrowser(url);
+                return InlineLink.openInBrowser(url);
             }
         });
     }
@@ -121,14 +108,17 @@ public final class AboutDialog extends JDialog {
         addRow(grid, "version", "版本", "v" + info.versionText(), false);
         addRow(grid, "commit", "提交", info.commitDisplay(), false);
         addRow(grid, "built", "构建日期", info.builtAt, false);
-        addRow(grid, "author", "作者", AUTHOR, true);
-        rows.get("commit").setToolTipText(COMMIT_TIP + "；" + COPY_HINT);
-        rows.get("built").setToolTipText(BUILT_TIP);
-
-        // 仓库那一行不在 grid 里：grid 第 0 列是行名，对撞键 dlg.about.rows 按那一列比，
-        // 把它塞进去会让四行变五行，而它本来就不是"一行信息"，是一颗链接
-        repoRow = new RepoLinkRow(AppInfo.REPO_URL, opener);
-        repoRow.setToolTipText(REPO_TIP);
+        // 作者那一格本身就是仓库链接：单独占一行太突兀，而"谁做的"与"在哪座仓库上"
+        // 本来就是同一件事。行名照旧进第 0 列，对撞键 dlg.about.rows 仍数到四行
+        authorLink = new InlineLink(AUTHOR, AppInfo.REPO_URL, opener);
+        addCaption(grid, "作者", rows.size(), true);
+        java.awt.GridBagConstraints ac = new java.awt.GridBagConstraints();
+        ac.gridx = 1;
+        ac.gridy = rows.size();
+        ac.weightx = 1;
+        ac.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        ac.anchor = java.awt.GridBagConstraints.WEST;
+        grid.add(authorLink, ac);
 
         JButton close = new JButton("关闭");
         close.addActionListener(e -> dispose());
@@ -168,12 +158,8 @@ public final class AboutDialog extends JDialog {
         JPanel head = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(6)));
         head.add(title, BorderLayout.NORTH);
         head.add(rule, BorderLayout.SOUTH);
-        JPanel body = new JPanel(new BorderLayout(UiScale.px(6), UiScale.px(6)));
-        body.setOpaque(false);
-        body.add(grid, BorderLayout.NORTH);
-        body.add(repoRow, BorderLayout.CENTER);
         top.add(head, BorderLayout.NORTH);
-        top.add(body, BorderLayout.CENTER);
+        top.add(grid, BorderLayout.CENTER);
         root.add(top, BorderLayout.NORTH);
         root.add(row, BorderLayout.SOUTH);
         setContentPane(root);
@@ -192,8 +178,8 @@ public final class AboutDialog extends JDialog {
             }
         });
         // 尺寸要等组件都摆好再算：pack 之前设尺寸等于跟布局抢活
-        // 262 = 原来那 230 再加一行仓库链接（行高 26 + 行距 6），与 Qt 那一版同数
-        Windows.clientSize(getContentPane(), this, 380, 262);
+        // 仍按客户区给，换字号只会变高不会裁字
+        Windows.clientSize(getContentPane(), this, 380, 230);
     }
 
     /** 自检用：某一行的悬浮提示文字（来源说明挂在提示里，界面不再铺小字）。 */
@@ -216,38 +202,62 @@ public final class AboutDialog extends JDialog {
         return copyButtonText() + "|" + COPIED_LABEL + "|" + CLIP_FAIL_LABEL;
     }
 
-    /** 自检与对撞用：仓库那一行此刻的字、点出去那串地址、四档回执。 */
-    public String repoText() {
-        return repoRow == null ? "" : repoRow.rowText();
+    /** 自检与对撞用：作者那一格此刻的字、点出去那串地址、四档回执。 */
+    public String linkText() {
+        return authorLink == null ? "" : authorLink.cellText();
     }
 
-    public String repoUrl() {
-        return repoRow == null ? "" : repoRow.rowUrl();
+    public String linkUrl() {
+        return authorLink == null ? "" : authorLink.linkUrl();
     }
 
-    public String repoStates() {
-        return REPO_LABEL + "|" + REPO_OPENED_LABEL + "|" + REPO_COPIED_LABEL
+    public String linkStates() {
+        return AUTHOR + "|" + REPO_OPENED_LABEL + "|" + REPO_COPIED_LABEL
                 + "|" + REPO_FAIL_LABEL;
     }
 
-    /** 自检用：两张随包小图有没有真读进来（缺图不算失败，但要能被发现）。 */
-    public String repoIconsMissing() {
-        return repoRow == null ? "no-row" : repoRow.iconsMissing();
+    /** 自检用：那枚小箭头有没有真读进来（缺图不算失败，但要能被发现）。 */
+    public String linkArrowMissing() {
+        return authorLink == null ? "no-cell" : authorLink.arrowMissing();
     }
 
-    /** 自检用：这一行是不是真能点。 */
-    public boolean repoClickable() {
-        return repoRow != null && repoRow.clickable();
+    /** 自检用：这一格是不是真能点。 */
+    public boolean linkClickable() {
+        return authorLink != null && authorLink.clickable();
     }
 
-    /** 自检用：把这一行按指定 opener 走一遍，返回它给出的状态字。 */
-    public String repoActivate() {
-        return repoRow == null ? "" : repoRow.activate();
+    /** 自检用：把这一格按指定 opener 走一遍，返回它给出的状态字。 */
+    public String linkActivate() {
+        return authorLink == null ? "" : authorLink.activate();
     }
 
-    /** 自检用：那一行的悬浮提示（完整地址就在这一串里）。 */
-    public String repoTip() {
-        return repoRow == null ? "" : repoRow.getToolTipText();
+    /**
+     * 自检与对撞用：框面上挂着的悬浮提示拼在一起，这一格设计成空串。
+     *
+     * <p>来源说明原先就挂在这几格的提示里，现在那段话只写在《使用说明》——框里再冒出
+     * 提示文字就是退回老样子，与"正面不许铺说明"那条判据配成一对。两颗按钮的提示不算
+     * （那是操作说明，不是来源介绍），所以只扫标签与文本框这两族，JButton 顶掉 JLabel
+     * 的继承关系要绕开。
+     */
+    public String faceTips() {
+        StringBuilder sb = new StringBuilder();
+        collectTips(getContentPane(), sb);
+        return sb.toString();
+    }
+
+    private static void collectTips(java.awt.Container c, StringBuilder sb) {
+        for (java.awt.Component k : c.getComponents()) {
+            boolean texty = (k instanceof JLabel && !(k instanceof javax.swing.AbstractButton))
+                    || k instanceof javax.swing.text.JTextComponent;
+            String tip = k instanceof javax.swing.JComponent
+                    ? ((javax.swing.JComponent) k).getToolTipText() : null;
+            if (texty && tip != null && !tip.trim().isEmpty()) {
+                sb.append(sb.length() == 0 ? "" : "|").append(tip.trim());
+            }
+            if (k instanceof java.awt.Container) {
+                collectTips((java.awt.Container) k, sb);
+            }
+        }
     }
 
     /**
@@ -255,7 +265,7 @@ public final class AboutDialog extends JDialog {
      *
      * <p>正面那一格仍是短号（一行放得下、也够人眼看），贴出去的要能一路粘进 git 里查，
      * 所以这里给 40 位；老产物没烧全号时退回短号，不写一个空值出去。
-     * 仓库那一行界面上只写「GitHub」，完整地址在这一份里给全，抄出去就能直接贴。
+     * 作者那一格只显示署名，完整仓库地址在这一份里给全，抄出去就能直接贴。
      */
     public String copyText() {
         return copyText(AppInfo.load());
@@ -273,17 +283,29 @@ public final class AboutDialog extends JDialog {
         return sb.toString();
     }
 
-    private void addRow(JPanel grid, String key, String label, String value, boolean last) {
-        int row = rows.size();
+    /** 行名那一格：灰字，并且登记进 captions——对撞键 dlg.about.rows 比的就是这一列。 */
+    private void addCaption(JPanel grid, String label, int row, boolean last) {
         JLabel head = new JLabel(label);
         head.setForeground(new Color(0x66, 0x66, 0x66));
         captions.add(label);
+        java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+        c.gridx = 0;
+        c.gridy = row;
+        c.anchor = java.awt.GridBagConstraints.WEST;
+        c.insets = new java.awt.Insets(0, 0,
+                last ? 0 : UiScale.px(7), UiScale.px(14));
+        grid.add(head, c);
+    }
+
+    private void addRow(JPanel grid, String key, String label, String value, boolean last) {
+        int row = rows.size();
+        addCaption(grid, label, row, last);
         // 值用 HintLabel（不可编辑的 JTextField）：拖选、高亮、Ctrl+C 都是现成的。
-        // 双击不吹"即复制"——那要自己编一套；这里让双击把整行选上，剩下的一步照旧走 Ctrl+C
+        // 双击不吹"即复制"——那要自己编一套；这里让双击把整行选上，剩下的一步照旧走 Ctrl+C。
+        // 这一族不挂悬浮提示：来源与取用方式写在《使用说明》里，框面只给结果
         HintLabel body = new HintLabel();
         body.setText(value);
         body.setFont(body.getFont().deriveFont(Font.PLAIN));
-        body.setToolTipText(COPY_HINT);
         body.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
@@ -293,13 +315,8 @@ public final class AboutDialog extends JDialog {
             }
         });
         java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
-        c.gridx = 0;
-        c.gridy = row;
-        c.anchor = java.awt.GridBagConstraints.WEST;
-        c.insets = new java.awt.Insets(0, 0,
-                last ? 0 : UiScale.px(7), UiScale.px(14));
-        grid.add(head, c);
         c.gridx = 1;
+        c.gridy = row;
         c.weightx = 1;
         c.fill = java.awt.GridBagConstraints.HORIZONTAL;
         grid.add(body, c);

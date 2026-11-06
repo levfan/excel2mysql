@@ -2,8 +2,6 @@
 
 单独成模块是因为主窗口已经够挤，而这些对话框只服务于"看"，不参与任何导入逻辑。
 """
-import os
-
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QFont, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
@@ -19,32 +17,22 @@ from help_doc import SECTIONS
 # 两条线的关于框由对撞键 dlg.about.rows 逐行比，改一处不改另一处就会红
 AUTHOR = "刘帆"
 
-# 「关于」底下不铺说明文字：提交号与构建日期的来源改挂在「提交」「构建日期」
-# 两行的悬浮提示上，界面只留四行结果。Java 侧镜像在 AboutDialog.java 的同名常量
-COMMIT_TIP = ("提交号取自构建戳：交付包里是打包那一刻烧进去的那一份，"
-              "直接跑源码时现场问 git；问不到写「无 git 信息」，不编一个号出来。"
-              "要核当前源码版本，在仓库目录里跑 git rev-parse --short HEAD")
-BUILT_TIP = ("构建日期同样取自构建戳：交付包里写的是打包完成那一刻，"
-             "直接跑源码时这一格显示「开发态（未打包）」")
+# 「关于」里既不铺说明文字，也不挂悬浮提示：提交号与构建日期的从哪来、怎么取走，
+# 全部归《使用说明》（右上角「?」或 F1），界面只留四行结果。
 # 「复制全部」那颗按钮的三种状态：两栈各写一份就会漂移，由对撞键逐字比
 COPY_LABEL = "复制全部"
 COPIED_LABEL = "已复制"
 CLIP_FAIL_LABEL = "剪贴板打不开"
 
-# 「关于」里那一行仓库链接。文案与状态字都是两栈各写一份的串，
-# 由对撞键 dlg.about.repo.* 逐字比；地址本身只有一个来源（appinfo.REPO_URL）
-REPO_LABEL = "GitHub"
+# 作者那一格本身就是仓库链接。回执那三档字两栈各写一份，由对撞键 dlg.about.link.*
+# 逐字比；地址只有一个来源（appinfo.REPO_URL）
 REPO_OPENED_LABEL = "已在浏览器打开"
 REPO_COPIED_LABEL = "打不开浏览器，地址已复制"
 REPO_FAIL_LABEL = "打不开浏览器，也没能写进剪贴板"
-REPO_TIP = ("仓库 " + REPO_URL + "：单击用系统默认浏览器打开。"
-             "本机打不开浏览器时（内网、没装浏览器、被安全软件拦下），"
-             "地址会写进剪贴板")
-# 随包的两张小图：GitHub 轮廓与行尾的外链箭头。画不出汉字那类教训同样适用于图形——
-# 所以图不靠系统主题，文件跟着包走（生成办法见 java/tools/export_repo_icons.py）
-REPO_ICON_FILES = ("assets/github_mark.png", "assets/external_link.png")
-REPO_ICON_PX = 18     # 左边那枚：与正文那一档字号差不多高
-REPO_ARROW_PX = 15    # 行尾那枚：略小一档，免得抢正文的字
+# 名字右侧那枚很小的外链箭头：图不靠系统主题，文件跟着包走，
+# 生成办法见 java/tools/export_repo_icons.py（画不出汉字那类教训同样适用于图形）
+LINK_ARROW_FILE = "assets/external_link.png"
+LINK_ARROW_PX = 12
 
 # Qt 的 Rich Text 只支持 CSS 的一个子集，这里只写 QTextBrowser 认得的属性
 # （写多了不报错，但静默不生效，所以行高用段落间距撑，不用 line-height）
@@ -176,57 +164,57 @@ def _bundled_pixmap(rel: str, px: int):
     return pm.scaled(px, px, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
-class RepoLinkRow(QFrame):
-    """「关于」里那一行仓库链接：左边 GitHub 轮廓、中间「GitHub」、行尾外链箭头，整行可点。
+class LinkCell(QFrame):
+    """「关于」里作者那一格：名字 + 一枚很小的外链箭头，整格可点开仓库。
 
-    地址不铺在正文那一格（框窄，长地址会被挤到看不全），所以取走它的路径给三条：
-    悬浮提示写完整地址、「复制全部」多带一行、本机打不开浏览器时直接进剪贴板。
-    点了必须有可见回执——静默不响应等于没这一行。
+    单独占一行太突兀，而这一格本来就是"这份东西是谁做的"——名字挂在哪个仓库上，
+    点名字就过去了。地址取走的路径两条：「复制全部」多带一行、本机打不开浏览器时
+    直接进剪贴板；不挂悬浮提示，那套说明归《使用说明》。
+    点了必须有可见回执（名字那一格临时换成回执那一句，两秒后复原）——静默不响应等于没这个链接。
     """
 
-    def __init__(self, url=REPO_URL, opener=None, parent=None):
+    def __init__(self, text, url, opener=None, parent=None):
         super().__init__(parent)
+        self.base_text = text
         self.url = url
         self.opener = opener or open_in_browser
         self.last_status = ""
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(6, 3, 6, 3)
-        lay.setSpacing(7)
-        self.icon = QLabel()
-        pm = _bundled_pixmap(REPO_ICON_FILES[0], REPO_ICON_PX)
-        if pm is not None:
-            self.icon.setPixmap(pm)
-        self.text = QLabel(REPO_LABEL)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.text = QLabel(text)
         self.arrow = QLabel()
-        pm = _bundled_pixmap(REPO_ICON_FILES[1], REPO_ARROW_PX)
-        if pm is not None:
+        pm = _bundled_pixmap(LINK_ARROW_FILE, LINK_ARROW_PX)
+        if pm is None:
+            self.arrow_missing = True
+        else:
             self.arrow.setPixmap(pm)
-        lay.addWidget(self.icon)
+            self.arrow_missing = False
         lay.addWidget(self.text)
-        lay.addStretch(1)
         lay.addWidget(self.arrow)
+        lay.addStretch(1)      # 箭头紧跟名字，不顶到格子最右边
         self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.TabFocus)   # Tab 走到这一行，回车与空格等价于单击
+        self.setFocusPolicy(Qt.TabFocus)   # Tab 走到这一格，回车与空格等价于单击
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            self.activate_link()
+            self.activate()
         super().mousePressEvent(e)
 
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
-            self.activate_link()
+            self.activate()
             return
         super().keyPressEvent(e)
 
     def enterEvent(self, e):
-        # 悬停给一档浅底：整行都是热区，不给个底色没人知道能点
-        self.setStyleSheet("background-color: #eef2f6; border-radius: 4px;")
+        # 悬停只把名字换成链接蓝：整格铺底色在这一档字号下会把两个字糊成一团
+        self.text.setStyleSheet("color: #0b5cad;")
 
     def leaveEvent(self, e):
-        self.setStyleSheet("")
+        self.text.setStyleSheet("")
 
-    def activate_link(self):
+    def activate(self):
         """单击那一下：先交给浏览器，交不出去就把地址放进剪贴板，回执只说实话。"""
         if self.opener(self.url):
             self.last_status = "opened"
@@ -248,26 +236,27 @@ class RepoLinkRow(QFrame):
 
     def _flash(self, label):
         self.text.setText(label)
-        QTimer.singleShot(2000, lambda: self.text.setText(REPO_LABEL))
+        QTimer.singleShot(2000, lambda: self.text.setText(self.base_text))
 
-    def row_text(self):
-        """自检与对撞用：这一行此刻显示的字。"""
+    def cell_text(self):
+        """自检与对撞用：这一格此刻显示的字。"""
         return self.text.text()
 
 
 class AboutDialog(QDialog):
-    """「关于」小框：版本 / 提交 / 构建日期 / 作者四行加一行仓库链接，值全部来自 appinfo。
+    """「关于」小框：版本 / 提交 / 构建日期 / 作者四行，值全部来自 appinfo。
 
     提交号与构建日期是打包时烧进产物的（exe 所在机器没有 .git），
     开发态则现场问 git；取不到就显示"开发态（未打包）"，不会编造。
+    这四行都不挂悬浮提示：来源与取用方式写在《使用说明》里，框里只给结果。
+    作者那一格是仓库链接，点名字开仓库。
     """
 
     def __init__(self, parent=None, repo_opener=None):
         super().__init__(parent)
         self.setWindowTitle("关于")
         self.setModal(True)
-        # 262 = 原来那 230 再加一行仓库链接（行高 26 + 行距 6）
-        fit_client(self, 380, 262)
+        fit_client(self, 380, 230)
         info = build_info()
 
         self.head_label = QLabel(APP_NAME)
@@ -287,27 +276,25 @@ class AboutDialog(QDialog):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(7)
         self.rows = {}
-        tips = {"commit": COMMIT_TIP + "；选中后可直接贴给别人",
-                "built": BUILT_TIP}
         for i, (key, label, value) in enumerate((
                 ("version", "版本", f"v{info['version']}"),
                 ("commit", "提交", commit_display(info)),
-                ("built", "构建日期", info["built_at"]),
-                ("author", "作者", AUTHOR))):
+                ("built", "构建日期", info["built_at"]))):
             head = QLabel(label)
             head.setStyleSheet("color: #666;")
             body = QLabel(value)
             body.setTextInteractionFlags(Qt.TextSelectableByMouse)   # 提交号要能选中复制
-            body.setToolTip(tips.get(key, ""))
             grid.addWidget(head, i, 0)
             grid.addWidget(body, i, 1)
             self.rows[key] = body
+        # 作者那一格本身就是仓库链接：单独占一行太突兀，而"谁做的"与"在哪座仓库上"
+        # 本来就是同一件事。行名照旧进 grid 第 0 列，对撞键 dlg.about.rows 仍数到四行
+        author_head = QLabel("作者")
+        author_head.setStyleSheet("color: #666;")
+        self.author_link = LinkCell(AUTHOR, REPO_URL, repo_opener, self)
+        grid.addWidget(author_head, 3, 0)
+        grid.addWidget(self.author_link, 3, 1)
         grid.setColumnStretch(1, 1)
-
-        # 仓库那一行不在 grid 里：grid 的第 0 列是行名，对撞键 dlg.about.rows 按那一列比，
-        # 把这行塞进去会让四行变成五行，而它本来就不是"一行信息"，是一颗链接
-        self.repo_row = RepoLinkRow(REPO_URL, repo_opener, self)
-        self.repo_row.setToolTip(REPO_TIP)
 
         self.btn_copy = QPushButton(COPY_LABEL)
         self.btn_copy.setToolTip("把上面五行一次放进剪贴板（提交号给 40 位完整值、仓库给完整地址）")
@@ -323,7 +310,6 @@ class AboutDialog(QDialog):
         lay.addWidget(title)
         lay.addWidget(rule)
         lay.addLayout(grid)
-        lay.addWidget(self.repo_row)
         lay.addStretch(1)
         lay.addLayout(row)
 
@@ -332,7 +318,7 @@ class AboutDialog(QDialog):
 
         正面那一格仍是短号（一行放得下、也够人眼看），贴出去的要能一路粘进 git 里查，
         所以这一份给 40 位；老产物没烧全号时退回短号，不写一个空值出去。
-        仓库那一行界面上只写「GitHub」，完整地址在这一份里给全，抄出去就能直接贴。
+        作者那一格只显示署名，完整仓库地址在这一份里给全，抄出去就能直接贴。
         """
         info = build_info()
         return "\n".join((
@@ -366,32 +352,35 @@ class AboutDialog(QDialog):
         """自检与对撞用：「复制全部」这颗按钮的两种文字（点了要变、两秒后复原）。"""
         return self.btn_copy.text() + "|" + COPIED_LABEL + "|" + CLIP_FAIL_LABEL
 
-    def repo_text(self):
-        """自检与对撞用：仓库那一行此刻的字。"""
-        return self.repo_row.row_text()
+    def link_text(self):
+        """自检与对撞用：作者那一格此刻显示的字（平时是署名，点完那两秒是回执）。"""
+        return self.author_link.cell_text()
 
-    def repo_url(self):
-        """自检与对撞用：那一行点出去、也抄出去的那串地址。"""
-        return self.repo_row.url
+    def link_url(self):
+        """自检与对撞用：那一格点出去、也抄出去的那串地址。"""
+        return self.author_link.url
 
-    def repo_states(self):
-        """自检与对撞用：那一行的三种回执，逐字比，两栈不许各写一份。"""
-        return "|".join((REPO_LABEL, REPO_OPENED_LABEL, REPO_COPIED_LABEL, REPO_FAIL_LABEL))
+    def link_states(self):
+        """自检与对撞用：那一格开场那一句加三种回执，逐字比，两栈不许各写一份。"""
+        return "|".join((AUTHOR, REPO_OPENED_LABEL, REPO_COPIED_LABEL, REPO_FAIL_LABEL))
 
-    def repo_tip(self):
-        """自检与对撞用：那一行的悬浮提示（完整地址就在这一串里）。"""
-        return self.repo_row.toolTip()
+    def link_arrow_missing(self):
+        """自检用：那枚小箭头有没有真读进来（缺图不算失败，但要能被发现）。"""
+        return LINK_ARROW_FILE if self.author_link.arrow_missing else ""
 
-    def repo_icons_missing(self):
-        """自检用：两张随包小图有没有真读进来（缺图不算失败，但要能被发现）。
+    def face_tips(self):
+        """自检与对撞用：框面上挂着的悬浮提示拼在一起，这一格设计成空串。
 
-        只报文件名：两栈一个按 assets/ 相对路径、一个按 classpath 路径，
-        带上前缀对撞永远红，缺不缺图这件事本身才是判据。
+        提交号与构建日期的来源说明原先就挂在这几格的提示里，现在那段话只写在
+        《使用说明》——框里再冒出提示文字就是退回老样子，由这条与「正面不许铺说明」
+        那条配成一对。两颗按钮的提示不算在内（那是操作说明，不是来源介绍）。
         """
-        return ",".join(os.path.basename(rel) for rel, label in
-                        ((REPO_ICON_FILES[0], self.repo_row.icon),
-                         (REPO_ICON_FILES[1], self.repo_row.arrow))
-                        if label.pixmap().isNull())
+        found = []
+        for w in self.findChildren(QLabel) + self.findChildren(QFrame):
+            tip = str(w.toolTip() or "").strip()
+            if tip:
+                found.append(tip)
+        return "|".join(found)
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:

@@ -1093,26 +1093,26 @@ public final class GuiMain {
     }
 
     /**
-     * 「关于」里那一行仓库链接：先核框面上那一行本身，再真走一遍单击，两种结局都要说实话。
+     * 「关于」里作者那一格（仓库链接）：先核这一格本身，再真走一遍单击，两种结局都要说实话。
      *
      * <p>浏览器那一步交给注入进来的假 opener——自检真开浏览器会把桌上的窗口搞乱，
      * 而这一判要的是"点了有没有可见回执"，不是"浏览器起没起"；真那条路另有出包冒烟。
      * 剪贴板是桌上借来的东西：先捕获原值，判完原样归还。
      */
-    private static void checkRepoLink(com.excel2mysql.gui.AboutDialog ad,
-                                      List<String> problems) {
-        String miss = ad.repoIconsMissing();
+    private static void checkAuthorLink(com.excel2mysql.gui.AboutDialog ad,
+                                        List<String> problems) {
+        String miss = ad.linkArrowMissing();
         if (!miss.isEmpty()) {
-            problems.add("关于框那行仓库链接的随包图没读进来：" + miss
-                    + "（出包时 assets 里那两张要连着走）");
+            problems.add("作者那一格的外链箭头没读进来：" + miss
+                    + "（出包时 assets 里那张要连着走）");
         }
-        if (!com.excel2mysql.core.AppInfo.REPO_URL.equals(ad.repoUrl())
-                || !ad.repoUrl().startsWith("https://")) {
-            problems.add("关于框那一行的地址不是单源那串 https：" + ad.repoUrl());
+        if (!com.excel2mysql.core.AppInfo.REPO_URL.equals(ad.linkUrl())
+                || !ad.linkUrl().startsWith("https://")) {
+            problems.add("作者那一格的地址不是单源那串 https：" + ad.linkUrl());
         }
-        if (!com.excel2mysql.gui.AboutDialog.REPO_LABEL.equals(ad.repoText())
-                || !ad.repoClickable()) {
-            problems.add("关于框那一行开场不是「GitHub」或不是真能点：" + ad.repoText());
+        if (!com.excel2mysql.gui.AboutDialog.AUTHOR.equals(ad.linkText())
+                || !ad.linkClickable()) {
+            problems.add("作者那一格开场不是署名或不是真能点：" + ad.linkText());
         }
         final List<String> seen = new ArrayList<String>();
         com.excel2mysql.gui.AboutDialog opened = new com.excel2mysql.gui.AboutDialog(
@@ -1125,17 +1125,13 @@ public final class GuiMain {
                     }
                 });
         try {
-            String st = opened.repoActivate();
+            String st = opened.linkActivate();
             if (!"opened".equals(st) || seen.size() != 1
                     || !com.excel2mysql.core.AppInfo.REPO_URL.equals(seen.get(0))) {
-                problems.add("点仓库那一行没把完整地址交给浏览器：" + st + " / " + seen);
+                problems.add("点作者那一格没把完整地址交给浏览器：" + st + " / " + seen);
             }
-            if (!com.excel2mysql.gui.AboutDialog.REPO_OPENED_LABEL.equals(opened.repoText())) {
-                problems.add("仓库那一行点开成功后没有可见回执：" + opened.repoText());
-            }
-            if (!com.excel2mysql.gui.AboutDialog.REPO_TIP.equals(opened.repoTip())) {
-                problems.add("仓库那一行的悬浮提示与单源文案不一致："
-                        + brief(opened.repoTip()));
+            if (!com.excel2mysql.gui.AboutDialog.REPO_OPENED_LABEL.equals(opened.linkText())) {
+                problems.add("作者那一格点开成功后没有可见回执：" + opened.linkText());
             }
         } finally {
             opened.dispose();
@@ -1150,22 +1146,22 @@ public final class GuiMain {
                     }
                 });
         try {
-            String st = failed.repoActivate();
+            String st = failed.linkActivate();
             boolean copied = "copied".equals(st);
             if (!(copied || "failed".equals(st))) {
-                problems.add("打不开浏览器时那一行既没复制也没如实报：" + st);
+                problems.add("打不开浏览器时那一格既没复制也没如实报：" + st);
             } else if (!copied) {
                 System.out.println("! [WARN] GUI-SELFTEST | 剪贴板开不了，"
                         + "「打不开浏览器就把地址复制进剪贴板」这一判本轮未覆盖"
-                        + "（那一行已如实报「" + failed.repoText() + "」）");
+                        + "（那一格已如实报「" + failed.linkText() + "」）");
             } else if (!com.excel2mysql.core.AppInfo.REPO_URL.equals(clipboardText())) {
-                problems.add("那一行说地址已复制，剪贴板里却不是那串地址："
+                problems.add("那一格说地址已复制，剪贴板里却不是那串地址："
                         + brief(clipboardText()));
             }
             String want = copied ? com.excel2mysql.gui.AboutDialog.REPO_COPIED_LABEL
                     : com.excel2mysql.gui.AboutDialog.REPO_FAIL_LABEL;
-            if (!want.equals(failed.repoText())) {
-                problems.add("仓库那一行的回执文字与状态不符：" + failed.repoText());
+            if (!want.equals(failed.linkText())) {
+                problems.add("作者那一格的回执文字与状态不符：" + failed.linkText());
             }
         } finally {
             failed.dispose();
@@ -5735,31 +5731,26 @@ public final class GuiMain {
                     com.excel2mysql.core.AppInfo.load().source)) {
                 problems.add("关于框既没有构建日期也没有声明来源，用户无从判断可信度");
             }
-            // 提交号与构建日期的来源写在各自那一行的悬浮提示里：正面只留四行结果加一行链接
-            // （两栈同一段话各写一份，这里判内容在不在；界面铺没铺字另有下面那条判据）
-            String tip = ad.tipOf("commit");
-            if (tip == null || !tip.contains("构建戳") || !tip.contains("无 git 信息")
-                    || !tip.contains("git rev-parse --short HEAD")) {
-                problems.add("关于框的提交行没把来源说清：" + tip);
-            }
-            String builtTip = ad.tipOf("built");
-            if (builtTip == null || !builtTip.contains("构建戳")
-                    || !builtTip.contains("开发态（未打包）")) {
-                problems.add("关于框的构建日期行没把来源说清：" + builtTip);
+            // 关于框里既不铺来源说明，也不挂悬浮提示：那段话（构建戳从哪来、自己核该跑
+            // 哪条命令）归《使用说明》，框面只留四行结果。两条判据配成一对，少一条就漏
+            String tips = ad.faceTips();
+            if (!tips.isEmpty()) {
+                problems.add("关于框又挂上悬浮提示了（来源说明归《使用说明》）："
+                        + brief(tips));
             }
             if (!hasRule(ad.getContentPane())) {
                 problems.add("关于框标题与四行之间少了那条分隔线（信息层次那一档）");
             }
-            // 正面不许再铺那段说明：说明只在提示里，界面上数到"构建戳"这三个字就是退回老样子
+            // 正面不许再铺那段说明：界面上数到"构建戳"这三个字就是退回老样子
             if (faceText(ad.getContentPane()).contains("构建戳")) {
-                problems.add("关于框正面铺了来源说明（该只在悬浮提示里）");
+                problems.add("关于框正面铺了来源说明（该只写在《使用说明》里）");
             }
             // 整框必须真画得出来：画不出来的组件（折行文本抽掉光标那类）只有画一次才暴露
             if (inkOf(ad.getContentPane(), new java.awt.Color(0x66, 0x66, 0x66)) <= 0) {
                 problems.add("关于框没画出灰色那一档文字（灰字像素为 0）");
             }
             checkAboutCopy(ad, problems);
-            checkRepoLink(ad, problems);
+            checkAuthorLink(ad, problems);
             // 构建时间戳：Maven 打的是 UTC，Python 打的是本机时间，显示前必须换成时区
             String shifted = com.excel2mysql.core.AppInfo.toLocal("2026-10-13 02:22:08");
             java.util.Calendar utc = java.util.Calendar.getInstance(

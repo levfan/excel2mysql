@@ -1,7 +1,9 @@
 package com.excel2mysql.gui;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Cursor;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.datatransfer.DataFlavor;
@@ -11,60 +13,54 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.net.URI;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.Function;
 
-import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 
 /**
- * 「关于」里那一行仓库链接：左边 GitHub 轮廓、中间「GitHub」、行尾外链箭头，整行都是热区。
- * 对应 ui_help.py 的 RepoLinkRow。
+ * 「关于」里作者那一格：署名 + 一枚很小的外链箭头，整格可点开仓库。
+ * 对应 ui_help.py 的 LinkCell。
  *
- * <p>地址不铺在正文那一格（框窄，长地址会被挤到看不全），所以取走它的路径给三条：
- * 悬浮提示写完整地址、「复制全部」多带一行、本机打不开浏览器时直接进剪贴板。
- * 点了必须有可见回执——静默不响应等于没这一行。
+ * <p>单独占一行太突兀，而"谁做的"与"在哪座仓库上"本来就是同一件事。地址取走的路径两条：
+ * 「复制全部」多带一行、本机打不开浏览器时直接进剪贴板；不挂悬浮提示，那套说明归《使用说明》。
+ * 点了必须有可见回执（署名那一格临时换成回执那一句，两秒后复原）——静默不响应等于没这个链接。
  *
  * <p>浏览器那一步交给注入进来的 opener：自检与离屏渲染不许真开浏览器，
  * 生产入口不传就用 {@link #openInBrowser}（那条路真的走系统外壳）。
  */
-public final class RepoLinkRow extends JPanel {
+public final class InlineLink extends JPanel {
 
-    private static final java.awt.Color HOVER = new java.awt.Color(0xee, 0xf2, 0xf6);
+    private static final Color LINK_COLOR = new Color(0x0b, 0x5c, 0xad);
 
-    private final JLabel iconLabel = new JLabel();
-    private final JLabel textLabel = new JLabel(AboutDialog.REPO_LABEL);
+    private final JLabel textLabel;
     private final JLabel arrowLabel = new JLabel();
     private final String url;
     private final Function<String, Boolean> opener;
-    private final List<String> missing = new ArrayList<String>();
 
-    private javax.swing.Timer restore;
+    private boolean arrowMissing;
     private String lastStatus = "";
+    private javax.swing.Timer restore;
 
-    public RepoLinkRow(String url, Function<String, Boolean> opener) {
+    public InlineLink(String text, String url, Function<String, Boolean> opener) {
         super(new BorderLayout(0, 0));
         this.url = url;
         this.opener = opener;
         setOpaque(false);
         setFocusable(true);
         setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        setBorder(BorderFactory.createEmptyBorder(
-                UiScale.px(3), UiScale.px(6), UiScale.px(3), UiScale.px(6)));
 
-        putIcon(iconLabel, AboutDialog.REPO_ICON_FILE, AboutDialog.REPO_ICON_PX);
-        putIcon(arrowLabel, AboutDialog.REPO_ARROW_FILE, AboutDialog.REPO_ARROW_PX);
+        textLabel = new JLabel(text);
         textLabel.setFont(textLabel.getFont().deriveFont(Font.PLAIN));
+        putArrow();
 
-        JPanel left = new JPanel(new BorderLayout(UiScale.px(7), 0));
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(4), 0));
         left.setOpaque(false);
-        left.add(iconLabel, BorderLayout.WEST);
-        left.add(textLabel, BorderLayout.CENTER);
+        left.add(textLabel);
+        left.add(arrowLabel);
+        // 箭头紧跟名字：顶到格子最右边就又变成"一整行链接"那种观感了
         add(left, BorderLayout.WEST);
-        add(arrowLabel, BorderLayout.EAST);
 
         addMouseListener(new MouseAdapter() {
             @Override
@@ -76,17 +72,16 @@ public final class RepoLinkRow extends JPanel {
 
             @Override
             public void mouseEntered(MouseEvent e) {
-                setOpaque(true);
-                setBackground(HOVER);
+                // 悬停只把名字换成链接蓝：整格铺底色在这一档字号下会把两个字糊成一团
+                textLabel.setForeground(LINK_COLOR);
             }
 
             @Override
             public void mouseExited(MouseEvent e) {
-                setOpaque(false);
-                setBackground(null);
+                textLabel.setForeground(null);
             }
         });
-        // Tab 走到这一行，回车与空格等价于单击：只有鼠标的链接在键盘上是摸不到的
+        // Tab 走到这一格，回车与空格等价于单击：只有鼠标的链接在键盘上是摸不到的
         addKeyListener(new java.awt.event.KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
@@ -97,23 +92,24 @@ public final class RepoLinkRow extends JPanel {
         });
     }
 
-    /** 读随包的小图；文件没进包时那一格留空并记一笔，缺图要能被自检发现而不是画个叉。 */
-    private void putIcon(JLabel label, String resource, int px) {
-        URL u = RepoLinkRow.class.getResource(resource);
+    /** 读随包的那枚小箭头；文件没进包时那一格留空并记一笔，缺图要能被自检发现。 */
+    private void putArrow() {
+        URL u = InlineLink.class.getResource(AboutDialog.LINK_ARROW_FILE);
         if (u == null) {
-            missing.add(resource);
+            arrowMissing = true;
             return;
         }
         try {
             java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(u);
             if (img == null) {
-                missing.add(resource);
+                arrowMissing = true;
                 return;
             }
-            label.setIcon(new ImageIcon(img.getScaledInstance(
-                    UiScale.px(px), UiScale.px(px), java.awt.Image.SCALE_SMOOTH)));
+            int px = UiScale.px(AboutDialog.LINK_ARROW_PX);
+            arrowLabel.setIcon(new ImageIcon(img.getScaledInstance(px, px,
+                    java.awt.Image.SCALE_SMOOTH)));
         } catch (Exception e) {
-            missing.add(resource);
+            arrowMissing = true;
         }
     }
 
@@ -154,10 +150,14 @@ public final class RepoLinkRow extends JPanel {
         if (restore != null && restore.isRunning()) {
             restore.stop();
         }
-        restore = new javax.swing.Timer(2000, e ->
-                textLabel.setText(AboutDialog.REPO_LABEL));
+        restore = new javax.swing.Timer(2000, e -> textLabel.setText(textBase()));
         restore.setRepeats(false);
         restore.start();
+    }
+
+    /** 回执复原要落回署名，不是落回某个写死的词：这一格的正文本来就是传进来的。 */
+    private String textBase() {
+        return AboutDialog.AUTHOR;
     }
 
     /**
@@ -183,12 +183,12 @@ public final class RepoLinkRow extends JPanel {
         }
     }
 
-    /** 自检与对撞用：这一行此刻显示的字。 */
-    public String rowText() {
+    /** 自检与对撞用：这一格此刻显示的字。 */
+    public String cellText() {
         return textLabel.getText();
     }
 
-    public String rowUrl() {
+    public String linkUrl() {
         return url;
     }
 
@@ -196,22 +196,12 @@ public final class RepoLinkRow extends JPanel {
         return lastStatus;
     }
 
-    /**
-     * 自检用：没读进来的随包图，空串表示两张都在。
-     *
-     * <p>只报文件名：Python 那边是 assets/ 相对路径，这里带的是 classpath 前缀，
-     * 比全路径对撞永远红，缺不缺图才是判据。
-     */
-    public String iconsMissing() {
-        StringBuilder sb = new StringBuilder();
-        for (String m : missing) {
-            sb.append(sb.length() == 0 ? "" : ",")
-                    .append(m.substring(m.lastIndexOf('/') + 1));
-        }
-        return sb.toString();
+    /** 自检用：那枚小箭头没读进来时报资源路径，读到了报空串。 */
+    public String arrowMissing() {
+        return arrowMissing ? AboutDialog.LINK_ARROW_FILE : "";
     }
 
-    /** 自检用：这一行是不是真能点——手型光标、能 Tab 到、已经摆出高度。 */
+    /** 自检用：这一格是不是真能点——手型光标、能 Tab 到、已经摆出高度。 */
     public boolean clickable() {
         return getCursor().getType() == Cursor.HAND_CURSOR && isFocusable()
                 && getHeight() > 0;

@@ -5041,9 +5041,8 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtCore import QEvent
 from help_doc import SECTIONS as HELP_SECTIONS
 from ui_help import (HelpDialog, AboutDialog, build_html, AUTHOR,
-                     COMMIT_TIP, BUILT_TIP, REPO_LABEL, REPO_OPENED_LABEL,
-                     REPO_COPIED_LABEL, REPO_FAIL_LABEL, REPO_TIP,
-                     REPO_ICON_FILES, open_in_browser)
+                     REPO_OPENED_LABEL, REPO_COPIED_LABEL, REPO_FAIL_LABEL,
+                     LINK_ARROW_FILE, open_in_browser)
 from appinfo import REPO_URL
 
 import re as _re
@@ -8096,19 +8095,22 @@ check("T7 三行的值来自 appinfo，不是写死的字符串",
       and ad.rows["commit"].text() == _ai.commit_display(_i)
       and ad.rows["built"].text() == _i["built_at"],
       {k: v.text() for k, v in ad.rows.items()})
-check("T7b 作者这一行有署名，取的是 ui_help.AUTHOR（Java 侧同一常量，对撞比行名）",
-      ad.rows["author"].text() == AUTHOR and bool(AUTHOR.strip()),
-      (ad.rows["author"].text(), AUTHOR))
+check("T7b 作者那一格开场就是署名，取的是 ui_help.AUTHOR（Java 侧同一常量，对撞比行名）",
+      ad.link_text() == AUTHOR and bool(AUTHOR.strip()),
+      (ad.link_text(), AUTHOR))
 check("T8 提交号可鼠标选中复制（要贴给别人时不用手抄）",
       bool(ad.rows["commit"].textInteractionFlags()))
-check("T8c 提交号与构建日期的来源写在各自那一行的悬浮提示里（含自己核该跑哪条命令）",
-      ad.rows["commit"].toolTip() == COMMIT_TIP + "；选中后可直接贴给别人"
-      and ad.rows["built"].toolTip() == BUILT_TIP
-      and all(t in ad.rows["commit"].toolTip()
-              for t in ("构建戳", "无 git 信息", "git rev-parse --short HEAD")),
-      ad.rows["commit"].toolTip()[:40])
-# 关于框界面上只留四行结果：说明挪进悬浮提示之后，底部再长出灰字段落就是退回老样子
-check("T8d 关于框正面不铺来源说明（那段话只在提示里，不在界面里）",
+# 关于框里既不铺来源说明，也不挂悬浮提示：那段话（构建戳从哪来、自己核该跑哪条命令）
+# 归《使用说明》。两条判据配成一对——框里不许有提示，说明那一节必须还写着来源
+check("T8c 关于框四行都不挂悬浮提示（来源说明归《使用说明》，不是藏在提示里）",
+      ad.face_tips() == "" and ad.author_link.toolTip() == "",
+      ad.face_tips()[:60])
+check("T8c2 那段来源说明确实落在《使用说明》里，没跟着提示一起删掉",
+      any(k in _html for k in ("打包那一刻", "开发态（未打包）"))
+      and "git" in _html,
+      [k for k in ("打包那一刻", "开发态（未打包）", "git") if k not in _html])
+# 关于框界面上只留四行结果：底部再长出灰字段落就是退回老样子
+check("T8d 关于框正面不铺来源说明（那段话只在《使用说明》里）",
       not any("构建戳" in t for t in _labels), [t[:20] for t in _labels if t][:8])
 # 复制这一路：正面那一格是短号，贴出去的必须是能直接粘进 git 里查的那一份
 import appinfo as _ai2
@@ -8196,7 +8198,7 @@ if getattr(sys, "frozen", False):
 else:
     skip("T14 冻结态提交号取证", "开发态跑不到 exe 环境，打包闸门里会跑")
 
-# ---- 关于框那一行仓库链接：图标、地址、点了有没有回执 ----
+# ---- 关于框作者那一格（仓库链接）：箭头、地址、点了有没有回执 ----
 from PySide6.QtCore import QEvent as _RpQE, QUrl as _RpUrl, Qt as _RpQt
 
 _rp_seen = []
@@ -8210,58 +8212,57 @@ def _rp_opener_ok(u):
 _rp_dlg = _real_about(None, repo_opener=_rp_opener_ok)
 _rp_dlg.show()
 _app.processEvents()
-check("T18 那一行开场写「GitHub」，地址来自 appinfo 单源且是合法 https",
-      _rp_dlg.repo_text() == REPO_LABEL and _rp_dlg.repo_url() == REPO_URL
+check("T18 那一格开场是署名，地址来自 appinfo 单源且是合法 https",
+      _rp_dlg.link_text() == AUTHOR and _rp_dlg.link_url() == REPO_URL
       and REPO_URL.startswith("https://") and _RpUrl(REPO_URL).isValid(),
-      (_rp_dlg.repo_text(), _rp_dlg.repo_url()))
-check("T18b 两张随包小图真读进来了（缺图=界面少一枚，光看代码看不出来）",
-      _rp_dlg.repo_icons_missing() == ""
-      and all(os.path.exists(app_main.resource_path(rel)) for rel in REPO_ICON_FILES),
-      (_rp_dlg.repo_icons_missing(),
-       [app_main.resource_path(rel) for rel in REPO_ICON_FILES]))
-check("T18c 整行是可点的热点：手型光标、能 Tab 到、悬浮提示给完整地址",
-      _rp_dlg.repo_row.cursor().shape() == _RpQt.PointingHandCursor
-      and _rp_dlg.repo_row.focusPolicy() == _RpQt.TabFocus
-      and REPO_URL in _rp_dlg.repo_row.toolTip()
-      and _rp_dlg.repo_row.toolTip() == REPO_TIP,
-      (_rp_dlg.repo_row.cursor().shape(), _rp_dlg.repo_row.focusPolicy()))
-_rp_status = _rp_dlg.repo_row.activate_link()
+      (_rp_dlg.link_text(), _rp_dlg.link_url()))
+check("T18b 那枚外链小箭头真读进来了（缺图=界面少一枚，光看代码看不出来）",
+      _rp_dlg.link_arrow_missing() == ""
+      and os.path.exists(app_main.resource_path(LINK_ARROW_FILE)),
+      (_rp_dlg.link_arrow_missing(), app_main.resource_path(LINK_ARROW_FILE)))
+check("T18c 整格是可点的热点：手型光标、能 Tab 到、不挂悬浮提示",
+      _rp_dlg.author_link.cursor().shape() == _RpQt.PointingHandCursor
+      and _rp_dlg.author_link.focusPolicy() == _RpQt.TabFocus
+      and _rp_dlg.author_link.toolTip() == "",
+      (_rp_dlg.author_link.cursor().shape(), _rp_dlg.author_link.focusPolicy(),
+       _rp_dlg.author_link.toolTip()))
+_rp_status = _rp_dlg.author_link.activate()
 check("T18d 单击把完整地址交给浏览器，回执当场看得见",
       _rp_status == "opened" and _rp_seen == [REPO_URL]
-      and _rp_dlg.repo_text() == REPO_OPENED_LABEL, (_rp_status, _rp_seen))
-_rp_dlg.repo_row.keyPressEvent(
+      and _rp_dlg.link_text() == REPO_OPENED_LABEL, (_rp_status, _rp_seen))
+_rp_dlg.author_link.keyPressEvent(
     QKeyEvent(_RpQE.KeyPress, _RpQt.Key_Space, _RpQt.NoModifier))
 check("T18e 空格走的是同一条路，不是只有鼠标能点", _rp_seen == [REPO_URL, REPO_URL], _rp_seen)
 _rp_deadline = _time.time() + 3.0
-while _time.time() < _rp_deadline and _rp_dlg.repo_text() != REPO_LABEL:
+while _time.time() < _rp_deadline and _rp_dlg.link_text() != AUTHOR:
     _app.processEvents()
     _time.sleep(0.05)
-check("T18f 回执两秒后自己收回，那一行回到「GitHub」",
-      _rp_dlg.repo_text() == REPO_LABEL, _rp_dlg.repo_text())
+check("T18f 回执两秒后自己收回，那一格回到署名",
+      _rp_dlg.link_text() == AUTHOR, _rp_dlg.link_text())
 _rp_dlg.close()
 _rp_dlg.deleteLater()
 _app.processEvents()
 
-# 打不开浏览器那一支：现场那类内网机器上这是常态，静默不响应等于没这一行。
+# 打不开浏览器那一支：现场那类内网机器上这是常态，静默不响应等于没这个链接。
 # 剪贴板是桌上借来的东西，判完原样归还
 _rp_prev_clip = _app.clipboard().text()
 _rp_fail = _real_about(None, repo_opener=lambda u: False)
 _rp_fail.show()
 _app.processEvents()
-_rp_st2 = _rp_fail.repo_row.activate_link()
+_rp_st2 = _rp_fail.author_link.activate()
 _rp_got = _app.clipboard().text()
 check("T18g 打不开浏览器时地址进剪贴板并如实回执（这台机器开不了剪贴板就报开不了）",
       _rp_st2 in ("copied", "failed")
-      and _rp_fail.repo_text() == (REPO_COPIED_LABEL if _rp_st2 == "copied"
+      and _rp_fail.link_text() == (REPO_COPIED_LABEL if _rp_st2 == "copied"
                                    else REPO_FAIL_LABEL)
       and (_rp_got == REPO_URL if _rp_st2 == "copied" else True),
-      (_rp_st2, _rp_fail.repo_text(), (_rp_got or "")[:44]))
+      (_rp_st2, _rp_fail.link_text(), (_rp_got or "")[:44]))
 if _rp_prev_clip is not None:
     _app.clipboard().setText(_rp_prev_clip)
-check("T18h 四档回执的字面逐字钉住（两栈各写一份就会漂，对撞键比同一串）",
-      _rp_fail.repo_states() == "|".join(
-          (REPO_LABEL, REPO_OPENED_LABEL, REPO_COPIED_LABEL, REPO_FAIL_LABEL)),
-      _rp_fail.repo_states())
+check("T18h 署名加三档回执的字面逐字钉住（两栈各写一份就会漂，对撞键比同一串）",
+      _rp_fail.link_states() == "|".join(
+          (AUTHOR, REPO_OPENED_LABEL, REPO_COPIED_LABEL, REPO_FAIL_LABEL)),
+      _rp_fail.link_states())
 _rp_fail.close()
 _rp_fail.deleteLater()
 _app.processEvents()
@@ -8270,9 +8271,9 @@ _rp_plain = _real_about(None)
 _rp_plain.show()
 _app.processEvents()
 check("T18i 不注入 opener 时，那一行走的是真入口 QDesktopServices，不是自己起进程",
-      _rp_plain.repo_row.opener is open_in_browser
+      _rp_plain.author_link.opener is open_in_browser
       and "QDesktopServices" in open_in_browser.__code__.co_names,
-      (_rp_plain.repo_row.opener, open_in_browser.__code__.co_names))
+      (_rp_plain.author_link.opener, open_in_browser.__code__.co_names))
 _rp_plain.close()
 _rp_plain.deleteLater()
 _app.processEvents()
@@ -8332,7 +8333,7 @@ _app.processEvents()
 _geo = _app.primaryScreen().availableGeometry()
 _suites = [("主窗口", app_main.MainWindow(), "1100x780"),
            ("使用说明", app_main.HelpDialog(), "960x700"),
-           ("关于", app_main.AboutDialog(), "380x262"),
+           ("关于", app_main.AboutDialog(), "380x230"),
            ("进度框", REAL_PROGRESS("正在解析文件…"), "480x140"),
            ("表结构预览", app_main.StructureDialog([]), "980x640"),
            ("DDL 预览", app_main.DDLDialog([], False), "900x600")]

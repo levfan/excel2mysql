@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""生成「关于」框那一行用的两张小图：GitHub 标记与外链箭头。
+"""生成「关于」框里作者那一格用的小图：外链箭头。
 
-两条线共用同一份文件，都住在 assets/ 下：Python 走 resource_path，
-Java 由 pom 把 assets 里这两张抄进 jar。所以这里只认 SVG 源、只写 PNG，
+两条线共用同一份文件，住在 assets/ 下：Python 走 resource_path，
+Java 由 pom 把 assets 里这张抄进 jar。所以这里只认 SVG 源、只写 PNG，
 不参与任何运行时逻辑。
 
 为什么烧成 PNG 而不是运行时画：
@@ -10,9 +10,8 @@ Java 由 pom 把 assets 里这两张抄进 jar。所以这里只认 SVG 源、�
 - 箭头如果用文字画（U+2197），就又回到"这台机器上有没有这个字形"那件事上，
   而这一轮刚刚把界面字体改成随包那一份，就是为了不再赌系统。
 
-GitHub 标记的外轮廓取自 Lucide 的 github 图标（ISC 许可的描边代码；轮廓本身是 GitHub
-注册商标，这里只用作指向自家仓库的链接）；箭头是自己按 24 格网格画的通用外链符号，不带商标。
-两份源 SVG 都抄进本文件，重跑一次得到同一张图，不需要联网。
+箭头是自己按 24 格网格画的通用外链符号（左下一只缺了右上角的方框，右上一支穿出去的箭头），
+不带任何商标。源 SVG 抄在本文件里，重跑一次得到同一张图，不需要联网。
 """
 import os
 
@@ -23,18 +22,7 @@ ASSETS = os.path.normpath(os.path.join(HERE, "..", "..", "assets"))
 SIDE = 96          # 出图边长：界面上只用到十几像素，源头出大一点缩放才不糊
 INK = "#24292f"    # 与正文墨色同一档，浅色底上读得出
 
-# Lucide 的 github 图标是描边画法（24 格网格、2 格粗），与界面里那档小图标观感一致
-GITHUB_MARK_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 24 24" '
-    'fill="none" stroke="%s" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15'
-    '.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5'
-    'A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15'
-    ' 1.85v4"/>'
-    '<path d="M9 18c-4.51 2-5-2-7-2"/></svg>' % (SIDE, SIDE, INK)
-)
-
-# 外链箭头：左下一只缺了右上角的方框，右上一支穿出去的箭头，都是 2 格粗的描边
+# 24 格网格、2 格粗的描边，与界面里那档小图标观感一致
 EXTERNAL_LINK_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 24 24" '
     'fill="none" stroke="%s" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -43,7 +31,7 @@ EXTERNAL_LINK_SVG = (
     '<path d="M10 14 20 4"/></svg>' % (SIDE, SIDE, INK)
 )
 
-OUTS = (("github_mark.png", GITHUB_MARK_SVG), ("external_link.png", EXTERNAL_LINK_SVG))
+OUTS = (("external_link.png", EXTERNAL_LINK_SVG),)
 
 
 def render(svg, path):

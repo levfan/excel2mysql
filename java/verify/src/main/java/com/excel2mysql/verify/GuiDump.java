@@ -960,12 +960,13 @@ public final class GuiDump {
                     // 产品名与复制按钮那两种字都是两栈各写一份的串，逐字比才知道有没有漂
                     put("dlg.about.heading", norm(ad.headingText()));
                     put("dlg.about.copy", norm(ad.copyLabels()));
-                    // 仓库那一行：地址、此刻的字、四档回执、缺图取证（与 Qt 那侧同键同判）
-                    putExact("dlg.about.repo.url", ad.repoUrl());
-                    putExact("dlg.about.repo.tip", ad.repoTip());
-                    put("dlg.about.repo.text", norm(ad.repoText()));
-                    put("dlg.about.repo.states", norm(ad.repoStates()));
-                    put("dlg.about.repo.icons", norm(ad.repoIconsMissing()));
+                    // 作者那一格就是仓库链接：地址、此刻的字、四档回执、缺箭头取证
+                    putExact("dlg.about.link.url", ad.linkUrl());
+                    put("dlg.about.link.text", norm(ad.linkText()));
+                    put("dlg.about.link.states", norm(ad.linkStates()));
+                    put("dlg.about.link.arrow", norm(ad.linkArrowMissing()));
+                    // 框面上的悬浮提示：这一格设计成空串，挂了字就是退回"说明写在提示里"那版
+                    put("dlg.about.tips", norm(ad.faceTips()));
                 } finally {
                     ad.dispose();
                 }
