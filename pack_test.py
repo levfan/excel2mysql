@@ -19,6 +19,7 @@ excel2mysql.spec 完全相同的 excludes/hiddenimports 口径冻结成控制台
   冻结态   dist\\packtest\\packtest.exe
 """
 import collections
+import copy
 import glob
 import io
 import os
@@ -3988,6 +3989,151 @@ check("RS9b 拦下说明要能直接照抄：点名拆几段、每段几列几�
       all(k in row_fit_notice(_rs9["row_fit"]["refuse"])
           for k in ("拆成", "列", "字节")),
       row_fit_notice(_rs9["row_fit"]["refuse"]))
+
+# ---------------------------------------------------------------------------
+section("WS 宽表拆分：公共字段识别 + 按行预算拆成多个 Excel")
+
+from core.wide_split import common_columns, plan_split, split_wide_table, \
+    notice_lines as split_notice
+
+_ws_key_cols = [
+    {"field": "dan_wei_bian_ma", "comment": "单位编码", "type": "VARCHAR(32)",
+     "primary_key": True},
+    {"field": "shu_ju_ri_qi", "comment": "数据日期", "type": "DATE",
+     "primary_key": False},
+    {"field": "zhuang_bei_ming_cheng", "comment": "装备名称", "type": "VARCHAR(64)",
+     "primary_key": False},
+]
+_ws_measure = [{"field": "zhi_%03d" % i, "comment": "指标%03d" % i,
+                "type": "DECIMAL(18,6)", "primary_key": False} for i in range(60)]
+
+_ws_common, _ws_note = common_columns(_ws_key_cols + _ws_measure)
+check("WS1 公共字段 = 表头最前面的连续键列（编号/日期/名称），碰到度量列就停",
+      _ws_common == [0, 1, 2] and "连续 3 列" in _ws_note, (_ws_common, _ws_note))
+
+_ws_nokey, _ws_nokey_note = common_columns(
+    [{"field": "zhi", "comment": "指标", "type": "INT", "primary_key": False},
+     {"field": "liang", "comment": "数量", "type": "INT", "primary_key": False}])
+check("WS1b 一列都不像键列时退化成「第一列当锚点」，不许出现空公共字段",
+      _ws_nokey == [0] and "锚点" in _ws_nokey_note, (_ws_nokey, _ws_nokey_note))
+
+# 主键落在后面也得补进公共字段：拆完每段都要能认回同一行，主键漏了就 join 不回去
+_ws_pk_late = [dict(_ws_key_cols[1], primary_key=False)] + _ws_measure[:3] \
+    + [dict(_ws_key_cols[0])] + _ws_measure[3:6]
+_ws_pk_common, _ = common_columns(_ws_pk_late)
+check("WS1c 主键不在第一段也补进公共字段",
+      4 in _ws_pk_common and _ws_pk_common == sorted(_ws_pk_common),
+      _ws_pk_common)
+
+# 装箱：950 个 9 字节列 + 2 个公共列，全表 8831 字节 > 半页 8126，必须切两段，
+# 每段都带公共字段且自己过线
+_ws_wide = [dict(_ws_key_cols[0]), dict(_ws_key_cols[1])] + [
+    {"field": "zhi_%03d" % i, "comment": "指标%03d" % i, "type": "DECIMAL(18,6)",
+     "primary_key": False} for i in range(950)]
+_ws_plan = plan_split(_ws_wide)
+check("WS2 按行预算装箱：拆成 2 段，每段都带公共字段且单独过线",
+      _ws_plan["ok"] and len(_ws_plan["parts"]) == 2
+      and all(p["idx"][:2] == [0, 1] for p in _ws_plan["parts"])
+      and all(row_plan([_ws_wide[j] for j in p["idx"]])["ok"]
+              for p in _ws_plan["parts"])
+      and row_plan(_ws_wide)["local"] > row_plan(_ws_wide)["local_limit"],
+      (len(_ws_plan["parts"]), [len(p["own"]) for p in _ws_plan["parts"]]))
+
+# 端到端：真造一张 242 列的宽表，建模被拦下 → 拆出 2 个 Excel → 每份拖回来都建得出来，
+# 而且不再触发一次降级（conversions 为 0 才算真救回来了）
+_ws_head = ["单位编码", "数据日期"] + ["说明%03d" % i for i in range(240)]
+_ws_rows = [["DW%03d" % r, "2026-01-0%d" % (r + 1)]
+            + ["这是一段比较长的说明文字用来把列宽撑开%d" % i for i in range(240)]
+            for r in range(3)]
+_ws_path = make_xlsx("超宽说明表.xlsx",
+                     {"Sheet1": pd.DataFrame(_ws_rows, columns=_ws_head)})
+_ws_td = build_table_def(_ws_path)
+check("WS3 建模阶段就判出这张表过不了线（不是等到建表才被库拒）",
+      _ws_td["row_fit"]["refuse"] is not None,
+      (_ws_td["row_fit"]["refuse"] or {}).get("reason", "没拦下"))
+
+_ws_res = split_wide_table(_ws_td)
+check("WS4 过不了线就自动拆出多个 Excel：段数≥2、每段都带公共 2 列、行数一致",
+      _ws_res["ok"] and len(_ws_res["files"]) >= 2
+      and all(f["columns"] == f["own"] + 2 for f in _ws_res["files"])
+      and all(f["rows"] == 3 for f in _ws_res["files"]),
+      [(f["columns"], f["own"]) for f in _ws_res["files"]])
+
+_ws_back = [build_table_def(f["file"]) for f in _ws_res["files"]]
+check("WS4b 拆出来的每一份重新建模都过线，且一次降级都不再触发（列类型原样保住）",
+      all(t["row_fit"]["refuse"] is None for t in _ws_back)
+      and all(not t["row_fit"]["conversions"] for t in _ws_back),
+      [(t["row_fit"]["refuse"] is not None, len(t["row_fit"]["conversions"]))
+       for t in _ws_back])
+check("WS4c 每一份的表头都以公共字段开头，数据 3 行都在",
+      all(list(t["df"].columns[:2]) == ["单位编码", "数据日期"] for t in _ws_back)
+      and all(len(t["df"]) == 3 for t in _ws_back),
+      [list(t["df"].columns[:2]) for t in _ws_back])
+check("WS4d 拆出来的列数合计 = 原列数 + 公共字段重复的那几份",
+      sum(f["columns"] for f in _ws_res["files"])
+      == len(_ws_td["columns"]) + 2 * (len(_ws_res["files"]) - 1),
+      (sum(f["columns"] for f in _ws_res["files"]), len(_ws_td["columns"])))
+
+_ws_lines = split_notice(_ws_td, _ws_res)
+check("WS5 日志能照着做：点名公共字段、每段几列几字节、文件叫什么、怎么用",
+      all(k in "\n".join(_ws_lines)
+          for k in ("公共字段", "单位编码", "数据日期", "字节", "_part1.xlsx", "join")),
+      _ws_lines[:1])
+
+# 同名不覆盖：同一张表再拆一次，文件名往后编号
+_ws_again = split_wide_table(_ws_td)
+check("WS6 同名文件不覆盖：第二次拆出来的带 _2",
+      _ws_again["ok"] and os.path.basename(_ws_again["files"][0]["file"]).endswith("_2.xlsx"),
+      os.path.basename(_ws_again["files"][0]["file"]))
+
+# 结构定义模式的表不自动拆：字段类型是人工承诺，拆成数据表会按数据重新推断
+_ws_struct = dict(_ws_td, source="structured")
+_ws_skip = app_main.auto_split_wide(_ws_struct)
+check("WS7 结构定义模式的表只报「不拆」，不去动它的文件",
+      _ws_skip is not None and not _ws_skip.get("ok")
+      and "结构定义" in _ws_skip.get("reason", ""),
+      _ws_skip.get("reason"))
+
+# 没被拦下的表根本不该拆：拆分是补救手段，不是对所有表都写一遍
+check("WS8 没被拦下的表不拆（不起文件、不出日志）",
+      app_main.auto_split_wide(_ws_back[0]) is None
+      and split_notice(_ws_back[0], {}) == [],
+      app_main.auto_split_wide(_ws_back[0]))
+
+# ---- 降级的两条底线：键列不许动、没救就别白改 ----
+# 主键 VARCHAR(255) 是这张表里最宽的一列，按"省字节最多优先"它会被第一个退成 TEXT，
+# 于是表"过线了"却建不出来（1170: BLOB/TEXT column used in key specification）。
+_ws_pk_cols = [{"field": "bian_ma", "comment": "编码", "type": "VARCHAR(255)",
+                "primary_key": True}]
+_ws_pk_cols += [{"field": "zi_duan_%02d" % i, "comment": "字段%02d" % i,
+                 "type": "VARCHAR(255)", "primary_key": False} for i in range(64)]
+_ws_pk_prev = copy.deepcopy(_ws_pk_cols)
+_ws_pk_fit = fit_row_limits(_ws_pk_cols)
+check("WS9 server 超线时主键列不参加降级（TEXT 当不了主键，建表会 1170）",
+      _ws_pk_fit["refuse"] is None
+      and [c["type"] for c in _ws_pk_cols if c.get("primary_key")] == ["VARCHAR(255)"]
+      and len(_ws_pk_fit["conversions"]) >= 1
+      and all(c["field"] != "bian_ma" for c in _ws_pk_fit["conversions"]),
+      ([c["type"] for c in _ws_pk_cols if c.get("primary_key")],
+       [(c["field"], c["to"]) for c in _ws_pk_fit["conversions"]][:3]))
+
+# 怎么降都过不了线（600 个短文本列，全退 TEXT 也要 600×41 字节 > 半页）：
+# 一列都不许改，直接拒绝去拆表——白改几百列再告诉用户"还是不行"是最糟的体验
+_ws_hope_cols = [{"field": "dan_wei", "comment": "单位编码", "type": "VARCHAR(32)",
+                  "primary_key": True}]
+_ws_hope_cols += [{"field": "shuo_ming_%03d" % i, "comment": "说明%03d" % i,
+                   "type": "VARCHAR(32)", "primary_key": False} for i in range(600)]
+_ws_hope_fit = fit_row_limits(copy.deepcopy(_ws_hope_cols))
+check("WS10 明知降不下来时一列都不改，直接拒绝（不制造几百条无用的降级记录）",
+      _ws_hope_fit["refuse"] is not None and _ws_hope_fit["conversions"] == [],
+      (len(_ws_hope_fit["conversions"]),
+       (_ws_hope_fit["refuse"] or {}).get("reason", "")[:60]))
+
+# 拒绝理由要说清楚"主键列没动"，否则用户会以为工具没尽力
+check("WS11 拒绝理由点名被保住的主键列",
+      "主键列" in _ws_hope_fit["refuse"]["reason"]
+      and "`dan_wei`" in _ws_hope_fit["refuse"]["reason"],
+      _ws_hope_fit["refuse"]["reason"])
 
 # ---------------------------------------------------------------------------
 section("M 字段命名规则（蛇形拼音 / 首字母降级 / 30 字符上限）")

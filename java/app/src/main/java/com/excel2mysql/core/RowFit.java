@@ -146,6 +146,31 @@ public final class RowFit {
     }
 
     /**
+     * 把能降的都降到极限，两条上限还救不救得回来。
+     *
+     * 救不回来时一列都不改，直接把表交给拆分：把 600 列全退成 TEXT 再告诉用户"还是不行、
+     * 得拆"，既白改了类型（页面上一长串降级记录），又让人以为工具尽力了而其实一开始就
+     * 知道没救。极限值取「这一列能到的最小占用」：能降的列 server 取 TEXT 的引用字节、
+     * 行内取整列走行外的字节；结构定义与主键列不许动，按现值算。
+     */
+    private static boolean canEverFit(List<Infer.Column> cols, Plan plan) {
+        long server = 0;
+        long local = 0;
+        for (Infer.Column c : cols) {
+            long[] pair = colBytes(c.type);
+            if (c.nullable != null || c.primaryKey || varcharN(c.type) == null) {
+                server += pair[0];
+                local += pair[1];
+                continue;
+            }
+            server += Math.min(pair[0], SERVER_BLOB_BYTES);
+            local += Math.min(pair[1], EXT_BYTES);
+        }
+        long localTotal = local + ROW_FIXED + ((cols.size() + 7) / 8);
+        return server <= SERVER_ROW_LIMIT && localTotal <= plan.localLimit;
+    }
+
+    /**
      * 体检并就地降级：先把最长的列逐根退成 TEXT，退完还不过再把最长那一档往下降一档。
      * 只动工具推断出来的列——结构定义里人工写的类型是使用者给的承诺，不改它，
      * 那条路走不通时给的是拦下，由调用方在建表之前停住。
@@ -159,7 +184,7 @@ public final class RowFit {
             return f;
         }
         int guard = 0;
-        while (!f.plan.ok && guard++ < 8192) {
+        while (!f.plan.ok && guard++ < 8192 && canEverFit(cols, f.plan)) {
             String[] moved = degradeOnce(cols, f.plan);
             if (moved == null) {
                 break;
@@ -191,16 +216,38 @@ public final class RowFit {
         return sb.toString();
     }
 
+    /**
+     * 这一改到底帮不帮得上忙：只算「当前真正越线那条」省下的字节。
+     *
+     * 两条上限咬的不是一回事——把 VARCHAR(96) 退成 TEXT，server 省几百字节，但行内一直
+     * 是 41（宽列表本来就整列走行外），半页那条一点没松。以前取 max，于是行内卡死的表
+     * 会被一路退 TEXT、白改几百列，最后还是得拆。返回 -1 = 对当下没用。
+     */
+    private static long degradeGain(long[] pair, long[] nu, boolean violServer, boolean violLocal) {
+        long saveServer = pair[0] - nu[0];
+        long saveLocal = pair[1] - nu[1];
+        if (violLocal && saveLocal <= 0) {
+            return -1;
+        }
+        if (violServer && saveServer <= 0) {
+            return -1;
+        }
+        return Math.max(violServer ? saveServer : 0, violLocal ? saveLocal : 0);
+    }
+
     private static String[] degradeOnce(List<Infer.Column> cols, Plan plan) {
+        boolean violServer = plan.server > SERVER_ROW_LIMIT;
+        boolean violLocal = plan.local > plan.localLimit;
         int best = -1;
         long bestSave = 0;
         for (int i = 0; i < cols.size(); i++) {
             Infer.Column c = cols.get(i);
-            if (c.nullable != null || varcharN(c.type) == null) {
+            // 主键列两条路都不动：TEXT 当不了主键（建表 1170），降长度会截断键值
+            if (c.nullable != null || c.primaryKey || varcharN(c.type) == null) {
                 continue;
             }
             long[] pair = colBytes(c.type);
-            long save = Math.max(pair[0] - SERVER_BLOB_BYTES, pair[1] - EXT_BYTES);
+            long save = degradeGain(pair, colBytes("TEXT"), violServer, violLocal);
             if (save > bestSave) {
                 bestSave = save;
                 best = i;
@@ -219,7 +266,7 @@ public final class RowFit {
         String bestTo = null;
         for (int i = 0; i < cols.size(); i++) {
             Infer.Column c = cols.get(i);
-            if (c.nullable != null) {
+            if (c.nullable != null || c.primaryKey) {
                 continue;
             }
             Integer n = varcharN(c.type);
@@ -237,9 +284,7 @@ public final class RowFit {
                 continue;
             }
             String to = "VARCHAR(" + lower + ")";
-            long[] old = colBytes(c.type);
-            long[] nu = colBytes(to);
-            long save = Math.max(old[0] - nu[0], old[1] - nu[1]);
+            long save = degradeGain(colBytes(c.type), colBytes(to), violServer, violLocal);
             if (save > bestSave) {
                 bestSave = save;
                 best = i;
@@ -270,15 +315,41 @@ public final class RowFit {
             }
         }
         if (fixed + ROW_FIXED + ((cols.size() + 7) / 8) > plan.localLimit) {
-            return "定长列（数值、日期这一类）行内已占 " + fixed + " 字节，超过 InnoDB 半页 "
-                    + plan.localLimit + " —— 退成 TEXT 与降长度都救不回来，只能拆表或删列";
+            return "定长列与短文本列（数值、日期、短 VARCHAR 这一类）行内已占 " + fixed
+                    + " 字节，超过 InnoDB 半页 "
+                    + plan.localLimit + " —— 退成 TEXT 与降长度都救不回来，只能拆表或删列"
+                    + keyNote(cols);
         }
         if (plan.server > SERVER_ROW_LIMIT) {
             return "全表行内字节 " + plan.server + " 仍超过 server 上限 " + SERVER_ROW_LIMIT
-                    + "（TEXT/BLOB 也省不出来了）";
+                    + "（TEXT/BLOB 也省不出来了）" + keyNote(cols);
         }
         return "需要整列走行外的列有 " + external + " 个，每个至少占行内 " + EXT_BYTES
-                + " 字节，半页 " + plan.localLimit + " 字节装不下，只能拆表";
+                + " 字节，半页 " + plan.localLimit + " 字节装不下，只能拆表" + keyNote(cols);
+    }
+
+    /** 被保住的主键列要说出来：降级会跳过它们（见 degradeOnce），不说就是"没尽力"。 */
+    private static String keyNote(List<Infer.Column> cols) {
+        StringBuilder sb = new StringBuilder();
+        int n = 0;
+        for (Infer.Column c : cols) {
+            if (!c.primaryKey || varcharN(c.type) == null) {
+                continue;
+            }
+            if (n == 0) {
+                sb.append("（主键列 ");
+            } else {
+                sb.append("、");
+            }
+            sb.append("`").append(c.field).append("`");
+            if (++n >= 3) {
+                break;
+            }
+        }
+        if (n == 0) {
+            return "";
+        }
+        return sb.append(" 没动：退成 TEXT 就当不了主键，降长度会截断键值，只能靠拆表）").toString();
     }
 
     /** 按列序贪心装箱，给出"至少拆成几段、每段几列几字节"。 */

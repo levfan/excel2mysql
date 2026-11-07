@@ -80,7 +80,34 @@ public final class ImportParse {
         public boolean cancelled;
     }
 
+    /**
+     * 拆分产物的落点覆盖：null 表示写在原文件旁边（现场口径）。
+     *
+     * <p>自检把它指到临时目录——自检的"用户文件"就是夹具目录，按现场口径写会把
+     * 夹具目录写花（下一轮自检又会把那些 _partN.xlsx 当成夹具读进来，表数、顺序全变）。
+     */
+    public static String splitOutDir;
+
     private ImportParse() {
+    }
+
+    /**
+     * 建模时行上限救不回来：按公共字段把这张表拆成几个 Excel（见 {@link SplitWide}）。
+     *
+     * <p>返回 null 表示这张表没被拦下，本来就不用拆。结构定义模式的表不拆：那类表的字段
+     * 类型是人工写的承诺，拆出来的数据表会按"普通数据表"重新推断类型，等于把人工定义丢掉。
+     */
+    public static SplitWide.Plan autoSplitWide(TableBuilder.Result td, String outDir, String stem) {
+        if (td == null || td.rowFit == null || td.rowFit.refuse == null) {
+            return null;
+        }
+        if ("structured".equals(td.table.source)) {
+            SplitWide.Plan p = new SplitWide.Plan();
+            p.reason = "结构定义模式的表不自动拆（字段类型是人工写的）";
+            return p;
+        }
+        String dir = outDir != null ? outDir : splitOutDir;
+        return SplitWide.write(td, dir, stem, 16384);
     }
 
     public static Outcome parse(List<String> files, List<String> existingPaths, String zipDir,
@@ -107,6 +134,9 @@ public final class ImportParse {
         Set<String> fromZip = new LinkedHashSet<String>();
         // 解压出的路径 -> 包内目录链：表名要从包根一路拼到文件名（见 Names.joinArchiveDirs）
         Map<String, List<String>> zipDirs = new LinkedHashMap<String, List<String>>();
+        // 解压出的路径 -> {压缩包所在目录, 包内叶子名}：拆出来的 Excel 落在压缩包旁边，
+        // 写进临时解压目录的话会随会话清理一起删掉
+        Map<String, String[]> zipHome = new LinkedHashMap<String, String[]>();
         for (String f : files) {
             if (!f.toLowerCase().endsWith(".zip")) {
                 pending.add(f);                 // 散装 Excel 留到解析阶段计项
@@ -216,7 +246,12 @@ public final class ImportParse {
                 }
             };
             try {
-                TableBuilder.Result td = builder.build(f, phase);
+                TableBuilder.Result td = builder.build(f, phase, zipDirs.get(f));
+                // 行上限救不回来（row size too large / 列数超 1017）时顺手拆成几个 Excel，
+                // 拆出来的文件落在原文件（压缩包）旁边，拖回来就是几张能分别建的表
+                String[] home = zipHome.get(f);
+                td.wideSplit = autoSplitWide(td, home == null ? null : home[0],
+                        home == null ? null : home[1]);
                 out.tables.add(td);
                 if (fromZip.contains(f)) {
                     out.addedZip.add(f);
@@ -234,6 +269,10 @@ public final class ImportParse {
                     sink.log("[类型修正] " + fname + " 共 " + notes.size()
                             + " 列按表头语义调整：" + LogText.NL + "    "
                             + String.join(LogText.NL + "    ", notes));
+                }
+                for (String line : SplitWide.noticeLines(td.table.tableName,
+                        td.table.columns, td.wideSplit)) {
+                    sink.log(line);
                 }
             } catch (MergeCheck.MergedCellsException e) {
                 out.merged++;

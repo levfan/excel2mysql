@@ -56,6 +56,8 @@ public final class TableBuilder {
         public TableOps.Table table;
         /** 建模收尾的行上限体检结论：类型已就地降级，refuse 非空表示这张表建不出来。 */
         public RowFit.Fit rowFit;
+        /** 被行上限拦下后自动拆成几个 Excel 的结果（见 SplitWide）；没拦下就是 null。 */
+        public SplitWide.Plan wideSplit;
         public List<Object> headers = new ArrayList<Object>();
         public List<List<Object>> rows = new ArrayList<List<Object>>();
         public String pkReason;

@@ -1123,18 +1123,46 @@ def row_plan(cols, page_size=16384):
                    and len(cols) <= INNODB_MAX_COLUMNS)}
 
 
+def _degrade_gain(pair, new_pair, viol_server, viol_local):
+    """这一改到底帮不帮得上忙：只算「当前真正越线那条」省下的字节。
+
+    两条上限咬的不是一回事——把一列 VARCHAR(96) 退成 TEXT，server 那边省掉几百字节，
+    但行内一直是 41 字节（宽列表本来就整列走行外），半页那条限制一点没松。
+    以前取 max(省 server, 省行内)，于是行内卡死的表会被一路退 TEXT 退到底、
+    白改几百列，最后还是得拆。判据改成"只认越线的那条"，行内卡死时这类列直接不动。
+
+    返回 -1 表示这一改对当下没用；否则返回能省的字节数。
+    """
+    save_server = pair[0] - new_pair[0]
+    save_local = pair[1] - new_pair[1]
+    if viol_local and save_local <= 0:
+        return -1               # 行内是卡点，这一改不省行内（甚至更占），别动
+    if viol_server and save_server <= 0:
+        return -1               # server 是卡点，这一改省不出 server 字节，别动
+    return max(save_server if viol_server else 0, save_local if viol_local else 0)
+
+
 def _degrade_once(cols, plan):
     """改一列：先退最长的那一列成 TEXT，没有可退的再把最长那一档降一档。
 
     排序键是"这一列能省多少字节"，同分时按列序——列序在两栈里都是数组下标，
     换成按字段名排就会在拼音列名上分叉（Java 与 Python 的比较器不完全同）。
+
+    **主键列一律不动**，两条路都不动：TEXT 当不了主键（建表直接 1170
+    "BLOB/TEXT column used in key specification without a key length"），
+    降长度又会截断键值、把两行并成一行。键列顶住导致救不回来时就如实拒绝，
+    交给宽表拆分——拆开的每段都带着主键，仍然建得出表。这一条是"能建表"的底线，
+    比"少拆一张表"重要。
     """
+    viol_server = plan["server"] > plan["server_limit"]
+    viol_local = plan["local"] > plan["local_limit"]
+
     best = None
     for i, c in enumerate(cols):
-        if "nullable" in c or _varchar_n(c) is None:
-            continue                    # 结构定义里人工写的类型与已经是 TEXT 的列都不动
+        if "nullable" in c or c.get("primary_key") or _varchar_n(c) is None:
+            continue                    # 结构定义里人工写的类型、主键、已经是 TEXT 的列都不动
         pair = _col_row_bytes(c)
-        save = max(pair[0] - _SERVER_BLOB_BYTES, pair[1] - _EXT_COLUMN_BYTES)
+        save = _degrade_gain(pair, _col_row_bytes({"type": "TEXT"}), viol_server, viol_local)
         if save > 0 and (best is None or save > best[0]):
             best = (save, i, c["type"], "TEXT")
     if best is not None:
@@ -1148,7 +1176,7 @@ def _degrade_once(cols, plan):
 
     best = None
     for i, c in enumerate(cols):
-        if "nullable" in c:
+        if "nullable" in c or c.get("primary_key"):
             continue
         n = _varchar_n(c)
         if n is None:
@@ -1157,8 +1185,8 @@ def _degrade_once(cols, plan):
         if not lower:
             continue
         to = "VARCHAR(%d)" % lower[-1]
-        save = max(_col_row_bytes(c)[0] - _col_row_bytes({"type": to})[0],
-                   _col_row_bytes(c)[1] - _col_row_bytes({"type": to})[1])
+        pair = _col_row_bytes(c)
+        save = _degrade_gain(pair, _col_row_bytes({"type": to}), viol_server, viol_local)
         if save > 0 and (best is None or save > best[0]):
             best = (save, i, c["type"], to)
     if best is None:
@@ -1200,16 +1228,44 @@ def _refuse_reason(cols, plan):
         else:
             fixed += pair[1]
     bitmap = -(-len(cols) // 8)
+    # 主键列不参与降级（见 _degrade_once），所以"还能再降"这句话是假的：
+    # 说明白是哪几列被保住，用户才不会以为工具没尽力
+    keys = [c for c in cols if c.get("primary_key") and _varchar_n(c) is not None]
+    note = ""
+    if keys:
+        note = ("（主键列 %s 没动：退成 TEXT 就当不了主键，降长度会截断键值，"
+                "只能靠拆表）" % "、".join("`%s`" % c["field"] for c in keys[:3]))
     if fixed + _INNODB_ROW_FIXED + bitmap > plan["local_limit"]:
-        return ("定长列（数值、日期这一类）行内已占 %d 字节，超过 InnoDB 半页 %d —— "
-                "退成 TEXT 与降长度都救不回来，只能拆表或删列"
-                % (fixed, plan["local_limit"]))
+        return ("定长列与短文本列（数值、日期、短 VARCHAR 这一类）行内已占 %d 字节，"
+                "超过 InnoDB 半页 %d —— 退成 TEXT 与降长度都救不回来，只能拆表或删列%s"
+                % (fixed, plan["local_limit"], note))
     if plan["server"] > plan["server_limit"]:
-        return ("全表行内字节 %d 仍超过 server 上限 %d（TEXT/BLOB 也省不出来了）"
-                % (plan["server"], plan["server_limit"]))
+        return ("全表行内字节 %d 仍超过 server 上限 %d（TEXT/BLOB 也省不出来了）%s"
+                % (plan["server"], plan["server_limit"], note))
     return ("需要整列走行外的列有 %d 个，每个至少占行内 %d 字节，"
-            "半页 %d 字节装不下，只能拆表"
-            % (external, _EXT_COLUMN_BYTES, plan["local_limit"]))
+            "半页 %d 字节装不下，只能拆表%s"
+            % (external, _EXT_COLUMN_BYTES, plan["local_limit"], note))
+
+
+def _can_ever_fit(cols, plan):
+    """把能降的都降到极限，两条上限还救不救得回来。
+
+    救不回来时**一列都不改**，直接把表交给拆分：把 600 列全退成 TEXT 再告诉用户
+    "还是不行、得拆"，既白改了类型（页面上一长串降级记录），又让人以为工具尽力了
+    而其实一开始就知道没救。极限值取「这一列能到的最小占用」：能降的列 server 取
+    TEXT 的引用字节、行内取整列走行外的字节；结构定义与主键列不许动，按现值算。
+    """
+    server = local = 0
+    for c in cols:
+        pair = _col_row_bytes(c)
+        if "nullable" in c or c.get("primary_key") or _varchar_n(c) is None:
+            server += pair[0]
+            local += pair[1]
+            continue
+        server += min(pair[0], _SERVER_BLOB_BYTES)
+        local += min(pair[1], _EXT_COLUMN_BYTES)
+    local_total = local + _INNODB_ROW_FIXED + -(-len(cols) // 8)
+    return server <= plan["server_limit"] and local_total <= plan["local_limit"]
 
 
 def fit_row_limits(cols, page_size=16384):
@@ -1227,7 +1283,7 @@ def fit_row_limits(cols, page_size=16384):
                                       % (plan["columns"], INNODB_MAX_COLUMNS),
                            "columns": plan["columns"], "server": plan["server"],
                            "local": plan["local"], "split": _split_advice(cols, page_size)}}
-    while not plan["ok"]:
+    while not plan["ok"] and _can_ever_fit(cols, plan):
         moved = _degrade_once(cols, plan)
         if moved is None:
             break

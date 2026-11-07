@@ -113,8 +113,24 @@ public final class ImportRun {
                     // 建模阶段就判得出这条 DDL 会被库拒（1118/1117），不发出去：
                     // 建表是隐式提交，半途报错既回滚不了也说不清，现场只会看到"导入失败"
                     row.message = r.rowFit.refuse.reason;
+                    // 拆出来的 Excel 已经在建模那一步落盘了，这里只提醒去拖回来，
+                    // 别再让人对着拦下理由找"那我该怎么办"
+                    String hint = "";
+                    SplitWide.Plan split = r.wideSplit;
+                    if (split != null && split.ok) {
+                        StringBuilder names = new StringBuilder();
+                        for (SplitWide.Part part : split.parts) {
+                            if (names.length() > 0) {
+                                names.append("、");
+                            }
+                            names.append(new java.io.File(part.file).getName());
+                        }
+                        hint = " / 已自动拆成 " + split.parts.size() + " 个 Excel（按公共字段 "
+                                + split.common.length + " 列）：" + names
+                                + "；把这几份拖回待导入列表就能分别建表";
+                    }
                     sink.logError("建表前拦下 " + name + "："
-                            + RowFit.notice(r.rowFit.refuse).replace("\n", " / "));
+                            + RowFit.notice(r.rowFit.refuse).replace("\n", " / ") + hint);
                     results.add(row);
                     sink.advance(1 + total, "跳过 `" + name + "`");
                     continue;

@@ -82,6 +82,7 @@ from core.zip_import import (
     extract_excel_archive, count_excel_entries, ZipArchiveError, EXCEL_EXTS,
 )
 from core.merge_check import MergedCellsError
+from core.wide_split import split_wide_table, notice_lines as split_notice_lines
 from ui_help import HelpDialog, AboutDialog, fit_client
 from appinfo import build_info, title_text
 from assetpath import resource_path
@@ -1076,6 +1077,23 @@ class ProgressWorker(QThread):
 _PARSE_UNITS = 5
 
 
+def auto_split_wide(td, out_dir=None, stem=None):
+    """建模时行上限救不回来：按公共字段把这张表拆成几个 Excel。
+
+    只有图形版 tab1 的解析流程调它（命令行两条线不改现场文件）。
+    结构定义模式的表不拆：那类表的字段类型是人工写的承诺，拆出来的数据表会按
+    "普通数据表"重新推断类型，等于把人工定义丢掉——只把拦下理由照旧报出来。
+    返回 None 表示这张表没被拦下，本来就不用拆。
+    """
+    refuse = (td.get("row_fit") or {}).get("refuse")
+    if not refuse:
+        return None
+    if td.get("source") == "structured":
+        return {"ok": False, "files": [], "common": [], "rows": 0,
+                "reason": "结构定义模式的表不自动拆（字段类型是人工写的）"}
+    return split_wide_table(td, out_dir=out_dir, stem=stem)
+
+
 def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
                        initials=False, upper=False, lower=False, auto_pk=False):
     """ZIP 展开 + 逐文件解析表结构，返回待导入列表与汇总计数。
@@ -1093,6 +1111,7 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
 
     out, from_zip, zip_origin = [], set(), {}
     zip_dirs = {}          # 解压出的路径 → 包内目录链，表名要从包根一路拼到文件名
+    zip_home = {}          # 解压出的路径 → (压缩包所在目录, 包内叶子名)：拆出来的 Excel 落这儿
     zips_ok = zips_bad = zips_empty = 0
     cancelled = False
     for f in files:
@@ -1123,6 +1142,9 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
                          if p]
                 if inner:
                     zip_dirs[x["path"]] = tuple(inner)
+                zip_home[x["path"]] = (os.path.dirname(os.path.abspath(f)),
+                                       os.path.splitext(os.path.basename(
+                                           x["origin"].replace("\\", "/")))[0])
             out.extend(x["path"] for x in r["files"])
             msg = f"[压缩包] {zname}：展开 {len(r['files'])} 个 Excel"
             if r["ignored"]:
@@ -1163,6 +1185,12 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
             td = build_table_def(f, progress_cb=phase, initials=initials,
                                  upper=upper, lower=lower, auto_pk=auto_pk,
                                  dirs=zip_dirs.get(f, ()))
+            # 行上限救不回来（row size too large / 列数超 1017）时顺手拆成几个 Excel：
+            # 拆出来的文件落在原文件（压缩包）旁边，拖回来就是几张能分别建的表
+            split_dir, split_stem = zip_home.get(f, (None, None))
+            split = auto_split_wide(td, out_dir=split_dir, stem=split_stem)
+            if split is not None:
+                td["wide_split"] = split
             tables.append(td)
             (added_zip if f in from_zip else added_loose).append(f)
             pk = td.get("primary_key")
@@ -1203,6 +1231,8 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
                 sink.log(
                     f"[类型修正] {fname} 共 {len(notes)} 列按表头语义调整："
                     + "\n    " + "\n    ".join(notes))
+            for msg in split_notice_lines(td, split or {}):
+                sink.log(msg)
         except MergedCellsError as e:
             merged += 1
             total = sum(len(v) for v in e.merged.values())
@@ -2009,8 +2039,18 @@ class ImportWorker(QThread):
                     # 建模阶段就判得出这条 DDL 会被库拒（1118/1117），不发出去：
                     # 建表是隐式提交，半途报错既回滚不了也说不清，现场只会看到"导入失败"
                     result["msg"] = refuse["reason"]
-                    rep.log_error("[建表前拦下] 表 `%s`\n%s"
-                                  % (name, row_fit_notice(refuse)))
+                    hint = ""
+                    split = t.get("wide_split") or {}
+                    if split.get("ok"):
+                        # 拆出来的 Excel 已经在建模那一步落盘了，这里只提醒去拖回来，
+                        # 别再让人对着拦下理由找"那我该怎么办"
+                        hint = ("\n已自动拆成 %d 个 Excel（按公共字段 %d 列）：%s；"
+                                "把这几份拖回待导入列表就能分别建表"
+                                % (len(split["files"]), len(split["common"]),
+                                   "、".join(os.path.basename(x["file"])
+                                            for x in split["files"])))
+                    rep.log_error("[建表前拦下] 表 `%s`\n%s%s"
+                                  % (name, row_fit_notice(refuse), hint))
                     results.append(result)
                     continue
                 # 每张表一个事务：先开启，成功提交，失败回滚

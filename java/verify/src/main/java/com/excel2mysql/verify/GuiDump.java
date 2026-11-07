@@ -66,6 +66,11 @@ public final class GuiDump {
             System.out.println("x [ERROR] GUI-DUMP | 建不出临时目录：" + tmp.getPath());
             System.exit(2);
         }
+        // 宽表被拦下时会自动拆出 _partN.xlsx，默认写"原文件旁边"——这里的原文件就是夹具，
+        // 按现场口径写会把夹具目录写花，下一趟读夹具时多出来的文件全成了输入
+        File splitOut = new File(tmp, "splitout");
+        splitOut.mkdirs();
+        com.excel2mysql.core.ImportParse.splitOutDir = splitOut.getPath();
         MainFrame.modalProgress = false;
         // 对撞口径固定在"没有 conn.ini"：包内冒烟时 jar 同级带着随包 conn.ini，
         // 不钉住的话这里会真的去连库，探针结果随运行目录变

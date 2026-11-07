@@ -126,6 +126,15 @@ public final class GuiMain {
                 frame.initialsBox().setSelected(false);
                 frame.upperBox().setSelected(false);
                 frame.lowerBox().setSelected(false);
+                // 宽表被拦下时会自动拆出 Excel：自检的"用户文件"就是夹具目录，
+                // 按现场口径写会把夹具写花（下一轮又会把 _partN.xlsx 当夹具读进来）
+                try {
+                    com.excel2mysql.core.ImportParse.splitOutDir =
+                            java.nio.file.Files.createTempDirectory("e2m-splitout")
+                                    .toFile().getPath();
+                } catch (java.io.IOException e) {
+                    problems.add("建拆分产物临时目录失败：" + e);
+                }
                 String addSummary = frame.addFiles(files);
                 // 有了待导入的表，同一颗按钮要转回强调色（禁用色留在上面那条断言里钉着）
                 if (!frame.importButton().isEnabled()) {
@@ -333,6 +342,10 @@ public final class GuiMain {
                 zip_roundtrip(frame, files, problems);
                 // 压缩包的三条现场形状：GBK 条目名、ZIP64 中央目录、连续多批拖入的落点编号
                 zip_field_shapes(frame, files, problems);
+                // 宽表被行上限拦下后按公共字段拆成多个 Excel（与 Python wide_split 同口径）
+                wide_split(frame, problems);
+                // 降级的两条底线：键列不许动、明知救不回来别白改（与 core.infer 同口径）
+                row_fit_guards(problems);
                 // 建不出表的输入必须在解析阶段就拒（空表 / 只有表头 / 内容是文本的假 .xlsx）
                 checkRejects(frame, problems);
                 // 命令行的 --prefix 对 .sql 也要生效，且 dry-run 要能预览脚本
@@ -6492,6 +6505,210 @@ public final class GuiMain {
      * 前者从前会产出 `CREATE TABLE x ( )`，到库里变成一条 SQL 语法错误、退出码归到"导入失败"；
      * 后者连语法错误都没有，直接当空表放过。两边现在都在解析阶段就拒，这里钉住 Java 侧。
      */
+    /**
+     * 宽表被行上限拦下后按公共字段拆成多个 Excel（core.SplitWide）。
+     *
+     * <p>判据与 Python 侧 pack_test 的 WS1–WS8 同一批、数字同源：夹具在这里现造
+     * （242 列 × 3 行，前两列是键列，其余长文本），拆完再把每一份重新建模——
+     * 必须都过线且一次降级都不触发。"拆出来仍然建不出"或"拆出来又被降级一轮"等于没拆。
+     */
+    /**
+     * 降级的两条底线，与 core.infer 的同名规则同口径：
+     * ① 主键列不许参加降级——TEXT 当不了主键（建表 1170），降长度会截断键值；
+     * ② 怎么降都过不了线的表一列都不改，直接拒绝去拆表，不制造几百条无用降级记录。
+     */
+    private static void row_fit_guards(java.util.List<String> problems) {
+        java.util.List<com.excel2mysql.core.Infer.Column> cols =
+                new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+        com.excel2mysql.core.Infer.Column pk = new com.excel2mysql.core.Infer.Column();
+        pk.field = "bian_ma";
+        pk.comment = "\u7f16\u7801";
+        pk.type = "VARCHAR(255)";
+        pk.primaryKey = true;
+        cols.add(pk);
+        for (int i = 0; i < 64; i++) {
+            com.excel2mysql.core.Infer.Column c = new com.excel2mysql.core.Infer.Column();
+            c.field = "zi_duan_" + String.format("%02d", Integer.valueOf(i));
+            c.comment = "\u5b57\u6bb5" + String.format("%02d", Integer.valueOf(i));
+            c.type = "VARCHAR(255)";
+            cols.add(c);
+        }
+        com.excel2mysql.core.RowFit.Fit f1 = com.excel2mysql.core.RowFit.fit(cols, 16384);
+        if (f1.refuse != null || !"VARCHAR(255)".equals(pk.type) || f1.conversions.isEmpty()
+                || !f1.conversions.get(0)[1].startsWith("zi_duan")) {
+            problems.add("\u4e3b\u952e\u5217\u88ab\u964d\u7ea7\u4e86\uff08TEXT \u5f53\u4e0d\u4e86\u4e3b\u952e\uff0c"
+                    + "\u5efa\u8868\u4f1a 1170\uff09\uff1apk=" + pk.type
+                    + " conversions=" + f1.conversions.size());
+        }
+
+        // 600 个短文本列：全退 TEXT 也要 600×41 字节 > 半页，明知没救就该一列都不改
+        java.util.List<com.excel2mysql.core.Infer.Column> hope =
+                new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+        com.excel2mysql.core.Infer.Column hpk = new com.excel2mysql.core.Infer.Column();
+        hpk.field = "dan_wei";
+        hpk.comment = "\u5355\u4f4d\u7f16\u7801";
+        hpk.type = "VARCHAR(32)";
+        hpk.primaryKey = true;
+        hope.add(hpk);
+        for (int i = 0; i < 600; i++) {
+            com.excel2mysql.core.Infer.Column c = new com.excel2mysql.core.Infer.Column();
+            c.field = "shuo_ming_" + String.format("%03d", Integer.valueOf(i));
+            c.comment = "\u8bf4\u660e" + String.format("%03d", Integer.valueOf(i));
+            c.type = "VARCHAR(32)";
+            hope.add(c);
+        }
+        com.excel2mysql.core.RowFit.Fit f2 = com.excel2mysql.core.RowFit.fit(hope, 16384);
+        if (f2.refuse == null || !f2.conversions.isEmpty()) {
+            problems.add("\u660e\u77e5\u964d\u4e0d\u4e0b\u6765\u8fd8\u767d\u6539\u4e86 "
+                    + f2.conversions.size() + " \u5217\uff08\u5e94\u5f53\u4e00\u5217\u90fd\u4e0d\u52a8\uff09\uff1a"
+                    + (f2.refuse == null ? "\u6ca1\u62e6\u4e0b" : f2.refuse.reason));
+        } else if (!f2.refuse.reason.contains("\u4e3b\u952e\u5217")
+                || !f2.refuse.reason.contains("`dan_wei`")) {
+            problems.add("\u62e6\u4e0b\u7406\u7531\u6ca1\u70b9\u540d\u88ab\u4fdd\u4f4f\u7684\u4e3b\u952e\u5217\uff1a"
+                    + f2.refuse.reason);
+        }
+    }
+
+    private static void wide_split(MainFrame frame, java.util.List<String> problems) {
+        com.excel2mysql.core.Infer.Column key1 = new com.excel2mysql.core.Infer.Column();
+        key1.field = "dan_wei_bian_ma";
+        key1.comment = "\u5355\u4f4d\u7f16\u7801";
+        key1.type = "VARCHAR(32)";
+        key1.primaryKey = true;
+        com.excel2mysql.core.Infer.Column key2 = new com.excel2mysql.core.Infer.Column();
+        key2.field = "shu_ju_ri_qi";
+        key2.comment = "\u6570\u636e\u65e5\u671f";
+        key2.type = "DATE";
+        com.excel2mysql.core.Infer.Column key3 = new com.excel2mysql.core.Infer.Column();
+        key3.field = "zhuang_bei_ming_cheng";
+        key3.comment = "\u88c5\u5907\u540d\u79f0";
+        key3.type = "VARCHAR(64)";
+        com.excel2mysql.core.Infer.Column measure = new com.excel2mysql.core.Infer.Column();
+        measure.field = "zhi_000";
+        measure.comment = "\u6307\u6807";
+        measure.type = "DECIMAL(18,6)";
+
+        String[] note = new String[]{""};
+        int[] common = com.excel2mysql.core.SplitWide.commonColumns(
+                java.util.Arrays.asList(key1, key2, key3, measure), note);
+        if (common.length != 3 || !note[0].contains("\u8fde\u7eed 3 \u5217")) {
+            problems.add("\u516c\u5171\u5b57\u6bb5\u6ca1\u8ba4\u51fa\u8868\u5934\u6700\u524d\u9762\u90a3\u8fde\u7eed\u51e0\u5217\u952e\u5217\uff1a"
+                    + java.util.Arrays.toString(common) + " / " + note[0]);
+        }
+        com.excel2mysql.core.Infer.Column m1 = new com.excel2mysql.core.Infer.Column();
+        m1.field = "zhi";
+        m1.comment = "\u6307\u6807";
+        m1.type = "INT";
+        com.excel2mysql.core.Infer.Column m2 = new com.excel2mysql.core.Infer.Column();
+        m2.field = "liang";
+        m2.comment = "\u6570\u91cf";
+        m2.type = "INT";
+        String[] note2 = new String[]{""};
+        int[] fallback = com.excel2mysql.core.SplitWide.commonColumns(
+                java.util.Arrays.asList(m1, m2), note2);
+        if (fallback.length != 1 || fallback[0] != 0 || !note2[0].contains("\u951a\u70b9")) {
+            problems.add("\u4e00\u5217\u90fd\u4e0d\u50cf\u952e\u5217\u65f6\u6ca1\u9000\u5316\u6210\u300c\u7b2c\u4e00\u5217\u5f53\u951a\u70b9\u300d\uff1a"
+                    + java.util.Arrays.toString(fallback) + " / " + note2[0]);
+        }
+
+        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
+                "e2m-split-" + System.nanoTime());
+        if (!dir.mkdirs()) {
+            problems.add("\u5efa\u5bbd\u8868\u62c6\u5206\u68c0\u67e5\u7684\u4e34\u65f6\u76ee\u5f55\u5931\u8d25\uff1a" + dir.getPath());
+            return;
+        }
+        java.io.File wide = new java.io.File(dir, "\u8d85\u5bbd\u8bf4\u660e\u8868.xlsx");
+        org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+        org.apache.poi.ss.usermodel.Sheet sh = wb.createSheet("Sheet1");
+        org.apache.poi.ss.usermodel.Row head = sh.createRow(0);
+        head.createCell(0).setCellValue("\u5355\u4f4d\u7f16\u7801");
+        head.createCell(1).setCellValue("\u6570\u636e\u65e5\u671f");
+        for (int i = 0; i < 240; i++) {
+            head.createCell(2 + i).setCellValue("\u8bf4\u660e" + String.format("%03d", i));
+        }
+        for (int r = 0; r < 3; r++) {
+            org.apache.poi.ss.usermodel.Row row = sh.createRow(r + 1);
+            row.createCell(0).setCellValue("DW" + String.format("%03d", r));
+            row.createCell(1).setCellValue("2026-01-0" + (r + 1));
+            for (int i = 0; i < 240; i++) {
+                row.createCell(2 + i).setCellValue(
+                        "\u8fd9\u662f\u4e00\u6bb5\u6bd4\u8f83\u957f\u7684\u8bf4\u660e\u6587\u5b57\u7528\u6765\u628a\u5217\u5bbd\u6491\u5f00" + i);
+            }
+        }
+        try {
+            writeWorkbook(wb, wide);
+        } catch (java.io.IOException e) {
+            problems.add("\u5bbd\u8868\u62c6\u5206\u68c0\u67e5\u5199\u4e0d\u4e86\u5939\u5177\uff1a" + e);
+            return;
+        }
+
+        com.excel2mysql.core.TableBuilder tb = new com.excel2mysql.core.TableBuilder(
+                new com.excel2mysql.core.Infer(frame.names()), frame.names());
+        com.excel2mysql.core.TableBuilder.Result r;
+        try {
+            r = tb.build(wide.getPath(), null, null);
+        } catch (Exception e) {
+            problems.add("\u5bbd\u8868\u62c6\u5206\u68c0\u67e5\u8bfb\u4e0d\u4e86\u5939\u5177\uff1a" + e);
+            return;
+        }
+        if (r.rowFit == null || r.rowFit.refuse == null) {
+            problems.add("242 \u5217\u957f\u6587\u672c\u8868\u5e94\u5f53\u5728\u5efa\u6a21\u9636\u6bb5\u5c31\u88ab\u884c\u4e0a\u9650\u62e6\u4e0b");
+            return;
+        }
+        com.excel2mysql.core.SplitWide.Plan plan =
+                com.excel2mysql.core.ImportParse.autoSplitWide(r, dir.getPath(), null);
+        if (plan == null || !plan.ok || plan.parts.size() != 2
+                || plan.common.length != 2) {
+            problems.add("\u5bbd\u8868\u6ca1\u88ab\u62c6\u6210 2 \u4efd\uff08\u516c\u5171\u5b57\u6bb5 2 \u5217\uff09\uff1a"
+                    + (plan == null ? "null" : plan.reason + " parts=" + plan.parts.size()));
+            return;
+        }
+        int[] owns = new int[]{plan.parts.get(0).own.length, plan.parts.get(1).own.length};
+        if (owns[0] != 169 || owns[1] != 71) {
+            problems.add("\u5207\u5206\u6bb5\u6570\u4e0e Python \u4e0d\u4e00\u81f4\uff08\u5e94\u662f 169 + 71\uff09\uff1a"
+                    + java.util.Arrays.toString(owns));
+        }
+        for (com.excel2mysql.core.SplitWide.Part part : plan.parts) {
+            java.io.File f = new java.io.File(part.file);
+            if (!f.isFile() || f.length() == 0) {
+                problems.add("\u62c6\u51fa\u6765\u7684 Excel \u6ca1\u771f\u5199\u76d8\uff1a" + part.file);
+                continue;
+            }
+            try {
+                com.excel2mysql.core.TableBuilder.Result back = tb.build(part.file, null, null);
+                if (back.rowFit.refuse != null || !back.rowFit.conversions.isEmpty()) {
+                    problems.add("\u62c6\u51fa\u6765\u7684\u4e00\u4efd\u91cd\u5efa\u6a21\u4ecd\u7136\u8fc7\u4e0d\u4e86\u7ebf\u6216\u53c8\u964d\u7ea7\u4e86\uff1a"
+                            + f.getName() + " refuse=" + (back.rowFit.refuse != null)
+                            + " conversions=" + back.rowFit.conversions.size()
+                            + " columns=" + back.table.columns.size());
+                }
+                if (back.rows.size() != 3 || back.table.columns.size() != part.columns) {
+                    problems.add("\u62c6\u51fa\u6765\u7684\u4e00\u4efd\u884c\u6570\u6216\u5217\u6570\u4e0d\u5bf9\uff1a"
+                            + f.getName() + " rows=" + back.rows.size()
+                            + " columns=" + back.table.columns.size()
+                            + " \u5e94\u662f 3 \u884c / " + part.columns + " \u5217");
+                }
+            } catch (Exception e) {
+                problems.add("\u62c6\u51fa\u6765\u7684 Excel \u8bfb\u4e0d\u56de\u6765\uff1a" + f.getName() + " " + e);
+            }
+        }
+
+        // 结构定义模式的表不拆：字段类型是人工写的承诺
+        com.excel2mysql.core.TableBuilder.Result fake =
+                new com.excel2mysql.core.TableBuilder.Result();
+        com.excel2mysql.core.TableOps.Table structured = r.table.copy();
+        structured.source = "structured";
+        fake.table = structured;
+        fake.rowFit = r.rowFit;
+        com.excel2mysql.core.SplitWide.Plan skip =
+                com.excel2mysql.core.ImportParse.autoSplitWide(fake, dir.getPath(), null);
+        if (skip == null || skip.ok || !skip.reason.contains("\u7ed3\u6784\u5b9a\u4e49")) {
+            problems.add("\u7ed3\u6784\u5b9a\u4e49\u6a21\u5f0f\u7684\u8868\u4e0d\u8be5\u81ea\u52a8\u62c6\uff1a"
+                    + (skip == null ? "null" : skip.reason));
+        }
+        deleteTree(dir);
+    }
     private static void checkRejects(MainFrame frame, java.util.List<String> problems) {
         java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
                 "e2m-reject-" + System.nanoTime());

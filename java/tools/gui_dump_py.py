@@ -32,6 +32,11 @@ from PySide6.QtWidgets import (QApplication, QAbstractItemView, QCheckBox, QComb
                                QTextEdit,
                                QTableWidget)                                                # noqa: E402
 import main as m  # noqa: E402
+from core import wide_split as _wide  # noqa: E402
+
+# 宽表被拦下时会自动拆出 Excel：对撞喂的"用户文件"就是夹具目录，按现场口径写
+# 会把夹具写花（Java 那一趟随后就会把 _partN.xlsx 当成夹具读进来，两边当场对不上）
+_wide.OUT_DIR_OVERRIDE = tempfile.mkdtemp(prefix="e2m-splitdump_")
 
 app = QApplication(sys.argv)
 m.setup_app(app)   # 图标等应用级设置走生产同一段代码
