@@ -124,9 +124,28 @@ def load(path):
         return json.load(fh)
 
 
+def git_props():
+    """构建要带提交号：appinfo.properties 是资源过滤出来的，不带 -Dgit.commit 就写成空串，
+    紧接着自检里「复制出去的提交号必须是 40 位十六进制」那条必然红。
+    本脚本会就地 mvn install 一次，所以这四份属性与 构建验证.bat 保持同一套。"""
+    def g(*a):
+        try:
+            return subprocess.check_output(("git",) + a, cwd=JAVA_DIR,
+                                           stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
+        except Exception:
+            return ""
+    pairs = (("git.commit", g("rev-parse", "--short", "HEAD")),
+             ("git.commitFull", g("rev-parse", "HEAD")),
+             ("git.branch", g("rev-parse", "--abbrev-ref", "HEAD")))
+    out = ["-D%s=%s" % (k, v) for k, v in pairs if v]
+    if g("status", "--porcelain"):
+        out.append("-Dgit.dirty=true")
+    return out
+
+
 def run(cmd, cwd):
-    env = dict(os.environ)
     # 构建与跑产物都用随包同款 JDK 8：开发机上的高版本 JDK 只会把"现场跑不了"留到交付那天
+    env = dict(os.environ)
     env["JAVA_HOME"] = JDK8
     env["PATH"] = os.path.join(JDK8, "bin") + os.pathsep + env.get("PATH", "")
     proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
@@ -151,7 +170,7 @@ def main():
             print(out[-4000:])
             print("x [ERROR] GUI-PARITY | Python 侧枚举失败，退出码 %d" % code)
             return 1
-        code, out = run([MVN, "-B", "-q", "-o", "install", "-pl", "app,verify"],
+        code, out = run([MVN, "-B", "-q", "-o", "install", "-pl", "app,verify"] + git_props(),
                         cwd=JAVA_DIR)
         if code != 0:
             print(out[-4000:])
