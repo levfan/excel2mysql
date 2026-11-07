@@ -39,7 +39,8 @@ JAR_NAME_TMPL = "excel2mysql-%s.jar"
 # 随包文档的小节与篇幅档位与两条 Python 线共用一个来源：这一轮 README 收成用户向八节，
 # 只有 build_exe.py 挂了断言，出包侧没人核，直到打包才炸。三条线都读同一份常量才不会漏。
 sys.path.insert(0, ROOT)
-from _pack_common import README_LEN_RANGE, README_SECTIONS  # noqa: E402
+from _pack_common import (README_LEN_RANGE, README_SECTIONS, SHIPPED_TEXT_FILES,  # noqa: E402
+                          lone_lf_count, write_shipped_text)
 
 
 def fail(msg):
@@ -195,12 +196,12 @@ def launcher_text(version):
 
 
 def copy_project_doc(dist):
-    """把项目根那份 README.md 原样拷进包里，连标题用的图标一起。
+    """把项目根那份 README.md 放进包里（行尾换成 CRLF），连标题用的图标一起。
 
     以前随包的是打包时渲染的 README.txt（正文在项目侧 java/assets/README.txt）与
     export_manual_txt 渲染的使用说明.txt：仓库里看不见产物那份、产物里看不见仓库改的那份，
-    两份会分叉。现在项目里只有一份文档，包里就是它，逐字节相同；文档标题挂了图标，
-    所以把 assets/app_icon.svg 放到包内的同名相对路径下，图片才解析得出来。
+    两份会分叉。现在项目里只有一份文档，包里就是它，只把行尾换成记事本认得的那种；
+    文档标题挂了图标，所以把 assets/app_icon.svg 放到包内的同名相对路径下，图片才解析得出来。
     代价要说清：包里那份不再带"本包剔了几个桩、多大"这类现场数——那些是构建时才知道的数，
     由本脚本打印在构建日志里，不再混进唯一的文档正文。
     """
@@ -218,8 +219,7 @@ def copy_project_doc(dist):
     if _miss:
         fail("README.md 缺了现场要用的小节：%s" % "、".join(_miss))
     dst = os.path.join(dist, "README.md")
-    with open(dst, "wb") as fh:
-        fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+    write_shipped_text(dst, text.encode("utf-8"))
     icon_src = os.path.join(ROOT, "assets", "app_icon.svg")
     if not os.path.isfile(icon_src):
         fail("随包文档要用的图标 assets/app_icon.svg 不在仓库里")
@@ -227,9 +227,13 @@ def copy_project_doc(dist):
     if not os.path.isdir(os.path.dirname(icon_dst)):
         os.makedirs(os.path.dirname(icon_dst))
     shutil.copy2(icon_src, icon_dst)
-    if os.path.getsize(dst) != len(text.encode("utf-8")) + text.count("\n"):
-        fail("包里的 README.md 与仓库那份字节数不对不上（行尾转换算进去也不该差）")
-    ok("README.md %d 字符（与仓库同源）+ assets/app_icon.svg" % len(text))
+    if lone_lf_count(dst):
+        fail("包里的 README.md 还有纯 LF 行尾，Win7 记事本打开是一整行")
+    with io.open(dst, "rb") as fh:
+        shipped = fh.read()
+    if shipped.replace(b"\r\n", b"\n") != text.encode("utf-8"):
+        fail("包里的 README.md 内容与仓库那份对不上（只许行尾不同）")
+    ok("README.md %d 字符（内容与仓库同一份，行尾转成 CRLF）+ assets/app_icon.svg" % len(text))
     return text
 
 
@@ -373,7 +377,8 @@ def main():
     conn_src = os.path.join(JAVA_DIR, "assets", "conn.ini")
     if not os.path.isfile(conn_src):
         fail("缺模板 %s：命令行会报「没指定目标库」，跟没带配置长得一模一样" % conn_src)
-    shutil.copy2(conn_src, os.path.join(dist, "conn.ini"))
+    with open(conn_src, "rb") as fh:
+        write_shipped_text(os.path.join(dist, "conn.ini"), fh.read())
     stubs_src = count_stubs(src_jre)
     removed, pdb = copy_jre(src_jre, os.path.join(dist, "jre"))
     info("剔除转发桩与 CRT 批 %d 个（源 JRE 里有 %d 个）、调试符号 %d 个"
@@ -399,6 +404,14 @@ def main():
         if not os.path.isfile(os.path.join(dist, want)):
             fail("产物里缺 %s" % want)
     ok("产物含 conn.ini、README.md 与 assets/app_icon.svg")
+    # 这两份是现场用记事本改的：留一个纯 LF，Win7 记事本就把它当一整行显示，
+    # 改口令的人要在看不见换行的文本里摸黑插字
+    for want in SHIPPED_TEXT_FILES:
+        p = os.path.join(dist, want)
+        if os.path.isfile(p) and lone_lf_count(p):
+            fail("产物里的 %s 还有 %d 个纯 LF 行尾，Win7 记事本打开是一整行"
+                 % (want, lone_lf_count(p)))
+    ok("随包文本行尾全是 CRLF（%s）" % "、".join(SHIPPED_TEXT_FILES))
     # 文档里的开关名必须真是这个 jar 认的：Python 命令行版那套 --run-sql / --swap-prefix
     # 抄到这里会让现场敲出一条"未知选项"。只核能照抄的那几行（含 java.exe -jar 或 启动.bat
     # 的示例）——"本包没有 --run-sql"这种提醒也得允许写出来，否则守卫会把解释当成错误

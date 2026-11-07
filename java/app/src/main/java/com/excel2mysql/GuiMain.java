@@ -7798,6 +7798,24 @@ public final class GuiMain {
         java.io.File blank = new java.io.File(dir, "blank.ini");
         writeText(blank.getPath(), "[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
                 + "password = pw-file\ndatabase =\n");     // 读得到，但没点名目标库
+        // 记事本另存会把行尾换成 CRLF，随包那两份文本也发 CRLF：两种行尾必须读出同一组值，
+        // 否则口令末尾多一个回车，报出来的却是"连不上库"这种看着像网络问题的错
+        java.io.File crlf = new java.io.File(dir, "conn-crlf.ini");
+        writeText(crlf.getPath(), "[mysql]\r\nhost = 10.0.0.8\r\nport = 3307\r\nuser = ops\r\n"
+                + "password = pw-file\r\ndatabase = alpha\r\n");
+        try {
+            com.excel2mysql.core.Config lf =
+                    com.excel2mysql.core.Config.fromFile(good.getPath());
+            com.excel2mysql.core.Config tcrlf =
+                    com.excel2mysql.core.Config.fromFile(crlf.getPath());
+            if (!lf.host.equals(tcrlf.host) || lf.port != tcrlf.port
+                    || !lf.user.equals(tcrlf.user) || !lf.password.equals(tcrlf.password)
+                    || !lf.database.equals(tcrlf.database)) {
+                problems.add("CRLF 的 conn.ini 与 LF 读出来不一样：" + tcrlf + " / " + lf);
+            }
+        } catch (java.io.IOException e) {
+            problems.add("两种行尾的 conn.ini 有一份读不下去：" + e);
+        }
         List<String> keep = MainFrame.connCandidates;
         try {
             MainFrame.connCandidates = java.util.Collections.singletonList(good.getPath());

@@ -809,6 +809,22 @@ with open(cfg_gbk, "wb") as fh:
 cfg2 = cli_mod.read_config_file(cfg_gbk)
 check("W15 GBK(记事本 ANSI) 配置文件退回 GBK 仍能读", cfg2["host"] == "10.0.0.8", cfg2)
 
+# 记事本另存会把行尾写成 CRLF，随包那份 conn.ini 也是 CRLF：取值里绝不能混进回车，
+# 否则口令与库名末尾多一个字符，报出来的却是"连不上库"这种看着像网络的错
+_cfg_body = ("# 记事本改过的中文注释\n[mysql]\nhost = 10.0.0.9\nport = 3307\n"
+             "user = reader\npassword = pw-from-file\ndatabase = filedemo\n")
+cfg_lf = os.path.join(_tmpdir, "conn_lf.ini")
+cfg_crlf = os.path.join(_tmpdir, "conn_crlf.ini")
+with open(cfg_lf, "wb") as fh:
+    fh.write(_cfg_body.encode("utf-8"))
+with open(cfg_crlf, "wb") as fh:
+    fh.write(_cfg_body.replace("\n", "\r\n").encode("utf-8"))
+_cfg_lf = cli_mod.read_config_file(cfg_lf)
+_cfg_crlf = cli_mod.read_config_file(cfg_crlf)
+check("W15b CRLF 的配置文件与 LF 读出同一组值（记事本改过的文件直接能用）",
+      _cfg_crlf == _cfg_lf and not any("\r" in v for v in _cfg_crlf.values()),
+      (_cfg_crlf, _cfg_lf))
+
 try:
     cli_mod.read_config_file(os.path.join(_tmpdir, "不存在.ini"))
     check("W16 配置文件不存在时报可读的错误", False, "没抛")

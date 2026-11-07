@@ -22,7 +22,8 @@ import time
 import time
 from ctypes import wintypes
 
-from _pack_common import README_LEN_RANGE, README_SECTIONS
+from _pack_common import (README_LEN_RANGE, README_SECTIONS, SHIPPED_TEXT_FILES,
+                          lone_lf_count, to_crlf, write_shipped_text)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 VENV_PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
@@ -208,11 +209,13 @@ def build_app():
 
 
 def copy_project_doc():
-    """把项目根那份 README.md 原样拷进包里。
+    """把项目根那份 README.md 放进包里，行尾转成记事本认得的 CRLF。
 
     现场拿到包的顺序是"先翻文件、再决定要不要双击 exe"，所以包里必须有一份可读文档。
     以前是打包时由 help_doc.py 渲染一份 README.txt——仓库里看不见产物那份、产物里看不见
-    仓库改的那份，两份会分叉；现在随包的就是仓库那一份，逐字节相同。
+    仓库改的那份，两份会分叉；现在随包的就是仓库那一份，只是行尾换成 CRLF：
+    Win7 的记事本只认 CRLF，纯 LF 打开是一整行，而 Win7 的记事本要一直到 Win10 1809
+    才认 LF，这条线的现场机就是 Win7 SP1。
     标题那行挂了图标，所以连 `assets/app_icon.svg` 一起放进包里的同名相对路径，
     否则文档里的图片在现场解析不出来。图标用矢量那一份：位图放大就发虚，
     而 README 会被人在各种字号下看。
@@ -230,8 +233,7 @@ def copy_project_doc():
     if _miss:
         raise RuntimeError("README.md 缺了现场要用的小节：%s" % "、".join(_miss))
     out = os.path.join(APP_DIST, "README.md")
-    with open(out, "wb") as fh:
-        fh.write(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+    write_shipped_text(out, text.encode("utf-8"))
     icon_src = os.path.join(ROOT, "assets", "app_icon.svg")
     if not os.path.isfile(icon_src):
         raise RuntimeError("随包文档用的图标 assets/app_icon.svg 不在仓库里")
@@ -239,9 +241,14 @@ def copy_project_doc():
     if not os.path.isdir(os.path.dirname(icon_dst)):
         os.makedirs(os.path.dirname(icon_dst))
     shutil.copy2(icon_src, icon_dst)
-    if os.path.getsize(out) != len(text.encode("utf-8")) + text.count("\n"):
-        raise RuntimeError("包里的 README.md 字节数与仓库那份对不上（行尾转换算进去也不该差）")
-    return "README.md %d 字符（与仓库逐字节一致）+ assets/app_icon.svg" % len(text)
+    with open(out, "rb") as fh:
+        shipped = fh.read()
+    if lone_lf_count(out):
+        raise RuntimeError("包里的 README.md 行尾不是 CRLF，Win7 记事本打开就是一整行")
+    if shipped.replace(b"\r\n", b"\n") != text.encode("utf-8"):
+        raise RuntimeError("包里的 README.md 内容与仓库那份对不上（只许行尾不同）")
+    return ("README.md %d 字符（内容与仓库同一份，行尾转成 CRLF）+ assets/app_icon.svg"
+            % len(text))
 
 
 def build_and_run_frozen_tests():

@@ -105,3 +105,29 @@ CLI_EXCLUDES = ALL_EXCLUDES + GUI_MODULES
 README_SECTIONS = ("选哪个包", "上手", "连接信息", "会踩的坑", "退出码",
                    "Win7 上起不来", "再往深", "许可")
 README_LEN_RANGE = (2000, 3200)
+
+# Win7 与 Win8/8.1 的记事本只把 CRLF 当换行，纯 LF 的文件打开就是一整行；现场要改的
+# 恰恰是 conn.ini 里那行口令，README 里的坑说明也全在行上。Win10 1809 的记事本才认 LF，
+# 而这条线交付的目标机就是 Win7 SP1。仓库里仍存 LF，只有随包那一份转成 CRLF。
+SHIPPED_TEXT_FILES = ("README.md", "conn.ini")
+
+
+def to_crlf(data):
+    """bytes -> bytes：先把行尾统一成 LF，再全部换成 CRLF，已是 CRLF 的不重复加。"""
+    return data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+
+def write_shipped_text(dst, data):
+    """按 CRLF 落地一份随包文本，返回 (行数, 字节数)。"""
+    out = to_crlf(data)
+    with open(dst, "wb") as fh:
+        fh.write(out)
+    return out.count(b"\r\n"), len(out)
+
+
+def lone_lf_count(path):
+    """文件里没配 \r 的裸 LF 个数，0 才算这条线发的是记事本认得了的行尾。"""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    return data.count(b"\n") - data.count(b"\r\n")
+

@@ -32,6 +32,10 @@ import time
 from ctypes import wintypes
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT)
+# 随包文本的行尾口径与另两条线共用同一份常量与同一支函数（_pack_common.py）
+from _pack_common import SHIPPED_TEXT_FILES, lone_lf_count, write_shipped_text  # noqa: E402
+
 VENV_PY = os.path.join(ROOT, ".venv38", "Scripts", "python.exe")
 PYINSTALLER = os.path.join(ROOT, ".venv38", "Scripts", "pyinstaller.exe")
 # GUI 线的环境：用它跑同一份 pack_test38.py，证明旧栈与新栈输出逐行一致
@@ -258,6 +262,26 @@ def build_app():
     return f"{size:.0f} MB / {n} 个文件 · {prereq}"
 
 
+def normalize_shipped_text():
+    """把随包的用户要读的文本统一换成 CRLF。
+
+    PyInstaller 按 spec 的 datas 原样拷，仓库里存的是 LF，而 Win7 与 Win8 自带的记事本
+    只把 CRLF 当换行——那种机器上打开 conn.ini 就是一整行，而现场要改的正是里面那行口令。
+    """
+    done = []
+    for name in SHIPPED_TEXT_FILES:
+        path = os.path.join(APP_DIST, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as fh:
+            data = fh.read()
+        lines, _ = write_shipped_text(path, data)
+        done.append("%s %d 行" % (name, lines))
+    if not done:
+        raise RuntimeError("产物里没有 README.md 也没有 conn.ini，随包文本这一步没东西可转")
+    return "、".join(done) + " 行尾转成 CRLF"
+
+
 def inspect_package():
     """产物体检：旧包里不该有 Qt，得有 python38.dll，且 PE 声明的系统版本不能高于 Win7。
 
@@ -277,6 +301,12 @@ def inspect_package():
             raise RuntimeError(
                 "产物同级没有 %s（spec 的 datas 漏了仓库根或 assets/ 里那一份）——"
                 "对方要么找不到默认配置，要么手上没有文档" % want)
+    for want in SHIPPED_TEXT_FILES:
+        p = os.path.join(APP_DIST, want)
+        if os.path.isfile(p) and lone_lf_count(p):
+            raise RuntimeError(
+                "产物里的 %s 还有 %d 个纯 LF 行尾：Win7 记事本打开就是一整行，"
+                "现场改口令要摸黑改" % (want, lone_lf_count(p)))
     # 仓库里有前置补丁目录，产物里就必须有同样数量的文件（内容已在 copy_prereq 逐文件核过 md5）
     if os.path.isdir(PREREQ_SRC):
         want_n = sum(len(fs) for _d, _dd, fs in os.walk(PREREQ_SRC))
@@ -471,6 +501,7 @@ def main():
     if "--no-parity" not in args:
         step("新栈同口径用例集（跨栈逐条比对）", run_parity_tests)
     step("构建产品包（onedir + 控制台 + PyInstaller 5.x）", build_app)
+    step("随包文本行尾（记事本认得的那一种）", normalize_shipped_text)
     step("产物体检（无 Qt / python38.dll / PE 系统版本 <= 6.1）", inspect_package)
     if not fast:
         step("构建并运行冻结态用例集", build_and_run_frozen_tests)
