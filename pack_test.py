@@ -7036,7 +7036,7 @@ sv.on_sql_files_dropped([_stat_sql])
 _app.processEvents()
 POPUPS.clear()
 sv.btn_sql_stat_rows.click()
-check("R45r 第二页「统计数据总行数」按「数据行数」求和，弹窗与日志同一句",
+check("R45w 第二页「统计数据总行数」按「数据行数」求和，弹窗与日志同一句",
       [sv.sql_table.item(r, 5).text() for r in range(2)] == ["3", "2"]
       and POPUPS and "数据总行数：5 行" in POPUPS[-1][1]
       and "[统计] 脚本 1 个、表 2 张，数据总行数：5 行" in sv.sql_log.toPlainText(),
@@ -8305,7 +8305,7 @@ else:
     _vbs_t18 = _mod_t18.vbs_launcher_text(APP_VERSION)
     _txt_t18 = _vbs_t18.decode("ascii")
     _open_t18 = _mod_t18._unclosed_line(_vbs_t18, "启动.vbs")
-    check("T18 启动.vbs 每一行的引号都配平（行尾没有悬空的字符串）",
+    check("T17b 启动.vbs 每一行的引号都配平（行尾没有悬空的字符串）",
           _open_t18 is None, _open_t18)
     _line_t18 = [x for x in _txt_t18.split("\r\n") if x.startswith("cmd = ")][0]
     _env_t18 = {"q": '"', "javaw": "J/javaw.exe", "jarPath": "J/x.jar"}
