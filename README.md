@@ -12,9 +12,11 @@
 | --- | --- | --- |
 | Win10 / 11，要边看边改表结构 | `excel2mysql.exe` | 64 位 Windows 10 1809 及以上 |
 | Win7，或要写批处理无人值守 | `excel2mysql-cli.exe` | 64 位 Windows 7 SP1 及以上，系统要有 UCRT |
-| Win7 也要图形界面，或数据库口令含中文 | Java 包里的 `启动.bat` | 64 位 Windows 7 及以上，Java 运行时随包 |
+| Win7 也要图形界面，或数据库口令含中文 | Java 包里的 `启动.vbs` | 64 位 Windows 7 及以上，Java 运行时随包 |
 
 三个包都是整个目录一起拷，**只拷 exe 跑不起来**；三个包共用同一套解析与建表口径，选哪个只看系统新旧、以及口令里有没有中文。都不用装 Python、Java 或数据库驱动。
+
+Java 包双击不留 cmd 黑框：`启动.vbs` 走 `javaw`，没有控制台可留（组策略禁用 .vbs 就用 `启动.bat`）；排障用 `启动-调试.bat`，它故意留着控制台。
 
 Java 包也能当命令行用：`启动.bat` 同级那个 jar，用包内 `jre\bin\java.exe -jar` 起，给一个目录会同时做 Excel 建表导入和 `.sql` 执行，只要其中一件就加 `--no-sql` 或 `--no-excel`，第一个参数写 `--gui` 就是开界面。
 

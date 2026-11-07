@@ -153,20 +153,66 @@ def count_stubs(path):
 
 
 def launcher_text(version):
-    """生成启动脚本。
+    """生成「启动.bat」：双击就是开窗口，而且**不留黑框**。
 
-    两条都是踩过的坑：
+    现场反馈「双击有个 cmd 黑框一直挂着」：旧的这一行用的是 jre\\bin\\java.exe，
+    那是控制台子系统程序，cmd 会一直挂在那里等 JVM 退出，于是窗口从头到尾都在。
+    javaw.exe 是同一份 JVM 的窗口子系统版本，不挂控制台；批处理把它拉起来就自己退出了，
+    窗口跟着关掉，只剩 Spline 的界面。默认入口给的是「启动.vbs」（连闪一下都没有），
+    这个 bat 是 .vbs 被组策略挡掉时的退路——所以它自己也得是不留黑框的。
+
+    几条都是踩过的坑：
     1. 不能用 % 格式化拼字符串——批处理里 %% 与 % 含义不同，只有某几行走过格式化的话，
        其余的 %% 会原样落进脚本，变成"成功也报 FAILED"。所以统一用占位符替换。
     2. 脚本正文一律 ASCII，不写中文注释。cmd 按当前代码页逐字节解析，
        UTF-8 中文里出现会被当成命令分隔符的字节时，一行 rem 能被拆成"命令找不到"，
        而这台机器与目标机的代码页并不一样。中文说明放随包的 README.md（项目根那一份）。
-    3. 无参数也必须开图形界面：双击 启动.bat 的人要的是窗口，不是用法清单。
+       正文纯 ASCII 之后 chcp 65001 那行也一起删了——它每秒都在给启动加延迟。
+    3. 无参数也必须开图形界面：双击的人要的是窗口，不是用法清单。
        拖文件进来时把文件转给界面（GuiMain 收路径参数并加载）。
+    4. 只在「文件缺失」这种一眼要人处理的场合才 pause：正常启动不 pause，
+       否则关掉界面后又会留一个"按任意键继续"的黑框，正是这次要治的病。
     """
     jar = JAR_NAME_TMPL % version
     lines = [
         "@echo off",
+        "rem Start the Swing GUI through javaw.exe: no console is attached, no black window.",
+        "rem Kept as the fallback entry for machines where .vbs scripts are blocked.",
+        "setlocal",
+        'cd /d "%~dp0"',
+        'set "JAVAW=%~dp0jre\\bin\\javaw.exe"',
+        'set "JAR=%~dp0__JAR__"',
+        'if not exist "%JAVAW%" goto no_jre',
+        'if not exist "%JAR%" goto no_jar',
+        "rem start returns at once: the console closes even while javaw keeps running.",
+        'start "" "%JAVAW%" -Dfile.encoding=UTF-8 -jar "%JAR%" --gui %*',
+        "exit /b 0",
+        "",
+        ":no_jre",
+        "echo [ERROR] missing jre\\bin\\javaw.exe - unpack the whole folder.",
+        "pause",
+        "exit /b 2",
+        "",
+        ":no_jar",
+        "echo [ERROR] missing __JAR__ in this folder.",
+        "pause",
+        "exit /b 3",
+        "",
+    ]
+    return ("\r\n".join(lines)).replace("__JAR__", jar).encode("ascii")
+
+
+def debug_launcher_text(version):
+    """生成「启动-调试.bat」：故意留着黑框，给排障用。
+
+    javaw 那一路没有控制台，JVM 起不来或者启动阶段就崩的时候，界面上什么都不会出现，
+    现场只能看到"双击没反应"。这一份用 java.exe 起，标准输出/错误都留在窗口里，
+    退出码也打出来，最后 pause 住不让人看不见——排障要的正是这个黑框。
+    """
+    jar = JAR_NAME_TMPL % version
+    lines = [
+        "@echo off",
+        "rem Diagnostic entry: keeps the console so start-up errors stay readable.",
         "chcp 65001 >nul",
         "setlocal",
         'cd /d "%~dp0"',
@@ -176,23 +222,139 @@ def launcher_text(version):
         "    pause",
         "    exit /b 2",
         ")",
-        'if not exist "__JAR__" (',
+        'if not exist "%~dp0__JAR__" (',
         "    echo [ERROR] missing __JAR__ in this folder.",
         "    pause",
         "    exit /b 3",
         ")",
-        "rem Always start the GUI. Dropped files are forwarded to the window as paths.",
-        '"%JAVA%" -Dfile.encoding=UTF-8 -jar "__JAR__" --gui %*',
+        '"%JAVA%" -Dfile.encoding=UTF-8 -jar "%~dp0__JAR__" --gui %*',
         'set "RC=%ERRORLEVEL%"',
-        'if not "%RC%"=="0" (',
-        "    echo [FAILED] exit code %RC%",
-        "    pause",
-        ")",
-        'if "%~1"=="" pause',
+        "echo [EXIT] %RC%",
+        "pause",
         "exit /b %RC%",
         "",
     ]
-    return ("\r\n".join(lines)).replace("__JAR__", jar).encode("utf-8")
+    return ("\r\n".join(lines)).replace("__JAR__", jar).encode("ascii")
+
+
+def vbs_launcher_text(version):
+    """生成「启动.vbs」：全程不出现任何窗口，连一闪都没有。
+
+    双击 .bat 时 cmd 总要先开一个控制台，哪怕脚本只跑 50 毫秒也会闪一下。
+    .vbs 由 wscript.exe 执行，本来就没有控制台，于是这条路径是零窗口的。
+    缺文件用 MsgBox 说人话（弹窗总比"双击没反应"强），正常启动什么都不弹。
+
+    正文同样只用 ASCII：VBS 里的字符串字面量按脚本文件的编码读，写中文就得跟着
+    操心 BOM 与代码页，不如把中文留给 README 与界面。
+    """
+    jar = JAR_NAME_TMPL % version
+    lines = [
+        "' Start the Swing GUI with no console window at all.",
+        "' This is the recommended entry: unlike a .bat, wscript.exe has no console to flash.",
+        "Option Explicit",
+        "Dim fso, sh, here, javaw, jarPath, cmd, i, rc, q",
+        'Set fso = CreateObject("Scripting.FileSystemObject")',
+        'Set sh = CreateObject("WScript.Shell")',
+        "here = fso.GetParentFolderName(WScript.ScriptFullName)",
+        'javaw = here & "\\jre\\bin\\javaw.exe"',
+        'jarPath = here & "\\__JAR__"',
+        "If Not fso.FileExists(javaw) Then",
+        '    MsgBox "missing jre\\bin\\javaw.exe - unpack the whole folder.", 16, "excel2mysql"',
+        "    WScript.Quit 2",
+        "End If",
+        "If Not fso.FileExists(jarPath) Then",
+        '    MsgBox "missing __JAR__ in this folder.", 16, "excel2mysql"',
+        "    WScript.Quit 3",
+        "End If",
+        "sh.CurrentDirectory = here",
+        # 引号一律走 Chr(34)：以前这里拿 """" 拼整条命令行，数错一个引号整份脚本
+        # 就是「未结束的字符串常量」，双击毫无反应——而且只有真跑才看得出来。
+        "q = Chr(34)",
+        'cmd = q & javaw & q & " -Dfile.encoding=UTF-8 -jar " & q & jarPath & q & " --gui"',
+        "For i = 0 To WScript.Arguments.Count - 1",
+        '    cmd = cmd & " " & q & WScript.Arguments(i) & q',
+        "Next",
+        "On Error Resume Next",
+        # 等着它退出（第三个参数 True）才能拿到返回码：以前不等，javaw 起不来
+        # 就一点动静都没有，用户只能看到「双击没反应」。wscript 无控制台，等的时候不占界面。
+        "rc = sh.Run(cmd, 1, True)",
+        "If Err.Number <> 0 Then",
+        '    MsgBox "could not start java: " & Err.Description, 16, "excel2mysql"',
+        "    WScript.Quit 4",
+        "End If",
+        "If rc <> 0 Then",
+        '    MsgBox "java exited with code " & rc & "." & vbCrLf _',
+        '        & "Use the debug .bat in this folder (it keeps a console) to see why.", 48, "excel2mysql"',
+        "    WScript.Quit rc",
+        "End If",
+        "",
+    ]
+    return ("\r\n".join(lines)).replace("__JAR__", jar).encode("ascii")
+
+
+# 三个入口各自的写法要求：用哪个 java、许不许有 pause 之类，都按「这一份的角色」判，
+# 不是一刀切——调试那一份故意留着黑框，拿"不许 pause"去卡它就是把排障手段卡死
+LAUNCHERS = (
+    # 文件名, 生成函数, 必须包含, 不许包含
+    ("启动.bat", launcher_text,
+     ("javaw.exe", "--gui"),
+     ("jre\\bin\\java.exe",)),
+    ("启动-调试.bat", debug_launcher_text,
+     ("jre\\bin\\java.exe", "--gui", "pause"),
+     ()),
+    ("启动.vbs", vbs_launcher_text,
+     # 引号只许走 Chr(34)；`--gui` 必须落在 jar 路径的闭合引号之后，
+     # 否则 Java 收到的 -jar 参数就是 "xxx.jar --gui" 整串，一样起不来
+     ("javaw.exe", "--gui", "MsgBox", "q = Chr(34)",
+      '-jar " & q & jarPath & q & " --gui"', "exited with code"),
+     ("jre\\bin\\java.exe",)),
+)
+
+
+def _unclosed_line(blob, name):
+    """逐行走一遍 VBS 字符串，返回第一处「行尾还停在字符串里」的行号与原文。
+
+    这不是锦上添花的 lint：`启动.vbs` 曾经因为拼命令行时多写一个引号（15 个，奇数），
+    整份脚本就是「未结束的字符串常量」，双击连窗都不弹。而本机的命令校验把脚本宿主
+    按 LOLBin 拦着，实跑一遍做不到，于是错到交付都没人发现。引号必须靠读就能判死。
+    """
+    if not name.lower().endswith(".vbs"):
+        return None
+    for no, raw in enumerate(blob.decode("ascii").split("\r\n"), 1):
+        line = raw.strip()
+        if not line or line.startswith("'"):
+            continue
+        inside = False
+        for ch in raw:
+            if ch == '"':
+                inside = not inside     # 相邻两个引号互为转义，一进一出仍然回到原状态
+        if inside:
+            return no, raw
+    return None
+
+
+def write_launchers(dist, version):
+    """把三个入口写进交付目录，当场把各自那条硬要求核一遍。"""
+    for name, make, must, forbid in LAUNCHERS:
+        blob = make(version)
+        bad = [s for s in must if s.encode("ascii") not in blob]
+        if bad:
+            fail("%s 少了该有的内容：%s" % (name, "、".join(bad)))
+        hit = [s for s in forbid if s.encode("ascii") in blob]
+        if hit:
+            fail("%s 里不该出现 %s：那一份的角色不对" % (name, "、".join(hit)))
+        non_ascii = sum(1 for b in blob if b > 127)
+        if non_ascii:
+            fail("%s 里有 %d 个非 ASCII 字节：目标机代码页不同会被解析错" % (name, non_ascii))
+        if b"\r\n" not in blob or blob.count(b"\n") != blob.count(b"\r\n"):
+            fail("%s 行尾不是全 CRLF" % name)
+        broken = _unclosed_line(blob, name)
+        if broken:
+            fail("%s 第 %d 行引号没配平（字符串没闭合，脚本根本解析不了）：%s"
+                 % (name, broken[0], broken[1].strip()))
+        with open(os.path.join(dist, name), "wb") as fh:
+            fh.write(blob)
+    ok("启动.bat（javaw，无黑框）、启动-调试.bat（留控制台）、启动.vbs（零窗口）：纯 ASCII、CRLF、引号配平")
 
 
 def copy_project_doc(dist):
@@ -384,19 +546,9 @@ def main():
     info("剔除转发桩与 CRT 批 %d 个（源 JRE 里有 %d 个）、调试符号 %d 个"
          % (removed, stubs_src, pdb))
 
-    with open(os.path.join(dist, "启动.bat"), "wb") as fh:
-        bat = launcher_text(version)
-        # 这两条各对应一个刚踩过的坑：漏了 --gui，双击只会打印 CLI 用法；
-        # 正文混进中文，cmd 按代码页逐字节解析时能把一行 rem 拆成"命令找不到"。
-        if b"--gui" not in bat:
-            fail("启动.bat 没有 --gui：双击 启动.bat 打开的会是用法清单，不是窗口")
-        non_ascii = sum(1 for b in bat if b > 127)
-        if non_ascii:
-            fail("启动.bat 里有 %d 个非 ASCII 字节：目标机代码页不同会被 cmd 解析错" % non_ascii)
-        if b"\r\n" not in bat or bat.count(b"\n") != bat.count(b"\r\n"):
-            fail("启动.bat 行尾不是全 CRLF")
-        fh.write(bat)
-    ok("启动.bat：走图形界面、纯 ASCII、CRLF 行尾")
+    # 三个入口各判各的：默认那两个必须不带控制台（javaw / wscript），
+    # 调试那一份必须留着控制台，漏了 --gui 就只会打印用法清单而不是开窗口
+    write_launchers(dist, version)
     size = human(dir_size(dist))
     doc = copy_project_doc(dist)
 

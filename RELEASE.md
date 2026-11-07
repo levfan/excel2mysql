@@ -6,7 +6,7 @@
 
 | 维度 | 图形版（GUI） | 命令行版（CLI） | Java 版（GUI + CLI 同一个 jar） |
 | --- | --- | --- | --- |
-| 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` | `java/` → `启动.bat` 起界面，`-jar` 起命令行 |
+| 入口 | `main.py` → `excel2mysql.exe` | `cli.py` → `excel2mysql-cli.exe` | `java/` → `启动.vbs`（零窗口）/ `启动.bat`（javaw，无黑框）起界面，`-jar` 起命令行 |
 | 支持系统 | 64 位 Windows 10 1809+ / 11 | Windows 7 SP1+，且系统 UCRT 补丁完整 | 64 位 Windows 7+，运行时随包 |
 | 运行时 | Python 3.10+（本机 `.venv` = 3.12.8）+ PySide6 | Python 3.8.10（本机 `.venv38`），不含 Qt | JDK 8（本机 `jdk1.8.0_202`） |
 | 产物体积 | 162 MB / 921 个文件 | 131 MB / 1405 个文件（含 42 MB 前置补丁） | 约 232 MB，绝大部分是随包 JRE |
@@ -112,7 +112,7 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 | --- | --- | --- |
 | 图形版 | PyInstaller 6.x onedir：`excel2mysql.exe` + `_internal\` | 两者必须同级放在一起，只拷 exe 跑不起来 |
 | 命令行版 | PyInstaller 5.x onedir：平铺，没有 `_internal` | 整目录复制或压成 zip 分发 |
-| Java 版 | `启动.bat` + `excel2mysql-4.3.4.jar` + `jre\` | 内部就是包内 `jre\bin\java.exe -jar … --gui`，不依赖目标机装没装 Java |
+| Java 版 | `启动.vbs` + `启动.bat` + `启动-调试.bat` + `excel2mysql-4.3.4.jar` + `jre\` | 默认入口用包内 `jre\bin\javaw.exe -jar … --gui` 起界面（无控制台，不留黑框）；`启动-调试.bat` 用 `java.exe` 起，排障时看得到启动报错与退出码；不依赖目标机装没装 Java |
 
 随包件（打包脚本逐条断言存在，缺一件不出包）：
 

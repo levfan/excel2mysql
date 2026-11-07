@@ -8291,6 +8291,36 @@ else:
           and not any(os.path.exists(os.path.join(_ROOT, "java", b)) for b in _BAT_AT_ROOT),
           [_bjd.count('os.path.join(ROOT, "dist"'), "java\\dist" in _rel,
            [b for b in _BAT_AT_ROOT if not os.path.isfile(os.path.join(_ROOT, b))]])
+
+# 出包时生成「启动.vbs」的那一段：整条命令行靠引号拼，多一个少一个就是
+# 「未结束的字符串常量」，双击连窗都不弹（第 135 节）。本机把脚本宿主按 LOLBin 拦着，
+# 实跑不了，那就把生成结果静态判死——逐行切字符串 + 把符号代进去算，比人眼数引号可靠。
+if not os.path.isfile(_bjd_p):
+    skip("T18 启动.vbs 每行引号配平、拼出的命令行 --gui 在 jar 路径之外", "冻结态不含出包脚本")
+else:
+    import importlib.util as _ilu_t18
+    _spec_t18 = _ilu_t18.spec_from_file_location("_bjd_t18", _bjd_p)
+    _mod_t18 = _ilu_t18.module_from_spec(_spec_t18)
+    _spec_t18.loader.exec_module(_mod_t18)
+    _vbs_t18 = _mod_t18.vbs_launcher_text(APP_VERSION)
+    _txt_t18 = _vbs_t18.decode("ascii")
+    _open_t18 = _mod_t18._unclosed_line(_vbs_t18, "启动.vbs")
+    check("T18 启动.vbs 每一行的引号都配平（行尾没有悬空的字符串）",
+          _open_t18 is None, _open_t18)
+    _line_t18 = [x for x in _txt_t18.split("\r\n") if x.startswith("cmd = ")][0]
+    _env_t18 = {"q": '"', "javaw": "J/javaw.exe", "jarPath": "J/x.jar"}
+    _got_t18 = []
+    for _tok in _line_t18[len("cmd = "):].split(" & "):
+        _tok = _tok.strip()
+        _got_t18.append(_tok[1:-1] if _tok.startswith('"') else _env_t18[_tok])
+    _real_t18 = "".join(_got_t18)
+    _inside_t18 = False
+    for _ch in _real_t18[:_real_t18.index("--gui")]:
+        if _ch == '"':
+            _inside_t18 = not _inside_t18
+    check("T19 代入后就是 javaw -jar xxx.jar --gui，且 --gui 在引号之外",
+          _real_t18 == '"J/javaw.exe" -Dfile.encoding=UTF-8 -jar "J/x.jar" --gui'
+          and not _inside_t18, (_real_t18, _inside_t18))
 tw = app_main.MainWindow()
 check("T3 窗口标题带版本号", APP_VERSION in tw.windowTitle(), tw.windowTitle())
 check("T4 「i」按钮存在且提示写明是关于",

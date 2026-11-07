@@ -60,7 +60,7 @@ SECTIONS = [
 <td>64 位 Windows 10 1809+ / Windows 11</td><td>有</td><td>无</td></tr>
 <tr><td>命令行版（Python，Windows 7 专用）</td><td><code>excel2mysql-cli.exe</code></td>
 <td>Windows 7 SP1 及以上，且系统 UCRT 补丁与系统文件完整</td><td>无</td><td>有</td></tr>
-<tr><td>Java 版</td><td><code>启动.bat</code> 或
+<tr><td>Java 版</td><td><code>启动.vbs</code>（双击开界面，零黑框）、<code>启动.bat</code> 或
 <code>java -jar excel2mysql-*.jar</code></td>
 <td>64 位 Windows 7 及以上；包内自带 Java 运行时，目标机器无需安装</td>
 <td>有</td><td>有</td></tr>
@@ -73,9 +73,12 @@ SECTIONS = [
 （如 <code>excel2mysql-cli.exe --check</code>）。直接双击会打印一句「没有输入」的用法后退出，
 窗口一闪即灭——不带参数即没有可执行的工作，属预期行为；它也没有界面模式。</li>
 <li>Java 版：界面与命令行是同一个 jar，按首个参数区分。要界面就双击
-<code>启动.bat</code>，它只做一件事——用包内 <code>jre\\bin\\java.exe</code> 跑
-<code>-jar excel2mysql-*.jar --gui</code>；要把文件一起带上，把 Excel/ZIP 拖到
-<code>启动.bat</code> 的图标上。要命令行就在 cmd 里跑同一条命令但不给
+<code>启动.vbs</code>——它只做一件事：用包内 <code>jre\\bin\\javaw.exe</code> 跑
+<code>-jar excel2mysql-*.jar --gui</code>。<code>javaw</code> 不挂控制台，所以双击之后
+不会留一个 cmd 黑框；<code>启动.bat</code> 是同一件事的批处理写法（同样走 javaw），
+在 <code>.vbs</code> 被组策略挡掉的机器上用它。要把文件一起带上，把 Excel/ZIP 拖到
+这两个入口的图标上。包没解全时它们会弹窗说清缺哪个文件；还想看到 Java 的原始报错与退出码，
+用 <code>启动-调试.bat</code>，它故意留着控制台。要命令行就在 cmd 里跑同一条命令但不给
 <code>--gui</code>，例如
 <code>jre\\bin\\java.exe -jar excel2mysql-4.3.4.jar --check</code>。
 双击 jar 文件本身没有任何反应。</li>
