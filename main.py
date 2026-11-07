@@ -66,7 +66,7 @@ from core.infer import (
 )
 from core.sql_execute import executable_statements, run as run_sql_statements
 from core.sql_script import (
-    extract_create_tables, split_sql_statements,
+    extract_create_tables, split_sql_statements, parse_insert_rows,
     parse_create_tables, rename_table_sql, apply_display_renames,
     set_table_comment, prepend_drop_tables,
     is_dump_script, dump_statements, dump_skip_reason, dump_database_switch,
@@ -1264,6 +1264,27 @@ def ensure_parsed(record):
     return parsed
 
 
+def sql_insert_row_counts(record):
+    """这份脚本里每张表的 INSERT / REPLACE 数据行数：{表名: 行数}。
+
+    与「生成标准/简易 Excel」那一路同一个口径（core.sql_script.parse_insert_rows），
+    但只留每张表第一行的值、其余只数行——清单上要的只是一个数，几十万行的 dump
+    不值得为了这个数把整份值都转成 Python 对象。
+    正文一改（改名、改表注释）就整份换成新字符串，这里按对象身份认缓存，
+    换了正文自然重算一遍，不会把旧行数挂在改了名的表上。
+    """
+    text = record.get("text") or ""
+    cached = record.get("insert_rows")
+    if cached is not None and record.get("insert_rows_src") is text:
+        return cached
+    counts = {}
+    for name, entry in parse_insert_rows(text, 1).items():
+        counts[name] = entry.get("total", 0)
+    record["insert_rows"] = counts
+    record["insert_rows_src"] = text
+    return counts
+
+
 def sql_load_task(paths, duplicates, sink):
     """读入 SQL 脚本文本并提取表名：几十万行的脚本读盘 + 正则扫描都在这里。
 
@@ -1296,9 +1317,13 @@ def sql_load_task(paths, duplicates, sink):
         parsed = {t["table_name"]: t for t in parse_create_tables(text)}
         names = "、".join(t["name"] for t in tabs) or "未发现 CREATE TABLE 语句"
         sink.log(f"[已加载] {fname}：{len(tabs)} 个表（{names}）")
-        loaded.append({"path": p, "text": text, "modified": False,
-                       "rename_map": {}, "display_map": {}, "tabs": tabs,
-                       "parsed": parsed})
+        record = {"path": p, "text": text, "modified": False,
+                  "rename_map": {}, "display_map": {}, "tabs": tabs,
+                  "parsed": parsed}
+        # 清单上「数据行数」这一列要的数顺手在这条子线程里算好：刷新表格时不用
+        # 为了一个数在主线程上再扫一遍整份脚本（10MB 脚本实测一次就是 1 秒上下）
+        sql_insert_row_counts(record)
+        loaded.append(record)
         sink.step(fname)
     return {"loaded": loaded, "failed": failed, "duplicates": list(duplicates),
             "cancelled": sink.cancelled}
@@ -2410,10 +2435,17 @@ class MainWindow(QWidget):
         self.btn_preview.clicked.connect(self.on_preview_structure)
         self.btn_ddl = QPushButton("预览 DDL")
         self.btn_ddl.clicked.connect(self.on_preview_ddl)
-        # 三颗都是次级操作：等宽铺满整行，不跟底部的执行按钮抢注意力
+        # 统计按钮也放在这一排：它读的就是表格里「数据行数」那一列，与清单同组同位置
+        self.btn_stat_rows = QPushButton("统计数据总行数")
+        self.btn_stat_rows.setToolTip(
+            "把清单里每张表的「数据行数」加起来，弹窗与日志报同一个总数；\n"
+            "数的是已解析出来的数据行（不含表头），不改清单也不碰磁盘上的文件")
+        self.btn_stat_rows.clicked.connect(self.on_stat_total_rows)
+        # 四颗都是次级操作：等宽铺满整行，不跟底部的执行按钮抢注意力
         btns.addWidget(self.btn_clear, 1)
         btns.addWidget(self.btn_preview, 1)
         btns.addWidget(self.btn_ddl, 1)
+        btns.addWidget(self.btn_stat_rows, 1)
         fl.addLayout(btns)
 
         # 4. 日志
@@ -2785,13 +2817,14 @@ class MainWindow(QWidget):
         name_bar.addWidget(self.chk_sql_lower)
         name_bar.addStretch(1)
 
-        self.sql_table = EmptyHintTable(0, 5, "请把 SQL 脚本拖到上方虚线区")
+        self.sql_table = EmptyHintTable(0, 6, "请把 SQL 脚本拖到上方虚线区")
         style_table_font(self.sql_table)
         # 「CREATE 出现次数」这一列去掉：同一份脚本里一张表被写两遍，日志已经逐条点名，
         # 现场清单里那一列全是 1，占着宽度只让人以为坏了；表注释是"这张表是干什么的"，
-        # 与「Excel 导入」那页同一列同名同位置，导入前先在这张表上就能核对
+        # 与「Excel 导入」那页同一列同名同位置，导入前先在这张表上就能核对。
+        # 「数据行数」摆在最后一列：与第一页同名列同一个口径（脚本里 INSERT/REPLACE 的行数）
         self.sql_table.setHorizontalHeaderLabels(
-            ["序号", "文件", "原表名", "当前表名", "表注释"])
+            ["序号", "文件", "原表名", "当前表名", "表注释", "数据行数"])
         header = self.sql_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setStretchLastSection(True)
@@ -2800,6 +2833,7 @@ class MainWindow(QWidget):
         self.sql_table.setColumnWidth(2, 260)
         self.sql_table.setColumnWidth(3, 200)
         self.sql_table.setColumnWidth(4, 280)
+        self.sql_table.setColumnWidth(5, 90)
         self.sql_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sql_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.sql_table.itemDoubleClicked.connect(self.on_sql_table_double_clicked)
@@ -2844,9 +2878,17 @@ class MainWindow(QWidget):
             "将要写出的那句 CREATE TABLE（含还没落地的改名与字段编辑）；\n"
             "勾选「覆盖已存在表」时，页签开头会补上执行前那句 DROP TABLE IF EXISTS。")
         self.btn_sql_ddl.clicked.connect(self.on_sql_preview_ddl)
+        # 统计按钮与第一页同名同位置：读的就是表格最后一列「数据行数」
+        self.btn_sql_stat_rows = QPushButton("统计数据总行数")
+        self.btn_sql_stat_rows.setToolTip(
+            "把清单里每张表的「数据行数」加起来，弹窗与日志报同一个总数；\n"
+            "数的是脚本里 INSERT/REPLACE 的数据行（没有 INSERT 的表记 0），"
+            "不改脚本也不碰磁盘上的文件")
+        self.btn_sql_stat_rows.clicked.connect(self.on_sql_stat_total_rows)
         name_row.addWidget(self.btn_sql_clear, 1)
         name_row.addWidget(self.btn_sql_preview, 1)
         name_row.addWidget(self.btn_sql_ddl, 1)
+        name_row.addWidget(self.btn_sql_stat_rows, 1)
 
         self.btn_sql_save = QPushButton("保存修改后ddl脚本")
         self.btn_sql_save.setEnabled(False)
@@ -2986,6 +3028,10 @@ class MainWindow(QWidget):
                 rev = {v: k for k, v in s["rename_map"].items()}
                 display_map = s.get("display_map") or {}
                 parsed = ensure_parsed(s)
+                # 「数据行数」取脚本里这条表的 INSERT/REPLACE 行数；按当前正文缓存，
+                # 改了正文（改名/改注释）就重算一遍。原表名兜一层：改名那一步
+                # 只改 CREATE/INSERT 的引用，正文没动过的老记录按原名查得到
+                insert_rows = sql_insert_row_counts(s)
                 # 表名清单在读取/改写时就已算好，几十万行的脚本不再回扫一遍
                 for t in s.get("tabs") or extract_create_tables(s["text"]):
                     rows.append({"path": s["path"], "base": base,
@@ -2994,6 +3040,8 @@ class MainWindow(QWidget):
                                  "display": self._sql_display_name(
                                      display_map.get(t["name"], t["name"])),
                                  "count": str(t["count"]),
+                                 "insert_rows": insert_rows.get(
+                                     t["name"], insert_rows.get(rev.get(t["name"], ""), 0)),
                                  "comment": (parsed.get(t["name"]) or {})
                                  .get("table_comment") or ""})
             self._sql_rows = rows
@@ -3002,10 +3050,14 @@ class MainWindow(QWidget):
             for i, row in enumerate(rows):
                 items = [QTableWidgetItem(str(i + 1)), QTableWidgetItem(row["base"]),
                          QTableWidgetItem(row["orig"]), QTableWidgetItem(row["display"]),
-                         QTableWidgetItem(row["comment"])]
+                         QTableWidgetItem(row["comment"]),
+                         QTableWidgetItem(str(row["insert_rows"]))]
                 items[1].setData(Qt.UserRole, row["path"])
                 items[1].setToolTip(row["path"])
                 items[4].setToolTip(row["comment"])
+                items[5].setToolTip(
+                    "脚本里 `%s` 的 INSERT/REPLACE 数据行数：%s 行"
+                    % (row["actual"], format(row["insert_rows"], ",")))
                 for j, it in enumerate(items):
                     flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
                     if j in (3, 4):
@@ -3311,6 +3363,35 @@ class MainWindow(QWidget):
         if row < 0 or row >= len(self._sql_rows):
             row = 0
         self.show_sql_table_metadata(row)
+
+    # ---- 统计数据总行数 ----
+    def on_sql_stat_total_rows(self):
+        """把清单里每张表的「数据行数」加起来，弹窗与日志报同一个总数。
+
+        求和取的是表格这一列（脚本里 INSERT/REPLACE 的行数），不是再读一遍脚本；
+        多个脚本时按文件列一份分项，一眼看得出是哪个脚本占大头。
+        """
+        if not self.sql_files:
+            self._warn("请先添加 SQL 脚本文件。")
+            return
+        if not self._sql_rows:
+            self._warn("清单里没有脚本表（空脚本或只有注释），没有数据行数可统计。")
+            return
+        total = sum(int(r.get("insert_rows") or 0) for r in self._sql_rows)
+        per_file = {}
+        for r in self._sql_rows:
+            per_file[r["base"]] = per_file.get(r["base"], 0) + int(r.get("insert_rows") or 0)
+        num = format(total, ",")
+        append_log(self.sql_log,
+                   "[统计] 脚本 %d 个、表 %d 张，数据总行数：%s 行"
+                   % (len(per_file), len(self._sql_rows), num))
+        lines = ["数据总行数：%s 行" % num, "",
+                 "脚本 %d 个，共 %d 张表。" % (len(per_file), len(self._sql_rows))]
+        if len(per_file) > 1:
+            lines.append("")
+            lines.extend("  %s：%s 行" % (b, format(n, ","))
+                         for b, n in per_file.items())
+        popup_box(self, "数据总行数", "\n".join(lines))
 
     def _sql_ddl_pages(self):
         """一张表一页 DDL：正文取脚本里属于这张表的 CREATE TABLE 语句。
@@ -4724,6 +4805,24 @@ class MainWindow(QWidget):
             self.tables = dlg.get_tables()
             self._refresh_file_table()
             append_log(self.log, "[结构] 已按弹窗确认 %d 张表的字段定义" % len(self.tables))
+
+    # ---- 统计数据总行数 ----
+    def on_stat_total_rows(self):
+        """把清单里每张表的「数据行数」加起来，弹窗与日志报同一个总数。
+
+        数的是表格里那一列（解析时就按数据行填好的 len(df)），不是再从文件读一遍。
+        """
+        if not self.tables:
+            popup_box(self, "提示", NO_FILE_HINT)
+            return
+        total = sum(len(t["df"]) for t in self.tables)
+        files = len({t["filepath"] for t in self.tables})
+        num = format(total, ",")
+        append_log(self.log,
+                   "[统计] 待导入文件 %d 个、表 %d 张，数据总行数：%s 行"
+                   % (files, len(self.tables), num))
+        popup_box(self, "数据总行数",
+                  "数据总行数：%s 行\n\n待导入文件 %d 个，共 %d 张表。" % (num, files, len(self.tables)))
 
     def on_file_table_item_changed(self, item) -> None:
         """清单里就地改的两格：表名要过校验，表注释直接写回这张表的定义。"""

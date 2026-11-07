@@ -3297,7 +3297,7 @@ _sql_btns = sorted(b.text() for b in _sql_page.findChildren(app_main.QPushButton
 check("K23 第二页按钮集合：表格下方那两颗是新增的，其余与改动前一致",
       _sql_btns == sorted([
           "批量应用前缀", "替换首个前缀", "清空待上传文件", "清除日志",
-          "生成表结构预览", "预览 DDL",
+          "生成表结构预览", "预览 DDL", "统计数据总行数",
           "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
           "生成标准excel文件", "生成简易excel文件"]), _sql_btns)
 # ---- 三页视觉层次：命名规则上移、斑马纹、序号收窄、底部三层 ----
@@ -5133,6 +5133,7 @@ app_main.HelpDialog = _real_help
 # 文档漂移守卫：说明里写到的按钮名必须是界面上真实存在的文案
 from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
+           "统计数据总行数",
            "开始导入", "清空待上传文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
            "连接并加载库", "生成标准excel文件", "生成简易excel文件",
            "示例 (?)", "格式化 SQL", "清空编辑区", "清空结果区", "设置数据源信息", "收起",
@@ -5649,6 +5650,28 @@ cw.btn_sql_clear_log.click()
 check("Q21 SQL 页清日志不影响另一页",
       cw.sql_log.toPlainText() == "" and "Excel 页保留" in cw.log.toPlainText(),
       cw.log.toPlainText())
+
+# ---- 第一页「统计数据总行数」：把「数据行数」列加起来，弹窗与日志同一句 ----
+st = app_main.MainWindow()
+st._add_files([jx1, jx2])
+POPUPS.clear()
+_expect_rows = sum(len(t["df"]) for t in st.tables)
+_expect_files = len({t["filepath"] for t in st.tables})
+_expect_text = ("[统计] 待导入文件 %d 个、表 %d 张，数据总行数：%s 行"
+                % (_expect_files, len(st.tables), format(_expect_rows, ",")))
+st.btn_stat_rows.click()
+check("Q21b 「统计数据总行数」按清单里的「数据行数」求和，弹窗与日志报同一个数",
+      _expect_rows > 0
+      and POPUPS and ("数据总行数：%s 行" % format(_expect_rows, ",")) in POPUPS[-1][1]
+      and _expect_text in st.log.toPlainText(),
+      (_expect_rows, POPUPS[-1] if POPUPS else None,
+       st.log.toPlainText().splitlines()[-1:]))
+st.btn_clear.click()
+POPUPS.clear()
+st.btn_stat_rows.click()
+check("Q21c 清单为空时「统计数据总行数」只提示、不算出 0 行",
+      POPUPS and POPUPS[-1][1] == app_main.NO_FILE_HINT,
+      POPUPS[-1] if POPUPS else None)
 
 # ---- 待上传文件列表按 Del 删除选中行（多选就是批量删）----
 from PySide6.QtCore import QItemSelection, QItemSelectionModel as _QSM
@@ -6799,8 +6822,8 @@ nw._refresh_sql_table()
 _nrow_text_before = nw.sql_files[0]["text"]
 _sql_headers = [nw.sql_table.horizontalHeaderItem(c).text()
                 for c in range(nw.sql_table.columnCount())]
-check("R45b 第二页列为 序号/文件/原表名/当前表名/表注释，没有「CREATE 出现次数」",
-      _sql_headers == ["序号", "文件", "原表名", "当前表名", "表注释"], _sql_headers)
+check("R45b 第二页列为 序号/文件/原表名/当前表名/表注释/数据行数，没有「CREATE 出现次数」",
+      _sql_headers == ["序号", "文件", "原表名", "当前表名", "表注释", "数据行数"], _sql_headers)
 check("R45c 脚本一导入就把表注释摆在清单里，取的是 CREATE TABLE 那句 COMMENT",
       nw.sql_table.item(0, 4).text() == "大小写检查表"
       and nw._sql_rows[0]["comment"] == "大小写检查表",
@@ -6808,7 +6831,11 @@ check("R45c 脚本一导入就把表注释摆在清单里，取的是 CREATE TAB
 _sql_flags = [bool(nw.sql_table.item(0, c).flags() & Qt.ItemIsEditable)
               for c in range(nw.sql_table.columnCount())]
 check("R45d 第二页可编辑的是「当前表名」与「表注释」两列",
-      _sql_flags == [False, False, False, True, True], _sql_flags)
+      _sql_flags == [False, False, False, True, True, False], _sql_flags)
+check("R45d2 「数据行数」按脚本里的 INSERT 行数填，没有 INSERT 的表记 0",
+      nw.sql_table.item(0, 5).text() == "0"
+      and nw._sql_rows[0]["insert_rows"] == 0,
+      (nw.sql_table.item(0, 5).text(), nw._sql_rows[0]["insert_rows"]))
 # 表注释这格双击进编辑器；双击其余列才是"看这一行的元数据"
 _seen_meta = []
 _orig_show_meta = nw.show_sql_table_metadata
@@ -6834,6 +6861,28 @@ check("R45p 第二页表格下方三颗按钮与第一页同文案同顺序",
       and [w.btn_clear.text(), w.btn_preview.text(), w.btn_ddl.text()]
       == ["清空待上传文件", "生成表结构预览", "预览 DDL"],
       (pv.btn_sql_clear.text(), pv.btn_sql_preview.text(), pv.btn_sql_ddl.text()))
+check("R45p2 两页同一排第四颗都是「统计数据总行数」",
+      pv.btn_sql_stat_rows.text() == "统计数据总行数"
+      and pv.btn_sql_stat_rows.text() == pv.btn_stat_rows.text(),
+      (pv.btn_sql_stat_rows.text(), pv.btn_stat_rows.text()))
+# ---- 第二页「统计数据总行数」：求和取的就是清单里的「数据行数」列 ----
+_stat_sql = os.path.join(_tmpdir, "统计行数.sql")
+with io.open(_stat_sql, "w", encoding="utf-8", newline="") as _sfh:
+    _sfh.write("CREATE TABLE `ods_s1` (`id` INT);\n"
+               "INSERT INTO `ods_s1` VALUES (1),(2),(3);\n"
+               "CREATE TABLE `ods_s2` (`id` INT);\n"
+               "INSERT INTO `ods_s2` VALUES (1),(2);\n")
+sv = app_main.MainWindow()
+sv.on_sql_files_dropped([_stat_sql])
+_app.processEvents()
+POPUPS.clear()
+sv.btn_sql_stat_rows.click()
+check("R45r 第二页「统计数据总行数」按「数据行数」求和，弹窗与日志同一句",
+      [sv.sql_table.item(r, 5).text() for r in range(2)] == ["3", "2"]
+      and POPUPS and "数据总行数：5 行" in POPUPS[-1][1]
+      and "[统计] 脚本 1 个、表 2 张，数据总行数：5 行" in sv.sql_log.toPlainText(),
+      ([sv.sql_table.item(r, 5).text() for r in range(2)],
+       POPUPS[-1] if POPUPS else None))
 _seen_meta2 = []
 pv.show_sql_table_metadata = lambda r: _seen_meta2.append(r)
 pv.sql_table.setCurrentCell(1, 1)

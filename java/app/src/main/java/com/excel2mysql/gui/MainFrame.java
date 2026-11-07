@@ -99,6 +99,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private String ddlText = "";
     private final LogPanel logPanel = new LogPanel();
     private JButton preview;
+    /** 第一页按钮区第四颗：统计清单里所有表的「数据行数」之和。 */
+    private JButton statRows;
     private JButton connect;
     private JButton importBtn;
     private JButton stopBtn;
@@ -661,12 +663,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         structure.addActionListener(e -> previewStructure());
         preview = new JButton("预览 DDL");
         preview.addActionListener(e -> previewDdl());
-        // Qt 的 QHBoxLayout 会把三颗按钮等宽铺满整行，Swing 的 FlowLayout 只会左对齐按内容宽
+        // 统计按钮也放在这一排：它读的就是表格里「数据行数」那一列，与清单同组同位置
+        statRows = new JButton("统计数据总行数");
+        statRows.setToolTipText("把清单里每张表的「数据行数」加起来，弹窗与日志报同一个总数；\n"
+                + "数的是已解析出来的数据行（不含表头），不改清单也不碰磁盘上的文件");
+        statRows.addActionListener(e -> statTotalRows());
+        // Qt 的 QHBoxLayout 会把四颗按钮等宽铺满整行，Swing 的 FlowLayout 只会左对齐按内容宽
         JPanel btnRow = new JPanel(new java.awt.GridLayout(
-                1, 3, UiScale.px(6), 0));
+                1, 4, UiScale.px(6), 0));
         btnRow.add(clear);
         btnRow.add(structure);
         btnRow.add(preview);
+        btnRow.add(statRows);
 
         JPanel fileRows = new JPanel(new BorderLayout(0, UiScale.px(2)));
         fileRows.add(prefixRow, BorderLayout.NORTH);
@@ -2190,6 +2198,36 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             sb.append(Ddl.buildDdl(t.tableName, t.tableComment, t.columns, dropIfExistsNow()));
         }
         ddlText = sb.toString();
+    }
+
+    /**
+     * 统计清单里所有表的「数据行数」之和：弹窗与日志报同一个数。
+     *
+     * 数的是已解析出来的数据行（Result.rows，不含表头），不再读一遍文件；
+     * 文件个数按表定义里的 filepath 去重，与 Python 侧 len({t["filepath"]}) 同口径。
+     */
+    public void statTotalRows() {
+        if (tables.isEmpty()) {
+            inform(NO_FILE_HINT);
+            return;
+        }
+        long total = 0;
+        java.util.Set<String> files = new java.util.LinkedHashSet<String>();
+        for (TableOps.Table t : tables) {
+            files.add(t.filepath == null ? "" : t.filepath);
+            TableBuilder.Result r = byTable.get(t);
+            total += r == null || r.rows == null ? 0 : r.rows.size();
+        }
+        String num = String.format(java.util.Locale.ROOT, "%,d", Long.valueOf(total));
+        log("[统计] 待导入文件 " + files.size() + " 个、表 " + tables.size()
+                + " 张，数据总行数：" + num + " 行");
+        inform2("数据总行数", "数据总行数：" + num + " 行" + LogText.NL + LogText.NL
+                + "待导入文件 " + files.size() + " 个，共 " + tables.size() + " 张表。");
+    }
+
+    /** 自检要按用户的方式点这颗按钮，而不是绕过界面直接算。 */
+    public javax.swing.JButton statRowsButton() {
+        return statRows;
     }
 
     /** 勾选状态既影响「预览 DDL」弹窗，也影响真实导入，两处读同一个判定。 */

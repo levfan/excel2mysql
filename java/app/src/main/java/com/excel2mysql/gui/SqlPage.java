@@ -86,6 +86,9 @@ public final class SqlPage extends JPanel {
         public final Map<String, String> renameMap = new LinkedHashMap<String, String>();
         /** 脚本里的当前表名 → 页面显示名：前缀两个按钮只动这一层，动作按钮才写进 text。 */
         public final Map<String, String> displayMap = new LinkedHashMap<String, String>();
+        /** 表名 → INSERT/REPLACE 的数据行数；按正文身份缓存，正文一改就重算。 */
+        public Map<String, Integer> insertRowCounts;
+        public String insertRowSrc;
 
         Entry(String path, String text, List<Map<String, Object>> tabs) {
             this.path = path;
@@ -106,7 +109,7 @@ public final class SqlPage extends JPanel {
      * 同一列同名同位置，导入前先在这张表上就能核对（列序与 Python 侧一致）。
      */
     private static final String[] COLUMNS =
-            {"序号", "文件", "原表名", "当前表名", "表注释"};
+            {"序号", "文件", "原表名", "当前表名", "表注释", "数据行数"};
 
     /**
      * 交给子线程的输入快照：改写期间主线程可能继续动列表，子线程只读这份拷贝。
@@ -219,13 +222,14 @@ public final class SqlPage extends JPanel {
             "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
                     + "只留「数据」一个 Sheet，表头是脚本里那些字段的英文名，"
                     + "下面是 INSERT 的数据\n"
-                    + "（每张表最多写 %d 行，超出的只在日志点名）\n"
                     + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖",
             SQL_EXPORT_ROW_CAP);
     private JButton genStd;
     private JButton genSimple;
     /** 保存/执行两颗动作按钮：清单空时置灰（与两颗生成按钮同一处判据）。 */
     private JButton saveButton;
+    /** 按钮区第四颗：统计清单里所有表的「数据行数」之和。 */
+    private JButton statRows;
     /** 这一页有没有任务在跑：只用来管两颗生成按钮，由主窗口每次改动任务清单时回来说一句。 */
     private boolean genBusy;
     /** 大小写开关：清单、元数据弹窗和生成件同步按那一档显示；脚本正文不回写。两颗互斥。 */
@@ -338,6 +342,12 @@ public final class SqlPage extends JPanel {
                 + "将要写出的那句 CREATE TABLE（含还没落地的改名与字段编辑）；<br>"
                 + "勾选「覆盖已存在表」时，页签开头会补上执行前那句 DROP TABLE IF EXISTS。</html>");
         previewDdl.addActionListener(e -> previewDdl());
+        // 统计按钮与第一页同名同位置：读的就是表格最后一列「数据行数」
+        statRows = new JButton("统计数据总行数");
+        statRows.setToolTipText("把清单里每张表的「数据行数」加起来，弹窗与日志报同一个总数；\n"
+                + "数的是脚本里 INSERT/REPLACE 的数据行（没有 INSERT 的表记 0），"
+                + "不改脚本也不碰磁盘上的文件");
+        statRows.addActionListener(e -> statTotalRows());
         prefixField = new HintTextField(18, PrefixHint.PLACEHOLDER);
         JButton apply = new JButton("批量应用前缀");
         apply.setToolTipText(APPLY_PREFIX_TIP);
@@ -451,11 +461,12 @@ public final class SqlPage extends JPanel {
 
         // 三颗按钮排在表格下方第一排（前缀行的下一行），与「Excel 导入」那页同一位置：
         // Qt 的 QHBoxLayout 把三颗等宽铺满整行，Swing 这边用 GridLayout(1,3) 对齐同一形状
-        JPanel nameRow = new JPanel(new java.awt.GridLayout(1, 3, UiScale.px(6), 0));
+        JPanel nameRow = new JPanel(new java.awt.GridLayout(1, 4, UiScale.px(6), 0));
         rowName = nameRow;
         nameRow.add(clearSql);
         nameRow.add(previewStructure);
         nameRow.add(previewDdl);
+        nameRow.add(statRows);
 
         JPanel actions = new JPanel(new BorderLayout());
         actions.add(prefixRow, BorderLayout.NORTH);
@@ -887,6 +898,11 @@ public final class SqlPage extends JPanel {
 
     public void setSqlRowComment(int row, String comment) {
         model.setValueAt(comment, row, 4);
+    }
+
+    /** 自检用：「数据行数」那一格显示成什么。 */
+    public String sqlRowRowCount(int row) {
+        return row < 0 || row >= model.getRowCount() ? null : String.valueOf(model.getValueAt(row, 5));
     }
 
     /** 自检用：某一格能不能直接编辑。 */
@@ -1693,6 +1709,98 @@ public final class SqlPage extends JPanel {
         return String.join("、", parts);
     }
 
+    /**
+     * 这份脚本里每张表的 INSERT / REPLACE 数据行数：{表名: 行数}。
+     *
+     * 与「生成标准/简易 Excel」那一路同一个口径（SqlScript.parseInsertRows），
+     * 但只留每张表第一行的值、其余只数行——清单上要的只是一个数，几十万行的 dump
+     * 不值得为了这个数把整份值都转成对象。正文一改（改名、改表注释）就整份换成
+     * 新字符串，这里按对象身份认缓存，不会把旧行数挂在改了名的表上。
+     */
+    private static Map<String, Integer> insertRowCounts(Entry e) {
+        String text = e.text == null ? "" : e.text;
+        if (e.insertRowCounts != null && e.insertRowSrc == text) {
+            return e.insertRowCounts;
+        }
+        Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
+        for (Map.Entry<String, SqlScript.InsertRows> en
+                : SqlScript.parseInsertRows(text, 1).entrySet()) {
+            counts.put(en.getKey(), Integer.valueOf(en.getValue().total));
+        }
+        e.insertRowCounts = counts;
+        e.insertRowSrc = text;
+        return counts;
+    }
+
+    /** 单张表的数据行数：原表名兜一层——改名只动 CREATE/INSERT 的引用，正文没动过时按原名查得到。 */
+    private static int insertRowCount(Entry e, String name) {
+        Map<String, Integer> counts = insertRowCounts(e);
+        Integer n = counts.get(name);
+        if (n == null) {
+            for (Map.Entry<String, String> en : e.renameMap.entrySet()) {
+                if (en.getValue().equals(name)) {
+                    n = counts.get(en.getKey());
+                    break;
+                }
+            }
+        }
+        return n == null ? 0 : n.intValue();
+    }
+
+    /**
+     * 统计清单里所有表的「数据行数」之和：弹窗与日志报同一个数。
+     *
+     * 求和取的就是表格这一列（脚本里 INSERT/REPLACE 的行数），不是再读一遍脚本；
+     * 多个脚本时按文件列一份分项，一眼看得出是哪个脚本占大头。
+     */
+    public void statTotalRows() {
+        if (entries.isEmpty()) {
+            host.warn("请先添加 SQL 脚本文件。");
+            return;
+        }
+        if (rowPath.isEmpty()) {
+            host.warn("清单里没有脚本表（空脚本或只有注释），没有数据行数可统计。");
+            return;
+        }
+        long total = 0;
+        Map<String, Long> perFile = new LinkedHashMap<String, Long>();
+        for (int i = 0; i < rowPath.size(); i++) {
+            Entry e = entryOfRow(i);
+            String name = rowActual.get(i);
+            int n = e == null ? 0 : insertRowCount(e, name);
+            total += n;
+            String base = baseName(rowPath.get(i));
+            Long prev = perFile.get(base);
+            perFile.put(base, Long.valueOf((prev == null ? 0 : prev.longValue()) + n));
+        }
+        String num = String.format(java.util.Locale.ROOT, "%,d", Long.valueOf(total));
+        logPanel.log("[统计] 脚本 " + perFile.size() + " 个、表 " + rowPath.size()
+                + " 张，数据总行数：" + num + " 行");
+        StringBuilder sb = new StringBuilder();
+        sb.append("数据总行数：").append(num).append(" 行").append(LogText.NL).append(LogText.NL);
+        sb.append("脚本 ").append(perFile.size()).append(" 个，共 ")
+                .append(rowPath.size()).append(" 张表。");
+        if (perFile.size() > 1) {
+            sb.append(LogText.NL).append(LogText.NL);
+            boolean first = true;
+            for (Map.Entry<String, Long> en : perFile.entrySet()) {
+                if (!first) {
+                    sb.append(LogText.NL);
+                }
+                first = false;
+                sb.append("  ").append(en.getKey()).append("：")
+                        .append(String.format(java.util.Locale.ROOT, "%,d", en.getValue()))
+                        .append(" 行");
+            }
+        }
+        host.inform2("数据总行数", sb.toString());
+    }
+
+    /** 自检要按用户的方式点这颗按钮，而不是绕过界面直接算。 */
+    public javax.swing.JButton statRowsButton() {
+        return statRows;
+    }
+
     /** 表格里一行是一个表名，不是一个文件；显示大小写只改视图，实际名字留在 rowActual。 */
     private void refreshTable() {
         editingRowName = true;
@@ -1716,7 +1824,8 @@ public final class SqlPage extends JPanel {
                     model.addRow(new Object[]{String.valueOf(rowPath.size() + 1),
                             baseName(e.path), origin,
                             displayName(displayBase(e, name)),
-                            pt == null || pt.tableComment == null ? "" : pt.tableComment});
+                            pt == null || pt.tableComment == null ? "" : pt.tableComment,
+                            String.valueOf(insertRowCount(e, name))});
                     rowPath.add(e.path);
                     rowOrigin.add(origin);
                     rowActual.add(name);

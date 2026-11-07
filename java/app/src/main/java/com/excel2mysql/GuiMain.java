@@ -4735,8 +4735,8 @@ public final class GuiMain {
         for (int c = 0; c < cache.columnCount(); c++) {
             cols.append(c == 0 ? "" : "|").append(cache.columnName(c));
         }
-        if (!"序号|文件|原表名|当前表名|表注释".equals(cols.toString())) {
-            problems.add("SQL 页的列不是 序号|文件|原表名|当前表名|表注释：" + cols);
+        if (!"序号|文件|原表名|当前表名|表注释|数据行数".equals(cols.toString())) {
+            problems.add("SQL 页的列不是 序号|文件|原表名|当前表名|表注释|数据行数：" + cols);
         }
         if (!"大脚本7".equals(cache.sqlRowComment(7))) {
             problems.add("导入脚本后表注释没显示在清单里：" + cache.sqlRowComment(7));
@@ -4745,8 +4745,16 @@ public final class GuiMain {
         for (int c = 0; c < cache.columnCount(); c++) {
             edit.append(c == 0 ? "" : ",").append(cache.cellEditable(7, c));
         }
-        if (!"false,false,false,true,true".equals(edit.toString())) {
+        if (!"false,false,false,true,true,false".equals(edit.toString())) {
             problems.add("SQL 页可编辑的列不对（应是「当前表名」与「表注释」）：" + edit);
+        }
+        // 「数据行数」列：大脚本里 t_big_07 有 120 条 INSERT，必须显示成 120
+        String rowCountCell = cache.sqlRowRowCount(7);
+        if (!"120".equals(rowCountCell)) {
+            problems.add("SQL 页的「数据行数」列不对（t_big_07 应是 120）：" + rowCountCell);
+        }
+        if (!cache.statRowsButton().isEnabled()) {
+            problems.add("SQL 页的「统计数据总行数」按钮不可用");
         }
 
         long full0 = System.nanoTime();
@@ -5286,6 +5294,13 @@ public final class GuiMain {
                 || !com.excel2mysql.gui.DropArea.RUN_HINT.contains("Ctrl+V")) {
             problems.add("拖拽区第三行「Ctrl+V 直接添加」文案不对："
                     + com.excel2mysql.gui.DropArea.EXCEL_HINT);
+        }
+        // 两页的「统计数据总行数」都要在按钮区里（不是藏在菜单里）
+        javax.swing.JButton excelStat = buttonIn(frame, "统计数据总行数");
+        if (excelStat == null) {
+            problems.add("第一页的按钮区没有「统计数据总行数」");
+        } else if (frame.statRowsButton() != excelStat) {
+            problems.add("第一页的「统计数据总行数」不是 frame.statRowsButton() 那一颗");
         }
         if (buttonIn(frame, "添加 SQL 文件") != null) {
             problems.add("第二页还留着「添加 SQL 文件」那颗按钮，入口没统一");
