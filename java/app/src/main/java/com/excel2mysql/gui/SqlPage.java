@@ -44,9 +44,9 @@ import java.util.Set;
  */
 public final class SqlPage extends JPanel {
 
-    /** 连接信息由主窗口持有，SQL 页不自留一份口令。 */
+    /** 连接信息由主窗口持有，SQL 页不自留一份口令，也不留一份快照——每次动手现读。 */
     public interface Host {
-        Config config();
+        Config currentConfig();
 
         boolean connected();
 
@@ -1469,7 +1469,7 @@ public final class SqlPage extends JPanel {
      * 执行并入统一任务位：抢不到任务位就不会开出第二个线程，进度、取消与日志走同一套。
      */
     public String execute() {
-        Config cfg = host.config();
+        Config cfg = host.currentConfig();
         if (cfg == null || !cfg.hasDatabase()) {
             return LogText.NO_DB_HINT;
         }

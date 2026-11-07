@@ -7335,7 +7335,7 @@ public final class GuiMain {
         }
 
         @Override
-        public com.excel2mysql.core.Config config() {
+        public com.excel2mysql.core.Config currentConfig() {
             return cfg;
         }
 
@@ -7855,8 +7855,16 @@ public final class GuiMain {
                         + f1.dbRowHint() + " 脏=" + f1.isConnDirty()
                         + " 条目=" + f1.dbListSize());
             }
+            // 目标库已经选上了，第二页点执行不许再说"没设置目标库"：这一页读的是缓存那份
+            // 连接快照（自动连接时在库列表加载出来之前就抓的，那时下拉框还是空的），
+            // 现场报的正是"状态栏写着目标库 testdb，第二页却说没选库"
+            String refusal = f1.sqlPage().execute();
+            if (com.excel2mysql.core.LogText.NO_DB_HINT.equals(refusal)) {
+                problems.add("目标库已选中（" + f1.selectedDatabase()
+                        + "），SQL 页执行仍报未选择目标库");
+            }
             // 配置的库不在服务器上：要解释，不能让人以为配置没生效
-            f1.applyDatabases(f1.currentConfig(), Arrays.asList("beta", "gamma"));
+            f1.applyDatabases(Arrays.asList("beta", "gamma"));
             if (!f1.logPanel().text().contains("[跳过] conn.ini 指定的目标库 alpha 不在服务器上")) {
                 problems.add("目标库不在服务器上时没有解释，用户会回头去改配置文件："
                         + tail(f1.logPanel().text()));

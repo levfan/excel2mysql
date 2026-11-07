@@ -429,7 +429,7 @@ public final class GuiDump {
                 put("guard.conn.log", nl < 0 ? connLog : connLog.substring(0, nl));
                 put("guard.conn.db_enabled", frame.databaseChooserEnabled() ? "1" : "0");
                 // 目标库那一行的三态，与 Python 侧同一条流：加载好 → 改过连接信息 → 加载失败
-                frame.applyDatabases(frame.currentConfig(), Arrays.asList("alpha", "beta"));
+                frame.applyDatabases(Arrays.asList("alpha", "beta"));
                 put("conn.db.hint.loaded", frame.dbRowHint());
                 put("conn.db.size.loaded", String.valueOf(frame.dbListSize()));
                 frame.hostField().setText("10.9.9.9");

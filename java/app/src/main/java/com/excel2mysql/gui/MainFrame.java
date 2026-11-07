@@ -225,7 +225,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private final List<TableOps.Table> tables = new ArrayList<TableOps.Table>();
     private final Map<TableOps.Table, TableBuilder.Result> byTable =
             new java.util.LinkedHashMap<TableOps.Table, TableBuilder.Result>();
-    private Config config;
     private boolean connected;
     /** conn.ini 里写的目标库：库列表加载出来之后按它预选。 */
     private String cfgDb = "";
@@ -876,8 +875,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /**
      * 把库列表灌进下拉框并选中配置里的目标库；手动加载与启动自动连接共用。
      * 与 Python 的 _apply_databases 同语义，含"配置的库不在服务器上"那句解释。
+     *
+     * 这里不接一份连接快照：目标库以界面上的下拉框为准，各页执行时现读
+     * {@link #currentConfig()}。以前在这儿把"加载库之前抓的那份"存起来给第二页用，
+     * 抓的时候下拉框还是空的，于是状态栏写着目标库、第二页却说没选库。
      */
-    public void applyDatabases(Config cfg, List<String> dbs) {
+    public void applyDatabases(List<String> dbs) {
         String previous = selectedDatabase();
         reloadDatabases(dbs);
         if (!previous.isEmpty() && dbs.contains(previous)) {
@@ -890,7 +893,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             // 说了要选却没选上，必须解释：否则用户以为配置没生效，回头改配置文件
             log("[跳过] conn.ini 指定的目标库 " + cfgDb + " 不在服务器上，请手动选择");
         }
-        config = cfg;
         connected = true;
         // 这份清单就是当前这四项连上去的那台服务器给的，"改过连接信息"这笔账到此结清
         connDirty = false;
@@ -916,7 +918,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         log("[连接中] 启动自动连接 " + cfg.host + ":" + cfg.port + "（用户 " + cfg.user + "）…");
         if (!modalProgress) {
             try {
-                applyDatabases(cfg, fetchDatabases(cfg));
+                applyDatabases(fetchDatabases(cfg));
             } catch (Exception e) {
                 autoConnectFailed(cfg, e);
             }
@@ -934,7 +936,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     return;         // 手动加载已经接手，这份迟到的结果作废
                 }
                 try {
-                    applyDatabases(cfg, get());
+                    applyDatabases(get());
                 } catch (Exception e) {
                     autoConnectFailed(cfg, e);
                 }
@@ -962,7 +964,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         Config cfg = currentConfig();
         dbLoadSeq++;                     // 还在路上的自动连接结果就此过期
         try {
-            applyDatabases(cfg, fetchDatabases(cfg));
+            applyDatabases(fetchDatabases(cfg));
             return null;
         } catch (Exception e) {
             String detail = LogText.describe(e);
@@ -1024,7 +1026,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }, out -> {
             ConnLoad r = (ConnLoad) out;
             if (r.error == null) {
-                applyDatabases(cfg, r.dbs);
+                applyDatabases(r.dbs);
                 return;
             }
             connFailure(cfg, r.error);
@@ -1214,7 +1216,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return;
         }
         final Task task = tasks.get(tasks.size() - 1);
-        config = cfg;
         final List<TableBuilder.Result> work = new ArrayList<TableBuilder.Result>();
         for (TableOps.Table t : tables) {
             TableBuilder.Result r = byTable.get(t);
@@ -2557,11 +2558,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     @Override
     public boolean connected() {
         return isConnected();
-    }
-
-    @Override
-    public Config config() {
-        return config;
     }
 
     @Override
