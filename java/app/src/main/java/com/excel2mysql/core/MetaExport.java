@@ -7,6 +7,7 @@ import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 import org.apache.poi.xssf.usermodel.XSSFCell;
 import org.apache.poi.xssf.usermodel.XSSFRow;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
@@ -199,18 +200,40 @@ public final class MetaExport {
         return micro == 0 ? base : base + "." + String.format("%06d", micro);
     }
 
+    /**
+     * 超过这个行数就换成流式写。
+     *
+     * POI 的全内存模型（XSSFWorkbook）实测 10 万行 × 8 列就吃掉 1.6 GB 堆，
+     * 而单表上限现在是 xlsx 的 2/3（699050 行），全内存必然 OutOfMemory。
+     * SXSSFWorkbook 只留一个几百行的窗口在堆里，内存不随行数涨；
+     * 小表仍走原来的全内存路径，写出结果一个字节都不变（既有夹具与对撞照旧）。
+     */
+    public static final int STREAM_ROWS = 20000;
+
+    /** xlsx 的数值是双精度；整数的绝对值超过 2^53 存进去就丢位，这类值改写文本。 */
+    private static final BigInteger EXACT_INT_MAX = BigInteger.valueOf(1L << 53);
+
     /** 写一张表。withMeta 为假时只写数据 Sheet（简易件）。 */
     public static String writeTable(Source source, String path, boolean withMeta)
             throws Exception {
-        XSSFWorkbook wb = new XSSFWorkbook();
+        return writeTable(source, path, withMeta, null);
+    }
+
+    /** 带日志的那一档：大整数被迫写成文本时要说一声，不能静默改数据形状。 */
+    public static String writeTable(Source source, String path, boolean withMeta,
+                                    ImportParse.Sink sink) throws Exception {
+        int dataRows = source.rows == null ? 0 : source.rows.size();
+        boolean stream = dataRows > STREAM_ROWS;
+        Workbook wb = stream ? new SXSSFWorkbook(500) : new XSSFWorkbook();
+        int[] big = new int[]{0};
         try {
-            XSSFSheet data;
+            Sheet data;
             if (withMeta) {
-                XSSFSheet meta = wb.createSheet(META_SHEET);
-                writeRow(meta, 0, headerCells());
+                Sheet meta = wb.createSheet(META_SHEET);
+                writeRow(meta, 0, headerCells(), stream, big);
                 List<Object[]> rows = metaRows(source.table.columns);
                 for (int i = 0; i < rows.size(); i++) {
-                    writeRow(meta, i + 1, rows.get(i));
+                    writeRow(meta, i + 1, rows.get(i), stream, big);
                 }
                 data = wb.createSheet(DATA_SHEET);
             } else {
@@ -222,7 +245,7 @@ public final class MetaExport {
             for (int i = 0; i < cols.size(); i++) {
                 head[i] = nz(cols.get(i).field);
             }
-            writeRow(data, 0, head);
+            writeRow(data, 0, head, stream, big);
             for (int i = 0; i < source.rows.size(); i++) {
                 List<Object> row = source.rows.get(i);
                 Object[] out = new Object[cols.size()];
@@ -230,7 +253,7 @@ public final class MetaExport {
                     int k = at[c];
                     out[c] = k < 0 ? null : cellValue(k < row.size() ? row.get(k) : null);
                 }
-                writeRow(data, i + 1, out);
+                writeRow(data, i + 1, out, stream, big);
             }
             File f = new File(path);
             mkdirs(f.getParentFile());
@@ -241,7 +264,17 @@ public final class MetaExport {
                 fos.close();
             }
         } finally {
-            wb.close();
+            if (stream) {
+                // dispose() 删掉 SXSSF 占用的临时文件；close() 不会
+                ((SXSSFWorkbook) wb).dispose();
+            } else {
+                ((XSSFWorkbook) wb).close();
+            }
+        }
+        if (big[0] > 0 && sink != null) {
+            sink.log("! [WARN] 说明 | " + new File(path).getName() + "：有 " + big[0]
+                    + " 个超过 15 位的整数按文本写（Excel 的数值只有双精度，"
+                    + "存成数值会丢低位，宁可写文本）");
         }
         return path;
     }
@@ -288,16 +321,17 @@ public final class MetaExport {
         return at;
     }
 
-    private static void writeRow(XSSFSheet sheet, int rowIndex, Object[] values) {
-        XSSFRow row = sheet.createRow(rowIndex);
+    private static void writeRow(Sheet sheet, int rowIndex, Object[] values,
+                                 boolean stream, int[] big) {
+        Row row = sheet.createRow(rowIndex);
         for (int i = 0; i < values.length; i++) {
             Object v = values[i];
             if (v == null) {
                 continue;       // 留空：读取端把空当成"未声明"，写出 "null" 字符串反而是个值
             }
-            XSSFCell cell = row.createCell(i);
+            Cell cell = row.createCell(i);
             if (v instanceof BigInteger || v instanceof Long || v instanceof Integer) {
-                setExactNumber(cell, String.valueOf(v));
+                setExactNumber(cell, String.valueOf(v), stream, big);
             } else if (v instanceof Number) {
                 cell.setCellValue(((Number) v).doubleValue());
             } else {
@@ -309,10 +343,25 @@ public final class MetaExport {
     /**
      * 整数按整数写：走 setCellValue(double) 会把 5 落成 "5.0"，
      * 回读时整列的 dtype 就从整型变成浮点，两条线推出来的类型会分叉。
+     *
+     * 全内存那条路能改 CT 值，写过的是 &lt;v&gt;5&lt;/v&gt; 这样的精确整数；
+     * 流式那条路没有 CT 层（SXSSFCell 只有 double），只能按能表示的范围分流：
+     * 2^53 以内的整数双精度够精确，超出的一位都不能丢，改写文本并在日志点名。
      */
-    private static void setExactNumber(XSSFCell cell, String text) {
-        cell.setCellValue(0.0);
-        cell.getCTCell().setV(text);
+    private static void setExactNumber(Cell cell, String text, boolean stream, int[] big) {
+        if (!stream) {
+            XSSFCell x = (XSSFCell) cell;
+            x.setCellValue(0.0);
+            x.getCTCell().setV(text);
+            return;
+        }
+        BigInteger v = new BigInteger(text);
+        if (v.abs().compareTo(EXACT_INT_MAX) <= 0) {
+            cell.setCellValue(v.doubleValue());
+        } else {
+            cell.setCellValue(text);
+            big[0]++;
+        }
     }
 
     /**
@@ -351,7 +400,7 @@ public final class MetaExport {
             }
             boolean ok = true;
             try {
-                writeTable(s, path, withMeta);
+                writeTable(s, path, withMeta, sink);
             } catch (Exception e) {
                 ok = false;
                 out.failed++;

@@ -204,17 +204,19 @@ public final class SqlPage extends JPanel {
     private final List<Entry> entries = new ArrayList<Entry>();
 
     /**
-     * 一张表的「数据」Sheet 最多写进行数：mysqldump 的 extended-insert 能到几百万行，
-     * 全写进 xlsx 既慢又会撑爆内存，超出部分只在日志点名。与 Python 同名常量同值。
+     * 一张表的「数据」Sheet 最多写进行数：不设人为的条数上限，只按 xlsx 单表 1048576 行的
+     * 2/3 留余量（= 699050），再多的只在日志点名。与 Python 同名常量同值。
      */
-    static final int SQL_EXPORT_ROW_CAP = 10000;
+    public static final int XLSX_MAX_ROWS = 1048576;
+    public static final int SQL_EXPORT_ROW_CAP = XLSX_MAX_ROWS * 2 / 3;
 
     /** 两颗生成按钮的说明与「Excel 导入」页那两颗同一口径，只是数据源换成了脚本正文。 */
     private static final String GEN_STD_TIP = String.format(
             "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
                     + "Sheet1「元数据」是脚本里解析出的字段定义，"
                     + "Sheet2「数据」是表头加脚本里 INSERT 的数据\n"
-                    + "（每张表最多写 %d 行，超出的只在日志点名；"
+                    + "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
+                    + "超出的只在日志点名；"
                     + "脚本里没有 INSERT 就只剩表头，这一张仍是给下游填数据的模板）\n"
                     + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖",
             SQL_EXPORT_ROW_CAP);
@@ -222,6 +224,8 @@ public final class SqlPage extends JPanel {
             "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
                     + "只留「数据」一个 Sheet，表头是脚本里那些字段的英文名，"
                     + "下面是 INSERT 的数据\n"
+                    + "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
+                    + "超出的只在日志点名）\n"
                     + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖",
             SQL_EXPORT_ROW_CAP);
     private JButton genStd;

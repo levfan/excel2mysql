@@ -346,6 +346,8 @@ public final class GuiMain {
                 wide_split(frame, problems);
                 // 降级的两条底线：键列不许动、明知救不回来别白改（与 core.infer 同口径）
                 row_fit_guards(problems);
+                // 单表行数过阈值时换成流式写：内存不随行数涨，整数怎么落盘要有说法
+                stream_export(problems);
                 // 建不出表的输入必须在解析阶段就拒（空表 / 只有表头 / 内容是文本的假 .xlsx）
                 checkRejects(frame, problems);
                 // 命令行的 --prefix 对 .sql 也要生效，且 dry-run 要能预览脚本
@@ -3701,6 +3703,22 @@ public final class GuiMain {
         if (!std.isEnabled() || !simple.isEnabled()) {
             problems.add("已有脚本时两颗生成按钮还是灰的");
         }
+        // 一张表的数据行上限：不设人为条数，按 xlsx 单表 1048576 行的 2/3 算（699050）。
+        // 说明里必须报出这个数与它的来历，两端数字与话术都要与 Python 一致
+        if (com.excel2mysql.gui.SqlPage.XLSX_MAX_ROWS != 1048576
+                || com.excel2mysql.gui.SqlPage.SQL_EXPORT_ROW_CAP != 699050) {
+            problems.add("数据行上限不是 xlsx 单表上限的 2/3："
+                    + com.excel2mysql.gui.SqlPage.XLSX_MAX_ROWS + " / "
+                    + com.excel2mysql.gui.SqlPage.SQL_EXPORT_ROW_CAP);
+        }
+        String cap = String.valueOf(com.excel2mysql.gui.SqlPage.SQL_EXPORT_ROW_CAP);
+        for (javax.swing.JButton b : new javax.swing.JButton[]{std, simple}) {
+            String tip = b.getToolTipText() == null ? "" : b.getToolTipText();
+            if (!tip.contains(cap) || !tip.contains("1048576")) {
+                problems.add("生成按钮的说明没把上限口径说清（" + cap + " / 1048576）："
+                        + tip.replace((char) 10, (char) 32));
+            }
+        }
 
         String outRoot = new java.io.File(dir, "out").getPath();
         page.generateExcel(true, outRoot);
@@ -6709,6 +6727,121 @@ public final class GuiMain {
         }
         deleteTree(dir);
     }
+
+    /**
+     * 行数过 {@link com.excel2mysql.core.MetaExport#STREAM_ROWS} 就换流式写。
+     *
+     * 这条分支是为单表 699050 行（xlsx 上限的 2/3）准备的：POI 的全内存模型在 10 万行
+     * 就吃掉 1.6 GB 堆，不换写法必然 OutOfMemory。流式那条路只能写双精度，
+     * 所以超过 2^53 的整数改写文本——宁可变文本，也不许静默丢位。
+     */
+    private static void stream_export(java.util.List<String> problems) {
+        java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
+                "e2m-stream-" + System.nanoTime());
+        if (!dir.mkdirs()) {
+            problems.add("建不出流式导出的临时目录：" + dir.getPath());
+            return;
+        }
+        final StringBuilder log = new StringBuilder();
+        com.excel2mysql.core.ImportParse.Sink sink = new com.excel2mysql.core.ImportParse.Sink() {
+            @Override
+            public void setTotal(int total) {
+            }
+
+            @Override
+            public void step(String label) {
+            }
+
+            @Override
+            public void advance(int units, String label) {
+            }
+
+            @Override
+            public void log(String text) {
+                log.append(text).append('\n');
+            }
+
+            @Override
+            public void logError(String text) {
+                log.append(text).append('\n');
+            }
+
+            @Override
+            public boolean cancelled() {
+                return false;
+            }
+        };
+        try {
+            int over = com.excel2mysql.core.MetaExport.STREAM_ROWS + 1;
+            java.io.File big = new java.io.File(dir, "流式_过阈值.xlsx");
+            com.excel2mysql.core.MetaExport.writeTable(
+                    streamSource(over), big.getPath(), false, sink);
+            java.util.List<com.excel2mysql.core.MetaExport.Dump> d =
+                    com.excel2mysql.core.MetaExport.dump(big.getPath());
+            if (d.isEmpty() || d.get(0).cells.size() != over + 1) {
+                problems.add("流式写出的行数不对（应是表头 + " + over + " 行）："
+                        + (d.isEmpty() ? "没有 Sheet" : "" + d.get(0).cells.size()));
+            } else {
+                Object sfz = d.get(0).cells.get(1).get(1);
+                Object id = d.get(0).cells.get(1).get(0);
+                if (!(sfz instanceof String) || !"110101199003078877".equals(sfz)) {
+                    problems.add("过阈值后 18 位整数没按文本写（会丢低位）：" + sfz);
+                }
+                if (!(id instanceof java.math.BigInteger)) {
+                    problems.add("流式写出的普通整数回读不是整数：" + id);
+                }
+                if (log.indexOf("按文本写") < 0) {
+                    problems.add("大整数转文本没在日志里点名：" + log.toString().trim());
+                }
+            }
+
+            // 阈值之内仍走全内存那条老路：同一份数据，18 位整数是数值型（与既有夹具一致）
+            java.io.File small = new java.io.File(dir, "全内存_阈值内.xlsx");
+            com.excel2mysql.core.MetaExport.writeTable(
+                    streamSource(com.excel2mysql.core.MetaExport.STREAM_ROWS),
+                    small.getPath(), false, sink);
+            java.util.List<com.excel2mysql.core.MetaExport.Dump> s =
+                    com.excel2mysql.core.MetaExport.dump(small.getPath());
+            if (s.isEmpty() || s.get(0).cells.size() != com.excel2mysql.core.MetaExport.STREAM_ROWS + 1) {
+                problems.add("阈值内的行数不对：" + (s.isEmpty() ? "没有 Sheet" : "" + s.get(0).cells.size()));
+            } else if (s.get(0).cells.get(1).get(1) instanceof String) {
+                problems.add("阈值内不该走流式：18 位整数被写成文本了");
+            }
+        } catch (Exception e) {
+            problems.add("流式导出检查跑不下去：" + e);
+        }
+        deleteTree(dir);
+    }
+
+    private static com.excel2mysql.core.MetaExport.Source streamSource(int n) {
+        com.excel2mysql.core.MetaExport.Source s = new com.excel2mysql.core.MetaExport.Source();
+        s.table = new com.excel2mysql.core.TableOps.Table();
+        s.table.tableName = "t_stream";
+        s.table.columns = new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+        s.table.columns.add(streamCol("id", "BIGINT"));
+        s.table.columns.add(streamCol("sfz", "VARCHAR(32)"));
+        s.table.columns.add(streamCol("note", "VARCHAR(32)"));
+        s.headers = new java.util.ArrayList<Object>(
+                java.util.Arrays.asList((Object) "id", "sfz", "note"));
+        s.rows = new java.util.ArrayList<java.util.List<Object>>();
+        for (int i = 0; i < n; i++) {
+            java.util.List<Object> row = new java.util.ArrayList<Object>();
+            row.add(Integer.valueOf(i));
+            row.add(new java.math.BigInteger("110101199003078877"));
+            row.add("第" + i + "行");
+            s.rows.add(row);
+        }
+        return s;
+    }
+
+    private static com.excel2mysql.core.Infer.Column streamCol(String field, String type) {
+        com.excel2mysql.core.Infer.Column c = new com.excel2mysql.core.Infer.Column();
+        c.field = field;
+        c.comment = field;
+        c.type = type;
+        return c;
+    }
+
     private static void checkRejects(MainFrame frame, java.util.List<String> problems) {
         java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
                 "e2m-reject-" + System.nanoTime());

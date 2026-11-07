@@ -3702,6 +3702,12 @@ else:
     finally:
         app_main.SQL_EXPORT_ROW_CAP = _CAP_PREV
 
+# 上限口径（用户明确要求）：不再按 10000 截断，也不设人为条数，只按 xlsx 单表物理上限的 2/3
+check("SD16 每张表的数据 Sheet 上限 = xlsx 单表上限 1048576 的 2/3，不是人为的 10000",
+      app_main.XLSX_MAX_ROWS == 1048576
+      and app_main.SQL_EXPORT_ROW_CAP == 1048576 * 2 // 3 == 699050,
+      (getattr(app_main, "XLSX_MAX_ROWS", None), app_main.SQL_EXPORT_ROW_CAP))
+
 # ---------------------------------------------------------------------------
 section("L 字段类型映射（金额语义 + 精度按数据校核）")
 
@@ -6796,6 +6802,9 @@ check("R34 有脚本后两颗按钮亮起，tooltip 说清数据行取自 INSERT
       and gw.btn_sql_save.isEnabled() and gw.btn_sql_run.isEnabled()
       and "INSERT" in gw.btn_sql_gen_std.toolTip()
       and str(app_main.SQL_EXPORT_ROW_CAP) in gw.btn_sql_gen_std.toolTip()
+      # 说明里要点出这个数的来历：xlsx 单表上限的 2/3，而不是随手定的一个条数
+      and "1048576" in gw.btn_sql_gen_std.toolTip()
+      and "1048576" in gw.btn_sql_gen_simple.toolTip()
       and "INSERT" in gw.btn_sql_gen_simple.toolTip()
       and "不含数据行" not in gw.btn_sql_gen_std.toolTip(),
       gw.btn_sql_gen_std.toolTip().replace("\n", " ")[:80])

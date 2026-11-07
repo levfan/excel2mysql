@@ -1884,9 +1884,10 @@ def _sql_data_frame(data, orig_fields, mapping):
     return pd.DataFrame(kept, columns=header, dtype=object), notes
 
 
-# 一张表的「数据」Sheet 最多写进行数：mysqldump 的 extended-insert 能到几百万行，
-# 全写进 xlsx 既慢又会撑爆内存，超出部分只在日志点名。Java 侧同名常量在 SqlPage。
-SQL_EXPORT_ROW_CAP = 10000
+# xlsx 一个 Sheet 的物理上限：1048576 行（含表头那一行）。这里不设人为的条数上限，
+# 只按这个物理上限留余量——一张表的「数据」Sheet 最多写它的 2/3，再多的在日志点名。
+XLSX_MAX_ROWS = 1048576
+SQL_EXPORT_ROW_CAP = XLSX_MAX_ROWS * 2 // 3  # 699050
 
 
 def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False,
@@ -1896,7 +1897,8 @@ def sql_meta_export_task(items, out_root, with_meta, upper, sink, lower=False,
     items 为 [(path, text), ...]，text 取的是页面上改过名之后的当前正文，
     所以"先批量改前缀、再生成交付件"这条路是通的——产物里的表名就是新表名。
     脚本里没有 INSERT 时「数据」Sheet 仍只有英文字段名那一行表头，那是给下游填的模板；
-    有 INSERT 就把值按字面量转出来写进去，每张表最多写 SQL_EXPORT_ROW_CAP 行，
+    有 INSERT 就把值按字面量转出来写进去，每张表最多写 SQL_EXPORT_ROW_CAP 行
+    （= xlsx 单表上限 1048576 的 2/3，约 70 万行；不再按 10000 截断），
     超出的只在日志里点名（脚本正文本来就已整份在内存里，截断省的是转值与写盘）。
     第二页的大小写开关只作用在清单、元数据视图和生成物上；脚本正文一个字不动。
     """
@@ -2951,7 +2953,8 @@ class MainWindow(QWidget):
             "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
             "Sheet1「元数据」是脚本里解析出的字段定义，"
             "Sheet2「数据」是表头加脚本里 INSERT 的数据\n"
-            "（每张表最多写 %d 行，超出的只在日志点名；"
+            "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
+            "超出的只在日志点名；"
             "脚本里没有 INSERT 就只剩表头，这一张仍是给下游填数据的模板）\n"
             "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖"
             % SQL_EXPORT_ROW_CAP)
@@ -2962,7 +2965,8 @@ class MainWindow(QWidget):
             "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
             "只留「数据」一个 Sheet，表头是脚本里那些字段的英文名，"
             "下面是 INSERT 的数据\n"
-            "（每张表最多写 %d 行，超出的只在日志点名）\n"
+            "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
+            "超出的只在日志点名）\n"
             "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖"
             % SQL_EXPORT_ROW_CAP)
         self.btn_sql_gen_simple.setEnabled(False)
