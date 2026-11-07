@@ -37,6 +37,10 @@ public final class NameDiffer {
         // 版本号括号没有单独放夹具（会带动整份金标准的二进制翻新），直接喂合成文件名：
         // 这里跑的就是 TableBuilder 与界面共用的 parseTableNameAndComment
         bad += checkVersionBracket(names, shown);
+        // 版本号（2.0 → v2）与 ZIP 目录拼接这两条新规则金标准里没有夹具，
+        // 拿合成文件名在这里撞：数字与 Python pack_test S8c/S8d 同源
+        bad += checkVersionToken(names, shown);
+        bad += checkArchiveDirs(names, shown);
         try {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -123,6 +127,7 @@ public final class NameDiffer {
         System.out.println("- [INFO] NAME-DIFF | 文件 " + files + " 个（结构定义 " + structured
                 + "，其中 nan 字段 " + nanFields + " 个）| 拼音字段 " + fields
                 + " 个 | 合并拒绝 " + rejected + " 个 | 版本号括号合成 5 例"
+                + " | 版本号改写与目录拼接合成 11 例"
                 + " | 不一致 " + bad + " 处");
         for (String s : shown) {
             System.out.println(s);
@@ -174,6 +179,75 @@ public final class NameDiffer {
             names.setUpperOnly(false);
         }
         return bad;
+    }
+
+    /**
+     * 表名里的版本号：`2.0` 一律写成 `v2`，`3.5` 写成 `v3_5`。
+     *
+     * 期望值是从 Python 侧同一批文件名抄下来的（`pack_test` S8c 那一组），两边各存一份
+     * 数字，谁单边改了都会在这里红。日期（`2026.10.1`）与三位以上主版本不许被这条规则吃掉，
+     * 所以它们也在这一组里——挡的就是"把日期当版本号"那种改法。
+     */
+    private static int checkVersionToken(Names names, List<String> shown) {
+        int bad = 0;
+        String[][] cases = {
+            {"manual_orders2.0.xlsx", "manual_orders_v2", "manual_orders2.0"},
+            {"装备实力2.0.xlsx", "zhuang_bei_shi_li_v2", "装备实力2.0"},
+            {"系统 2.0 数据.xlsx", "xi_tong_v2_shu_ju", "系统 2.0 数据"},
+            {"v3.5beta.xlsx", "v3_5_beta", "v3.5beta"},
+            {"表2.10.xlsx", "biao_v2_10", "表2.10"},
+            {"2.0.xlsx", "v2", "2.0"},
+            {"2026.10.1.xlsx", "t_2026_10_1", "2026.10.1"},
+        };
+        for (String[] c : cases) {
+            bad += expect(names, shown, "版本号[" + c[0] + "]", c[0], null, c[1], c[2]);
+        }
+        return bad;
+    }
+
+    /**
+     * ZIP 里的表名从包根一路拼到文件名，目录之间用下划线；表注释用 `/` 留着层级。
+     *
+     * 与 Python `parse_table_name_and_comment(..., dirs=...)` 逐值对齐；
+     * 最后一条是首字母档（图形版默认勾着「只取首字母」），别拿全拼当期望。
+     */
+    private static int checkArchiveDirs(Names names, List<String> shown) {
+        int bad = 0;
+        bad += expect(names, shown, "目录拼接[北京/水库]", "水库基础信息（dim_reservoir_info）.xlsx",
+                new String[]{"北京", "水库"}, "bei_jing_shui_ku_dim_reservoir_info",
+                "北京/水库/水库基础信息");
+        bad += expect(names, shown, "目录拼接[目录名带版本号]",
+                "装备2.0.xlsx", new String[]{"数据治理2.0"},
+                "shu_ju_zhi_li_v2_zhuang_bei_v2", "数据治理2.0/装备2.0");
+        // 不在包里的同名文件不受影响：没有目录就还是叶子名（括号里那截英文优先），与从前一致
+        bad += expect(names, shown, "目录拼接[无目录]",
+                "水库基础信息（dim_reservoir_info）.xlsx", null,
+                "dim_reservoir_info", "水库基础信息");
+        try {
+            names.setInitialsOnly(true);
+            bad += expect(names, shown, "目录拼接[首字母]",
+                    "河道水文站.xlsx", new String[]{"北京"}, "bj_hdswz", "北京/河道水文站");
+        } finally {
+            names.setInitialsOnly(false);
+        }
+        return bad;
+    }
+
+    /** 一条比对：给定文件名与目录，看表名与表注释是否都等于期望。 */
+    private static int expect(Names names, List<String> shown, String label, String file,
+                              String[] dirs, String wantName, String wantComment) {
+        String[] got = dirs == null
+                ? names.parseTableNameAndComment(file)
+                : names.parseTableNameAndComment(file, java.util.Arrays.asList(dirs));
+        if (wantName.equals(got[0]) && wantComment.equals(got[1])) {
+            return 0;
+        }
+        if (shown.size() < 12) {
+            shown.add("     " + label + "\n       期望=" + ascii(wantName)
+                    + " / " + ascii(wantComment) + "\n       实际=" + ascii(got[0])
+                    + " / " + ascii(got[1]));
+        }
+        return 1;
     }
 
     /** 差异报表里的中文要转义，否则在 GBK 控制台上是豆腐块，取证时读不出内容。 */

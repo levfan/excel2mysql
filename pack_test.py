@@ -2887,6 +2887,10 @@ check("H13 日志报告展开与忽略数量",
       and "忽略 3 个非 Excel 文件" in w3.log.toPlainText()
       and "跳过 1 个嵌套 zip" in w3.log.toPlainText(),
       log_lines(w3.log.toPlainText(), "[压缩包]"))
+check("H13b 包内文件表名从包根拼到文件名（目录之间用下划线；界面默认首字母档）",
+      [t["table_name"] for t in w3.tables] == ["skjcxx", "bj_hdswz"]
+      and w3.tables[1]["table_comment"] == "北京/河道水文站",
+      [(t["table_name"], t["table_comment"]) for t in w3.tables])
 w3._add_files([zempty])
 check("H14 空包给出红色告警而不是静默", "压缩包为空" in w3.log.toPlainText())
 w3._add_files([fake])
@@ -7326,6 +7330,15 @@ check("R55 含空格/标点的表名被拦下并恢复",
       rw6.tables[1]["table_name"] == "manual_orders"
       and any("含非法字符" in x for _, x in POPUPS), POPUPS[-1] if POPUPS else "无弹窗")
 POPUPS.clear()
+rw6.file_table.item(1, 2).setText("manual_orders2.0")
+_app.processEvents()
+check("R55b 名字里的 2.0 按 _v2_ 拼接改写，不弹「只能用字母、数字、下划线」",
+      rw6.tables[1]["table_name"] == "manual_orders_v2"
+      and not any("含非法字符" in x for _, x in POPUPS),
+      (rw6.tables[1]["table_name"], POPUPS[-1] if POPUPS else "无弹窗"))
+rw6.file_table.item(1, 2).setText("manual_orders")
+_app.processEvents()
+POPUPS.clear()
 rw6.file_table.item(1, 2).setText(rw6.tables[0]["table_name"])
 _app.processEvents()
 check("R56 与其他表重名被拦下并恢复",
@@ -7963,6 +7976,7 @@ sw.close()
 section("S 文件名括号内容判定（不允许汉字表名 / 纯数字表名 / 版本号表名）")
 
 from core.infer import parse_table_name_and_comment as _PT, _col_to_field as _CF
+from core.infer import table_name_problem as _TNP
 
 _n1, _c1 = _PT("人员信息表（人事处人员）.xlsx")
 check("S1 括号内是中文：表名由全部中文一起转拼音，绝不含汉字",
@@ -7989,6 +8003,26 @@ check("S8 括号内是版本号：不当表名，回退成完整文件名拼音�
       and _PT("订单表（v2）.xlsx")[0] == "ding_dan_biao_v2"
       and _PT("订单表（V2_1）.xlsx")[0] == "ding_dan_biao_v2_1",
       (_v2n, _v2c))
+_v20n, _v20c = _PT("装备实力2.0.xlsx")
+check("S8c 名字里带小数的版本号写成 _v2_（不拆成 2_0，也不被判成非法字符）",
+      _v20n == "zhuang_bei_shi_li_v2" and _v20c == "装备实力2.0"
+      and _PT("系统 2.0 数据.xlsx")[0] == "xi_tong_v2_shu_ju"
+      and _PT("装备实力v3.5.xlsx")[0] == "zhuang_bei_shi_li_v3_5"
+      and _PT("某某2026.10.1.xlsx")[0] == "mou_mou_2026_10_1"
+      and _TNP(_v20n) is None,
+      (_v20n, _PT("系统 2.0 数据.xlsx")[0], _PT("某某2026.10.1.xlsx")[0]))
+check("S8d 包内目录链进表名：目录_目录_文件名，注释带目录、散装文件不变",
+      _PT("水库基础信息（dim_reservoir_info）.xlsx", dirs=("北京", "水库"))
+      == ("bei_jing_shui_ku_dim_reservoir_info", "北京/水库/水库基础信息")
+      and _PT("水库基础信息（dim_reservoir_info）.xlsx")
+      == ("dim_reservoir_info", "水库基础信息")
+      and _PT("数据治理2.0/装备2.0.xlsx", dirs=("数据治理2.0",))[0]
+      == "shu_ju_zhi_li_v2_zhuang_bei_v2",
+      (_PT("水库基础信息（dim_reservoir_info）.xlsx", dirs=("北京", "水库")),
+       _PT("数据治理2.0/装备2.0.xlsx", dirs=("数据治理2.0",))))
+check("S8e 字段名不做版本号改写（「≥1.0mm」是量值口径，不能变成 v1mm）",
+      _CF("累年月日降水量≥1.0mm平均日数") == "lnyrjsl10mmpjrs",
+      _CF("累年月日降水量≥1.0mm平均日数"))
 check("S8b 版本号回退跟首字母/大小写开关（DDBV2），order2/A1 这类真名字仍直接采用",
       _PT("订单表（V2）.xlsx", initials=True)[0] == "ddbv2"
       and _PT("订单表（V2）.xlsx", initials=True, upper=True)[0] == "DDBV2"

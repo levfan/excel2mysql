@@ -49,6 +49,11 @@ public final class Names {
             "(?<![0-9A-Za-z])[yYmMdDhHsS]{2,}(?:[-/\u2013_.:\uff1a][0-9yYmMdDhHsS]+)*(?![0-9A-Za-z])");
     private static final Pattern NON_WORD =
             Pattern.compile("[^\\w]+", Pattern.UNICODE_CHARACTER_CLASS);
+    // 名字里带小数的版本号：2.0 / V2.0 / v3.5。直接转拼音会断成 2_0 两段，
+    // 看着像两个并列数字；整段写成 v2（v3.5 写成 v3_5）。主版本限一到两位，
+    // 前后不许贴数字或点，所以 2026.10.1 这种日期不是版本号
+    private static final Pattern VER_TOKEN =
+            Pattern.compile("(?<![0-9.])[vV]?(\\d{1,2})\\.(\\d{1,2})(?![0-9])");
     private static final Pattern RUN =
             Pattern.compile("[A-Za-z0-9_]+|[\\u4e00-\\u9fff]+");
     private static final Pattern HANJI_HEAD = Pattern.compile("[\\u4e00-\\u9fff]");
@@ -115,6 +120,24 @@ public final class Names {
 
     /** 文件名 -> (表名, 表注释)。括号里是合法英文标识符（版本号除外）才采用，否则整名转拼音。 */
     public String[] parseTableNameAndComment(String filename) {
+        return parseTableNameAndComment(filename, java.util.Collections.<String>emptyList());
+    }
+
+    /**
+     * 文件名 + ZIP 包内目录链 -> (表名, 表注释)。
+     *
+     * dirs 为空就是散装 Excel：只看文件名。给了目录链（从包根数到文件所在目录）时
+     * 表名按「目录1_目录2_文件名」拼，不同目录下的同名文件因此不会塌成一张表；
+     * 表注释也带上目录链（用 / 连接），一眼看得出它来自包里的哪一层。
+     * 与 Python 侧 core.infer.parse_table_name_and_comment 逐字对齐。
+     */
+    public String[] parseTableNameAndComment(String filename, List<String> dirs) {
+        String[] leaf = leafTableName(filename);
+        return joinArchiveDirs(leaf[0], leaf[1], dirs, filename);
+    }
+
+    /** 叶子节点（文件名本身）-> (表名, 表注释)，括号规则见 parseTableNameAndComment。 */
+    private String[] leafTableName(String filename) {
         String stem = stripExtension(baseName(filename));
         Matcher m = PAREN_TABLE.matcher(stem);
         if (m.find()) {
@@ -135,17 +158,98 @@ public final class Names {
         return new String[]{sanitizeTableName(stem), stem};
     }
 
+    /**
+     * 把包内目录链拼到叶子表名前面（目录之间、目录与文件名之间都用下划线）。
+     *
+     * 目录链兜底为拼音（与叶子同一套转写与大小写开关），整条超过 64 字符时改用
+     * 「整条包内路径」重新转写，与单个长文件名的降级口径一致（首字母压缩）。
+     */
+    private String[] joinArchiveDirs(String leafName, String leafComment, List<String> dirs,
+                                     String filename) {
+        List<String> items = new ArrayList<String>();
+        if (dirs != null) {
+            for (String d : dirs) {
+                if (d != null && !pyStrip(d).isEmpty()) {
+                    items.add(pyStrip(d));
+                }
+            }
+        }
+        if (items.isEmpty()) {
+            return new String[]{leafName, leafComment};
+        }
+        String prefix = cnToTableName(joinWith(items, "_"), TABLE_MAX_LEN, true);
+        if (prefix.isEmpty()) {
+            // 目录名一个可用字符都没有（纯符号）：只认文件名，别拼出一串下划线
+            return new String[]{leafName, leafComment};
+        }
+        String name = prefix + "_" + leafName;
+        if (name.length() > TABLE_MAX_LEN) {
+            List<String> all = new ArrayList<String>(items);
+            all.add(stripExtension(baseName(filename)));
+            name = sanitizeTableName(joinWith(all, "/"));
+        }
+        List<String> comment = new ArrayList<String>(items);
+        comment.add(leafComment);
+        return new String[]{name, joinWith(comment, "/")};
+    }
+
+    private static String joinWith(List<String> items, String sep) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : items) {
+            if (sb.length() > 0) {
+                sb.append(sep);
+            }
+            sb.append(s);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 名字里的版本号改写成能直接进表名的一段：2.0 -> v2，V3.5 -> v3_5（与 Python 侧同口径）。
+     * 紧贴字母数字时两侧补下划线（orders2.0 -> orders_v2），「拼接形式」才算真成立。
+     */
+    public static String rewriteVersions(String text) {
+        String src = text == null ? "" : text;
+        Matcher m = VER_TOKEN.matcher(src);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String major = m.group(1);
+            String minor = m.group(2);
+            // 2.0 这种补零小版本没有区分意义，写成 v2；3.5 这种要留住 5，写成 v3_5
+            String token = "0".equals(minor) ? "v" + major : "v" + major + "_" + minor;
+            char before = m.start() > 0 ? src.charAt(m.start() - 1) : 0;
+            char after = m.end() < src.length() ? src.charAt(m.end()) : 0;
+            if (before != 0 && Character.isLetterOrDigit(before)) {
+                token = "_" + token;
+            }
+            if (after != 0 && Character.isLetterOrDigit(after)) {
+                token = token + "_";
+            }
+            m.appendReplacement(sb, Matcher.quoteReplacement(token));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
     public String sanitizeTableName(String text) {
-        String name = cnToTableName(text, TABLE_MAX_LEN);
+        String name = cnToTableName(text, TABLE_MAX_LEN, true);
         return name.isEmpty() ? (upperOnly ? "T_IMPORT_DATA" : "t_import_data") : name;
     }
 
     public String cnToTableName(String text, int limit) {
+        return cnToTableName(text, limit, true);
+    }
+
+    /**
+     * versions=true（表名用）时先把 2.0 / V2.0 这类版本号改写成 v2；
+     * 字段名一律传 false：「≥1.0mm」是量值口径，改成 v1mm 会丢信息。
+     */
+    public String cnToTableName(String text, int limit, boolean versions) {
         String t = pyStrip(text == null ? "" : String.valueOf(text));
         if (t.isEmpty()) {
             return "";
         }
-        List<Syllable> syllables = syllables(t);
+        List<Syllable> syllables = syllables(t, versions);
         if (syllables.isEmpty()) {
             return "";
         }
@@ -222,7 +326,13 @@ public final class Names {
      * 会被整段丢弃，Python 侧就是这么表现的，改名等于改契约。
      */
     public List<Syllable> syllables(String text) {
-        String norm = NON_WORD.matcher(pyStrip(String.valueOf(text)))
+        return syllables(text, false);
+    }
+
+    /** versions=true 时先把 2.0 这类版本号改写成 v2（表名用，字段名不用）。 */
+    public List<Syllable> syllables(String text, boolean versions) {
+        String src = versions ? rewriteVersions(pyStrip(String.valueOf(text))) : String.valueOf(text);
+        String norm = NON_WORD.matcher(pyStrip(src))
                 .replaceAll("_");
         List<Syllable> out = new ArrayList<Syllable>();
         Matcher m = RUN.matcher(norm);

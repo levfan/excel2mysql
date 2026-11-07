@@ -105,6 +105,8 @@ public final class ImportParse {
 
         List<String> pending = new ArrayList<String>();
         Set<String> fromZip = new LinkedHashSet<String>();
+        // 解压出的路径 -> 包内目录链：表名要从包根一路拼到文件名（见 Names.joinArchiveDirs）
+        Map<String, List<String>> zipDirs = new LinkedHashMap<String, List<String>>();
         for (String f : files) {
             if (!f.toLowerCase().endsWith(".zip")) {
                 pending.add(f);                 // 散装 Excel 留到解析阶段计项
@@ -152,6 +154,13 @@ public final class ImportParse {
             for (ZipImport.Entry x : r.files) {
                 out.zipOrigin.put(x.path, zname + "!" + x.origin);
                 fromZip.add(x.path);
+                List<String> inner = archiveDirs(x.origin);
+                if (!inner.isEmpty()) {
+                    zipDirs.put(x.path, inner);
+                }
+                zipHome.put(x.path, new String[]{
+                    new File(f).getAbsoluteFile().getParent(),
+                    stripExtension(baseName(x.origin.replace('\\', '/')))});
             }
             StringBuilder msg = new StringBuilder("[压缩包] ").append(zname)
                     .append("：展开 ").append(r.files.size()).append(" 个 Excel");
@@ -243,6 +252,27 @@ public final class ImportParse {
                         + LogText.indentDetail(LogText.describe(e)));
             }
             sink.advance(Math.max(0, PARSE_UNITS - used[0]), fname);
+        }
+        return out;
+    }
+
+    /**
+     * 包内路径（如 部门A/子目录/表.xlsx）-> 目录链 [部门A, 子目录]。
+     *
+     * 表名按「目录_…_文件名」拼，所以这里保留每一层目录；根目录下的文件返回空表，
+     * 表名照旧只看文件名。平铺（路径过长被砍目录）时 origin 仍是包内原始路径，
+     * 表名不受落盘位置影响。
+     */
+    static List<String> archiveDirs(String origin) {
+        List<String> out = new ArrayList<String>();
+        if (origin == null) {
+            return out;
+        }
+        String[] parts = origin.replace('\\', '/').split("/");
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (!parts[i].isEmpty()) {
+                out.add(parts[i]);
+            }
         }
         return out;
     }

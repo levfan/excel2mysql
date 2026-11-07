@@ -2260,7 +2260,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 文件表单击「表名」改名：校验不过就恢复原名，改成了就以新名为基础名。 */
     private void renameFileTable(FileRowModel.Item item, String typed) {
         String old = item.table.tableName;
-        String name = Names.pyStrip(String.valueOf(typed == null ? "" : typed).replace("`", ""));
+        // 名字里的 2.0 先按 _v2_ 的拼接形式改写：版本号不是非法字符，
+        // 不该被下面"只能用字母、数字、下划线"那条规则拦下（拖文件进来时也不拦）
+        String name = Names.rewriteVersions(
+                Names.pyStrip(String.valueOf(typed == null ? "" : typed).replace("`", "")));
         if (name.equals(old)) {
             fileModel.refresh();
             return;

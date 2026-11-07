@@ -5922,6 +5922,13 @@ public final class GuiMain {
             byte[] raw = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(files.get(0)));
             zos.write(raw);
             zos.closeEntry();
+            // 包内两层目录：表名要从包根一路拼到文件名（目录之间下划线），
+            // 表注释用 `/` 留层级——这条只能靠真的走一遍解压才验得到
+            zos.putNextEntry(new java.util.zip.ZipEntry(
+                    "\u5317\u4eac/\u6cb3\u9053\u6c34\u6587\u7ad9/"
+                            + "\u6cb3\u9053\u6c34\u6587\u7ad9.xlsx"));
+            zos.write(raw);
+            zos.closeEntry();
             zos.close();
         } catch (Exception e) {
             problems.add("打 ZIP 夹具失败：" + e);
@@ -5932,19 +5939,42 @@ public final class GuiMain {
         List<String> one = new ArrayList<String>();
         one.add(zip.getPath());
         String summary = frame.addFiles(one);
-        if (frame.tables().size() != before + 1) {
+        if (frame.tables().size() != before + 2) {
             problems.add("压缩包里的 Excel 没被展开进列表：" + before + " → "
                     + frame.tables().size() + "；日志尾部：" + tail(frame.logPanel().text()));
         }
-        if (!frame.logPanel().contains("[压缩包] pack1.zip：展开 1 个 Excel，忽略 1 个非 Excel 文件")) {
+        if (!frame.logPanel().contains("[压缩包] pack1.zip：展开 2 个 Excel，忽略 1 个非 Excel 文件")) {
             problems.add("压缩包展开没报清楚（展开几个、忽略几个）");
+        }
+        // 包内两层目录的那张：表名带目录前缀，注释带层级（图形版默认只取首字母）
+        com.excel2mysql.core.TableOps.Table nestedTable = null;
+        for (com.excel2mysql.core.TableOps.Table t : frame.tables()) {
+            if (t.filepath != null && t.filepath.endsWith("\u6cb3\u9053\u6c34\u6587\u7ad9.xlsx")) {
+                nestedTable = t;
+                break;
+            }
+        }
+        if (nestedTable == null) {
+            problems.add("包内两层目录的 Excel 没进列表");
+        } else {
+            // 表名必须带目录前缀。两种写法都算对：「取首字母」勾没勾是界面状态，
+            // 命名那一段自检跑在前面会动这个开关；只用叶子名的那一版必须撞红
+            String nestedName = nestedTable.tableName;
+            boolean withDirs = "bjhdswz_hdswz".equals(nestedName)
+                    || "bei_jing_he_dao_shui_wen_zhan_he_dao_shui_wen_zhan".equals(nestedName);
+            if (!withDirs) {
+                problems.add("包内文件的表名没从包根拼到文件名：" + nestedName);
+            }
+            if (!"\u5317\u4eac/\u6cb3\u9053\u6c34\u6587\u7ad9/\u6cb3\u9053\u6c34\u6587\u7ad9".equals(nestedTable.tableComment)) {
+                problems.add("包内文件的表注释没留目录层级：" + nestedTable.tableComment);
+            }
         }
         if (!summary.contains("添加 1 项 zip 文件")) {
             problems.add("弹窗汇总没把 zip 单列一行：" + summary.replace((char) 10, ' '));
         }
         int last = frame.fileModel().getRowCount() - 1;
         String tip = frame.fileModel().tooltipAt(last);
-        if (!tip.contains("pack1.zip!") || !tip.contains("inner.xlsx")) {
+        if (!tip.contains("pack1.zip!") || !tip.contains(".xlsx")) {
             problems.add("包内文件的来源 tooltip 不对：" + tip);
         }
         String looseTip = frame.fileModel().tooltipAt(0);

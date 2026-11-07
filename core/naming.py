@@ -8,6 +8,36 @@ import re
 # 手填前缀允许的字符：合法 MySQL 标识符片段（大小写保留，Linux 下表名区分大小写）
 _PREFIX_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
+# 名字里带小数的版本号：2.0 / V2.0 / v3.5 —— 直接转拼音会断成 2_0 两段，看着像两个
+# 并列数字而不像版本。整段写成 v2（v3.5 写成 v3_5），拼进名字就是 xxx_v2 / xxx_v2_yyy。
+# 主版本限一到两位，且前后不许贴着数字或点：2026.10.1 这类日期、1234.56 这种数值不受影响。
+_VERSION_TOKEN_RE = re.compile(r"(?<![0-9.])[vV]?(\d{1,2})\.(\d{1,2})(?![0-9])")
+
+
+def rewrite_versions(text) -> str:
+    """把名字里的版本号改写成能直接进表名的一段：2.0 -> v2，V3.5 -> v3_5。
+
+    表名与手工改名的校验都走这一条：用户看到的是 _v2_ 这种拼接形式，
+    而不是被"只能用字母数字下划线"拦下来的 2.0。
+    紧贴字母数字时两侧补下划线（orders2.0 -> orders_v2），
+    这样「拼接形式」在任何名字里都成立，不会粘成 ordersv2。
+    """
+    src = str(text if text is not None else "")
+
+    def _sub(m):
+        major, minor = m.group(1), m.group(2)
+        # 2.0 这种补零小版本没有区分意义，写成 v2；3.5 这种要留住 5，写成 v3_5
+        token = f"v{major}" if minor == "0" else f"v{major}_{minor}"
+        before = src[m.start() - 1] if m.start() > 0 else ""
+        after = src[m.end():m.end() + 1]
+        if before and before.isalnum():
+            token = "_" + token
+        if after and after.isalnum():
+            token = token + "_"
+        return token
+
+    return _VERSION_TOKEN_RE.sub(_sub, src)
+
 
 def clean_prefix(text) -> str:
     """清掉用户输入里的空白与反引号/反斜杠，并去掉末尾下划线。

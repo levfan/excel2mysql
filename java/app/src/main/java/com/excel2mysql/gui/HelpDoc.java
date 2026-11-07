@@ -183,6 +183,12 @@ public final class HelpDoc {
                     "<ul>" + NL +
                     "<li><b>递归子目录</b>：包内 <code>北京/水库.xlsx</code> 这类嵌套路径同样收进来，" + NL +
                     "解压时保留目录结构，不同目录下的同名文件不会互相覆盖</li>" + NL +
+                    "<li><b>表名从包根一路拼到文件名</b>：包内路径的每一层目录都进表名，目录之间、" + NL +
+                    "目录与文件名之间用下划线连接——<code>北京/水库/水库基础信息（dim_reservoir_info）.xlsx</code>" + NL +
+                    "的表名是 <code>bei_jing_shui_ku_dim_reservoir_info</code>，表注释是" + NL +
+                    "<code>北京/水库/水库基础信息</code>。不同目录下的同名文件因此天然是两个表名，" + NL +
+                    "不用手工改也不会塌成 <code>_2</code>；<b>散装 Excel 不受影响</b>，表名仍只看文件名。" + NL +
+                    "整条超过 64 字符时按「整条包内路径」转拼音降级（首字母压缩），不会砍掉尾巴</li>" + NL +
                     "<li><b>不递归嵌套 zip</b>：包内的 <code>.zip</code> 跳过并在日志计数，" + NL +
                     "需要导入就把内层包单独拖进来</li>" + NL +
                     "<li><b>非 Excel 文件忽略</b>，<code>~$xxx.xlsx</code> 这类 Office 临时锁文件也跳过</li>" + NL +
@@ -297,6 +303,11 @@ public final class HelpDoc {
                     "<td>括号内是版本号（V2 / v2 / V2_1）→ 版本号不是表名，" + NL +
                     "<b>回退后版本段留在末尾</b>；勾「取拼音首字母」为 <code>ddbv2</code>，" + NL +
                     "再勾「转大写」为 <code>DDBV2</code></td></tr>" + NL +
+                    "<tr><td><code>装备实力2.0</code></td><td><code>zhuang_bei_shi_li_v2</code></td>" + NL +
+                    "<td>名字里带小数的版本号（<code>2.0</code> / <code>V2.0</code> / <code>v3.5</code>）" + NL +
+                    "整体写成 <code>v2</code>（<code>v3.5</code> 写成 <code>v3_5</code>）：" + NL +
+                    "拼进名字就是 <code>_v2_</code> 这种形式，不会拆成 <code>2_0</code> 两段。" + NL +
+                    "<b>版本号不会被判成非法字符</b>，拖进来不弹「只能用字母、数字、下划线」的警告</td></tr>" + NL +
                     "</table>" + NL +
                     "回退时<b>表注释保留完整文件名</b>（含括号内容），因此" + NL +
                     "<code>人员信息表（人事处）</code> 与 <code>人员信息表（财务部）</code>" + NL +

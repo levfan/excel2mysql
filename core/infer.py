@@ -11,7 +11,7 @@ import pandas as pd
 from pypinyin import lazy_pinyin
 
 from .merge_check import (MergedCellsError, detect_merged_cells, header_merge_plan)
-from .naming import clean_prefix, swap_first_segment
+from .naming import clean_prefix, rewrite_versions, swap_first_segment
 
 
 # 文件名末尾「（表名）」模式：中英文括号均可，如 北京市水务局-水库基础信息（dim_reservoir_info）
@@ -582,7 +582,8 @@ def case_switch(name: str, upper: bool, lower: bool) -> str:
 
 
 def parse_table_name_and_comment(filename: str, initials: bool = False,
-                                 upper: bool = False, lower: bool = False) -> tuple:
+                                 upper: bool = False, lower: bool = False,
+                                 dirs=()) -> tuple:
     """
     从文件名解析 (表名, 表注释)。
 
@@ -600,7 +601,20 @@ def parse_table_name_and_comment(filename: str, initials: bool = False,
     回退时表注释保留完整文件名（含括号内容），表名取括号部分转拼音后保留，
     这样 人员信息表（人事处）与 人员信息表（财务部） 得到两个不同且可辨识的表名。
     文本无有效字符时用兜底表名 t_import_data。
+
+    dirs 是 ZIP 包内的目录链（从包根数到文件所在目录，不含文件名）：
+    给了目录链时表名按「目录1_目录2_文件名」拼——不同目录下的同名文件因此不会
+    塌成一张表，导进库也能一眼看出它来自哪一层；表注释同样带上目录链（/ 连接）。
+    不给（散装 Excel）就还是只看文件名，与以前完全一致。
     """
+    leaf_name, leaf_comment = _leaf_table_name(filename, initials, upper, lower)
+    return _join_archive_dirs(leaf_name, leaf_comment, dirs, filename,
+                              initials, upper, lower)
+
+
+def _leaf_table_name(filename: str, initials: bool = False,
+                     upper: bool = False, lower: bool = False) -> tuple:
+    """叶子节点（文件名本身）-> (表名, 表注释)，括号规则见 parse_table_name_and_comment。"""
     stem = os.path.splitext(os.path.basename(filename))[0]
     m = _PAREN_TABLE_RE.search(stem)
     if m:
@@ -621,9 +635,34 @@ def parse_table_name_and_comment(filename: str, initials: bool = False,
     return sanitize_table_name(stem, initials=initials, upper=upper, lower=lower), stem
 
 
+def _join_archive_dirs(leaf_name: str, leaf_comment: str, dirs, filename: str,
+                       initials: bool = False, upper: bool = False,
+                       lower: bool = False) -> tuple:
+    """把 ZIP 包内的目录链拼到叶子表名前面（目录之间、目录与文件名之间都用下划线）。
+
+    目录链兜底为拼音（与叶子同一套转写与大小写开关），不合法字符（空格、横线、
+    括号）照旧折成下划线；整条超过 64 字符时改用「整条包内路径」重新转写，
+    与单个长文件名的降级口径一致（首字母压缩），不会砍掉尾巴。
+    """
+    items = [str(d).strip() for d in (dirs or ()) if str(d).strip()]
+    if not items:
+        return leaf_name, leaf_comment
+    prefix = _cn_to_table_name("_".join(items), limit=64, initials=initials,
+                               upper=upper, lower=lower)
+    if not prefix:
+        # 目录名一个可用字符都没有（纯符号/纯表情）：只认文件名，别拼出一串下划线
+        return leaf_name, leaf_comment
+    name = f"{prefix}_{leaf_name}"
+    if len(name) > 64:
+        stem = os.path.splitext(os.path.basename(filename))[0]
+        name = sanitize_table_name("/".join(items + [stem]), initials=initials,
+                                   upper=upper, lower=lower)
+    return name, "/".join(items + [leaf_comment])
+
+
 def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
                       initials: bool = False, upper: bool = False,
-                      lower: bool = False) -> str:
+                      lower: bool = False, versions: bool = True) -> str:
     """
     文本 -> 拼音表名组件：小写字母/数字/下划线，符合 MySQL 表名规范。
     各类分隔符（连字符、空格、斜杠、括号等）统一转下划线；连续英文/数字原样保留；
@@ -635,11 +674,13 @@ def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
     initials=True 时汉字音节一律取首字母（用户开关选了「取中文首字母」）。
     upper=True 时整名转大写（用户开关选了「表名与字段名大写」）；
     lower=True 时整名转小写，与不勾同结果（音节切分时英文段已被拉成小写）。
+    versions=True（表名用）时把 2.0 / V2.0 这类版本号改写成 v2，字段名不传这一档：
+    表头里的「≥1.0mm」是量值口径，改成 v1mm 就丢信息了。
     """
     text = str(text).strip()
     if not text:
         return ""
-    syllables = _syllables(text)
+    syllables = _syllables(text, versions=versions)
     if not syllables:
         return ""
     return _fit_name(syllables, limit, "t_", initials=initials, upper=upper,
@@ -651,6 +692,7 @@ def sanitize_table_name(text: str, initials: bool = False,
     """
     文本 -> 默认表名：汉字转拼音（音节间下划线分隔），符合 MySQL 命名规范
     （仅小写字母/数字/下划线，不以数字开头，最长 64 字符；upper=True 时为大写）。
+    名字里的 2.0 / V2.0 这类版本号写成 v2（拼出来是 xxx_v2 这种 _v2_ 形式）。
     """
     name = _cn_to_table_name(text, limit=64, initials=initials, upper=upper,
                              lower=lower)
@@ -659,12 +701,15 @@ def sanitize_table_name(text: str, initials: bool = False,
     return name
 
 
-def _syllables(text):
+def _syllables(text, versions: bool = False):
     """把任意文本切成 (音节, 是否来自汉字) 序列：汉字逐字一个音节，英文/数字整段保留。
 
     字段名与表名共用这一套切分，保证同一个中文在两处的转写结果一致。
+    versions=True 时先把 2.0 这类版本号改写成 v2（表名用；字段名不动，
+    表头里的「≥1.0mm」是量值口径，改成 v1mm 会丢信息）。
     """
     out = []
+    text = rewrite_versions(text) if versions else text
     norm = re.sub(r"[^\w]+", "_", str(text).strip(), flags=re.UNICODE)
     for seg in re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", norm):
         if re.match(r"[\u4e00-\u9fff]", seg):
@@ -1414,16 +1459,17 @@ def _meta_nullable(v) -> bool:
 
 
 def _build_structured(filepath: str, sheets: dict, initials: bool = False,
-                      upper: bool = False, lower: bool = False) -> dict:
+                      upper: bool = False, lower: bool = False, dirs=()) -> dict:
     """
     第 2 类 Excel：结构定义模式。字段名/类型/长度/主键/可空全部以元数据 Sheet 定义为准，
     不再从数据推断；数据 Sheet 按字段名对齐（大小写不敏感），
     多余列忽略并记录，缺失列补 NULL；只有定义没有数据时建空表。
     勾上大小写开关时元数据里手写的字段名一起转（数据 Sheet 按字段名对齐是大小写
     不敏感的，转完照样对得上）；两颗都不勾时保持原样——不做大小写转换不等于替使用者改名。
+    dirs 是 ZIP 包内的目录链，与普通表同一口径（表名带上目录链）。
     """
     table_name, table_comment = parse_table_name_and_comment(
-        filepath, initials=initials, upper=upper, lower=lower)
+        filepath, initials=initials, upper=upper, lower=lower, dirs=dirs)
     meta_name = next(n for n, sdf in sheets.items() if _match_meta_roles(sdf) is not None)
     roles = _match_meta_roles(sheets[meta_name])
     meta = sheets[meta_name].dropna(axis=0, how="all")
@@ -1750,7 +1796,7 @@ def apply_auto_pk(td: dict, add: bool, upper: bool = False,
 
 def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
                     upper: bool = False, lower: bool = False,
-                    auto_pk: bool = False) -> dict:
+                    auto_pk: bool = False, dirs=()) -> dict:
     """
     读取单个 Excel，自动识别两类格式并返回表定义：
       第 1 类（普通数据表）：单个数据 Sheet，表名/注释来自文件名，字段从数据推断；
@@ -1761,6 +1807,8 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     initials=True 取拼音首字母（结构定义模式手写的字段名不受它影响）；
     upper=True 表名与字段名转大写、lower=True 转小写，结构定义模式里手写的字段名也一样转；
     auto_pk=True 走「自动补全主键」，没有主键的表补一个 business_id（见 apply_auto_pk）。
+    dirs 是 ZIP 包内的目录链：给了就按「目录_…_文件名」出表名（见
+    parse_table_name_and_comment），散装文件不传，表名只看文件名。
     """
     def _note(text):
         # 大文件读盘与推断要好几秒，逐阶段报一句，进度框上能看到"还在动"
@@ -1802,7 +1850,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     if meta_name is not None:
         _note("按字段定义组装")
         td = _build_structured(filepath, sheets, initials=initials, upper=upper,
-                               lower=lower)
+                               lower=lower, dirs=dirs)
         td["merged_header"] = merged_info
         if auto_pk:
             apply_auto_pk(td, True, upper=upper, lower=lower)
@@ -1813,7 +1861,7 @@ def build_table_def(filepath: str, progress_cb=None, initials: bool = False,
     df, keep_empty = _drop_unnamed_blank_columns(df)
     df = df.dropna(axis=0, how="all")
     table_name, table_comment = parse_table_name_and_comment(
-        filepath, initials=initials, upper=upper, lower=lower)
+        filepath, initials=initials, upper=upper, lower=lower, dirs=dirs)
     _note("推断字段类型")
     columns = infer_columns(df, initials=initials, upper=upper, lower=lower)
     # 一列都没有时先回原始工作簿问一次列宽：表头整行没写字的模板，pandas 把宽度一起丢了，

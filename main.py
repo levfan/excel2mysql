@@ -73,7 +73,7 @@ from core.sql_script import (
     edit_column, format_sql, format_refusal, add_auto_pk_create,
     SQL_FORMAT_KEYWORDS, SQL_FORMAT_TYPES,
 )
-from core.naming import clean_prefix, is_valid_prefix, swap_first_segment
+from core.naming import clean_prefix, is_valid_prefix, rewrite_versions, swap_first_segment
 from sql_samples import SAMPLES as SQL_SAMPLES, matches as sample_matches
 from core.mysql_io import (
     build_ddl, connect, list_databases, create_table, insert_data,
@@ -1092,6 +1092,7 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
     sink.set_total(len(zips) + entries + _PARSE_UNITS * (len(loose) + entries))
 
     out, from_zip, zip_origin = [], set(), {}
+    zip_dirs = {}          # 解压出的路径 → 包内目录链，表名要从包根一路拼到文件名
     zips_ok = zips_bad = zips_empty = 0
     cancelled = False
     for f in files:
@@ -1118,6 +1119,10 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
             for x in r["files"]:
                 zip_origin[x["path"]] = f"{zname}!{x['origin']}"
                 from_zip.add(x["path"])
+                inner = [p for p in x["origin"].replace("\\", "/").split("/")[:-1]
+                         if p]
+                if inner:
+                    zip_dirs[x["path"]] = tuple(inner)
             out.extend(x["path"] for x in r["files"])
             msg = f"[压缩包] {zname}：展开 {len(r['files'])} 个 Excel"
             if r["ignored"]:
@@ -1156,7 +1161,8 @@ def parse_import_files(files, existing_paths, zip_dir, dest_start, sink,
 
         try:
             td = build_table_def(f, progress_cb=phase, initials=initials,
-                                 upper=upper, lower=lower, auto_pk=auto_pk)
+                                 upper=upper, lower=lower, auto_pk=auto_pk,
+                                 dirs=zip_dirs.get(f, ()))
             tables.append(td)
             (added_zip if f in from_zip else added_loose).append(f)
             pk = td.get("primary_key")
@@ -4840,8 +4846,10 @@ class MainWindow(QWidget):
             return
         t = self.tables[row]
         old = t["table_name"]
-        # 反引号是 DDL 的引用符，不是名字的一部分；粘贴时最容易带上
-        new = str(item.text() or "").replace("`", "").strip()
+        # 反引号是 DDL 的引用符，不是名字的一部分；粘贴时最容易带上。
+        # 名字里的 2.0 先按 _v2_ 的拼接形式改写：版本号不是非法字符，
+        # 不该被下面"只能用字母、数字、下划线"那条规则拦下（拖文件进来时也不拦）
+        new = rewrite_versions(str(item.text() or "").replace("`", "").strip())
         if new == old:
             if item.text() != old:
                 self._refresh_file_table()   # 去掉多余空白/反引号后回显规范名

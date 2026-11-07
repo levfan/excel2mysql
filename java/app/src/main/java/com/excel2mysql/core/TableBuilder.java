@@ -82,6 +82,14 @@ public final class TableBuilder {
     }
 
     public Result build(String filepath, ProgressCallback cb) {
+        return build(filepath, cb, null);
+    }
+
+    /**
+     * dirs 是 ZIP 包内的目录链（从包根数到文件所在目录）：给了就按「目录_…_文件名」出表名，
+     * 散装 Excel 传 null，表名只看文件名。与 Python 侧 build_table_def(dirs=…) 同口径。
+     */
+    public Result build(String filepath, ProgressCallback cb, List<String> dirs) {
         String lower = filepath.toLowerCase();
         int dot = lower.lastIndexOf('.');
         String ext = dot < 0 ? "" : lower.substring(dot);
@@ -139,7 +147,7 @@ public final class TableBuilder {
             if (cb != null) {
                 cb.stage("按字段定义组装");
             }
-            Result structured = buildStructured(filepath, frames, metaIndex);
+            Result structured = buildStructured(filepath, frames, metaIndex, dirs);
             structured.mergedHeaderDepth = mergePlan == null ? 0 : mergePlan.depth;
             return structured;
         }
@@ -147,7 +155,7 @@ public final class TableBuilder {
             throw new IllegalArgumentException("工作簿里没有可读的 Sheet");
         }
         Frame first = frames.get(0);
-        String[] tc = names.parseTableNameAndComment(filepath);
+        String[] tc = names.parseTableNameAndComment(filepath, dirs);
         Result r = new Result();
         r.mergedHeaderDepth = mergePlan == null ? 0 : mergePlan.depth;
         Grid grid = dropEmptyColumnsAndRows(first, r.emptyColumns);
@@ -298,10 +306,11 @@ public final class TableBuilder {
      * （NaN 是真值），所以"字段名留空"的那一行不会像直觉那样被跳过，而是生成一个叫 nan 的列。
      * 这是现网行为，Java 侧 null 不经过同样处理就会变成"跳过该行"，两边就分叉了。
      */
-    private Result buildStructured(String filepath, List<Frame> frames, int metaIndex) {
+    private Result buildStructured(String filepath, List<Frame> frames, int metaIndex,
+                                   List<String> dirs) {
         Frame metaFrame = frames.get(metaIndex);
         Map<String, Object> roles = matchMetaRoles(metaFrame);
-        String[] tc = names.parseTableNameAndComment(filepath);
+        String[] tc = names.parseTableNameAndComment(filepath, dirs);
 
         Result r = new Result();
         r.table = new TableOps.Table();
