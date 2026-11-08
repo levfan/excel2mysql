@@ -8175,6 +8175,22 @@ check("S8d 包内目录链进表名：目录_目录_文件名，注释带目录�
       == "shu_ju_zhi_li_v2_zhuang_bei_v2",
       (_PT("水库基础信息（dim_reservoir_info）.xlsx", dirs=("北京", "水库")),
        _PT("数据治理2.0/装备2.0.xlsx", dirs=("数据治理2.0",))))
+check("S8f 目录边界恒为下划线：首字母档与超长降级都逐层压写，不粘成一长串",
+      _PT("人员信息.xlsx", initials=True, dirs=("财务部", "2026年"))
+      == ("cwb_2026n_ryxx", "财务部/2026年/人员信息")
+      and _PT("河道水文站.xlsx", initials=True, dirs=("北京", "水库"))[0]
+      == "bj_sk_hdswz"
+      and _PT("人员信息.xlsx", dirs=("北京市水务局", "海淀区", "水库台账"))[0]
+      == "bjsswj_hdq_sktz_ren_yuan_xin_xi"
+      and _PT("人员信息.xlsx", dirs=("北京市水务局", "海淀区", "水库台账"))[0].count("_") >= 3,
+      (_PT("人员信息.xlsx", initials=True, dirs=("财务部", "2026年")),
+       _PT("人员信息.xlsx", dirs=("北京市水务局", "海淀区", "水库台账"))[0]))
+check("S8g 目录逐层转写不各自补 t_ 前缀：数字只出现在整名开头才算",
+      _PT("人员信息.xlsx", dirs=("财务部", "2026年"))[0]
+      == "cai_wu_bu_2026_nian_ren_yuan_xin_xi"
+      and _PT("人员信息.xlsx", dirs=("2026", "台账"))[0] == "t_2026_tai_zhang_ren_yuan_xin_xi",
+      (_PT("人员信息.xlsx", dirs=("财务部", "2026年"))[0],
+       _PT("人员信息.xlsx", dirs=("2026", "台账"))[0]))
 check("S8e 字段名不做版本号改写（「≥1.0mm」是量值口径，不能变成 v1mm）",
       _CF("累年月日降水量≥1.0mm平均日数") == "lnyrjsl10mmpjrs",
       _CF("累年月日降水量≥1.0mm平均日数"))

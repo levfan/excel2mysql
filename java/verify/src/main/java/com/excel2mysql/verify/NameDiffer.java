@@ -127,7 +127,7 @@ public final class NameDiffer {
         System.out.println("- [INFO] NAME-DIFF | 文件 " + files + " 个（结构定义 " + structured
                 + "，其中 nan 字段 " + nanFields + " 个）| 拼音字段 " + fields
                 + " 个 | 合并拒绝 " + rejected + " 个 | 版本号括号合成 5 例"
-                + " | 版本号改写与目录拼接合成 11 例"
+                + " | 版本号改写与目录拼接合成 14 例"
                 + " | 不一致 " + bad + " 处");
         for (String s : shown) {
             System.out.println(s);
@@ -209,7 +209,7 @@ public final class NameDiffer {
      * ZIP 里的表名从包根一路拼到文件名，目录之间用下划线；表注释用 `/` 留着层级。
      *
      * 与 Python `parse_table_name_and_comment(..., dirs=...)` 逐值对齐；
-     * 最后一条是首字母档（图形版默认勾着「只取首字母」），别拿全拼当期望。
+     * 最后两条是首字母档（图形版默认勾着「只取首字母」），别拿全拼当期望。
      */
     private static int checkArchiveDirs(Names names, List<String> shown) {
         int bad = 0;
@@ -223,10 +223,23 @@ public final class NameDiffer {
         bad += expect(names, shown, "目录拼接[无目录]",
                 "水库基础信息（dim_reservoir_info）.xlsx", null,
                 "dim_reservoir_info", "水库基础信息");
+        // 超长降级：整条超过 64 字符时逐层压首字母，目录边界仍是下划线
+        bad += expect(names, shown, "目录拼接[超长降级]",
+                "人员信息.xlsx", new String[]{"北京市水务局", "海淀区", "水库台账"},
+                "bjsswj_hdq_sktz_ren_yuan_xin_xi",
+                "北京市水务局/海淀区/水库台账/人员信息");
+        // 数字只在整个表名开头才补 t_，逐层补会把中间那层写成 t_2026
+        bad += expect(names, shown, "目录拼接[中间层是数字]",
+                "人员信息.xlsx", new String[]{"财务部", "2026年"},
+                "cai_wu_bu_2026_nian_ren_yuan_xin_xi", "财务部/2026年/人员信息");
         try {
             names.setInitialsOnly(true);
             bad += expect(names, shown, "目录拼接[首字母]",
                     "河道水文站.xlsx", new String[]{"北京"}, "bj_hdswz", "北京/河道水文站");
+            // 首字母档同样逐层加下划线：两层目录别粘成 cwb2026n
+            bad += expect(names, shown, "目录拼接[首字母·两层目录]",
+                    "人员信息.xlsx", new String[]{"财务部", "2026年"},
+                    "cwb_2026n_ryxx", "财务部/2026年/人员信息");
         } finally {
             names.setInitialsOnly(false);
         }

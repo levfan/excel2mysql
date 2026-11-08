@@ -161,8 +161,12 @@ public final class Names {
     /**
      * 把包内目录链拼到叶子表名前面（目录之间、目录与文件名之间都用下划线）。
      *
-     * 目录链兜底为拼音（与叶子同一套转写与大小写开关），整条超过 64 字符时改用
-     * 「整条包内路径」重新转写，与单个长文件名的降级口径一致（首字母压缩）。
+     * 逐层目录各自转写再用下划线连起来，而不是把整条链当成一个词转写：后者在
+     * 「取中文首字母」或超长降级时会把相邻两层粘成一段（财务部/2026年 -> cwb2026n），
+     * 表名里看不出它跨了几层。逐层转写后目录边界永远是下划线。
+     * 降级顺序：全拼装不下 -> 每层压首字母（叶子不动）；叶子自己也顶着上限 -> 叶子一并压成
+     * 首字母；还装不下 -> 从最外层丢目录（包根那层通常只是压缩包名），叶子整段保留。
+     * 与 Python 侧 core.infer._join_archive_dirs 逐字对齐。
      */
     private String[] joinArchiveDirs(String leafName, String leafComment, List<String> dirs,
                                      String filename) {
@@ -177,20 +181,70 @@ public final class Names {
         if (items.isEmpty()) {
             return new String[]{leafName, leafComment};
         }
-        String prefix = cnToTableName(joinWith(items, "_"), TABLE_MAX_LEN, true);
-        if (prefix.isEmpty()) {
+        List<String> parts = dirParts(items, false);
+        if (parts.isEmpty()) {
             // 目录名一个可用字符都没有（纯符号）：只认文件名，别拼出一串下划线
             return new String[]{leafName, leafComment};
         }
-        String name = prefix + "_" + leafName;
+        String name = joinWithTail(parts, leafName, "_");
         if (name.length() > TABLE_MAX_LEN) {
-            List<String> all = new ArrayList<String>(items);
-            all.add(stripExtension(baseName(filename)));
-            name = sanitizeTableName(joinWith(all, "/"));
+            parts = dirParts(items, true);
+            name = parts.isEmpty() ? leafName : joinWithTail(parts, leafName, "_");
+        }
+        if (name.length() > TABLE_MAX_LEN) {
+            String tail = flatName(stripExtension(baseName(filename)), true);
+            if (tail.isEmpty()) {
+                tail = leafName;
+            }
+            while (!parts.isEmpty() && joinWithTail(parts, tail, "_").length() > TABLE_MAX_LEN) {
+                parts = new ArrayList<String>(parts.subList(1, parts.size()));
+            }
+            name = parts.isEmpty() ? tail : joinWithTail(parts, tail, "_");
+            if (name.length() > TABLE_MAX_LEN) {
+                name = name.substring(0, TABLE_MAX_LEN);
+            }
+        }
+        if (!name.isEmpty() && Character.isDigit(name.charAt(0))) {
+            // 整名（不是某一层）以数字开头才补前缀，与叶子同一口径
+            name = "t_" + name;
         }
         List<String> comment = new ArrayList<String>(items);
         comment.add(leafComment);
-        return new String[]{name, joinWith(comment, "/")};
+        return new String[]{applyCase(name), joinWith(comment, "/")};
+    }
+
+    /** 目录链 -> 表名片段：一层一段，转不出字符的层直接丢弃（不留连续下划线）。 */
+    private List<String> dirParts(List<String> items, boolean forceInitials) {
+        List<String> parts = new ArrayList<String>();
+        for (String d : items) {
+            String p = flatName(d, forceInitials || initialsOnly);
+            if (!p.isEmpty()) {
+                parts.add(p);
+            }
+        }
+        return parts;
+    }
+
+    /**
+     * 单段文本 -> 表名片段：不带 t_ 前缀、不落大小写，都留到整名拼完再判。
+     * 逐层补前缀的话 财务部/2026 会拼成 cai_wu_bu_t_2026，中间凭空多出一截 t_。
+     */
+    private String flatName(String text, boolean initials) {
+        String t = pyStrip(text == null ? "" : String.valueOf(text));
+        if (t.isEmpty()) {
+            return "";
+        }
+        List<Syllable> syl = syllables(t, true);
+        if (syl.isEmpty()) {
+            return "";
+        }
+        return fitName(syl, TABLE_MAX_LEN, "", initials);
+    }
+
+    private static String joinWithTail(List<String> items, String tail, String sep) {
+        List<String> all = new ArrayList<String>(items);
+        all.add(tail);
+        return joinWith(all, sep);
     }
 
     private static String joinWith(List<String> items, String sep) {

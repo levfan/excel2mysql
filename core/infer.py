@@ -605,6 +605,7 @@ def parse_table_name_and_comment(filename: str, initials: bool = False,
     dirs 是 ZIP 包内的目录链（从包根数到文件所在目录，不含文件名）：
     给了目录链时表名按「目录1_目录2_文件名」拼——不同目录下的同名文件因此不会
     塌成一张表，导进库也能一眼看出它来自哪一层；表注释同样带上目录链（/ 连接）。
+    目录边界恒为下划线：首字母档与超长降级都逐层压写，不会把相邻两层粘成一段。
     不给（散装 Excel）就还是只看文件名，与以前完全一致。
     """
     leaf_name, leaf_comment = _leaf_table_name(filename, initials, upper, lower)
@@ -640,29 +641,62 @@ def _join_archive_dirs(leaf_name: str, leaf_comment: str, dirs, filename: str,
                        lower: bool = False) -> tuple:
     """把 ZIP 包内的目录链拼到叶子表名前面（目录之间、目录与文件名之间都用下划线）。
 
-    目录链兜底为拼音（与叶子同一套转写与大小写开关），不合法字符（空格、横线、
-    括号）照旧折成下划线；整条超过 64 字符时改用「整条包内路径」重新转写，
-    与单个长文件名的降级口径一致（首字母压缩），不会砍掉尾巴。
+    **逐层目录各自转写**，再用下划线连起来，而不是把整条链当成一个词去转写：
+    后者在「取中文首字母」或超长降级时会把相邻两层粘成一段
+    （财务部/2026年 → cwb2026n），表名里看不出它跨了几层，也没法靠下划线还原边界。
+    逐层转写后边界永远是下划线；某一层转不出字符（纯符号/纯表情）只丢这一层，
+    不会留下连续下划线。
+    长度口径不变（整名不超过 64 字符），降级顺序：
+      1. 全拼装不下 → 每层压到音节首字母，叶子名不动，边界仍是下划线；
+      2. 叶子名自己也贴着上限 → 叶子一并压成音节首字母；
+      3. 还装不下 → 从最外层丢目录（包根那层通常只是压缩包名），叶子名不动。
+    叶子名始终整段保留、目录边界始终是下划线，名字才既认得出文件、又看得出层级。
     """
     items = [str(d).strip() for d in (dirs or ()) if str(d).strip()]
     if not items:
         return leaf_name, leaf_comment
-    prefix = _cn_to_table_name("_".join(items), limit=64, initials=initials,
-                               upper=upper, lower=lower)
-    if not prefix:
+    parts = _archive_dir_parts(items, initials)
+    if not parts:
         # 目录名一个可用字符都没有（纯符号/纯表情）：只认文件名，别拼出一串下划线
         return leaf_name, leaf_comment
-    name = f"{prefix}_{leaf_name}"
-    if len(name) > 64:
+    name = "_".join(parts + [leaf_name])
+    if len(name) > _TABLE_MAX_LEN:
+        parts = _archive_dir_parts(items, True)
+        name = "_".join(parts + [leaf_name]) if parts else leaf_name
+    if len(name) > _TABLE_MAX_LEN:
         stem = os.path.splitext(os.path.basename(filename))[0]
-        name = sanitize_table_name("/".join(items + [stem]), initials=initials,
-                                   upper=upper, lower=lower)
-    return name, "/".join(items + [leaf_comment])
+        tail = _flat_name(stem, True) or leaf_name
+        while parts and len("_".join(parts + [tail])) > _TABLE_MAX_LEN:
+            parts = parts[1:]
+        name = ("_".join(parts + [tail]) if parts else tail)[:_TABLE_MAX_LEN]
+    if name[:1].isdigit():
+        name = "t_" + name           # 整名（不是某一层）以数字开头才补前缀，与叶子同一口径
+    return case_switch(name, upper, lower), "/".join(items + [leaf_comment])
+
+
+def _archive_dir_parts(items, initials: bool = False) -> list:
+    """目录链 -> 表名片段：一层一段，转不出字符的层直接丢弃（不留连续下划线）。"""
+    return [p for p in (_flat_name(d, initials) for d in items) if p]
+
+
+def _flat_name(text, initials: bool = False) -> str:
+    """单段文本 -> 表名片段：不带数字前缀、不落大小写（都留到整名拼完再判）。
+
+    数字前缀必须留到整名：逐层补的话 财务部/2026 会拼成 cai_wu_bu_t_2026，
+    中间凭空多出一截 t_。大小写同理，_fit_name 的限长判定全按小写算，
+    先转大小写再截断与先截断再转等价，索性拼完统一走 case_switch。
+    """
+    text = str(text).strip()
+    if not text:
+        return ""
+    return _cn_to_table_name(text, limit=_TABLE_MAX_LEN, initials=initials,
+                             upper=False, lower=False, digit_prefix="")
 
 
 def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
                       initials: bool = False, upper: bool = False,
-                      lower: bool = False, versions: bool = True) -> str:
+                      lower: bool = False, versions: bool = True,
+                      digit_prefix: str = "t_") -> str:
     """
     文本 -> 拼音表名组件：小写字母/数字/下划线，符合 MySQL 表名规范。
     各类分隔符（连字符、空格、斜杠、括号等）统一转下划线；连续英文/数字原样保留；
@@ -670,12 +704,14 @@ def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
     超长处理与字段名同一套规则：全拼不超过 limit 用全拼，超过则整名降级为各音节
     首字母（如 北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表 -> bjsshdqxsdkscsgjcxxhzbb），
     这样每个汉字都还在名字里，比"砍掉后半段"更能区分不同文件；
-    数字/英文音节整段保留，数字开头自动补 t_ 前缀。无法产出有效字符时返回空串。
+    数字/英文音节整段保留，数字开头自动补 digit_prefix 前缀（表名是 t_）。
+    无法产出有效字符时返回空串。
     initials=True 时汉字音节一律取首字母（用户开关选了「取中文首字母」）。
     upper=True 时整名转大写（用户开关选了「表名与字段名大写」）；
     lower=True 时整名转小写，与不勾同结果（音节切分时英文段已被拉成小写）。
     versions=True（表名用）时把 2.0 / V2.0 这类版本号改写成 v2，字段名不传这一档：
     表头里的「≥1.0mm」是量值口径，改成 v1mm 就丢信息了。
+    digit_prefix 传空串时不自补前缀（ZIP 目录链逐层转写用：前缀要等整名拼完再判）。
     """
     text = str(text).strip()
     if not text:
@@ -683,7 +719,7 @@ def _cn_to_table_name(text: str, limit: int = _TABLE_MAX_LEN,
     syllables = _syllables(text, versions=versions)
     if not syllables:
         return ""
-    return _fit_name(syllables, limit, "t_", initials=initials, upper=upper,
+    return _fit_name(syllables, limit, digit_prefix, initials=initials, upper=upper,
                      lower=lower)
 
 

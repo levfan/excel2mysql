@@ -191,7 +191,9 @@ public final class HelpDoc {
                     "的表名是 <code>bei_jing_shui_ku_dim_reservoir_info</code>，表注释是" + NL +
                     "<code>北京/水库/水库基础信息</code>。不同目录下的同名文件因此天然是两个表名，" + NL +
                     "不用手工改也不会塌成 <code>_2</code>；<b>散装 Excel 不受影响</b>，表名仍只看文件名。" + NL +
-                    "整条超过 64 字符时按「整条包内路径」转拼音降级（首字母压缩），不会砍掉尾巴</li>" + NL +
+                    "勾了「取中文首字母」或整条超过 64 字符时，也是每层目录各自压写、<b>目录之间照样是下划线</b>" + NL +
+                    "（<code>财务部/2026年/人员信息.xlsx</code> → <code>cwb_2026n_ryxx</code>），不会粘成一长串；" + NL +
+                    "实在装不下才从最外层开始丢目录（包根那层通常只是压缩包名），文件名本身不动</li>" + NL +
                     "<li><b>不递归嵌套 zip</b>：包内的 <code>.zip</code> 跳过并在日志计数，" + NL +
                     "需要导入就把内层包单独拖进来</li>" + NL +
                     "<li><b>非 Excel 文件忽略</b>，<code>~$xxx.xlsx</code> 这类 Office 临时锁文件也跳过</li>" + NL +
