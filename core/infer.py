@@ -11,7 +11,8 @@ import pandas as pd
 from pypinyin import lazy_pinyin
 
 from .merge_check import (MergedCellsError, detect_merged_cells, header_merge_plan)
-from .naming import clean_prefix, rewrite_versions, swap_first_segment
+from .naming import (clean_prefix, rewrite_cn_numbers, rewrite_versions,
+                     swap_first_segment)
 
 
 # 文件名末尾「（表名）」模式：中英文括号均可，如 北京市水务局-水库基础信息（dim_reservoir_info）
@@ -741,10 +742,14 @@ def _syllables(text, versions: bool = False):
     """把任意文本切成 (音节, 是否来自汉字) 序列：汉字逐字一个音节，英文/数字整段保留。
 
     字段名与表名共用这一套切分，保证同一个中文在两处的转写结果一致。
-    versions=True 时先把 2.0 这类版本号改写成 v2（表名用；字段名不动，
+    切之前先把连续的中文数字读成阿拉伯数字（二〇二五 -> 2025，第十二批 -> 第12批）：
+    逐字转拼音只会得到 er_er_wu / elew（〇 还不在拼音表里，整字被丢掉），
+    与文件名里本来就写 2025 的那一份拼出两种形状，排序和辨识都吃亏。
+    versions=True 时再把 2.0 这类版本号改写成 v2（表名用；字段名不动，
     表头里的「≥1.0mm」是量值口径，改成 v1mm 会丢信息）。
     """
     out = []
+    text = rewrite_cn_numbers(text)
     text = rewrite_versions(text) if versions else text
     norm = re.sub(r"[^\w]+", "_", str(text).strip(), flags=re.UNICODE)
     for seg in re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", norm):

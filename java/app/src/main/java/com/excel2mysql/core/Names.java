@@ -56,6 +56,11 @@ public final class Names {
             Pattern.compile("(?<![0-9.])[vV]?(\\d{1,2})\\.(\\d{1,2})(?![0-9])");
     private static final Pattern RUN =
             Pattern.compile("[A-Za-z0-9_]+|[\\u4e00-\\u9fff]+");
+    // 连续中文数字读成阿拉伯数字：二〇二五 -> 2025，第十二批 -> 第12批。
+    // 两个及以上才算数词：统一、第一、万一 里的「一」是词的一部分，单个汉字照旧转拼音。
+    private static final String CN_NUM_CHARS =
+            "零〇○一壹二贰貳两兩三叁參四肆五伍六陆陸七柒八捌九玖十拾百佰千仟万萬亿億";
+    private static final Pattern CN_NUM = Pattern.compile("[" + CN_NUM_CHARS + "]{2,}");
     private static final Pattern HANJI_HEAD = Pattern.compile("[\\u4e00-\\u9fff]");
     private static final Pattern NOT_LOWER_OR_DIGIT = Pattern.compile("[^a-z0-9]");
     private static final Pattern WS_EDGE = Pattern.compile(
@@ -285,6 +290,111 @@ public final class Names {
         return sb.toString();
     }
 
+    /**
+     * 连续中文数字 -> 阿拉伯数字：二〇二五 -> 2025，第十二批 -> 第12批。
+     * 表名与字段名共用这一条（两者的音节切分本来就同源）：不转的话
+     * 二〇二五 逐字转拼音得到 er_er_wu（〇 不在拼音表里还会被整字丢掉），
+     * 与文件名里本来就写 2025 的那一份落成两种形状。与 Python 侧同口径。
+     */
+    public static String rewriteCnNumbers(String text) {
+        String src = text == null ? "" : text;
+        Matcher m = CN_NUM.matcher(src);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String num = cnNumber(m.group());
+            m.appendReplacement(sb, Matcher.quoteReplacement(num == null ? m.group() : num));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /**
+     * 一段中文数字 -> 数字串；读不成一个合理数字时返回 null（调用方保留原文）。
+     * 没有单位词时逐位读，前导零照留：二〇二五 -> 2025，零一 -> 01；
+     * 有单位词时按位置权重算：十二 -> 12，二十五 -> 25，一百零八 -> 108，两万 -> 20000。
+     * 「千万」「万一」「一万二」这类词不硬读，保留原文。
+     */
+    private static String cnNumber(String token) {
+        boolean hasUnit = false;
+        for (int i = 0; i < token.length(); i++) {
+            if (cnUnit(token.charAt(i)) > 0) {
+                hasUnit = true;
+                break;
+            }
+        }
+        if (!hasUnit) {
+            StringBuilder digits = new StringBuilder();
+            for (int i = 0; i < token.length(); i++) {
+                digits.append(cnDigit(token.charAt(i)));
+            }
+            return digits.toString();
+        }
+        char prev = 0;
+        for (int i = 0; i < token.length(); i++) {
+            char ch = token.charAt(i);
+            if (cnUnit(ch) >= 100 && cnDigit(prev) < 0) {
+                return null;
+            }
+            prev = ch;
+        }
+        char tail = token.charAt(token.length() - 1);
+        if (cnDigit(tail) >= 0 && tail != '零' && token.length() >= 2) {
+            char before = token.charAt(token.length() - 2);
+            if (cnUnit(before) >= 10000) {
+                return null;
+            }
+        }
+        long total = 0;
+        long section = 0;
+        long number = 0;
+        for (int i = 0; i < token.length(); i++) {
+            char ch = token.charAt(i);
+            int digit = cnDigit(ch);
+            if (digit >= 0) {
+                number = digit;
+                continue;
+            }
+            long unit = cnUnit(ch);
+            if (unit >= 10000) {
+                section += number;
+                total += (section != 0 ? section : 1) * unit;
+                section = 0;
+                number = 0;
+            } else {
+                section += (number != 0 ? number : 1) * unit;   // 十二 / 一百 里的省略写法按 1 算
+                number = 0;
+            }
+        }
+        return String.valueOf(total + section + number);
+    }
+
+    private static int cnDigit(char ch) {
+        switch (ch) {
+            case '零': case '〇': case '○': return 0;
+            case '一': case '壹': return 1;
+            case '二': case '贰': case '貳': case '两': case '兩': return 2;
+            case '三': case '叁': case '參': return 3;
+            case '四': case '肆': return 4;
+            case '五': case '伍': return 5;
+            case '六': case '陆': case '陸': return 6;
+            case '七': case '柒': return 7;
+            case '八': case '捌': return 8;
+            case '九': case '玖': return 9;
+            default: return -1;
+        }
+    }
+
+    private static int cnUnit(char ch) {
+        switch (ch) {
+            case '十': case '拾': return 10;
+            case '百': case '佰': return 100;
+            case '千': case '仟': return 1000;
+            case '万': case '萬': return 10000;
+            case '亿': case '億': return 100000000;
+            default: return 0;
+        }
+    }
+
     public String sanitizeTableName(String text) {
         String name = cnToTableName(text, TABLE_MAX_LEN, true);
         return name.isEmpty() ? (upperOnly ? "T_IMPORT_DATA" : "t_import_data") : name;
@@ -383,9 +493,13 @@ public final class Names {
         return syllables(text, false);
     }
 
-    /** versions=true 时先把 2.0 这类版本号改写成 v2（表名用，字段名不用）。 */
+    /**
+     * 切之前先把连续的中文数字读成阿拉伯数字（二〇二五 -> 2025，第十二批 -> 第12批）；
+     * versions=true 时再把 2.0 这类版本号改写成 v2（表名用，字段名不用）。
+     */
     public List<Syllable> syllables(String text, boolean versions) {
-        String src = versions ? rewriteVersions(pyStrip(String.valueOf(text))) : String.valueOf(text);
+        String src = rewriteCnNumbers(String.valueOf(text));
+        src = versions ? rewriteVersions(pyStrip(src)) : src;
         String norm = NON_WORD.matcher(pyStrip(src))
                 .replaceAll("_");
         List<Syllable> out = new ArrayList<Syllable>();

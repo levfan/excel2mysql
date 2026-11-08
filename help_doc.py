@@ -178,7 +178,9 @@ latin-1 范围内（实际为 ASCII 与欧洲字母）的 MySQL 口令；口令�
 不用手工改也不会塌成 <code>_2</code>；<b>散装 Excel 不受影响</b>，表名仍只看文件名。
 勾了「取中文首字母」或整条超过 64 字符时，也是每层目录各自压写、<b>目录之间照样是下划线</b>
 （<code>财务部/2026年/人员信息.xlsx</code> → <code>cwb_2026n_ryxx</code>），不会粘成一长串；
-实在装不下才从最外层开始丢目录（包根那层通常只是压缩包名），文件名本身不动</li>
+实在装不下才从最外层开始丢目录（包根那层通常只是压缩包名），文件名本身不动。
+目录名里的连续中文数字同样先读成阿拉伯数字：<code>二〇二五年/水库信息.xlsx</code> →
+<code>t_2025_nian_shui_ku_xin_xi</code>，不会按字面拆成一串拼音</li>
 <li><b>不递归嵌套 zip</b>：包内的 <code>.zip</code> 跳过并在日志计数，
 需要导入就把内层包单独拖进来</li>
 <li><b>非 Excel 文件忽略</b>，<code>~$xxx.xlsx</code> 这类 Office 临时锁文件也跳过</li>
@@ -309,6 +311,11 @@ UTF-8 标记，工具会正确还原，不会变成乱码表名</li>
 <code>北京市海淀区水务局下属大型水库枢纽工程基础信息汇总表</code> →
 <code>bjshdqswjxsdxsksngcjcxxhzb</code>。表名与字段名共用同一套切分与降级逻辑，
 只是上限不同（表名 64 / 字段名 30）</li>
+<li><b>连续中文数字按阿拉伯数字读</b>：<code>二零二五</code>、<code>二〇二五</code> 都得到
+<code>2025</code>，<code>第十二批</code> 得到 <code>第12批</code>，<code>二十五</code> 得到 <code>25</code>、
+<code>一百零八</code> 得到 <code>108</code>、<code>两万</code> 得到 <code>20000</code>，再按上面的规则转拼音。
+只有连续两个及以上才按数词读，<code>统一</code>、<code>第一</code>、<code>万一</code>、<code>千万</code>
+里的数字字仍是词的一部分，原样转拼音；表名、字段名与 ZIP 目录名走同一套读法</li>
 <li><b>表头里的符号不进字段名</b>：<code>*</code> / <code>＊</code> 这类必填标记、全角空格、
 <code>【】〈〉《》「」〖〗</code> 等括号符本身都会去掉；<b>成对括号包住的那一段整段也不进名字</b>——
 表单里 <code>发布日期（yyyy-MM-dd）</code>、<code>金额（元）</code>、

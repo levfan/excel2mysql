@@ -8191,6 +8191,30 @@ check("S8g 目录逐层转写不各自补 t_ 前缀：数字只出现在整名�
       and _PT("人员信息.xlsx", dirs=("2026", "台账"))[0] == "t_2026_tai_zhang_ren_yuan_xin_xi",
       (_PT("人员信息.xlsx", dirs=("财务部", "2026年"))[0],
        _PT("人员信息.xlsx", dirs=("2026", "台账"))[0]))
+from core.naming import rewrite_cn_numbers as _RCN
+
+check("S8h 连续中文数字读成阿拉伯数字：二零二五/二〇二五 -> 2025，单位按位值拼",
+      _RCN(u"二零二五") == "2025" and _RCN(u"二〇二五") == "2025"
+      and _RCN(u"第十二批") == u"第12批" and _RCN(u"二十五") == "25"
+      and _RCN(u"一百零八") == "108" and _RCN(u"两万") == "20000"
+      and _RCN(u"十一") == "11",
+      [_RCN(u"二零二五"), _RCN(u"二〇二五"), _RCN(u"第十二批"),
+       _RCN(u"二十五"), _RCN(u"一百零八"), _RCN(u"两万")])
+check("S8i 中文数字进表名/字段名/目录链，词不是数（万一/千万/统一）不许改",
+      _PT(u"二零二五年度水库信息.xlsx")
+      == ("t_2025_nian_du_shui_ku_xin_xi", u"二零二五年度水库信息")
+      and _PT(u"二零二五年度水库信息.xlsx", initials=True)[0] == "t_2025ndskxx"
+      and _PT(u"水库信息.xlsx", dirs=(u"二〇二五年",))
+      == ("t_2025_nian_shui_ku_xin_xi", u"二〇二五年/水库信息")
+      and _PT(u"水库信息.xlsx", initials=True, dirs=(u"二〇二五年",))[0] == "t_2025n_skxx"
+      and _PT(u"第十二批.xlsx")[0] == "di_12_pi"
+      and _CF(u"二零二五年度收入") == "f_2025_nian_du_shou_ru"
+      and _CF(u"第十二批") == "di_12_pi" and _CF(u"二十五") == "f_25"
+      and _PT(u"万一.xlsx")[0] == "wan_yi" and _CF(u"万一") == "wan_yi"
+      and _PT(u"千万.xlsx")[0] == "qian_wan"
+      and _PT(u"统一.xlsx")[0] == "tong_yi" and _CF(u"统一") == "tong_yi",
+      (_PT(u"二零二五年度水库信息.xlsx"), _PT(u"水库信息.xlsx", dirs=(u"二〇二五年",)),
+       _PT(u"万一.xlsx")[0], _PT(u"统一.xlsx")[0]))
 check("S8e 字段名不做版本号改写（「≥1.0mm」是量值口径，不能变成 v1mm）",
       _CF("累年月日降水量≥1.0mm平均日数") == "lnyrjsl10mmpjrs",
       _CF("累年月日降水量≥1.0mm平均日数"))

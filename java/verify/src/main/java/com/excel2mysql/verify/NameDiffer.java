@@ -41,6 +41,8 @@ public final class NameDiffer {
         // 拿合成文件名在这里撞：数字与 Python pack_test S8c/S8d 同源
         bad += checkVersionToken(names, shown);
         bad += checkArchiveDirs(names, shown);
+        // 中文数字先读成阿拉伯数字再转拼音（二零二五 -> 2025），与 Python 侧同一套词法
+        bad += checkCnNumbers(names, shown);
         try {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -128,6 +130,7 @@ public final class NameDiffer {
                 + "，其中 nan 字段 " + nanFields + " 个）| 拼音字段 " + fields
                 + " 个 | 合并拒绝 " + rejected + " 个 | 版本号括号合成 5 例"
                 + " | 版本号改写与目录拼接合成 14 例"
+                + " | 中文数字合成 22 例"
                 + " | 不一致 " + bad + " 处");
         for (String s : shown) {
             System.out.println(s);
@@ -242,6 +245,74 @@ public final class NameDiffer {
                     "cwb_2026n_ryxx", "财务部/2026年/人员信息");
         } finally {
             names.setInitialsOnly(false);
+        }
+        return bad;
+    }
+
+    /**
+     * 连续中文数字按阿拉伯数字读：二零二五/二〇二五 -> 2025，第十二批 -> 第12批。
+     * 两个及以上才算数词（统一、第一里的「一」不是），带单位的按位值拼（一百零八、两万）；
+     * 「万一」「千万」是词不是数，尾数校验与单位前校验各挡一条，必须原样留下。
+     */
+    private static int checkCnNumbers(Names names, List<String> shown) {
+        int bad = 0;
+        String[][] words = {
+            {"二零二五", "2025"},
+            {"二〇二五", "2025"},
+            {"二零二五年", "2025年"},
+            {"第十二批", "第12批"},
+            {"二十五", "25"},
+            {"一百零八", "108"},
+            {"两万", "20000"},
+            {"十一", "11"},
+            {"万一", "万一"},
+            {"千万", "千万"},
+            {"统一", "统一"},
+        };
+        for (String[] c : words) {
+            String got = Names.rewriteCnNumbers(c[0]);
+            if (!c[1].equals(got)) {
+                bad++;
+                if (shown.size() < 12) {
+                    shown.add("     中文数字[" + ascii(c[0]) + "]\n       期望="
+                            + ascii(c[1]) + " 实际=" + ascii(got));
+                }
+            }
+        }
+        bad += expect(names, shown, "中文数字[全拼]", "二零二五年度水库信息.xlsx", null,
+                "t_2025_nian_du_shui_ku_xin_xi", "二零二五年度水库信息");
+        bad += expect(names, shown, "中文数字[目录]", "水库信息.xlsx",
+                new String[]{"二〇二五年"}, "t_2025_nian_shui_ku_xin_xi",
+                "二〇二五年/水库信息");
+        bad += expect(names, shown, "中文数字[第十二批]", "第十二批.xlsx", null,
+                "di_12_pi", "第十二批");
+        bad += expect(names, shown, "中文数字[词不是数]", "万一.xlsx", null,
+                "wan_yi", "万一");
+        try {
+            names.setInitialsOnly(true);
+            bad += expect(names, shown, "中文数字[首字母]", "二零二五年度水库信息.xlsx", null,
+                    "t_2025ndskxx", "二零二五年度水库信息");
+            bad += expect(names, shown, "中文数字[目录·首字母]", "水库信息.xlsx",
+                    new String[]{"二〇二五年"}, "t_2025n_skxx", "二〇二五年/水库信息");
+        } finally {
+            names.setInitialsOnly(false);
+        }
+        String[][] fields = {
+            {"二零二五年度收入", "f_2025_nian_du_shou_ru"},
+            {"第十二批", "di_12_pi"},
+            {"二十五", "f_25"},
+            {"万一", "wan_yi"},
+            {"统一", "tong_yi"},
+        };
+        for (String[] c : fields) {
+            String got = names.colToField(c[0]);
+            if (!c[1].equals(got)) {
+                bad++;
+                if (shown.size() < 12) {
+                    shown.add("     中文字段[" + ascii(c[0]) + "]\n       期望="
+                            + ascii(c[1]) + " 实际=" + ascii(got));
+                }
+            }
         }
         return bad;
     }

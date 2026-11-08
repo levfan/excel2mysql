@@ -39,6 +39,72 @@ def rewrite_versions(text) -> str:
     return _VERSION_TOKEN_RE.sub(_sub, src)
 
 
+# 中文数字：文件名/目录名里的「二〇二五」「二零二五」「第十二批」这类写法，逐字转拼音只能得到
+# er_er_wu / elew（〇 还不在拼音表里，整字被丢掉），表名读不出年份也不便排序。
+# 先把连续的数字汉字读成阿拉伯数字，再走后面的拼音分词。
+# 只处理**连续两个及以上**的数字汉字：统一编码、第一、万一 里的「一」是词的一部分而不是数词，
+# 单个汉字一律照旧转拼音。
+_CN_DIGITS = {
+    "零": 0, "〇": 0, "○": 0,
+    "一": 1, "壹": 1, "二": 2, "贰": 2, "貳": 2, "两": 2, "兩": 2,
+    "三": 3, "叁": 3, "參": 3, "四": 4, "肆": 4, "五": 5, "伍": 5,
+    "六": 6, "陆": 6, "陸": 6, "七": 7, "柒": 7, "八": 8, "捌": 8, "九": 9, "玖": 9,
+}
+_CN_UNITS = {
+    "十": 10, "拾": 10, "百": 100, "佰": 100, "千": 1000, "仟": 1000,
+    "万": 10000, "萬": 10000, "亿": 100000000, "億": 100000000,
+}
+_CN_NUM_RE = re.compile("[%s]{2,}" % re.escape("".join(list(_CN_DIGITS) + list(_CN_UNITS))))
+
+
+def _cn_number(token: str):
+    """一段中文数字 -> 数字串；读不成一个合理数字时返回 None（调用方保留原文）。
+
+    没有单位词时逐位读，前导零照留：二〇二五 -> 2025，零一 -> 01；
+    有单位词时按位置权重算：十二 -> 12，二十五 -> 25，一百零八 -> 108，两万 -> 20000。
+    位置读法要先过两道合法性，否则「千万」「百万」「万一」这类词会被硬读成天文数字：
+      1. 百/千/万/亿 前必须有明确数字（十 允许省略前面的「一」，十二 才是数词）；
+      2. 结尾的裸数字只能跟在 十/百/千 或「零」后面（二十五、一百零八 成立，
+         「一万二」这种口语省略不认）。
+    """
+    if not any(ch in _CN_UNITS for ch in token):
+        return "".join(str(_CN_DIGITS[ch]) for ch in token)
+    prev = ""
+    for ch in token:
+        if ch in _CN_UNITS and _CN_UNITS[ch] >= 100 and prev not in _CN_DIGITS:
+            return None
+        prev = ch
+    tail = token[-1]
+    if tail in _CN_DIGITS and tail != "零" and len(token) >= 2:
+        before = token[-2]
+        if before in _CN_UNITS and _CN_UNITS[before] >= 10000:
+            return None
+    total = section = number = 0
+    for ch in token:
+        if ch in _CN_DIGITS:
+            number = _CN_DIGITS[ch]
+            continue
+        unit = _CN_UNITS[ch]
+        if unit >= 10000:
+            section += number
+            total += (section or 1) * unit
+            section = number = 0
+        else:
+            section += (number or 1) * unit      # 十二 / 一百 里的省略写法按 1 算
+            number = 0
+    return str(total + section + number)
+
+
+def rewrite_cn_numbers(text) -> str:
+    """把名字里的中文数字写成阿拉伯数字：二〇二五 -> 2025，第十二批 -> 第12批。
+
+    表名与字段名共用这一条（两者的音节切分本来就同源），拼出来的名字既读得出年份，
+    也与文件名里本来就写 2025 的那一份落在同一套形状上，不会一个 2025 一个 elew。
+    """
+    src = str(text if text is not None else "")
+    return _CN_NUM_RE.sub(lambda m: _cn_number(m.group(0)) or m.group(0), src)
+
+
 def clean_prefix(text) -> str:
     """清掉用户输入里的空白与反引号/反斜杠，并去掉末尾下划线。
 
