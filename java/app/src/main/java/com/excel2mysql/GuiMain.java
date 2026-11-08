@@ -6629,6 +6629,49 @@ public final class GuiMain {
                     + java.util.Arrays.toString(fallback) + " / " + note2[0]);
         }
 
+        // 首列不是键列词（行政区划）时它仍是锚点，后随的键列要继续算公共字段；
+        // 以前首列不命中就整段放弃，公共字段只剩第一列，其余拆分表拿不到 join 键
+        com.excel2mysql.core.Infer.Column anchor = new com.excel2mysql.core.Infer.Column();
+        anchor.field = "xing_zheng_qu_hua";
+        anchor.comment = "\u884c\u653f\u533a\u5212";
+        anchor.type = "VARCHAR(32)";
+        String[] note3 = new String[]{""};
+        int[] anchored = com.excel2mysql.core.SplitWide.commonColumns(
+                java.util.Arrays.asList(anchor, key1, key2, measure), note3);
+        if (!java.util.Arrays.equals(anchored, new int[]{0, 1, 2})
+                || !note3[0].contains("\u951a\u70b9")) {
+            problems.add("\u9996\u5217\u4e0d\u662f\u952e\u5217\u65f6\u6ca1\u5f53\u951a\u70b9\u5e76\u7ee7\u7eed\u5403\u540e\u968f\u952e\u5217\uff08\u516c\u5171\u5b57\u6bb5\u5e94\u662f 0/1/2\uff09\uff1a"
+                    + java.util.Arrays.toString(anchored) + " / " + note3[0]);
+        }
+        java.util.List<com.excel2mysql.core.Infer.Column> anchoredCols =
+                new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+        anchoredCols.add(anchor);
+        anchoredCols.add(key1);
+        anchoredCols.add(key2);
+        for (int i = 0; i < 950; i++) {
+            com.excel2mysql.core.Infer.Column m = new com.excel2mysql.core.Infer.Column();
+            m.field = "zhi_" + String.format("%03d", Integer.valueOf(i));
+            m.comment = "\u6307\u6807" + String.format("%03d", Integer.valueOf(i));
+            m.type = "DECIMAL(18,6)";
+            anchoredCols.add(m);
+        }
+        com.excel2mysql.core.SplitWide.Plan anchoredPlan =
+                com.excel2mysql.core.SplitWide.plan(anchoredCols, 16384);
+        boolean anchoredPartsOk = anchoredPlan.ok && !anchoredPlan.parts.isEmpty();
+        if (anchoredPartsOk) {
+            for (com.excel2mysql.core.SplitWide.Part part : anchoredPlan.parts) {
+                if (part.idx.length < 3 || part.idx[0] != 0
+                        || part.idx[1] != 1 || part.idx[2] != 2) {
+                    anchoredPartsOk = false;
+                }
+            }
+        }
+        if (!anchoredPartsOk) {
+            problems.add("\u9996\u5217\u5f53\u951a\u70b9\u540e\u62c6\u51fa\u7684\u6bcf\u4e00\u6bb5\u90fd\u8981\u5e26\u516c\u5171\u5b57\u6bb5\uff08\u6bb5\u9996\u5e94\u662f 0/1/2\uff09\uff1a"
+                    + (anchoredPlan.ok ? "parts=" + anchoredPlan.parts.size()
+                    : anchoredPlan.reason));
+        }
+
         java.io.File dir = new java.io.File(System.getProperty("java.io.tmpdir"),
                 "e2m-split-" + System.nanoTime());
         if (!dir.mkdirs()) {

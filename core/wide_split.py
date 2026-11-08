@@ -53,27 +53,35 @@ def is_key_column(col):
 def common_columns(columns):
     """认出表头最前面的公共字段，返回 (列序号列表, 一句说明)。
 
-    从第 0 列起连续取键列，遇到第一个不像键列的就停（"前面的公共字段"就是这个意思）；
-    主键列一个都不许落在公共字段之外，落在后面的补进来。一列都没认出来时退化成
-    "用第一列当锚点"——总得有个能对上行的列，否则拆完的几段谁也认不出谁。
+    第 0 列始终当锚点并计入公共字段（它命不命中键列词都一样——总得有个能对上行的列）；
+    从第 1 列起继续取连续键列，遇到第一个不像键列的就停（"前面的公共字段"就是这个
+    意思）。主键列一个都不许落在公共字段之外，落在后面的补进来。
     """
     if not columns:
         return [], "没有字段"
-    picked = []
-    for i, col in enumerate(columns):
-        if len(picked) >= COMMON_MAX:
+    first_is_key = is_key_column(columns[0])
+    picked = [0]
+    contig = 1
+    for i in range(1, len(columns)):
+        if contig >= COMMON_MAX:
             break
-        if not is_key_column(col):
+        if not is_key_column(columns[i]):
             break
         picked.append(i)
-    if not picked:
-        return [0], "没认出键列，用第一列当锚点"
+        contig += 1
     for i, col in enumerate(columns):
         if col.get("primary_key") and i not in picked:
             picked.append(i)
     picked.sort()
-    note = "从第 1 列起连续 %d 列是键列" % len(picked)
-    if len(picked) >= COMMON_MAX:
+    if first_is_key:
+        note = "从第 1 列起连续 %d 列是键列" % contig
+    elif contig > 1:
+        note = "第 1 列当锚点，后接 %d 列键列" % (contig - 1)
+    else:
+        note = "没认出键列，用第一列当锚点"
+    if len(picked) > contig:
+        note += "，另补 %d 列主键" % (len(picked) - contig)
+    if contig >= COMMON_MAX:
         note += "（到 %d 列封顶）" % COMMON_MAX
     return picked, note
 

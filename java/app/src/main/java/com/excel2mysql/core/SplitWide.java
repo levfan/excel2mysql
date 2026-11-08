@@ -98,23 +98,21 @@ public final class SplitWide {
     /**
      * 认出表头最前面的公共字段。返回列序号；note 由第二参带回一句说明。
      *
-     * <p>从第 0 列起连续取键列，遇到第一个不像键列的就停（"前面的公共字段"就是这个意思）；
-     * 主键列一个都不许落在公共字段之外，落在后面的补进来。一列都没认出来时退化成
-     * "用第一列当锚点"——总得有个能对上行的列。
+     * <p>第 0 列始终当锚点并计入公共字段（它命不命中键列词都一样——总得有个能对上行的列）；
+     * 从第 1 列起继续取连续键列，遇到第一个不像键列的就停（"前面的公共字段"就是这个意思）。
+     * 主键列一个都不许落在公共字段之外，落在后面的补进来。
      */
     public static int[] commonColumns(List<Infer.Column> cols, String[] note) {
+        boolean firstIsKey = isKeyColumn(cols.get(0));
         List<Integer> picked = new ArrayList<Integer>();
-        for (int i = 0; i < cols.size() && picked.size() < COMMON_MAX; i++) {
+        picked.add(Integer.valueOf(0));
+        int contig = 1;
+        for (int i = 1; i < cols.size() && contig < COMMON_MAX; i++) {
             if (!isKeyColumn(cols.get(i))) {
                 break;
             }
             picked.add(Integer.valueOf(i));
-        }
-        if (picked.isEmpty()) {
-            if (note != null && note.length > 0) {
-                note[0] = "没认出键列，用第一列当锚点";
-            }
-            return new int[]{0};
+            contig++;
         }
         for (int i = 0; i < cols.size(); i++) {
             Integer key = Integer.valueOf(i);
@@ -124,8 +122,18 @@ public final class SplitWide {
         }
         java.util.Collections.sort(picked);
         if (note != null && note.length > 0) {
-            String text = "从第 1 列起连续 " + picked.size() + " 列是键列";
-            if (picked.size() >= COMMON_MAX) {
+            String text;
+            if (firstIsKey) {
+                text = "从第 1 列起连续 " + contig + " 列是键列";
+            } else if (contig > 1) {
+                text = "第 1 列当锚点，后接 " + (contig - 1) + " 列键列";
+            } else {
+                text = "没认出键列，用第一列当锚点";
+            }
+            if (picked.size() > contig) {
+                text += "，另补 " + (picked.size() - contig) + " 列主键";
+            }
+            if (contig >= COMMON_MAX) {
                 text += "（到 " + COMMON_MAX + " 列封顶）";
             }
             note[0] = text;

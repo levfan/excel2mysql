@@ -4045,6 +4045,19 @@ check("WS2 按行预算装箱：拆成 2 段，每段都带公共字段且单独
       and row_plan(_ws_wide)["local"] > row_plan(_ws_wide)["local_limit"],
       (len(_ws_plan["parts"]), [len(p["own"]) for p in _ws_plan["parts"]]))
 
+# 首列不在键列词里（行政区划）时它仍是锚点，后随的站点编号/数据日期要接着算公共字段；
+# 以前首列不命中就整段放弃，主键只落在第一段，其余段拿不到 join 键
+_ws_anchor = [{"field": "xing_zheng_qu_hua", "comment": "行政区划",
+               "type": "VARCHAR(32)", "primary_key": False}] + _ws_wide
+_ws_anchor_common, _ws_anchor_note = common_columns(_ws_anchor)
+_ws_anchor_plan = plan_split(_ws_anchor)
+check("WS1d 首列不是键列也要当锚点并继续吃后随键列，主键不许漏在公共字段之外",
+      _ws_anchor_common == [0, 1, 2]
+      and _ws_anchor_plan["ok"]
+      and all(p["idx"][:3] == [0, 1, 2] for p in _ws_anchor_plan["parts"]),
+      (_ws_anchor_common, _ws_anchor_note,
+       [p["idx"][:4] for p in _ws_anchor_plan.get("parts") or []]))
+
 # 端到端：真造一张 242 列的宽表，建模被拦下 → 拆出 2 个 Excel → 每份拖回来都建得出来，
 # 而且不再触发一次降级（conversions 为 0 才算真救回来了）
 _ws_head = ["单位编码", "数据日期"] + ["说明%03d" % i for i in range(240)]
