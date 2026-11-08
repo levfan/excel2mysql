@@ -119,7 +119,7 @@ set PT_HOST=127.0.0.1& set PT_PORT=3306& set PT_USER=root& set PT_PASS=密码& s
 | 随包件 | 内容 |
 | --- | --- |
 | `conn.ini` | 命令行版与 Java 版各带一份空模板 |
-| `README.md` | 项目根这一份的原样副本，连标题图标 `assets/app_icon.png` 一起放进同名相对路径 |
+| `README.md` | 项目根这一份的原样副本，连标题图标 `assets/app_icon.svg` 一起放进同名相对路径 |
 | `win7_sp1_patch\` | 仅命令行版：四个 `.msu` + `vc_redist.x64.exe` + `3.check_win7.bat` / `4.install_minimal.bat` / `5.install_win7_prereq.bat`。这批二进制是微软按内部使用授权分发的，不入库（`.gitignore` 排除）；目录不在时构建照常通过，但日志会明写「本次没带补丁」 |
 
 ## 6. 质量闸门
