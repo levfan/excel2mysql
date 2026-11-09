@@ -1078,9 +1078,10 @@ public final class LayerDbRegression {
             exec(db, "INSERT INTO `" + SRC + "`.`t_oil` VALUES ('1','油料甲'),('2','油料乙')");
 
             List<LayerGen.SourceTable> src = LayerGen.readSource(db, SRC);
-            if (src.size() != 1 || src.get(0).columns.size() != 2) {
-                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 1 表 2 列 实际 "
-                        + src.size() + " 表");
+            if (src.size() != 1) {
+                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 1 表 实际 " + src.size());
+            } else if (src.get(0).columns.size() != 2) {
+                bad++; System.out.println("x [ERROR] READ-SOURCE | t_oil 期望 2 列 实际 " + src.get(0).columns.size());
             }
 
             MappingFile m = mapping();
@@ -1090,9 +1091,13 @@ public final class LayerDbRegression {
             for (LayerGen.Layer layer : new LayerGen.Layer[]{LayerGen.Layer.DOM, LayerGen.Layer.OBJ, LayerGen.Layer.ADS}) {
                 LayerGen.LayerOutput out = LayerGen.genLayer(layer, m, src, o);
                 String targetDb = layer == LayerGen.Layer.DOM ? DOM : layer == LayerGen.Layer.OBJ ? OBJ : ADS;
+                if (!created.contains(targetDb)) { created.add(targetDb); } // 先登记：execute 若中途抛，探针库也在清理账上
                 LayerGen.WriteResult wr = LayerGen.execute(out, targetDb, db, ImportParse.LOG_ONLY);
-                if (!created.contains(targetDb)) { created.add(targetDb); }
                 if (!wr.errors.isEmpty()) { bad++; System.out.println("x [ERROR] EXEC | " + layer + " " + wr.errors); }
+                if (layer == LayerGen.Layer.DOM && (wr.tablesCreated != 1 || wr.rowsAffected != 2)) {
+                    bad++; System.out.println("x [ERROR] WRITE-RESULT | dom 期望 建表1/影响2 实际 "
+                            + wr.tablesCreated + "/" + wr.rowsAffected);
+                }
             }
 
             long domRows = count(db, DOM, "dwd_proc_oil");
@@ -1102,6 +1107,9 @@ public final class LayerDbRegression {
             // entity_id 必须是 UUID 且非空、src_entity_id 保留来源
             String entityId = scalar(db, "SELECT `entity_id` FROM `" + OBJ + "`.`dim_material` LIMIT 1");
             if (entityId == null || entityId.length() < 32) { bad++; System.out.println("x [ERROR] UUID | obj entity_id 不像 UUID：" + entityId); }
+            // ads 模板聚合须真的执行成功：ads_rc 恰好 1 行（锁 execute 不因 "--" 前缀把注释后的 INSERT 丢掉）
+            long adsRows = count(db, ADS, "ads_rc");
+            if (adsRows != 1) { bad++; System.out.println("x [ERROR] COUNT | ads ads_rc 期望 1 行 实际 " + adsRows); }
         } finally {
             for (String d : created) {
                 try { exec(db, "DROP DATABASE IF EXISTS `" + d + "`"); } catch (Exception ignore) { }
@@ -1135,17 +1143,29 @@ public final class LayerDbRegression {
     }
 
     private static long count(DbClient db, String schema, String table) throws Exception {
-        Statement st = db.connection().createStatement();
+        Statement st = null;
         try {
+            st = db.connection().createStatement();
             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM `" + schema + "`.`" + table + "`");
             rs.next(); long n = rs.getLong(1); rs.close(); return n;
-        } finally { st.close(); }
+        } catch (java.sql.SQLException e) {
+            // 表没建成时 executeQuery 会抛：这里报可读 FAIL 并返回 -1，让调用点计入 bad、
+            // 流程继续走到跑后残留校验（否则异常掀掉 main，SIDE-EFFECT 那条最该跑的反而没跑）
+            System.out.println("x [ERROR] COUNT | " + schema + "." + table + " 读行数失败：" + e.getMessage());
+            return -1L;
+        } finally { if (st != null) { st.close(); } }
     }
 
     private static String scalar(DbClient db, String sql) throws Exception {
-        Statement st = db.connection().createStatement();
-        try { ResultSet rs = st.executeQuery(sql); String s = rs.next() ? rs.getString(1) : null; rs.close(); return s; }
-        finally { st.close(); }
+        Statement st = null;
+        try {
+            st = db.connection().createStatement();
+            ResultSet rs = st.executeQuery(sql);
+            String s = rs.next() ? rs.getString(1) : null; rs.close(); return s;
+        } catch (java.sql.SQLException e) {
+            System.out.println("x [ERROR] SCALAR | 取值失败：" + e.getMessage());
+            return null;
+        } finally { if (st != null) { st.close(); } }
     }
 
     private static Set<String> databases(Connection c) throws Exception {
@@ -1169,6 +1189,41 @@ public final class LayerDbRegression {
 mvn -B -q install -pl app,verify
 ```
 Expected: 编译失败，`LayerGen.readSource` / `execute` / `WriteResult` 不存在。预期红。
+
+- [ ] **Step 3a: 先修 Task2 遗留的 DDL 语句终止符（承重）**
+
+`Ddl.buildDdl` 返回的 CREATE TABLE **不以 `;` 结尾**（它只为 DROP 加了 `;`）。既有 Excel 页按"一表一次 createTable"用，从不把多表拼一起，所以没暴露；但分层建模把**整层多张表的 DDL 拼成一个字符串**（312 张表），下游两处都会坏：
+- `execute()` 里 `splitStatements` 靠"行尾 `;`"切句——非末张表的 CREATE 没有结尾 `;`，会被并进下一条 DROP 的 `;` 一起 flush，得到 `CREATE TABLE t_k (...) COMMENT='..'\n\nDROP TABLE IF EXISTS t_{k+1}` 一条畸形语句 → 真库报语法错；
+- 交付的 `<层>_ddl.sql` 丢进 mysql 客户端，`CREATE ... COMMENT='..'`（无 `;`）会一直吃到下一条 `;` 为止、同样粘连 → **312 表的建表脚本根本跑不动**（spec §9 要求 .sql 可直接执行）。
+
+修法：给这三处 `Ddl.buildDdl(...)` 之后的 `.append("\n\n")` 改为 `.append(";\n\n")`（只动 DDL 的 append，transform 的 `dml.append(...)` 本来就以 `;` 收尾，不动）。committed `LayerGen.java` 里的三行：
+
+```java
+// genDom
+ddl.append(Ddl.buildDdl(target, target, cols, true)).append(";\n\n");
+// genObj
+ddl.append(Ddl.buildDdl(dim, dim, cols, true)).append(";\n\n");
+// genAds
+ddl.append(Ddl.buildDdl(target, "主题 " + theme + "（待核）", cols, true)).append(";\n\n");
+```
+
+再在 `LayerGenDiffer.java` 的 ads GOV_ADS 断言之后、"未绑定"段之前，插一段**离线**锁（无库也能判红，守"守卫要真变红"）：
+
+```java
+        // 建表语句必须以分号终止：否则整层拼接后 splitStatements 粘连、交付 .sql 在 mysql 客户端跑不动
+        if (!dom.ddlSql.contains("COMMENT='dwd_proc_oil';") || !dom.ddlSql.contains("COMMENT='dwd_comp_tech';")) {
+            bad++; shown.add("dom DDL 建表语句未以分号终止");
+        }
+        if (!obj.ddlSql.contains("COMMENT='dim_material';")) {
+            bad++; shown.add("obj DDL 建表语句未以分号终止");
+        }
+        if (!obj.ddlSql.startsWith("USE `obj`;")) {
+            bad++; shown.add("obj DDL 缺 USE `obj`; 头（execute 的一致性校验/前置 USE 全靠它）");
+        }
+        if (!ads.ddlSql.contains("（待核）';")) {
+            bad++; shown.add("ads DDL 建表语句未以分号终止");
+        }
+```
 
 - [ ] **Step 3: 在 LayerGen 追加 I/O 实现**
 
@@ -1238,12 +1293,36 @@ Expected: 编译失败，`LayerGen.readSource` / `execute` / `WriteResult` 不�
     public static WriteResult execute(LayerOutput out, String targetDb, DbClient db, ImportParse.Sink sink)
             throws java.sql.SQLException {
         WriteResult wr = new WriteResult();
+        // targetDb 与 DDL 里的 `USE \`x\`;` 头必须一致——两者是两个事实源，调用方（Task4/5）给错库时，
+        // 语句会经 USE 落进另一个库、还在这库留个空壳。宁可记账不执行，也不能默默写错库。
+        String useDb = firstUseTarget(out.ddlSql);
+        if (useDb != null && !useDb.equals(targetDb)) {
+            wr.errors.add("目标库不一致：USE `" + useDb + "` 但 targetDb=" + targetDb + "，已跳过执行");
+            sink.logError("x [ERROR] LAYER-EXEC | 目标库不一致，未执行：" + useDb + " vs " + targetDb);
+            return wr;
+        }
+        // 建库也纳入单条失败隔离：权限/磁盘错记进 errors、收摊返回，不再抛出掀整轮（与下面循环同口径）。
         java.sql.Statement st = db.connection().createStatement();
         try {
             st.execute("CREATE DATABASE IF NOT EXISTS `" + targetDb + "` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci");
             db.connection().commit();
+        } catch (java.sql.SQLException e) {
+            wr.errors.add("建库失败[" + targetDb + "]：" + e.getMessage());
+            sink.logError("x [ERROR] LAYER-DB | 建库失败：" + e.getMessage());
+            return wr;   // 库没建成，后面 USE/建表必炸，直接收摊
         } finally { st.close(); }
-        // DDL 按 ";\n" 拆（与 DbClient.createTable 同口径），USE 头先跑
+        // 会话目标库设为**前置条件**：显式 USE 并单独隔离失败——不能只靠下面循环里那条会被
+        // continue-on-error 忽略的 USE 头。否则 USE 一旦失败，后续未限定的 DROP/CREATE 会落到
+        // 上一次 execute 的库或 URL 目录库（E2M_DB），静默毁同名表。先 USE 成，语句才准往下跑。
+        java.sql.Statement us = db.connection().createStatement();
+        try {
+            us.execute("USE `" + targetDb + "`");
+            db.connection().commit();
+        } catch (java.sql.SQLException e) {
+            noteError(wr, sink, "LAYER-USE", "切库失败", "USE `" + targetDb + "`", targetDb, e);
+            return wr;   // 进不去目标库就别往下走，绝不让语句漂到别的库
+        } finally { us.close(); }
+        // DDL 按 ";\n" 拆（与 DbClient.createTable 同口径）；USE 头已在上面坐实，这里再遇 USE 是同库空操作
         for (String stmt : splitStatements(out.ddlSql)) {
             if (stmt.trim().isEmpty()) { continue; }
             java.sql.Statement s = db.connection().createStatement();
@@ -1252,23 +1331,48 @@ Expected: 编译失败，`LayerGen.readSource` / `execute` / `WriteResult` 不�
                 db.connection().commit();
                 if (stmt.trim().toUpperCase().startsWith("CREATE TABLE")) { wr.tablesCreated++; }
             } catch (java.sql.SQLException e) {
-                wr.errors.add("DDL 失败：" + e.getMessage());
-                sink.logError("x [ERROR] LAYER-DDL | " + e.getMessage());
+                noteError(wr, sink, "LAYER-DDL", "DDL 失败", stmt, targetDb, e);
             } finally { s.close(); }
         }
         for (String stmt : splitStatements(out.transformSql)) {
-            if (stmt.trim().isEmpty() || stmt.trim().startsWith("--")) { continue; }
+            if (stmt.trim().isEmpty()) { continue; }
             java.sql.Statement s = db.connection().createStatement();
             try {
                 int n = s.executeUpdate(stmt);
                 db.connection().commit();
                 if (n > 0) { wr.rowsAffected += n; }
             } catch (java.sql.SQLException e) {
-                wr.errors.add("转换失败：" + e.getMessage());
-                sink.logError("x [ERROR] LAYER-DML | " + e.getMessage());
+                noteError(wr, sink, "LAYER-DML", "转换失败", stmt, targetDb, e);
             } finally { s.close(); }
         }
         return wr;
+    }
+
+    /** 从 DDL 串里取第一个 `USE \`x\`;` 的库名；没有返回 null。 */
+    private static String firstUseTarget(String ddl) {
+        int i = ddl.indexOf("USE `");
+        if (i < 0) { return null; }
+        int j = ddl.indexOf('`', i + 5);
+        return j < 0 ? null : ddl.substring(i + 5, j);
+    }
+
+    /** 逐条报错日志上限：超过就只报一次"另有更多"，与 SqlFileRun 的汇总口径一致，312 表时不刷屏。 */
+    private static final int MAX_LOGGED_ERRORS = 15;
+
+    /** 单条失败记账：错误串带**落库名＋语句头部**（312 表时才知道炸在哪个库哪条）；逐条日志有上限。 */
+    private static void noteError(WriteResult wr, ImportParse.Sink sink, String tag,
+                                  String kind, String stmt, String db, java.sql.SQLException e) {
+        wr.errors.add(kind + "（库 " + db + "）[" + stmtHead(stmt) + "]：" + e.getMessage());
+        if (wr.errors.size() < MAX_LOGGED_ERRORS) {
+            sink.logError("x [ERROR] " + tag + " | 库 " + db + " · " + stmtHead(stmt) + "：" + e.getMessage());
+        } else if (wr.errors.size() == MAX_LOGGED_ERRORS) {
+            sink.logError("! [WARN] " + tag + " | 库 " + db + " 另有更多语句报错未逐条列出（见 errors 汇总）");
+        }
+    }
+
+    private static String stmtHead(String stmt) {
+        String s = stmt.trim();
+        return s.length() <= 60 ? s : s.substring(0, 60) + "…";
     }
 
     /** 按 ";\n" 拆语句，但保留语句内的分号（注释行里的 -- 不拆）。与 DbClient.createTable 同口径。 */
@@ -1290,7 +1394,7 @@ Expected: 编译失败，`LayerGen.readSource` / `execute` / `WriteResult` 不�
     }
 ```
 
-注：`splitStatements` 对 `-- 注释` 行会并入下一条语句一起 execute，MySQL 允许语句前缀注释；execute 里跳过纯注释 trim 后 startsWith("--") 的片段。ads 转换里的 `-- 主题...` 注释行与 INSERT 在同一段（注释行不以 `;` 结尾），会随 INSERT 一起发送，MySQL 正常解析。
+注：`splitStatements` 对 `-- 注释` 行会并入下一条语句一起 execute，MySQL 允许语句前缀行注释。execute **不再** 按 `startsWith("--")` 跳过整段——ads 的 `-- 主题...` 注释与紧随的 `INSERT ... GROUP BY ...;` 在同一段（注释行不以 `;` 结尾），若按 `--` 前缀跳过会把注释后面的 INSERT 一起丢掉、ads 表恒空。只跳过 `trim().isEmpty()` 的空片段；本流程里不存在"纯注释无语句"的片段（每条 INSERT 都以 `;` 收尾自成一段）。
 
 - [ ] **Step 4: 跑测试确认通过（需 testdb 凭据）**
 
@@ -1302,18 +1406,20 @@ mvn -B -q install -pl app,verify
 java -Dfile.encoding=UTF-8 -cp "app/target/classes;verify/target/classes;verify/target/lib/*" com.excel2mysql.verify.LayerDbRegression
 echo "exit=$?"
 ```
-Expected: `+ [OK] LAYER-DB | ...`，exit=0。端口不通（WSL/docker 没起）时连不上——这是"未覆盖"，汇报要说清是端口不通而非没配凭据；不许留 SKIP 当成跑过。跑前扫一眼 testdb 有无上一轮残留 `e2mlayerprobe_*` 库。
+Expected: LayerDbRegression `+ [OK] LAYER-DB | ...` exit=0，且 LayerGenDiffer 重跑仍 `+ [OK] LAYER-DIFF | ...` exit=0（Step 3a 补分号后离线断言必须继续绿）。端口不通（WSL/docker 没起）时连不上——这是"未覆盖"，汇报要说清是端口不通而非没配凭据；不许留 SKIP 当成跑过。跑前扫一眼 testdb 有无上一轮残留 `e2mlayerprobe_*` 库。
 
 - [ ] **Step 5: 变异抽查**
 
-把 `execute` 里 `CREATE DATABASE IF NOT EXISTS` 那行注释掉，重编译跑 LayerDbRegression，确认报 `DDL 失败` 或 `SIDE-EFFECT`（建表落在错库）这条可读 FAIL。Edit 还原＋md5 自证＋重跑 exit=0。
+（a）DB 侧：把 `execute` 里 `CREATE DATABASE IF NOT EXISTS` 那行注释掉，重编译跑 LayerDbRegression，确认报 `DDL 失败` 或 `SIDE-EFFECT`（建表落在错库）这条可读 FAIL。Edit 还原＋md5 自证＋重跑 exit=0。若本机 testdb 端口不通跑不了本条，如实记"端口不通未覆盖"，不许当跑过。
+（b）离线侧（不依赖库，必做）：把 Step 3a 里 genDom 那句 `.append(";\n\n")` 改回 `.append("\n\n")`，重编译跑 LayerGenDiffer，确认报 `dom DDL 建表语句未以分号终止` 这条可读 FAIL；Edit 还原＋md5 自证＋重跑 LayerGenDiffer exit=0。再单独把 `execute` 的 transform 循环改回 `... || stmt.trim().startsWith("--")`，跑 LayerDbRegression（有库时）应报 `ads ads_rc 期望 1 行 实际 0`——无库时此条记未覆盖。
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add java/app/src/main/java/com/excel2mysql/core/LayerGen.java \
-        java/verify/src/main/java/com/excel2mysql/verify/LayerDbRegression.java
-git commit -m "feat(core): 分层建模读源库结构与入库执行，真库探针回归零残留"
+        java/verify/src/main/java/com/excel2mysql/verify/LayerDbRegression.java \
+        java/verify/src/main/java/com/excel2mysql/verify/LayerGenDiffer.java
+git commit -m "feat(core): 分层建模读源库结构与入库执行，DDL 语句补分号终止，真库探针回归零残留"
 ```
 
 ---
