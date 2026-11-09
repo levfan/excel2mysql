@@ -169,6 +169,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     private boolean lastDialogIsError;
     private String lastDialogIcon = "information";
     private javax.swing.JTabbedPane tabs;
+    /** 动作条上那句「这一下动几张表」：选中行会悄悄改范围，得摆在按钮旁边说清楚。 */
+    private javax.swing.JLabel scopeLabel;
     /** 第三个页签「SQL 执行器」：编辑区、结果区与那三颗按钮，示例对话框不算常驻控件。 */
     private javax.swing.JTextPane sqlRunInput;
     private LogPanel sqlRunLog;
@@ -587,6 +589,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             table.getColumnModel().getColumn(i).setPreferredWidth(UiScale.px(widths[i]));
         }
         Tables.zebra(table);
+        // 选中行决定按钮作用范围，动作条上那句小字跟着变（Python 侧接的是 itemSelectionChanged）
+        table.getSelectionModel().addListSelectionListener(
+                e -> refreshScopeHint());
         // 列宽可自由拖动，最后一列自动吃掉剩余空间（Qt 的 Interactive + stretchLastSection）
         table.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_LAST_COLUMN);
         JScrollPane tableScroll = new JScrollPane(table);
@@ -656,6 +661,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         prefixRow.add(new StaticText("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixEast, BorderLayout.EAST);
+        // 输入框与两颗按钮排成一行，高度按最高的那个钉死：不钉的话输入框比按钮矮一截，
+        // 全屏时更明显（用户 2026-11-09 报的第 4 条，与 main.py 的 equal_heights 同口径）
+        Buttons.equalHeights(prefixField, applyPrefix, replacePrefix);
 
         JButton clear = new JButton("清空待上传文件");
         clear.addActionListener(e -> clearAll());
@@ -765,8 +773,15 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                 + "每张表一个 xlsx：<br>只留「数据」一个 Sheet</html>");
         genSimple.setEnabled(false);
         genSimple.addActionListener(e -> generateExcel(false));
+        // 动作条上这支小字：这一排按钮这次到底动几张表。选中行会静悄悄地改范围，
+        // 不写出来的话，改完一行名再点前缀的人会以为按钮坏了（只动了一行）。
+        scopeLabel = new javax.swing.JLabel("范围：全量");
+        scopeLabel.setForeground(new java.awt.Color(0x66, 0x70, 0x85));
+        scopeLabel.setToolTipText("<html>按钮区默认作用于整份清单；在表格里选中几行，"
+                + "就只作用于选中的这几行。<br>没选中任何行时仍按全量走。</html>");
         JPanel opRight = new JPanel(new java.awt.FlowLayout(
                 java.awt.FlowLayout.RIGHT, UiScale.px(6), UiScale.px(2)));
+        opRight.add(scopeLabel);
         opRight.add(stopBtn);
         opRight.add(importBtn);
         opRight.add(genStd);
@@ -786,6 +801,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         JPanel op = excelActionBar;
         op.add(opLeft, BorderLayout.CENTER);
         op.add(opRight, BorderLayout.EAST);
+        // 整排等高：两个开关与四颗按钮的 insets 各不相同，不钉的话这一排上下差 1~3px
+        Buttons.equalHeights(dropExisting, autoPkBox, stopBtn, importBtn, genStd, genSimple);
         JPanel south = new JPanel(new BorderLayout(0, UiScale.px(2)));
         // 执行层与上方表格区之间的细分隔线：底部动作条不再和表格内容糊成一片
         south.add(new javax.swing.JSeparator(), BorderLayout.NORTH);
@@ -1136,8 +1153,12 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     }
 
     /**
-     * 导入收尾：汇总日志 -> 成功的文件移出列表、失败的留着便于改了再试 ->
-     * 把要在弹窗里重复的那句话返回给调用方。对应 main.py:1579-1613。
+     * 导入收尾：汇总日志 -> 清单原样留着（成功的也不抽走）-> 把要在弹窗里重复的那句话返回。
+     * 对应 main.py 的 _on_finished_all。
+     *
+     * 导入完成的文件仍留在待导入列表里（用户 2026-11-09 点名：执行完不要清空待上传区域）：
+     * 同一批文件常要再导一次到另一个库、或换个前缀再导，自动抽走等于逼人重新拖一遍。
+     * 要清空有「清空待上传文件」，要删几行有 Del，退路都在。
      */
     public String finishImport(List<ImportOutcome> outcomes, boolean cancelled) {
         int ok = 0;
@@ -1149,13 +1170,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             }
         }
         int fail = outcomes.size() - ok;
-        List<TableOps.Table> removed = new ArrayList<TableOps.Table>();
-        List<TableOps.Table> kept = new ArrayList<TableOps.Table>();
+        List<TableOps.Table> done = new ArrayList<TableOps.Table>();
         for (TableOps.Table t : tables) {
             if (doneFiles.contains(t.filepath)) {
-                removed.add(t);
-            } else {
-                kept.add(t);
+                done.add(t);
             }
         }
         String summary = "===== 全部完成：成功 " + ok + " 张表，失败 " + fail + " 张表 ====="
@@ -1165,30 +1183,24 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         } else {
             log(summary);
         }
-        if (!removed.isEmpty()) {
-            log("[清理] 已从待导入列表移除成功文件：" + names(removed));
+        if (!done.isEmpty()) {
+            log("[保留] 导入完成的文件仍留在待导入列表：" + names(done));
         }
-        if (fail > 0 && !kept.isEmpty()) {
-            log("[保留] 导入失败的文件仍在列表中，可调整后重试：" + names(kept));
+        if (fail > 0) {
+            log("[保留] 导入失败的文件同样留在列表里，可调整后重试");
         }
-        tables.clear();
-        tables.addAll(kept);
-        for (TableOps.Table t : removed) {
-            byTable.remove(t);
-        }
-        fileModel.removeItems(removed);
         importBtn.setEnabled(!tables.isEmpty());
         syncGenButtons();
         refreshPreview();
 
         StringBuilder msg = new StringBuilder("成功 ").append(ok).append(" 张表，失败 ")
                 .append(fail).append(" 张表。");
-        if (!removed.isEmpty()) {
-            msg.append(NEWLINE + "已从待导入列表移除 ").append(removed.size())
-                    .append(" 个成功文件。");
+        if (!done.isEmpty()) {
+            msg.append(NEWLINE + "导入完成的 ").append(done.size())
+                    .append(" 张表仍留在待导入列表里。");
         }
         if (fail > 0) {
-            msg.append(NEWLINE + "失败文件保留在列表中，可调整后重试。");
+            msg.append(NEWLINE + "失败的表也在列表里，可调整后重试。");
         }
         msg.append(NEWLINE + "详见日志。");
         return msg.toString();
@@ -1225,7 +1237,9 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         }
         final Task task = tasks.get(tasks.size() - 1);
         final List<TableBuilder.Result> work = new ArrayList<TableBuilder.Result>();
-        for (TableOps.Table t : tables) {
+        Scope scope = scopedTables();
+        logScope(scope.note);
+        for (TableOps.Table t : scope.tables) {
             TableBuilder.Result r = byTable.get(t);
             if (r != null) {
                 work.add(r);
@@ -1390,8 +1404,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             warn(NO_FILE_HINT);
             return;
         }
+        Scope scope = scopedTables();
+        logScope(scope.note);
         final List<MetaExport.Source> work = new ArrayList<MetaExport.Source>();
-        for (TableOps.Table t : tables) {
+        for (TableOps.Table t : scope.tables) {
             work.add(MetaExport.of(t, byTable.get(t)));
         }
         log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（输出根目录 "
@@ -2073,6 +2089,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             importBtn.setEnabled(!tables.isEmpty());
         }
         syncGenButtons();
+        refreshScopeHint();
         refreshPreview();
         String summary = ImportParse.summaryText(outcome);
         if (outcome.cancelled) {
@@ -2211,18 +2228,22 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             inform(NO_FILE_HINT);
             return;
         }
+        Scope scope = scopedTables();
+        logScope(scope.note);
         long total = 0;
         java.util.Set<String> files = new java.util.LinkedHashSet<String>();
-        for (TableOps.Table t : tables) {
+        for (TableOps.Table t : scope.tables) {
             files.add(t.filepath == null ? "" : t.filepath);
             TableBuilder.Result r = byTable.get(t);
             total += r == null || r.rows == null ? 0 : r.rows.size();
         }
         String num = String.format(java.util.Locale.ROOT, "%,d", Long.valueOf(total));
-        log("[统计] 待导入文件 " + files.size() + " 个、表 " + tables.size()
-                + " 张，数据总行数：" + num + " 行");
+        String head = scope.note.isEmpty()
+                ? "待导入文件 " + files.size() + " 个、表 " + scope.tables.size() + " 张"
+                : "选中的 " + scope.tables.size() + " 张表";
+        log("[统计] " + head + "，数据总行数：" + num + " 行");
         inform2("数据总行数", "数据总行数：" + num + " 行" + LogText.NL + LogText.NL
-                + "待导入文件 " + files.size() + " 个，共 " + tables.size() + " 张表。");
+                + head + "。");
     }
 
     /** 自检要按用户的方式点这颗按钮，而不是绕过界面直接算。 */
@@ -2237,6 +2258,86 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public List<TableOps.Table> tables() {
         return tables;
+    }
+
+    /** 清单里选中的行号（升序去重）；越界的一律丢掉，选中为空就返回空列表。 */
+    private List<Integer> selectedFileRows() {
+        java.util.TreeSet<Integer> picked = new java.util.TreeSet<Integer>();
+        int[] rows = table == null ? new int[0] : table.getSelectedRows();
+        for (int row : rows) {
+            if (row >= 0 && row < tables.size()) {
+                picked.add(Integer.valueOf(row));
+            }
+        }
+        return new ArrayList<Integer>(picked);
+    }
+
+    /** 一次按钮操作的作用范围：表清单 + 一句给日志的范围说明（全量时为空串）。 */
+    public static final class Scope {
+        public final List<TableOps.Table> tables;
+        public final String note;
+
+        Scope(List<TableOps.Table> tables, String note) {
+            this.tables = tables;
+            this.note = note;
+        }
+    }
+
+    /**
+     * 按钮区这一下作用在哪些表：选了就只给选中的，没选就是整份清单。
+     *
+     * 用户口径（2026-11-09）：按钮不该永远作用于全量——选中几行就该只改那几行；
+     * 一个都没选时仍按整份清单走，两条路都不必先"全选"一次。
+     */
+    public Scope scopedTables() {
+        List<Integer> rows = selectedFileRows();
+        if (rows.isEmpty()) {
+            return new Scope(new ArrayList<TableOps.Table>(tables), "");
+        }
+        List<TableOps.Table> picked = new ArrayList<TableOps.Table>();
+        for (Integer r : rows) {
+            picked.add(tables.get(r.intValue()));
+        }
+        return new Scope(picked,
+                "本次只作用于选中的 " + rows.size() + " 张表，没选中的一概不动");
+    }
+
+    private void logScope(String note) {
+        if (note != null && !note.isEmpty()) {
+            log("[范围] " + note);
+        }
+    }
+
+    /** 一小组表对应的数据行：结构弹窗与生成件都要"表定义 + 数据行"成对给出去。 */
+    private List<TableBuilder.Result> resultsOf(List<TableOps.Table> list) {
+        List<TableBuilder.Result> out = new ArrayList<TableBuilder.Result>();
+        for (TableOps.Table t : list) {
+            out.add(byTable.get(t));
+        }
+        return out;
+    }
+
+    /**
+     * 动作条上那句「作用范围」跟着选中行走，没建好就跳过。
+     *
+     * 选中行会静悄悄地改按钮范围：改完一行表名再点前缀，如果没这句提示，
+     * 用户只会看到"只改了一行"然后以为按钮坏了（第一版就是这么被报上来的）。
+     */
+    public void refreshScopeHint() {
+        if (scopeLabel == null) {
+            return;
+        }
+        int n = selectedFileRows().size();
+        if (n > 0) {
+            scopeLabel.setText("范围：选中 " + n + " 张表");
+        } else {
+            scopeLabel.setText("范围：全量（" + tables.size() + " 张表）");
+        }
+    }
+
+    /** 自检读这一句：范围小字是"按钮会改范围"这件事唯一可见的凭据。 */
+    public String scopeHintText() {
+        return scopeLabel == null ? "" : scopeLabel.getText();
     }
 
     /** 自检要把生成的文件再读回来，用的必须是窗口上那一份词典，不是新起一套。 */
@@ -2255,6 +2356,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public FileRowModel fileModel() {
         return fileModel;
+    }
+
+    /** 自检要断"清单还有表时导入按钮不灰"：判据与按钮本体的启用位同一处取值。 */
+    public boolean importEnabled() {
+        return importBtn != null && importBtn.isEnabled();
     }
 
     /** 文件表单击「表名」改名：校验不过就恢复原名，改成了就以新名为基础名。 */
@@ -2515,6 +2621,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         // 留着亮按钮等于允许点一次只会弹"请先添加文件"的空操作
         importBtn.setEnabled(!tables.isEmpty());
         syncGenButtons();
+        refreshScopeHint();
         log("已清空");
     }
 
@@ -4827,19 +4934,27 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return;
         }
         final String prefix = Names.pyStrip(prefixField.getText());
+        final Scope scope = scopedTables();
+        logScope(scope.note);
+        final List<TableOps.Table> work = scope.tables;
         runTask("正在批量应用表名前缀…", sink -> {
-            sink.setTotal(tables.size() + 1);
-            TableOps.applyPrefix(tables, prefix);
-            for (TableOps.Table t : tables) {
+            sink.setTotal(work.size() + 1);
+            TableOps.applyPrefix(work, prefix);
+            for (TableOps.Table t : work) {
                 sink.step(t.tableName);
             }
             sink.step("重名去重");
-            return prefix;
+            // 报的是"这一下作用了几张表"，与 Python 的 len(tables) 同一口径：
+            // 说不说得出"哪几张"由作用范围决定，不再拿"改了名"去反推
+            return Integer.valueOf(work.size());
         }, out -> {
+            int n = ((Integer) out).intValue();
             fileModel.refresh();
-            log(prefix.isEmpty() ? "[前缀] 已移除前缀，恢复基础表名"
-                                 : "[前缀] 已为全部表名批量添加前缀「" + prefix + "」");
+            // 只报"这一下动了几张表"：按选中行生效后再说"全部表名"就把范围说错了
+            log(prefix.isEmpty() ? "[前缀] 已移除前缀，" + n + " 张表恢复基础表名"
+                                 : "[前缀] 已为 " + n + " 张表名批量添加前缀「" + prefix + "」");
             refreshPreview();
+            refreshScopeHint();
         });
     }
 
@@ -4860,10 +4975,13 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             return;
         }
         final String newHead = head;
+        final Scope scope = scopedTables();
+        logScope(scope.note);
+        final List<TableOps.Table> work = scope.tables;
         runTask("正在替换表名前缀…", sink -> {
-            sink.setTotal(tables.size() + 1);
-            TableOps.RenameResult r = TableOps.replaceFirstSegment(tables, newHead);
-            for (TableOps.Table t : tables) {
+            sink.setTotal(work.size() + 1);
+            TableOps.RenameResult r = TableOps.replaceFirstSegment(work, newHead);
+            for (TableOps.Table t : work) {
                 sink.step(t.tableName);
             }
             sink.step("重名去重");
@@ -4880,6 +4998,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                     + (r.skipped.isEmpty() ? "" : "，跳过 " + r.skipped.size() + " 张"));
             fileModel.refresh();
             refreshPreview();
+            refreshScopeHint();
         });
     }
 
@@ -4889,8 +5008,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             inform(NO_FILE_HINT);
             return;
         }
+        Scope scope = scopedTables();
+        logScope(scope.note);
         refreshPreview();
-        new DDLDialog(this, tables, dropIfExistsNow()).setVisible(true);
+        new DDLDialog(this, scope.tables, dropIfExistsNow()).setVisible(true);
     }
 
     /** 自检与非界面调用用：当前状态下的全部建表语句。 */
@@ -4904,14 +5025,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
             inform(NO_FILE_HINT);
             return;
         }
-        StructureDialog dialog = new StructureDialog(this, results(), logPanel);
+        Scope scope = scopedTables();
+        logScope(scope.note);
+        StructureDialog dialog = new StructureDialog(this, resultsOf(scope.tables), logPanel);
         dialog.setVisible(true);
         if (!dialog.isConfirmed()) {
             return;
         }
         fileModel.refresh();
         refreshPreview();
-        log("[结构] 已按弹窗确认 " + tables.size() + " 张表的字段定义");
+        log("[结构] 已按弹窗确认 " + scope.tables.size() + " 张表的字段定义");
     }
 
     public void inform(String text) {

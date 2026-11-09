@@ -908,6 +908,11 @@ def main():
         put("dblclick.structure", "1|%d|%s" % (_sd.tabs.count(), _titles))
     else:
         put("dblclick.structure", "0|0|")
+    # setCurrentCell 顺带把第 0 行选中了。按钮区现在按选中行生效（2026-11-09），
+    # 留着这个选中态会让后面每一步前缀/生成都悄悄跑在"只作用于一行"的口径上，
+    # 与 Swing 侧（那边探针不动选中态）就不是同一件事了。取完立刻复原。
+    win.file_table.clearSelection()
+    app.processEvents()
     POPUPS.clear()
     win.on_start_import()
     put("guard.nodb.import", popup_text())

@@ -132,6 +132,37 @@ public final class Buttons {
         return SECONDARY_DISABLED_BG;
     }
 
+    /**
+     * 同一排里的输入框与按钮统一取同一个高度。
+     *
+     * Swing 按各自 insets 算出来的高度差 1~3px：带 padding 的强调按钮比普通按钮高，
+     * 输入框又偏矮；单看每一个都正常，排成一行就是一眼能看见的参差（表名前缀那行、
+     * 底部动作条都踩过，用户 2026-11-09 报的就是这一处）。统一按最高的那个钉死，
+     * 与 main.py 的 equal_heights 同一口径：取 sizeHint 与 minimumSizeHint 里更大的那个。
+     */
+    public static void equalHeights(java.awt.Component... widgets) {
+        int h = 0;
+        for (java.awt.Component w : widgets) {
+            if (w == null) {
+                continue;
+            }
+            h = Math.max(h, Math.max(w.getPreferredSize().height,
+                    w.getMinimumSize().height));
+        }
+        if (h <= 0) {
+            return;
+        }
+        for (java.awt.Component w : widgets) {
+            if (w == null) {
+                continue;
+            }
+            java.awt.Dimension d = w.getPreferredSize();
+            w.setPreferredSize(new java.awt.Dimension(d.width, h));
+            java.awt.Dimension m = w.getMinimumSize();
+            w.setMinimumSize(new java.awt.Dimension(m.width, h));
+        }
+    }
+
     private static javax.swing.border.Border edge(Color color) {
         return BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(color, 1),

@@ -323,6 +323,7 @@ public final class GuiMain {
                 // 表注释手动改：写回 CREATE TABLE 的表选项，并一路带到弹窗与日志回执
                 sql_comment_edit(frame, problems);
                 sql_field_edit(frame, problems);
+                sql_scope(frame, problems);
                 // 页面级「停止」与并发护栏
                 stop_button(frame, problems);
                 // 程序同级 conn.ini 预填连接信息：读到 / 读不了 / 没有，三种说法各验一条
@@ -783,7 +784,8 @@ public final class GuiMain {
                 problems.add("应用前缀后表名没带上 ods_：" + n);
             }
         }
-        if (!frame.logPanel().contains("[前缀] 已为全部表名批量添加前缀「ods_」")) {
+        if (!frame.logPanel().contains(
+                "[前缀] 已为 " + base.size() + " 张表名批量添加前缀「ods_」")) {
             problems.add("批量应用前缀没有留下日志");
         }
         frame.applyPrefix();
@@ -795,7 +797,8 @@ public final class GuiMain {
         if (!namesOf(frame).equals(base)) {
             problems.add("留空再点「批量应用前缀」没恢复基础表名：" + namesOf(frame));
         }
-        if (!frame.logPanel().contains("[前缀] 已移除前缀，恢复基础表名")) {
+        if (!frame.logPanel().contains(
+                "[前缀] 已移除前缀，" + base.size() + " 张表恢复基础表名")) {
             problems.add("移除前缀没有留下日志");
         }
 
@@ -2691,17 +2694,18 @@ public final class GuiMain {
         if (!frame.logPanel().isErrorLine("===== 全部完成")) {
             problems.add("有失败时汇总行没标成错误级");
         }
-        if (!frame.logPanel().contains("[清理] 已从待导入列表移除成功文件")) {
-            problems.add("成功文件移出列表没有留痕");
+        if (!frame.logPanel().contains("[保留] 导入完成的文件仍留在待导入列表")) {
+            problems.add("导入完成的文件留在清单这件事没有留痕");
         }
-        if (!frame.logPanel().contains("[保留] 导入失败的文件仍在列表中")) {
+        if (!frame.logPanel().contains("[保留] 导入失败的文件同样留在列表里")) {
             problems.add("失败文件保留没有说明原因");
         }
-        if (frame.tables().size() != 1 || !f1.equals(frame.tables().get(0).filepath)) {
-            problems.add("收尾后剩下的应该是失败那张表");
+        if (frame.tables().size() != 2 || frame.fileModel().getRowCount() != 2) {
+            problems.add("收尾不该动清单：应有 2 张表、2 行，实际 "
+                    + frame.tables().size() + " 张、" + frame.fileModel().getRowCount() + " 行");
         }
-        if (frame.fileModel().getRowCount() != 1) {
-            problems.add("文件表没跟着移出，还剩 " + frame.fileModel().getRowCount() + " 行");
+        if (!summary.contains("导入完成的 1 张表仍留在待导入列表里")) {
+            problems.add("弹窗没说清完成的文件还在清单里：" + summary.replace((char) 10, ' '));
         }
 
         frame.clearAll();
@@ -2712,8 +2716,12 @@ public final class GuiMain {
         allOk.add(new MainFrame.ImportOutcome(a, true));
         allOk.add(new MainFrame.ImportOutcome(b, true));
         frame.finishImport(allOk, false);
-        if (!frame.tables().isEmpty() || frame.fileModel().getRowCount() != 0) {
-            problems.add("全部成功后列表却没清空");
+        if (frame.tables().size() != 2 || frame.fileModel().getRowCount() != 2) {
+            problems.add("全部成功后清单仍应原样留着，实际 "
+                    + frame.tables().size() + " 张、" + frame.fileModel().getRowCount() + " 行");
+        }
+        if (!frame.importEnabled()) {
+            problems.add("清单还有表，导入按钮不该变灰");
         }
         // 日志是累加的，所以这里按第二场自己的汇总行判：零失败不该被标成错误级
         if (!frame.logPanel().contains("===== 全部完成：成功 2 张表，失败 0 张表 =====")) {
@@ -4992,13 +5000,20 @@ public final class GuiMain {
         if (!text.contains("`money` DECIMAL(10,2)") || text.contains("`amount`")) {
             problems.add("改字段名没只换那一行的标识符：" + secondLine(text));
         }
-        // 被 PRIMARY KEY 引用的那一列拒绝改名，且那一格要填回原值
+        // 被 PRIMARY KEY 引用的字段改名：不再拒绝，而是连带把引用一起改写
+        // （与 Python 侧 E19 同一口径：改完 PRIMARY KEY (`pk`)，并在回执里说清改了几处引用）
         text = page.textOf(script.getPath());
         dlg.editCell(0, 0, "pk");
-        if (page.textOf(script.getPath()).contains("`pk`")
-                || !"id".equals(dlg.cellValue(0, 0))
-                || !frame.lastDialogText().contains("引用")) {
-            problems.add("被主键引用的字段改名没被拦下，或那一格没填回原值");
+        text = page.textOf(script.getPath());
+        if (!text.contains("PRIMARY KEY (`pk`)") || text.contains("PRIMARY KEY (`id`)")) {
+            problems.add("被主键引用的字段改名没连带改写主键引用："
+                    + text.replaceAll("\\s+", " "));
+        }
+        if (!"pk".equals(dlg.cellValue(0, 0))) {
+            problems.add("被引用字段改名成功后那一格没显示新名字：" + dlg.cellValue(0, 0));
+        }
+        if (!page.logPanel().contains("引用")) {
+            problems.add("连带改写了引用却没在回执里说清");
         }
         closeMetadataDialogs();
         // 脚本里有四列（最后一列是故意拉长的字段名，用来量列宽够不够装下内容）
@@ -5033,6 +5048,30 @@ public final class GuiMain {
             smallDlg.pack();
             if (!smallDlg.columnsFillViewport()) {
                 problems.add("元数据弹窗内容装得下时没铺满视口：表格右侧留着一条白");
+            }
+            // 增删字段（用户 2026-11-09 第 2 条）：改的是脚本正文那句 CREATE TABLE，
+            // 弹窗行数、标题里的列数、解析缓存三处必须同时跟上
+            if (!smallDlg.hasColumnOps() || smallDlg.fieldCount() != 2) {
+                problems.add("元数据弹窗没接上增删字段（或字段数不对）："
+                        + smallDlg.hasColumnOps() + " / " + smallDlg.fieldCount());
+            }
+            smallDlg.pressAddForTest();
+            if (smallDlg.fieldCount() != 3
+                    || !page.textOf(small.getPath()).contains("is_new_field")) {
+                problems.add("「新增字段」没把占位列写进脚本：" + smallDlg.fieldCount() + " 列");
+            }
+            if (!smallDlg.columnTitle().contains("共 3 列")) {
+                problems.add("增完字段标题里的列数没跟着换：" + smallDlg.columnTitle());
+            }
+            smallDlg.pressDeleteForTest(1);          // 删掉 `name` 那一列
+            String afterDel = page.textOf(small.getPath());
+            if (smallDlg.fieldCount() != 2 || afterDel.contains("`name`")
+                    || !afterDel.contains("PRIMARY KEY (`id`)")) {
+                problems.add("「删除选中字段」没只删那一列（主键引用不该被殃及）："
+                        + afterDel.replaceAll("\\s+", " "));
+            }
+            if (!page.logPanel().contains("[字段]") || !page.isModified(small.getPath())) {
+                problems.add("增删字段没留回执，或没把这份脚本标成已改动");
             }
             smallDlg.dispose();
         }
@@ -5091,6 +5130,94 @@ public final class GuiMain {
             problems.add("两颗预览按钮把清单或脚本正文改了：预览应当只读不算");
         }
         sqlDdlPagesScale(frame, problems);
+    }
+
+    /**
+     * 按钮区按选中的行生效（用户 2026-11-09 第 3 条）：选中一行就只动那一行，
+     * 一个都没选仍是全量。范围小字、DDL 页数、执行副本、统计、前缀五处走同一套口径。
+     */
+    private static void sql_scope(MainFrame frame, List<String> problems) {
+        java.io.File dir;
+        try {
+            dir = java.nio.file.Files.createTempDirectory("e2m-sqlscope").toFile();
+        } catch (java.io.IOException e) {
+            problems.add("建范围自检的临时目录失败：" + e);
+            return;
+        }
+        String nl = String.valueOf((char) 10);
+        String one = new java.io.File(dir, "s1.sql").getPath();
+        writeText(one, "CREATE TABLE t_ra (id INT COMMENT '一号');" + nl
+                + "INSERT INTO `t_ra` VALUES (1),(2);" + nl
+                + "CREATE TABLE t_rb (id INT COMMENT '二号');" + nl
+                + "INSERT INTO `t_rb` VALUES (7);" + nl);
+        String two = new java.io.File(dir, "s2.sql").getPath();
+        writeText(two, "CREATE TABLE t_rc (id INT);" + nl);
+        com.excel2mysql.gui.SqlPage page = new com.excel2mysql.gui.SqlPage(frame);
+        List<String> paths = new ArrayList<String>();
+        paths.add(one);
+        paths.add(two);
+        page.addFiles(paths);
+        if (page.sqlRowCount() != 3) {
+            problems.add("范围自检需要 3 张表，实际 " + page.sqlRowCount());
+            return;
+        }
+        // 没选中 = 全量：小字、范围本体、DDL 页数三处必须一致
+        if (!"范围：全量（3 张表）".equals(page.scopeHintText())) {
+            problems.add("没选中行时动作条那句范围小字不对：" + page.scopeHintText());
+        }
+        if (page.currentScope().names != null) {
+            problems.add("没选中行时作用范围却是收窄的");
+        }
+        if (page.ddlPages(page.currentScope()).size() != 3) {
+            problems.add("没选中行时「预览 DDL」的页数不是全量");
+        }
+        // 选中第二行（t_rb）
+        page.selectRow(1);
+        if (!"范围：选中 1 张表".equals(page.scopeHintText())) {
+            problems.add("选中一行后那句范围小字没跟上：" + page.scopeHintText());
+        }
+        List<String[]> picked = page.ddlPages(page.currentScope());
+        if (picked.size() != 1 || !"t_rb".equals(picked.get(0)[0])) {
+            problems.add("选中一行后「预览 DDL」没只出那一页：" + picked.size() + " 页");
+        }
+        // 执行副本同样收窄：只留 t_rb 的语句，t_ra 与 s2.sql 一概不带走
+        List<String[]> dropped = new ArrayList<String[]>();
+        List<com.excel2mysql.gui.SqlPage.Src> run =
+                page.prepareRunItems(page.currentScope(), false, dropped);
+        if (run.size() != 1 || !run.get(0).text.contains("t_rb")
+                || run.get(0).text.contains("t_ra")) {
+            problems.add("选中一行后执行副本没收窄：" + run.size() + " 个文件");
+        }
+        // 统计只算选中的那一张：t_rb 有 1 行数据
+        page.statTotalRows();
+        if (!frame.lastDialogText().contains("共 1 张表")
+                || !frame.lastDialogText().contains("本次只作用于选中的 1 张表")) {
+            problems.add("选中一行后「统计数据总行数」还是全量口径："
+                    + frame.lastDialogText().replace((char) 10, ' '));
+        }
+        // 前缀按钮：加了前缀只落在选中的那一行，脚本正文一个字不改
+        page.setPrefixText("dim_");
+        page.applyPrefix();
+        if (!"dim_t_rb".equals(page.sqlRowDisplayName(1))
+                || !"t_ra".equals(page.sqlRowDisplayName(0))
+                || !page.textOf(one).contains("CREATE TABLE t_rb")) {
+            problems.add("按选中行加前缀落错了行：" + page.sqlRowDisplayName(0)
+                    + " / " + page.sqlRowDisplayName(1));
+        }
+        if (!page.logPanel().contains("[范围] 本次只作用于选中的 1 张表，没选中的一概不动")) {
+            problems.add("按选中行生效没有在日志里写明范围");
+        }
+        // 空前缀再点：只撤选中行的显示层，其余行保持原样
+        page.setPrefixText("");
+        page.applyPrefix();
+        if (!"t_ra".equals(page.sqlRowDisplayName(0))
+                || !"t_rb".equals(page.sqlRowDisplayName(1))) {
+            problems.add("空前缀只该撤选中行的前缀：" + page.sqlRowDisplayName(1));
+        }
+        page.clearRowSelection();
+        if (!page.scopeHintText().startsWith("范围：全量")) {
+            problems.add("清掉选中行后范围小字没回到全量：" + page.scopeHintText());
+        }
     }
 
     /**

@@ -8,6 +8,7 @@ import javax.swing.GroupLayout;
 import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
@@ -17,7 +18,6 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.Frame;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * SQL 脚本页的表元数据弹窗：一张表的字段清单。
@@ -26,12 +26,22 @@ import java.util.Locale;
  * 不拆成"类型 + 长度"两格。给了 FieldEdit 回调时字段名 / 字段注释 / 数据类型三列可改，
  * 每改一格立刻回调（只把真正变了的那几项交出去），被拒绝时那一格填回原值；
  * 没给回调时整表只读（取证与自检走这一路，不去动脚本）。主键与可空两列恒只读。
+ *
+ * 给了 ColumnOps 回调时另外多两颗按钮：「新增字段」「删除选中字段」（Del 同效）。
+ * 增删改的都是脚本正文那句 CREATE TABLE，删完由调用方决定要不要落盘。
  */
 public final class SqlMetadataDialog extends JDialog {
 
     /** 一列改写的回调：三项里 null 表示那一项没改；返回 false 表示这次改动被拒绝。 */
     public interface FieldEdit {
         boolean apply(String field, String newField, String newComment, String newType);
+    }
+
+    /** 增删字段的回调：返回改完之后的列清单，null 表示这次操作被拒绝。 */
+    public interface ColumnOps {
+        List<Infer.Column> addField();
+
+        List<Infer.Column> deleteFields(List<String> fields);
     }
 
     private static final String[] HEADERS = {"字段名", "字段注释", "数据类型", "主键", "可空"};
@@ -42,13 +52,32 @@ public final class SqlMetadataDialog extends JDialog {
 
     /** 字段表外面那层带标题的容器，标题里带列数；自检要读它。 */
     private final JPanel columnsBox;
-    private final FillTable fieldTable;
+    private FillTable fieldTable;
+    private final DefaultTableModel model;
+
+    private final boolean upper;
+    private final boolean lower;
+    private final FieldEdit edit;
+    private final ColumnOps ops;
+
+    /** 每行的 (字段名, 注释, 类型) 原值：判"改了哪一格"要用脚本里的名字，不能用大写开关改过的显示名。 */
+    private final List<String[]> originals = new ArrayList<String[]>();
 
     public SqlMetadataDialog(Frame owner, SqlScript.ParsedTable table,
                              String displayName, boolean upper, boolean lower,
                              FieldEdit edit) {
+        this(owner, table, displayName, upper, lower, edit, null);
+    }
+
+    public SqlMetadataDialog(Frame owner, SqlScript.ParsedTable table,
+                             String displayName, boolean upper, boolean lower,
+                             FieldEdit edit, ColumnOps ops) {
         super(owner, "表元数据（" + displayName + "）", false);
         WindowIcons.apply(this);
+        this.upper = upper;
+        this.lower = lower;
+        this.edit = edit;
+        this.ops = ops;
         JPanel content = new JPanel(new java.awt.BorderLayout(0, UiScale.px(6)));
         content.setBorder(BorderFactory.createEmptyBorder(
                 UiScale.px(8), UiScale.px(10), UiScale.px(8), UiScale.px(10)));
@@ -79,17 +108,10 @@ public final class SqlMetadataDialog extends JDialog {
                 .addComponent(scope));
         content.add(header, java.awt.BorderLayout.NORTH);
 
-        // 每行的 (字段名, 注释, 类型) 原值：判"改了哪一格"要用脚本里的名字，
-        // 不能用大写开关改过的显示名，否则勾着转大写时一格都改不动
-        final List<String[]> originals = new ArrayList<String[]>();
-        for (Infer.Column c : table.columns) {
-            originals.add(new String[]{c.field, c.comment == null ? "" : c.comment,
-                    c.type == null ? "" : c.type});
-        }
-        DefaultTableModel model = new DefaultTableModel(HEADERS, 0) {
+        model = new DefaultTableModel(HEADERS, 0) {
             @Override
             public boolean isCellEditable(int row, int col) {
-                return edit != null && col <= 2;
+                return SqlMetadataDialog.this.edit != null && col <= 2;
             }
 
             @Override
@@ -108,22 +130,19 @@ public final class SqlMetadataDialog extends JDialog {
                 if (newField == null && newComment == null && newType == null) {
                     return;
                 }
-                if (edit != null && edit.apply(before[0], newField, newComment, newType)) {
+                if (SqlMetadataDialog.this.edit != null
+                        && SqlMetadataDialog.this.edit.apply(before[0], newField, newComment,
+                        newType)) {
                     originals.set(row, after);
                     super.setValueAt(col == 1 ? after[1] : after[col], row, col);
                     return;
                 }
                 // 被拒绝：这一格填回原值（仍按当前大小写档显示），别留一个改不动的假象
-                super.setValueAt(display(before[col], upper, lower), row, col);
+                super.setValueAt(display(before[col]), row, col);
             }
         };
-        for (int i = 0; i < originals.size(); i++) {
-            String[] one = originals.get(i);
-            Infer.Column c = table.columns.get(i);
-            model.addRow(new Object[]{display(one[0], upper, lower), one[1], one[2],
-                    Boolean.TRUE.equals(c.primaryKey) ? "是" : "",
-                    Boolean.FALSE.equals(c.nullable) ? "否" : "是"});
-        }
+        fill(table.columns);
+
         fieldTable = new FillTable(model, METADATA_COL_FLOORS, METADATA_COL_STRETCH);
         Tables.style(fieldTable);
         fieldTable.fitColumns();   // 字体定下来之后重算底宽
@@ -138,9 +157,40 @@ public final class SqlMetadataDialog extends JDialog {
         // 不必滚到表格末尾数这一张表解析出了多少列
         JPanel colBox = new JPanel(new java.awt.BorderLayout());
         columnsBox = colBox;
-        Tables.titled(colBox, Tables.COLUMN_TABLE_TITLE + "（共 " + table.columns.size() + " 列）");
+        Tables.titled(colBox, Tables.COLUMN_TABLE_TITLE + "（共 "
+                + table.columns.size() + " 列）");
         colBox.add(scroll, java.awt.BorderLayout.CENTER);
-        content.add(colBox, java.awt.BorderLayout.CENTER);
+
+        // 增删字段挂在表格上沿：与第一页结构弹窗同一个位置、同一套措辞
+        JPanel tools = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
+        JButton addField = new JButton("新增字段");
+        addField.setToolTipText("<html>往这句 CREATE TABLE 末尾补一列（先叫 is_new_field），"
+                + "<br>再在表里把名字、注释、类型改成要的</html>");
+        addField.addActionListener(e -> addClicked());
+        JButton delField = new JButton("删除选中字段");
+        delField.setToolTipText("<html>把选中的行从这句 CREATE TABLE 里删掉（可多选，Del 同效）；"
+                + "<br>主键/索引对它的引用一并清掉，INSERT 不动</html>");
+        delField.addActionListener(e -> deleteClicked());
+        addField.setVisible(edit != null && ops != null);
+        delField.setVisible(edit != null && ops != null);
+        tools.add(addField);
+        tools.add(delField);
+        JPanel center = new JPanel(new java.awt.BorderLayout(0, UiScale.px(4)));
+        center.add(tools, java.awt.BorderLayout.NORTH);
+        center.add(colBox, java.awt.BorderLayout.CENTER);
+        content.add(center, java.awt.BorderLayout.CENTER);
+
+        // Del 与「删除选中字段」同一个动作：两条入口一套规则，不各写一遍
+        fieldTable.getInputMap(JTable.WHEN_FOCUSED).put(
+                javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0),
+                "delField");
+        fieldTable.getActionMap().put("delField", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                deleteClicked();
+            }
+        });
 
         JPanel footer = new JPanel();
         footer.setLayout(new java.awt.FlowLayout(
@@ -156,7 +206,86 @@ public final class SqlMetadataDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    /** 字段表左上角那句标识（含列数），从真控件的标题边框上读。 */
+    /** 按一份列清单整表重铺：增删字段之后列数变了，行与列标题都要跟着换。 */
+    private void fill(List<Infer.Column> columns) {
+        originals.clear();
+        model.setRowCount(0);
+        for (Infer.Column c : columns) {
+            originals.add(new String[]{c.field, c.comment == null ? "" : c.comment,
+                    c.type == null ? "" : c.type});
+        }
+        for (int i = 0; i < originals.size(); i++) {
+            String[] one = originals.get(i);
+            Infer.Column c = columns.get(i);
+            model.addRow(new Object[]{display(one[0]), one[1], one[2],
+                    Boolean.TRUE.equals(c.primaryKey) ? "是" : "",
+                    Boolean.FALSE.equals(c.nullable) ? "否" : "是"});
+        }
+        if (columnsBox != null) {
+            Tables.titled(columnsBox, Tables.COLUMN_TABLE_TITLE + "（共 "
+                    + columns.size() + " 列）");
+        }
+        if (fieldTable != null) {
+            fieldTable.fitColumns();
+        }
+    }
+
+    /** 「新增字段」：补一列占位定义，成功后整表重铺（新行在最后一行）。 */
+    private void addClicked() {
+        if (ops == null) {
+            return;
+        }
+        List<Infer.Column> now = ops.addField();
+        if (now == null) {
+            return;
+        }
+        fill(now);
+        if (fieldTable.getRowCount() > 0) {
+            int row = fieldTable.getRowCount() - 1;
+            fieldTable.setRowSelectionInterval(row, row);
+            fieldTable.scrollRectToVisible(fieldTable.getCellRect(row, 0, true));
+        }
+    }
+
+    /** 「删除选中字段」/ Del：先问一次——删的是脚本正文那一列，主键/索引引用会一并清掉。 */
+    private void deleteClicked() {
+        if (ops == null) {
+            return;
+        }
+        int[] rows = fieldTable.getSelectedRows();
+        if (rows.length == 0) {
+            MessageDialog.show(this, "删除字段",
+                    "先在表里选中要删的行（可以按住 Ctrl 多选），再点这颗按钮。", null,
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        List<String> fields = new ArrayList<String>();
+        for (int row : rows) {
+            if (row >= 0 && row < originals.size()) {
+                fields.add(originals.get(row)[0]);
+            }
+        }
+        if (fields.isEmpty()) {
+            return;
+        }
+        String text = "要从这句 CREATE TABLE 里删掉这些字段：\n  " + String.join("、", fields)
+                + "\n\n主键与索引对它们的引用会一并清掉；脚本里的 INSERT 不动"
+                + "（执行到库时可能因列数对不上报 1136）。\n删完记得点「保存」才落盘。";
+        Object[] options = {"删除", "取消"};
+        int pick = JOptionPane.showOptionDialog(this, text, "删除字段",
+                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE, null,
+                options, options[1]);
+        if (pick != 0) {
+            return;
+        }
+        List<Infer.Column> now = ops.deleteFields(fields);
+        if (now == null) {
+            return;
+        }
+        fill(now);
+        fieldTable.clearSelection();
+    }
+
     /**
      * 自检用：那张字段表是不是"装不下就横向滚动"。列自适应一关，视口放不下时
      * 滚动容器自己会出横向条（JScrollPane 默认按需），不会被挤成一片省略号。
@@ -202,8 +331,45 @@ public final class SqlMetadataDialog extends JDialog {
         fieldTable.setValueAt(value, row, col);
     }
 
+    /** 自检用：行数（字段数），增删之后要能读回来。 */
+    public int fieldCount() {
+        return model.getRowCount();
+    }
+
+    /** 自检用：那两颗增删按钮在只读档下不该出现。 */
+    public boolean hasColumnOps() {
+        return edit != null && ops != null;
+    }
+
+    /** 自检用：直接走增删背后的那条路，不弹确认框（自检在 EDT 上，弹窗会把自己卡死）。 */
+    public void pressAddForTest() {
+        if (ops == null) {
+            return;
+        }
+        List<Infer.Column> now = ops.addField();
+        if (now != null) {
+            fill(now);
+        }
+    }
+
+    public void pressDeleteForTest(int... rows) {
+        if (ops == null) {
+            return;
+        }
+        List<String> fields = new ArrayList<String>();
+        for (int row : rows) {
+            if (row >= 0 && row < originals.size()) {
+                fields.add(originals.get(row)[0]);
+            }
+        }
+        List<Infer.Column> now = ops.deleteFields(fields);
+        if (now != null) {
+            fill(now);
+        }
+    }
+
     /** 字段名那一列按大写开关显示，其余两列原样。 */
-    private static String display(String value, boolean upper, boolean lower) {
+    private String display(String value) {
         // 大小写档只有一个落点，与生成物那条路共用 SqlPage.caseName
         return SqlPage.caseName(value == null ? "" : value, upper, lower);
     }

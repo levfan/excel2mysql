@@ -261,6 +261,8 @@ public final class SqlPage extends JPanel {
     private java.awt.Container rowName;
     /** 底部动作条（覆盖开关 + 保存/执行/生成四颗），在分隔条之外。 */
     private java.awt.Container rowAct;
+    /** 动作条上那句「这一下动几张表」：选中行会改范围，得摆在按钮旁边说清楚。 */
+    private javax.swing.JLabel scopeLabel;
     /** 页签顶部那句介绍：与另两页同一块底板（Python 侧 win.sql_intro）。 */
     private final StaticText intro = PageIntro.of("解析建表语句，回写库");
 
@@ -325,6 +327,12 @@ public final class SqlPage extends JPanel {
         });
         // 斑马纹要挂在「文件」列渲染器之后：晚一步挂会把那一列的路径提示一起包进来
         Tables.zebra(table);
+        // 选中行就是按钮区的作用范围：这条小字是唯一可见的凭据，得跟着选中走
+        table.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                refreshScopeHint();
+            }
+        });
 
         JScrollPane scroll = new JScrollPane(table);
         scroll.setMinimumSize(new Dimension(UiScale.px(300), UiScale.px(120)));
@@ -424,11 +432,20 @@ public final class SqlPage extends JPanel {
         prefixRow.add(new StaticText("表名前缀："), BorderLayout.WEST);
         prefixRow.add(prefixField, BorderLayout.CENTER);
         prefixRow.add(prefixBtns, BorderLayout.EAST);
+        // 输入框与两颗按钮排成一行，高度按最高的那个钉死：不钉的话输入框比按钮矮一截，
+        // 一眼就能看出参差（与 main.py 的 equal_heights 同一处、同一口径）
+        Buttons.equalHeights(prefixField, apply, replace);
 
         // 保存/执行/生成四颗动作按钮与覆盖开关挪到底部动作条（与第一页同一形状）：
         // 开关在左、按钮在右，且都在分隔条之外，不跟着表格段被挤压
+        // 动作条上这支小字：选中几行就只动那几行，不写出来的话用户会以为按钮坏了
+        scopeLabel = new javax.swing.JLabel("范围：全量");
+        scopeLabel.setForeground(new java.awt.Color(0x66, 0x70, 0x85));
+        scopeLabel.setToolTipText("<html>按钮区默认作用于整份清单；在表格里选中几行，"
+                + "就只作用于选中的这几行。<br>没选中任何行时仍按全量走。</html>");
         JPanel runBtns = flow();
         runBtns.setOpaque(false);
+        runBtns.add(scopeLabel);
         runBtns.add(saveButton);
         runBtns.add(runButton);
         runBtns.add(genStd);
@@ -456,6 +473,8 @@ public final class SqlPage extends JPanel {
         opWest.add(autoPkBox);
         op.add(opWest, BorderLayout.WEST);
         op.add(runBtns, BorderLayout.EAST);
+        // 整排等高：两个开关与四颗按钮的 insets 各不相同，不钉的话这一排上下差 1~3px
+        Buttons.equalHeights(dropExisting, autoPkBox, saveButton, runButton, genStd, genSimple);
 
         // 命名规则工具条贴表格上沿（与第一页同一位置）：管的是"表名/字段名怎么起"
         JPanel nameBar = flow();
@@ -821,6 +840,21 @@ public final class SqlPage extends JPanel {
         table.setRowSelectionInterval(row, row);
     }
 
+    /** 自检用：把选中行清干净（回到全量口径）。 */
+    public void clearRowSelection() {
+        table.clearSelection();
+    }
+
+    /**
+     * 自检用：这一下按钮会作用在哪些表。
+     *
+     * 走的就是按钮自己取范围的同一个方法——另写一套"测试用的取范围"，
+     * 量出来的就不是用户点下去那一下的范围了。
+     */
+    public Scope currentScope() {
+        return selectedScope();
+    }
+
     // ---------------------------------------------------------------- 动作
 
     private void chooseFiles() {
@@ -1116,6 +1150,195 @@ public final class SqlPage extends JPanel {
         return n;
     }
 
+    // ---- 按选中的行决定按钮作用范围（与第一页同一套口径） ----
+
+    /** 清单里选中的行号（升序去重）；越界的一律丢掉，选中为空就返回空列表。 */
+    private List<Integer> selectedRowIndexes() {
+        java.util.TreeSet<Integer> picked = new java.util.TreeSet<Integer>();
+        for (int row : table.getSelectedRows()) {
+            if (row >= 0 && row < rowActual.size()) {
+                picked.add(Integer.valueOf(row));
+            }
+        }
+        return new ArrayList<Integer>(picked);
+    }
+
+    /** 全量口径的行号表：范围为空时那些"按行取数"的动作走这里，不必另写一套循环。 */
+    private List<Integer> allRows() {
+        List<Integer> all = new ArrayList<Integer>(rowActual.size());
+        for (int i = 0; i < rowActual.size(); i++) {
+            all.add(Integer.valueOf(i));
+        }
+        return all;
+    }
+
+    /** 一次按钮操作的作用范围：{脚本路径 → {正文表名}}；全量时 names 为 null。 */
+    public static final class Scope {
+        public final Map<String, Set<String>> names;
+        public final String note;
+        public final List<Integer> rows;
+
+        Scope(Map<String, Set<String>> names, String note, List<Integer> rows) {
+            this.names = names;
+            this.note = note;
+            this.rows = rows;
+        }
+    }
+
+    /**
+     * 按钮区这一下作用在哪些表：选了就只给选中的，没选就是全量。
+     *
+     * 取 rowActual——那是脚本正文里现在的表名，也是 displayMap 的键、切句后认表名时
+     * 对得上的那个；清单上看到的 display 已经过大小写开关，拿它去正文里找会找不到
+     * （勾了转大写时尤其明显）。与 Python 侧 _sql_scope_names 同一口径。
+     */
+    private Scope selectedScope() {
+        List<Integer> rows = selectedRowIndexes();
+        if (rows.isEmpty()) {
+            return new Scope(null, "", rows);
+        }
+        Map<String, Set<String>> names = new LinkedHashMap<String, Set<String>>();
+        for (Integer r : rows) {
+            int i = r.intValue();
+            Set<String> one = names.get(rowPath.get(i));
+            if (one == null) {
+                one = new LinkedHashSet<String>();
+                names.put(rowPath.get(i), one);
+            }
+            one.add(rowActual.get(i));
+        }
+        return new Scope(names, "本次只作用于选中的 " + rows.size() + " 张表，没选中的一概不动",
+                rows);
+    }
+
+    private void logScope(String note) {
+        if (note != null && !note.isEmpty()) {
+            log("[范围] " + note);
+        }
+    }
+
+    /**
+     * 落盘前的最后一步：行号 → 范围。
+     *
+     * 保存/生成/执行都会先 materializeDisplayNames()，正文里的表名会当场换成显示名，
+     * 清单也会重铺；所以范围必须在落地之后按同一个行号重新取一遍，否则拿到的是
+     * 改名之前的老名字，textForTables 会在正文里一句都认不出来。全量时 names 为 null。
+     */
+    private Scope scopeAfter(List<Integer> idx) {
+        Scope now = selectedScope();
+        if (idx == null || idx.isEmpty()) {
+            // 全量：重铺之后的清单照样是全部
+            return new Scope(null, "", now.rows);
+        }
+        Map<String, Set<String>> names = new LinkedHashMap<String, Set<String>>();
+        int kept = 0;
+        for (Integer r : idx) {
+            int i = r.intValue();
+            if (i < 0 || i >= rowPath.size()) {
+                continue;
+            }
+            kept++;
+            Set<String> one = names.get(rowPath.get(i));
+            if (one == null) {
+                one = new LinkedHashSet<String>();
+                names.put(rowPath.get(i), one);
+            }
+            one.add(rowActual.get(i));
+        }
+        return new Scope(names, "本次只作用于选中的 " + kept + " 张表，没选中的一概不动", idx);
+    }
+
+    /** 这份脚本这一下要动的表名；全量时返回 null。 */
+    private static Set<String> scopeInFile(Scope scope, Entry e) {
+        if (scope.names == null) {
+            return null;
+        }
+        Set<String> one = scope.names.get(e.path);
+        return one == null ? new LinkedHashSet<String>() : one;
+    }
+
+    /** 这份脚本里全部表名。 */
+    private static Set<String> allNames(Entry e) {
+        Set<String> all = new LinkedHashSet<String>();
+        for (Map<String, Object> t : e.tabs) {
+            all.add(String.valueOf(t.get("name")));
+        }
+        return all;
+    }
+
+    /**
+     * 从一份脚本里只留属于 names 的语句。
+     *
+     * 生成 excel / 执行这类"整份文件"的动作要按选中行收窄时走这里：语句头认不出表名的
+     * （SET / BEGIN / LOCK TABLES 之类）一律不带走——它们是整份脚本的壳，收窄成几张表时
+     * 带上只会把范围又放大回去。与 Python 侧 _sql_text_for_tables 同一口径。
+     */
+    public static String textForTables(String text, Set<String> names) {
+        if (names == null) {
+            return text;
+        }
+        Set<String> keep = new LinkedHashSet<String>();
+        for (String n : names) {
+            keep.add(n.toLowerCase());
+        }
+        List<String> out = new ArrayList<String>();
+        for (String st : SqlScript.splitStatements(text)) {
+            java.util.regex.Matcher m = HEAD_TABLE.matcher(st.replaceAll("^\\s+", ""));
+            if (!m.find()) {
+                continue;
+            }
+            String target = m.group(1).replace("`", "");
+            int dot = target.lastIndexOf('.');
+            if (dot >= 0) {
+                target = target.substring(dot + 1);
+            }
+            if (!keep.contains(target.toLowerCase())) {
+                continue;
+            }
+            String one = st.trim();
+            while (one.endsWith(";")) {
+                one = one.substring(0, one.length() - 1);
+            }
+            out.add(one);
+        }
+        if (out.isEmpty()) {
+            return "";
+        }
+        return String.join(";\n", out) + ";\n";
+    }
+
+    /** 语句头认表名：只要认得出这句是谁的，就能按选中行把它带走或不带走。 */
+    private static final java.util.regex.Pattern HEAD_TABLE =
+            java.util.regex.Pattern.compile(
+                    "^(?:CREATE\\s+(?:TEMPORARY\\s+)?TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?"
+                    + "|INSERT\\s+(?:IGNORE\\s+)?INTO\\s+"
+                    + "|REPLACE\\s+INTO\\s+"
+                    + "|ALTER\\s+TABLE\\s+"
+                    + "|CREATE\\s+(?:UNIQUE\\s+|FULLTEXT\\s+|SPATIAL\\s+)?INDEX\\s+\\S+\\s+ON\\s+"
+                    + "|DROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?"
+                    + "|TRUNCATE\\s+TABLE\\s+"
+                    + "|DELETE\\s+FROM\\s+"
+                    + ")([`\\w$]+(?:\\.[`\\w$]+)?)",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** 动作条上那句「作用范围」跟着选中行走；没建好就跳过。 */
+    public void refreshScopeHint() {
+        if (scopeLabel == null) {
+            return;
+        }
+        int n = selectedRowIndexes().size();
+        if (n > 0) {
+            scopeLabel.setText("范围：选中 " + n + " 张表");
+        } else {
+            scopeLabel.setText("范围：全量（" + rowActual.size() + " 张表）");
+        }
+    }
+
+    /** 自检读这一句：范围小字是"按钮会改范围"这件事唯一可见的凭据。 */
+    public String scopeHintText() {
+        return scopeLabel == null ? "" : scopeLabel.getText();
+    }
+
     /**
      * 「生成表结构预览」：打开当前选中那一行的字段清单，与双击只读列同一个框。
      *
@@ -1146,9 +1369,14 @@ public final class SqlPage extends JPanel {
             host.warn(why);
             return;
         }
-        List<String[]> pages = ddlPages();
+        // 选了行就只预览这几张表；一个都没选照旧全量（与按钮区其它功能同一口径）
+        Scope scope = selectedScope();
+        logScope(scope.note);
+        List<String[]> pages = ddlPages(scope);
         if (pages.isEmpty()) {
-            host.warn("这些脚本里没有解析出 CREATE TABLE 语句，没有可预览的 DDL。");
+            host.warn(scope.names == null
+                    ? "这些脚本里没有解析出 CREATE TABLE 语句，没有可预览的 DDL。"
+                    : "选中的这几行没有解析出 CREATE TABLE 语句，没有可预览的 DDL。");
             return;
         }
         if (dropExisting.isSelected()) {
@@ -1156,7 +1384,14 @@ public final class SqlPage extends JPanel {
                 page[1] = "DROP TABLE IF EXISTS `" + page[0] + "`;\n\n" + page[1];
             }
         }
+        log("[预览] DDL 共 " + pages.size() + " 页"
+                + (scope.names == null ? "" : "（" + scope.note + "）"));
         new SqlScriptDdlDialog(host.owner(), pages).setVisible(true);
+    }
+
+    /** 全量口径的旧入口：自检与外部调用仍按"整份清单"取页。 */
+    public List<String[]> ddlPages() {
+        return ddlPages(null);
     }
 
     /**
@@ -1166,14 +1401,23 @@ public final class SqlPage extends JPanel {
      * 500 张表的整库 dump 点一次「预览 DDL」要十几秒，界面看起来就是卡死
      * （与 Python 侧 {@code _sql_ddl_pages} 同一次修正）。
      */
-    public List<String[]> ddlPages() {
+    public List<String[]> ddlPages(Scope scope) {
         List<String[]> pages = new ArrayList<String[]>();
         for (Entry e : entries) {
             String text = e.text;
+            Set<String> keep = null;
             if (!e.displayMap.isEmpty()) {
                 // 只在这份副本上套用还没落地的改名；e.displayMap 与 e.text 都不动，
                 // 预览不该把改动定死（与 Python 侧 _sql_ddl_pages 同一口径）
                 text = SqlScript.applyDisplayRenames(e.text, e.displayMap).text;
+            }
+            if (scope != null && scope.names != null) {
+                // 页是按改名之后的正文切出来的，所以范围也要摊到改名后的名字上；
+                // 这份脚本里没有选中的表就是空集，一张页都不出
+                keep = new LinkedHashSet<String>();
+                for (String n : scopeInFile(scope, e)) {
+                    keep.add(e.displayMap.containsKey(n) ? e.displayMap.get(n) : n);
+                }
             }
             Map<String, StringBuilder> bodies = new java.util.LinkedHashMap<String, StringBuilder>();
             for (String stmt : SqlScript.splitStatements(text)) {
@@ -1201,6 +1445,9 @@ public final class SqlPage extends JPanel {
             }
             for (Map<String, Object> t : SqlScript.extractCreateTables(text)) {
                 String name = String.valueOf(t.get("name"));
+                if (keep != null && !keep.contains(name)) {
+                    continue;
+                }
                 StringBuilder sb = bodies.get(name);
                 String body = sb == null ? "" : sb.toString();
                 if (body.isEmpty()) {
@@ -1245,33 +1492,40 @@ public final class SqlPage extends JPanel {
             return blocked;
         }
         String prefix = Names.pyStrip(prefixField.getText()).replace("`", "").replace("\\", "");
+        Scope scope = selectedScope();
+        logScope(scope.note);
         if (prefix.isEmpty()) {
-            clearDisplayPrefix();
+            clearDisplayPrefix(scope);
             return null;
         }
         int total = 0;
         for (Entry e : entries) {
-            Map<String, String> plan = new LinkedHashMap<String, String>();
-            Map<String, String> current =
-                    new LinkedHashMap<String, String>(e.displayMap);
+            Set<String> names = scopeInFile(scope, e);
+            if (names != null && names.isEmpty()) {
+                continue;                     // 这份脚本里没有选中的表
+            }
+            // 从当前显示层起步：没被点到的名字原样留着，选中的才重算
+            Map<String, String> plan = new LinkedHashMap<String, String>(e.displayMap);
             List<String> skipped = new ArrayList<String>();
+            List<String> added = new ArrayList<String>();
             for (Map<String, Object> t : e.tabs) {
                 String old = String.valueOf(t.get("name"));
-                String shown = current.containsKey(old) ? current.get(old) : old;
+                if (names != null && !names.contains(old)) {
+                    continue;
+                }
+                String shown = plan.containsKey(old) ? plan.get(old) : old;
                 if (shown.startsWith(prefix)) {
-                    if (!shown.equals(old)) {
-                        plan.put(old, shown);     // 已带前缀：保留原显示，不叠也不丢
-                    }
-                    skipped.add(shown);
+                    skipped.add(shown);       // 已带前缀：不叠，留着原显示
                     continue;
                 }
                 plan.put(old, prefix + shown);
+                added.add(old + " → " + prefix + shown + "（显示）");
+                total++;
             }
             e.displayMap.clear();
             e.displayMap.putAll(plan);
-            total += plan.size();
-            if (!plan.isEmpty()) {
-                log("[前缀] " + baseName(e.path) + "：" + describeDisplayPlan(plan));
+            if (!added.isEmpty()) {
+                log("[前缀] " + baseName(e.path) + "：" + String.join("、", added));
             }
             if (!skipped.isEmpty()) {
                 log("[跳过] " + baseName(e.path) + "：已带前缀 " + String.join("、", skipped));
@@ -1283,12 +1537,29 @@ public final class SqlPage extends JPanel {
         return null;
     }
 
-    /** 空前缀再点一次：只撤掉显示层，表名回到脚本里的原名。 */
-    private void clearDisplayPrefix() {
+    /**
+     * 空前缀再点一次：只撤掉显示层，表名回到脚本里的原名。
+     *
+     * scope 为 null、或 scope.names 为 null（一个行都没选）时撤整份清单；
+     * 选了行就只撤这几张表的显示，没选中的显示层一个字不动。
+     */
+    private void clearDisplayPrefix(Scope scope) {
         int n = 0;
+        boolean all = scope == null || scope.names == null;
         for (Entry e : entries) {
-            n += e.displayMap.size();
-            e.displayMap.clear();
+            if (all) {
+                n += e.displayMap.size();
+                e.displayMap.clear();
+                continue;
+            }
+            Set<String> names = scopeInFile(scope, e);
+            java.util.Iterator<Map.Entry<String, String>> it = e.displayMap.entrySet().iterator();
+            while (it.hasNext()) {
+                if (names.contains(it.next().getKey())) {
+                    n++;
+                    it.remove();
+                }
+            }
         }
         refreshTable();
         if (n > 0) {
@@ -1304,8 +1575,10 @@ public final class SqlPage extends JPanel {
         if (blocked != null) {
             return blocked;
         }
+        Scope scope = selectedScope();
         if (Names.pyStrip(prefixField.getText()).isEmpty()) {
-            clearDisplayPrefix();
+            logScope(scope.note);
+            clearDisplayPrefix(scope);
             return null;
         }
         String head = Prefix.clean(prefixField.getText());
@@ -1316,30 +1589,35 @@ public final class SqlPage extends JPanel {
             return "前缀「" + head + "」含非法字符：只能用字母、数字、下划线；"
                     + "末尾的下划线不用写，原表名自带。";
         }
+        logScope(scope.note);
         int total = 0;
         for (Entry e : entries) {
-            Map<String, String> plan = new LinkedHashMap<String, String>();
-            Map<String, String> current =
-                    new LinkedHashMap<String, String>(e.displayMap);
+            Set<String> names = scopeInFile(scope, e);
+            if (names != null && names.isEmpty()) {
+                continue;                     // 这份脚本里没有选中的表
+            }
+            Map<String, String> plan = new LinkedHashMap<String, String>(e.displayMap);
             List<String> skipped = new ArrayList<String>();
+            List<String> changed = new ArrayList<String>();
             for (Map<String, Object> t : e.tabs) {
                 String old = String.valueOf(t.get("name"));
-                String shown = current.containsKey(old) ? current.get(old) : old;
+                if (names != null && !names.contains(old)) {
+                    continue;
+                }
+                String shown = plan.containsKey(old) ? plan.get(old) : old;
                 String rep = Prefix.swapFirstSegment(shown, head);
                 if (rep == null) {
-                    if (!shown.equals(old)) {
-                        plan.put(old, shown);     // 没换成：保留原显示
-                    }
-                    skipped.add(shown);
+                    skipped.add(shown);       // 没换成：保留原显示
                     continue;
                 }
                 plan.put(old, rep);
+                changed.add(old + " → " + rep + "（显示）");
+                total++;
             }
             e.displayMap.clear();
             e.displayMap.putAll(plan);
-            total += plan.size();
-            if (!plan.isEmpty()) {
-                log("[换前缀] " + baseName(e.path) + "：" + describeDisplayPlan(plan));
+            if (!changed.isEmpty()) {
+                log("[换前缀] " + baseName(e.path) + "：" + String.join("、", changed));
             }
             if (!skipped.isEmpty()) {
                 log("[跳过] " + baseName(e.path) + "：未改写 " + String.join("、", skipped)
@@ -1350,14 +1628,6 @@ public final class SqlPage extends JPanel {
         log("[换前缀完成] 共 " + total + " 个表名改为显示名"
                 + "（脚本正文未改，点保存/执行/生成时才写入）");
         return null;
-    }
-
-    private static String describeDisplayPlan(Map<String, String> plan) {
-        List<String> parts = new ArrayList<String>();
-        for (Map.Entry<String, String> en : plan.entrySet()) {
-            parts.add(en.getKey() + " → " + en.getValue() + "（显示）");
-        }
-        return String.join("、", parts);
     }
 
     /**
@@ -1411,7 +1681,15 @@ public final class SqlPage extends JPanel {
     /** 几十万行的脚本写盘也放子线程；哪些算"已落盘"要回到事件分发线程才清 modified 标记。 */
     @SuppressWarnings("unchecked")
     public void saveModified() {
+        List<Integer> picked = selectedRowIndexes();
         materializeDisplayNames();
+        if (!picked.isEmpty()) {
+            // 保存是按文件落盘的：一份脚本里只要有一张表动过，写出的就是整份正文。
+            // 选中行只决定"改动了哪几张表"，落盘粒度照样是文件，这句得说明白，
+            // 免得用户以为没选中的表在磁盘上没被碰过（与 Python 侧同一句）。
+            logScope("本次改动只涉及选中的表；保存按脚本文件落盘，"
+                    + "写出的仍是整份正文（没动过的表内容一模一样）");
+        }
         List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
             if (e.modified) {
@@ -1496,12 +1774,20 @@ public final class SqlPage extends JPanel {
         if (entries.isEmpty()) {
             return LogText.NO_SQL_HINT;
         }
+        // 行号先记下来：materialize 之后清单会重铺，选中的是"哪几张表"得按行号重新取
+        List<Integer> picked = selectedRowIndexes();
         materializeDisplayNames();
+        Scope scope = scopeAfter(picked);
+        logScope(scope.note);
         boolean overwrite = dropExisting.isSelected();
         String note = overwrite ? "；已勾选「覆盖已存在表」，执行副本先 DROP 脚本要建的表" : "";
         log("===== 开始执行脚本（目标库 " + cfg.database + "，每个文件一个事务" + note + "）=====");
         List<String[]> dropped = new ArrayList<String[]>();
-        List<Src> items = prepareRunItems(overwrite, dropped);
+        List<Src> items = prepareRunItems(scope, overwrite, dropped);
+        if (items.isEmpty()) {
+            host.warn("选中的表在脚本里没有可执行的语句，没有执行任何脚本。");
+            return null;
+        }
         if (overwrite) {
             if (dropped.isEmpty()) {
                 log("[覆盖] " + LogText.COVER_NOTHING_BODY);
@@ -1534,11 +1820,23 @@ public final class SqlPage extends JPanel {
     /**
      * 生成执行副本：勾选覆盖时每个副本先补 DROP，并往 dropped 里记「文件名 → 表名」。
      * 脚本正文（entries 里的 text）不动；保存与生成两条出口也拿不到这份副本。
+     *
+     * scope 给了就先把每份脚本收窄到选中的那几张表——DROP 补在收窄后的正文上，
+     * 否则"只跑这三张表"会把整份 dump 的表都 DROP 一遍。收窄后一句都不剩的文件
+     * 直接跳过，并在日志里点名，免得用户以为它跑了。
      */
-    public List<Src> prepareRunItems(boolean overwrite, List<String[]> dropped) {
+    public List<Src> prepareRunItems(Scope scope, boolean overwrite, List<String[]> dropped) {
         List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
             String text = e.text;
+            if (scope != null && scope.names != null) {
+                text = textForTables(text, scopeInFile(scope, e));
+                if (text.isEmpty()) {
+                    log("! [WARN] 跳过 | " + baseName(e.path)
+                            + "：选中的表在这份脚本里没有可执行的语句");
+                    continue;
+                }
+            }
             if (overwrite) {
                 SqlScript.DropPrep prep = SqlScript.prependDropTables(text);
                 text = prep.text;
@@ -1549,6 +1847,11 @@ public final class SqlPage extends JPanel {
             items.add(new Src(e.path, text));
         }
         return items;
+    }
+
+    /** 全量口径的旧入口：自检与外部调用按"整份清单"取执行副本。 */
+    public List<Src> prepareRunItems(boolean overwrite, List<String[]> dropped) {
+        return prepareRunItems(null, overwrite, dropped);
     }
 
     /**
@@ -1766,9 +2069,14 @@ public final class SqlPage extends JPanel {
             host.warn("清单里没有脚本表（空脚本或只有注释），没有数据行数可统计。");
             return;
         }
+        // 选了行就只统计这几张表；一个都没选照旧全量（与其余按钮同一口径）
+        Scope scope = selectedScope();
+        logScope(scope.note);
+        List<Integer> rows = scope.names == null ? allRows() : scope.rows;
         long total = 0;
         Map<String, Long> perFile = new LinkedHashMap<String, Long>();
-        for (int i = 0; i < rowPath.size(); i++) {
+        for (Integer r : rows) {
+            int i = r.intValue();
             Entry e = entryOfRow(i);
             String name = rowActual.get(i);
             int n = e == null ? 0 : insertRowCount(e, name);
@@ -1778,12 +2086,18 @@ public final class SqlPage extends JPanel {
             perFile.put(base, Long.valueOf((prev == null ? 0 : prev.longValue()) + n));
         }
         String num = String.format(java.util.Locale.ROOT, "%,d", Long.valueOf(total));
-        logPanel.log("[统计] 脚本 " + perFile.size() + " 个、表 " + rowPath.size()
-                + " 张，数据总行数：" + num + " 行");
+        logPanel.log("[统计] 脚本 " + perFile.size() + " 个、表 " + rows.size()
+                + " 张，数据总行数：" + num + " 行"
+                + (scope.names == null ? "" : "（" + scope.note + "）"));
         StringBuilder sb = new StringBuilder();
-        sb.append("数据总行数：").append(num).append(" 行").append(LogText.NL).append(LogText.NL);
+        sb.append("数据总行数：").append(num).append(" 行").append(LogText.NL);
+        if (scope.names != null) {
+            // 与 Python 侧同一行序：总数、范围说明、空行、脚本/表数
+            sb.append(scope.note).append("。").append(LogText.NL);
+        }
+        sb.append(LogText.NL);
         sb.append("脚本 ").append(perFile.size()).append(" 个，共 ")
-                .append(rowPath.size()).append(" 张表。");
+                .append(rows.size()).append(" 张表。");
         if (perFile.size() > 1) {
             sb.append(LogText.NL).append(LogText.NL);
             boolean first = true;
@@ -1841,6 +2155,8 @@ public final class SqlPage extends JPanel {
         // 判据是"有没有脚本"，不是"解析得出几张表"：解析在点下去之后才做，
         // 解析不出东西时日志会给话，按钮不该一直灰着让人以为程序坏了
         applyGenEnabled();
+        // 重铺清单会把选中行清掉，动作条那句「范围」得跟着回到全量
+        refreshScopeHint();
     }
 
     /**
@@ -2046,6 +2362,17 @@ public final class SqlPage extends JPanel {
                                          String newComment, String newType) {
                         return applyFieldEdit(row, field, newField, newComment, newType);
                     }
+                },
+                new SqlMetadataDialog.ColumnOps() {
+                    @Override
+                    public List<Infer.Column> addField() {
+                        return addFieldInScript(row);
+                    }
+
+                    @Override
+                    public List<Infer.Column> deleteFields(List<String> fields) {
+                        return deleteFieldsInScript(row, fields);
+                    }
                 }).setVisible(true);
     }
 
@@ -2113,8 +2440,80 @@ public final class SqlPage extends JPanel {
         if (newType != null) {
             parts.add("类型 " + wasType + " → " + col.type);
         }
-        log("[字段改写] 表 `" + name + "` 的 " + String.join("，", parts) + "（已写进脚本；未落盘）");
+        log("[字段改写] 表 `" + name + "` 的 " + String.join("，", parts)
+                + "（已写进脚本；未落盘）" + ed.reason);
         return true;
+    }
+
+    /**
+     * 元数据弹窗点「新增字段」：往这句 CREATE TABLE 末尾补一列占位定义。
+     *
+     * 补完返回新的列清单，弹窗据此整表重铺（新列在最后一行）。
+     * 与 Python 侧 _apply_sql_add_field 同口径：占位名 is_new_field、类型 VARCHAR(255)、
+     * 注释「新字段」；同名字段已存在时 addColumn 自己会拒绝，这里把原因点名。
+     */
+    private List<Infer.Column> addFieldInScript(int row) {
+        if (row < 0 || row >= rowActual.size()) {
+            return null;
+        }
+        Entry entry = entryOfRow(row);
+        if (entry == null) {
+            return null;
+        }
+        String name = rowActual.get(row);
+        SqlScript.ColumnEdit ed = SqlScript.addColumn(entry.text, name, "is_new_field",
+                "VARCHAR(255)", "新字段", true);
+        if (!ed.changed) {
+            host.warn("没能新增字段：" + ed.reason);
+            return null;
+        }
+        return afterColumnChange(row, entry, ed.text, ed.reason);
+    }
+
+    /**
+     * 元数据弹窗点「删除选中字段」：一句表一次删完，中途失败就整句不动。
+     * 删的是脚本正文那一列，主键/索引引用由 deleteColumn 一并清掉；INSERT 不动。
+     */
+    private List<Infer.Column> deleteFieldsInScript(int row, List<String> fields) {
+        if (row < 0 || row >= rowActual.size()) {
+            return null;
+        }
+        Entry entry = entryOfRow(row);
+        if (entry == null) {
+            return null;
+        }
+        String name = rowActual.get(row);
+        String text = entry.text;
+        List<String> notes = new ArrayList<String>();
+        for (String field : fields) {
+            SqlScript.ColumnEdit ed = SqlScript.deleteColumn(text, name, field);
+            if (!ed.changed) {
+                host.warn("字段「" + field + "」没删：" + ed.reason);
+                return null;
+            }
+            text = ed.text;
+            notes.add(ed.reason);
+        }
+        return afterColumnChange(row, entry, text, String.join("；", notes));
+    }
+
+    /** 字段增删改了正文之后：落正文、重解这一份脚本、刷清单、写日志，返回最新列清单。 */
+    private List<Infer.Column> afterColumnChange(int row, Entry entry, String newText,
+                                                 String note) {
+        entry.text = newText;
+        entry.modified = true;
+        // 只重解这一份脚本：增删都在同一句 CREATE TABLE 里，几万行的 dump 也只扫一遍
+        entry.tabs = SqlScript.extractCreateTables(newText);
+        entry.parsed = null;
+        entry.insertRowCounts = null;
+        entry.insertRowSrc = null;
+        refreshTable();
+        if (row < rowActual.size()) {
+            log("[字段] 表 `" + rowActual.get(row) + "` " + note + "（已写进脚本；未落盘）");
+        }
+        SqlScript.ParsedTable now = metadataAtRow(row);
+        SqlScript.ParsedTable view = now == null ? null : metadataView(now);
+        return view == null ? null : view.columns;
     }
 
     private void log(String text) {
@@ -2147,17 +2546,36 @@ public final class SqlPage extends JPanel {
             host.warn(LogText.NO_SQL_HINT);
             return;
         }
+        // 行号先记下来：materialize 之后清单会重铺，选中的是"哪几张表"得按行号重新取
+        List<Integer> picked = selectedRowIndexes();
         materializeDisplayNames();
+        Scope scope = scopeAfter(picked);
+        logScope(scope.note);
+        final String label = withMeta ? "标准" : "简易";
+        log("===== 开始生成" + label + "excel文件（脚本 " + entries.size()
+                + " 个，输出根目录 " + outRoot + "）=====");
         final List<Src> items = new ArrayList<Src>();
         for (Entry e : entries) {
-            items.add(new Src(e.path, e.text));
+            String text = e.text;
+            if (scope.names != null) {
+                // 只留选中的那几张表的语句；收窄后一句不剩的文件不占一个导出项，
+                // 免得产物里冒出只有表头的空表（与 Python 侧同一口径）
+                text = textForTables(text, scopeInFile(scope, e));
+                if (text.isEmpty()) {
+                    log("[跳过] " + baseName(e.path) + "：选中的表在这份脚本里没有可导出的语句");
+                    continue;
+                }
+            }
+            items.add(new Src(e.path, text));
         }
-        log("===== 开始生成" + (withMeta ? "标准" : "简易") + "excel文件（脚本 " + items.size()
-                + " 个，输出根目录 " + outRoot + "）=====");
+        if (items.isEmpty()) {
+            host.warn("选中的表在脚本里没有可导出的语句，没有生成任何文件。");
+            return;
+        }
         final boolean upper = upperBox.isSelected();
         final boolean lower = lowerBox.isSelected();
         final boolean autoPk = autoPkBox.isSelected();
-        host.runSqlTask("正在生成" + (withMeta ? "标准" : "简易") + "excel文件…",
+        host.runSqlTask("正在生成" + label + "excel文件…",
                 sink -> exportFromScripts(items, outRoot, withMeta, upper, lower, autoPk, sink),
                 out -> finishGenerate((GenResult) out));
     }
