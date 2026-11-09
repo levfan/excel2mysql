@@ -149,6 +149,36 @@ public final class GuiMain {
                     if (lp.adsButton().isEnabled()) {
                         problems.add("obj/dom 未生成时 ads 按钮却亮了（依赖锁失效）");
                     }
+                    // 只生成模式：显式产物根指临时目录（仿 sql_gen_excel 的 generateExcel(true,outRoot)），
+                    // 不污染 programDir；modalProgress=false 下 runLayerTask 原地跑完、关态不连库。
+                    // 先注入一条字段映射例外，验它在落盘前覆盖进 obj 的 _field_mapping.csv（写回这条路）
+                    lp.setFieldExceptionOverride("dim_material", "name", "自检自定义规则", "已确认");
+                    java.io.File outRoot = java.nio.file.Files.createTempDirectory("e2m-layer-selftest").toFile();
+                    lp.generateTo(com.excel2mysql.core.LayerGen.Layer.OBJ, outRoot.getPath());
+                    java.io.File[] dirs = outRoot.listFiles();
+                    boolean found = false;
+                    boolean exceptionApplied = false;
+                    if (dirs != null) {
+                        for (java.io.File d : dirs) {
+                            if (!d.isDirectory() || !d.getName().startsWith("layer_")) { continue; }
+                            if (new java.io.File(d, "obj_ddl.sql").isFile()) { found = true; }
+                            java.io.File fm = new java.io.File(d, "obj_field_mapping.csv");
+                            if (fm.isFile()) {
+                                for (com.excel2mysql.core.MappingFile.FieldMap f
+                                        : com.excel2mysql.core.MappingFile.readFieldCsv(fm.getPath())) {
+                                    if ("dim_material".equals(f.dstTable) && "name".equals(f.dstField)
+                                            && "自检自定义规则".equals(f.transformRule)
+                                            && "已确认".equals(f.status)) { exceptionApplied = true; }
+                                }
+                            }
+                        }
+                    }
+                    if (!found) { problems.add("只生成模式 generateTo(obj) 后没在临时根落下 obj_ddl.sql"); }
+                    if (!exceptionApplied) { problems.add("字段映射例外没覆盖进 obj_field_mapping.csv"); }
+                    // 依赖锁：仅生成 obj 后 ads 仍不该亮（dom 未生成）——这条锁死 adsBtn.setEnabled(ready)
+                    if (lp.adsButton().isEnabled()) {
+                        problems.add("仅生成 obj 后 ads 不该亮（dom 未生成）");
+                    }
                 }
                 // 主按钮的底色必须跟着启用状态走：列表还空着时「开始导入」是禁用的，
                 // 涂成强调色会让它看着就能点（现场那句"没导任何东西，点一下颜色才变"）

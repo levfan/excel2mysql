@@ -1,13 +1,16 @@
 package com.excel2mysql.gui;
 
 import com.excel2mysql.core.Config;
+import com.excel2mysql.core.DbClient;
 import com.excel2mysql.core.ImportParse;
 import com.excel2mysql.core.LayerGen;
+import com.excel2mysql.core.LogText;
 import com.excel2mysql.core.MappingFile;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -17,9 +20,14 @@ import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
+import java.awt.Frame;
+import java.awt.Window;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -57,6 +65,8 @@ public final class LayerPage extends JPanel {
     private List<LayerGen.SourceTable> sourceTables = new ArrayList<LayerGen.SourceTable>();
     private boolean objGenerated;
     private boolean domGenerated;
+    /** 字段映射例外表：键 dstTable.dstField，值 {转换规则, 映射状态}；生成落盘前覆盖进 out.fieldMapping。 */
+    private final Map<String, String[]> fieldExceptions = new ConcurrentHashMap<String, String[]>();
 
     public LayerPage(Host host) {
         this.host = host;
@@ -66,6 +76,18 @@ public final class LayerPage extends JPanel {
         setLayout(new BorderLayout(0, UiScale.px(6)));
         add(buildTop(), BorderLayout.NORTH);
         Tables.style(table);
+        // 双击行弹字段映射例外窗（照 SqlPage.java:316 的 MouseAdapter 形状）：
+        // 看的是这一张源表被自动草稿成的目标字段，转换规则/映射状态可改，改后存进例外表
+        table.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 2) {
+                    int row = table.rowAtPoint(e.getPoint());
+                    if (row >= 0 && row < (mapping == null ? 0 : mapping.tables().size())) {
+                        openFieldMappingDialog(row);
+                    }
+                }
+            }
+        });
         add(new JScrollPane(table), BorderLayout.CENTER);
         add(buildBottom(), BorderLayout.SOUTH);
         objBtn.addActionListener(e -> generate(LayerGen.Layer.OBJ));
@@ -85,6 +107,12 @@ public final class LayerPage extends JPanel {
         Buttons.secondary(load);
         load.addActionListener(e -> chooseMapping());
         row.add(load);
+        JButton readSrc = new JButton("读源库结构");
+        Buttons.secondary(readSrc);
+        readSrc.setToolTipText("<html>连上当前数据源后，读源库这一列的下拉库里的用户表结构，<br>"
+                + "填库列表并绑定映射行的绑定状态；obj/dom 生成依赖这一步。</html>");
+        readSrc.addActionListener(e -> readSourceStructure());
+        row.add(readSrc);
         row.add(mappingLabel);
         row.add(new JLabel("目标库 obj/dom/ads"));
         row.add(objDb); row.add(domDb); row.add(adsDb);
@@ -162,19 +190,36 @@ public final class LayerPage extends JPanel {
         generateTo(layer, host.exportRoot());
     }
 
-    /** 显式产物根：按钮走 host.exportRoot()，自检走临时目录（仿 SqlPage.generateExcel(boolean,String)）。 */
-    public void generateTo(final LayerGen.Layer layer, String rootDir) {
-        if (mapping == null) { return; }
-        final LayerGen.GenOptions o = new LayerGen.GenOptions();
+    /** 从界面字段拼一份生成选项（EDT 上读输入框）；按钮与字段窗都用它，避免两处各读各的。 */
+    private LayerGen.GenOptions buildOptions() {
+        LayerGen.GenOptions o = new LayerGen.GenOptions();
         o.sourceDb = String.valueOf(sourceDb.getSelectedItem());
         o.objDb = objDb.getText().trim();
         o.domDb = domDb.getText().trim();
         o.adsDb = adsDb.getText().trim();
         o.writeMode = writeMode.isSelected();
+        return o;
+    }
+
+    /** 本层入库目标库：obj→objDb、dom→domDb、ads→adsDb（与 DDL 的 USE 头同源）。 */
+    private String targetDbFor(LayerGen.Layer layer, LayerGen.GenOptions o) {
+        if (layer == LayerGen.Layer.OBJ) { return o.objDb; }
+        if (layer == LayerGen.Layer.DOM) { return o.domDb; }
+        return o.adsDb;
+    }
+
+    /** 显式产物根：按钮走 host.exportRoot()，自检走临时目录（仿 SqlPage.generateExcel(boolean,String)）。 */
+    public void generateTo(final LayerGen.Layer layer, String rootDir) {
+        if (mapping == null) { return; }
+        final LayerGen.GenOptions o = buildOptions();
         final String root = rootDir;
+        // 配置只在 EDT 上现读一份传进 worker：口令只在这一步离开输入框，不落文件/日志。
+        // writeMode 开时才连库，关时纯落盘（自检断言的就是关态无 DB 副作用）。
+        final Config cfg = o.writeMode ? host.currentConfig() : null;
         host.runLayerTask("生成 " + layer, new Function<ImportParse.Sink, Object>() {
             @Override public Object apply(ImportParse.Sink sink) {
                 LayerGen.LayerOutput out = LayerGen.genLayer(layer, mapping, sourceTables, o);
+                applyFieldExceptions(out.fieldMapping);
                 String dir = root + File.separator + "layer_"
                         + new java.text.SimpleDateFormat("yyyyMMdd").format(new java.util.Date());
                 new File(dir).mkdirs();
@@ -190,6 +235,7 @@ public final class LayerPage extends JPanel {
                 sink.log("- [INFO] LAYER | " + layer + " 表 " + out.tableCount + " 张 | 字段映射 "
                         + out.fieldMapping.size() + " 条 | 未绑定 " + out.unbound.size() + " 张 | 产物 " + dir);
                 for (String w : out.warnings) { sink.log("! [WARN] LAYER | " + w); }
+                if (o.writeMode) { executeWrite(layer, o, out, cfg, sink); }
                 return new Object[]{layer, out, dir};
             }
         }, new Consumer<Object>() {
@@ -203,6 +249,184 @@ public final class LayerPage extends JPanel {
                 host.inform("已生成 " + lay + "，产物目录：" + dir);
             }
         });
+    }
+
+    /**
+     * writeMode 开时的入库：连当前数据源跑 LayerGen.execute（建库→建表→灌数），
+     * 单条失败在 execute 内部隔离记 errors。整段在 worker 线程跑，DbClient 用完即关。
+     * 与 SqlPage.runScripts 的 new DbClient(cfg) 同一形状；日志走 sink（留在本页面板）。
+     */
+    private void executeWrite(LayerGen.Layer layer, LayerGen.GenOptions o,
+                              LayerGen.LayerOutput out, Config cfg, ImportParse.Sink sink) {
+        String target = targetDbFor(layer, o);
+        DbClient c = null;
+        try {
+            c = new DbClient(cfg);
+            LayerGen.WriteResult wr = LayerGen.execute(out, target, c, sink);
+            sink.log("- [INFO] LAYER-EXEC | " + layer + " → 库 " + target
+                    + " | 建表 " + wr.tablesCreated + " | 影响行 " + wr.rowsAffected
+                    + " | 错误 " + wr.errors.size());
+        } catch (Exception ex) {
+            sink.logError("x [ERROR] LAYER-EXEC | 连接失败：无法连到 " + cfg.host + ":" + cfg.port
+                    + "（用户 " + cfg.user + "），入库未执行" + LogText.NL
+                    + LogText.indentDetail(LogText.describe(ex)));
+        } finally {
+            if (c != null) { c.close(); }
+        }
+    }
+
+    /**
+     * 读源库结构：连上当前数据源后列库填 sourceDb 下拉、再读选中的那一库的用户表结构。
+     * DB I/O 全在 worker 里跑（真 GUI 下不在 EDT），库列表/清单落界面在 onUi（EDT）。
+     * 连不上按既有"连接失败＋库列表未加载"口径写日志并 error 弹窗。
+     */
+    private void readSourceStructure() {
+        if (!host.connected()) {
+            host.warn("未连接数据库，无法读取源库结构：请先在顶部连接并加载库列表。");
+            return;
+        }
+        final Config cfg = host.currentConfig();
+        final String db = String.valueOf(sourceDb.getSelectedItem());
+        host.runLayerTask("读源库结构 " + db, new Function<ImportParse.Sink, Object>() {
+            @Override public Object apply(ImportParse.Sink sink) {
+                DbClient c = null;
+                try {
+                    c = new DbClient(cfg, 5000);   // 5 秒握手超时，同连接区取库列表口径
+                    List<String> dbs = c.listDatabases();
+                    List<LayerGen.SourceTable> st = LayerGen.readSource(c, db);
+                    return new Object[]{dbs, st, null};
+                } catch (Exception ex) {
+                    sink.logError("x [ERROR] LAYER | 连接失败：无法连接到 " + cfg.host + ":" + cfg.port
+                            + "（用户 " + cfg.user + "），库列表未加载" + LogText.NL
+                            + LogText.indentDetail(LogText.describe(ex)));
+                    return new Object[]{null, null, LogText.describe(ex)};
+                } finally {
+                    if (c != null) { c.close(); }
+                }
+            }
+        }, new Consumer<Object>() {
+            @Override public void accept(Object res) {
+                Object[] arr = (Object[]) res;
+                if (arr[2] != null) {
+                    host.informError("读取源库结构失败", String.valueOf(arr[2]));
+                    return;
+                }
+                @SuppressWarnings("unchecked")
+                List<String> dbs = (List<String>) arr[0];
+                @SuppressWarnings("unchecked")
+                List<LayerGen.SourceTable> st = (List<LayerGen.SourceTable>) arr[1];
+                setDatabases(dbs);
+                setSourceTables(st);
+                logPanel.log("- [INFO] LAYER | 读源库 " + db + " | 用户表 " + st.size()
+                        + " 张 | 库列表 " + (dbs == null ? 0 : dbs.size()) + " 个");
+                host.inform("已读取源库结构：库 " + db + " 共 " + st.size() + " 张用户表");
+            }
+        });
+    }
+
+    /** 把库列表灌进 sourceDb 下拉；选中项若还在就保持，否则回到首项。由 MainFrame 连接成功时同步。 */
+    public void setDatabases(List<String> dbs) {
+        Object prev = sourceDb.getSelectedItem();
+        sourceDb.removeAllItems();
+        if (dbs != null) {
+            for (String d : dbs) { sourceDb.addItem(d); }
+        }
+        if (prev != null && dbs != null && dbs.contains(String.valueOf(prev))) {
+            sourceDb.setSelectedItem(prev);
+        }
+    }
+
+    /** 例外覆盖：把已存的转换规则/映射状态盖到自动草稿出来的字段映射行上（只改 CSV 内容，不动 DDL/SQL）。 */
+    private void applyFieldExceptions(List<MappingFile.FieldMap> rows) {
+        if (rows == null || fieldExceptions.isEmpty()) { return; }
+        for (MappingFile.FieldMap f : rows) {
+            String[] e = fieldExceptions.get(exceptionKey(f.dstTable, f.dstField));
+            if (e != null) { f.transformRule = e[0]; f.status = e[1]; }
+        }
+    }
+
+    private static String exceptionKey(String dstTable, String dstField) {
+        return (dstTable == null ? "" : dstTable) + "." + (dstField == null ? "" : dstField);
+    }
+
+    /**
+     * 双击行弹字段映射例外窗：以这一张源表为键，把它在 obj/dom 上的自动草稿字段列出来，
+     * 转换规则/映射状态两列可改（其余只读）。照 SqlMetadataDialog 的非模态 JDialog＋可编辑
+     * DefaultTableModel 形状，OK 把改动按 dstTable.dstField 存进例外表，供下次生成落盘前覆盖。
+     */
+    private void openFieldMappingDialog(int row) {
+        if (mapping == null) { return; }
+        MappingFile.TableMap tm = mapping.tables().get(row);
+        final String physical = tm.odsPhysical == null || tm.odsPhysical.isEmpty()
+                ? tm.tableEn : tm.odsPhysical;
+        // 现取一份自动草稿：obj/dom 各跑 genLayer（离线，快），留 srcTable 命中的行，按目标字段去重
+        LayerGen.GenOptions o = buildOptions();
+        Map<String, MappingFile.FieldMap> byTarget = new LinkedHashMap<String, MappingFile.FieldMap>();
+        for (LayerGen.Layer lay : new LayerGen.Layer[]{LayerGen.Layer.OBJ, LayerGen.Layer.DOM}) {
+            LayerGen.LayerOutput out = LayerGen.genLayer(lay, mapping, sourceTables, o);
+            for (MappingFile.FieldMap f : out.fieldMapping) {
+                if (physical.equals(f.srcTable)) { byTarget.put(exceptionKey(f.dstTable, f.dstField), f); }
+            }
+        }
+        applyFieldExceptions(new ArrayList<MappingFile.FieldMap>(byTarget.values()));
+        Window w = SwingUtilities.getWindowAncestor(this);
+        Frame owner = (w instanceof Frame) ? (Frame) w : null;
+        JDialog dlg = new JDialog(owner, "字段映射（" + physical + "）", false);
+        WindowIcons.apply(dlg);
+        JPanel content = new JPanel(new BorderLayout(0, UiScale.px(6)));
+        content.setBorder(javax.swing.BorderFactory.createEmptyBorder(
+                UiScale.px(8), UiScale.px(10), UiScale.px(8), UiScale.px(10)));
+        JLabel head = new JLabel("<html>源表「" + physical + "」映射到的目标字段草稿。<br>"
+                + "「转换规则」「映射状态」两列可直接改，改完点「确定」记下例外；"
+                + "下次生成该层时，这些改动只写进 <层>_field_mapping.csv，不改 DDL 与转换 SQL。<br>"
+                + "（还没有自动草稿时，先「读源库结构」并生成 obj/dom）</html>");
+        content.add(head, BorderLayout.NORTH);
+
+        final String[] cols = {"目标表", "目标字段", "源字段", "转换规则", "映射状态"};
+        final javax.swing.table.DefaultTableModel dm = new javax.swing.table.DefaultTableModel(cols, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return c >= 3; }
+        };
+        for (MappingFile.FieldMap f : byTarget.values()) {
+            dm.addRow(new Object[]{f.dstTable, f.dstField, f.srcField,
+                    f.transformRule == null ? "" : f.transformRule,
+                    f.status == null ? "" : f.status});
+        }
+        JTable ft = new JTable(dm);
+        Tables.style(ft);
+        content.add(new JScrollPane(ft), BorderLayout.CENTER);
+
+        JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(6), 0));
+        JButton ok = new JButton("确定");
+        JButton close = new JButton("关闭");
+        ok.addActionListener(e -> {
+            for (int r = 0; r < dm.getRowCount(); r++) {
+                String key = exceptionKey(strAt(dm, r, 0), strAt(dm, r, 1));
+                fieldExceptions.put(key, new String[]{strAt(dm, r, 3), strAt(dm, r, 4)});
+            }
+            logPanel.log("- [INFO] LAYER | 记录源表 " + physical + " 的字段映射例外 " + dm.getRowCount() + " 条");
+            dlg.dispose();
+        });
+        close.addActionListener(e -> dlg.dispose());
+        footer.add(ok);
+        footer.add(close);
+        dlg.getRootPane().setDefaultButton(ok);
+        content.add(footer, BorderLayout.SOUTH);
+
+        dlg.setContentPane(content);
+        dlg.setSize(UiScale.px(760), UiScale.px(460));
+        dlg.setLocationRelativeTo(this);
+        dlg.setVisible(true);
+    }
+
+    private static String strAt(javax.swing.table.TableModel m, int r, int c) {
+        Object v = m.getValueAt(r, c);
+        return v == null ? "" : String.valueOf(v);
+    }
+
+    /** 自检用：直接注入一条字段映射例外，验落盘前的覆盖写回这条路（不弹模态框）。 */
+    public void setFieldExceptionOverride(String dstTable, String dstField,
+                                          String transformRule, String status) {
+        fieldExceptions.put(exceptionKey(dstTable, dstField), new String[]{transformRule, status});
     }
 
     private static void writeText(String path, String text) throws java.io.IOException {

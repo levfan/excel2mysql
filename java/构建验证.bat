@@ -109,6 +109,16 @@ call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\targ
   verify\golden\meta.jsonl.gz verify\fixtures || exit /b 1
 
 echo.
+echo === 9b/10 层间映射 CSV 读写差分 ===
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
+  com.excel2mysql.verify.MappingFileDiffer || exit /b 1
+
+echo.
+echo === 9c/10 三层生成口径差分 ===
+call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -cp "app\target\classes;verify\target\classes;verify\target\lib\*" ^
+  com.excel2mysql.verify.LayerGenDiffer || exit /b 1
+
+echo.
 echo === 10/10 Swing 界面自检 ===
 call "%JDK8%\bin\java" -Dfile.encoding=UTF-8 -jar "app\target\excel2mysql-5.1.0.jar" ^
   --gui --selftest verify\fixtures || exit /b 1
