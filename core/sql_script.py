@@ -283,6 +283,50 @@ def _paren_tokens(masked_piece: str) -> list:
     return names
 
 
+def _rename_in_column_list(piece: str, old: str, new: str) -> str:
+    """把主键/索引行括号名单里的 old 换成 new，引号风格跟着原来那一个走。
+
+    只动名单里的标识符：`col`(10) 那种前缀长度、DESC/ASC 这些修饰原样留着。
+    """
+    masked = _mask_comments(piece)
+    open_at = masked.find("(")
+    if open_at == -1:
+        return piece
+    close = _match_paren(masked, open_at)
+    if close == -1:
+        return piece
+
+    def sub(m):
+        tok = m.group(0)
+        if tok.strip("`").strip().lower() != old.lower():
+            return tok
+        if tok.lstrip().startswith("`"):
+            return "`" + new.replace("`", "``") + "`"
+        return new
+
+    inside = re.sub(r"`[^`]*`|[A-Za-z_][A-Za-z0-9_$]*", sub, piece[open_at + 1:close])
+    return piece[:open_at + 1] + inside + piece[close:]
+
+
+def _remove_from_column_list(piece: str, field: str):
+    """主键/索引行的列名单里去掉 field；名单因此变空时返回 None（整句约束一起删）。"""
+    masked = _mask_comments(piece)
+    open_at = masked.find("(")
+    if open_at == -1:
+        return piece
+    close = _match_paren(masked, open_at)
+    if close == -1:
+        return piece
+    parts = piece[open_at + 1:close].split(",")
+    kept = [p for p in parts
+            if (_leading_name(p)[0] or "").lower() != field.lower()]
+    if len(kept) == len(parts):
+        return piece
+    if not kept:
+        return None
+    return piece[:open_at + 1] + ",".join(kept) + piece[close:]
+
+
 def _column_comment_span(masked_piece: str, piece: str):
     """列定义里 COMMENT 字面量的 (起, 止)；只有关键字没有字面量、或在字符串里，返回 None。"""
     for m in _COL_COMMENT_RE.finditer(masked_piece):
@@ -312,8 +356,8 @@ def edit_column(text: str, table_name: str, field: str, new_field: str = None,
     NOT NULL、DEFAULT、AUTO_INCREMENT 这些原样留着），注释换 COMMENT 的字面量
     （原来没有就补在行尾）。改完这一行以外的字节级内容一个都不变。
 
-    被主键或索引列名单引用的字段拒绝改名：索引行里写的还是旧名字，
-    放过去就会生成一句引用不存在列的 DDL，报错要等建表时才炸，比在这儿拒绝难查得多。
+    改名连带改主键/索引那几句的列名单：只换列定义不换名单，留下的是引用旧列的定义，
+    报错要等建表时才炸，比在这儿说清难查得多。名单里的 `col`(10)、DESC 这些修饰原样留着。
     同名表被写两遍只改第一处，与表注释、元数据导出「同名表只按第一处」是同一条规则。
     """
     name = str(table_name or "").strip().strip("`")
@@ -355,25 +399,26 @@ def edit_column(text: str, table_name: str, field: str, new_field: str = None,
         for raw in _split_top_level(body, body_masked):
             pieces.append((at, raw))
             at += len(raw) + 1                      # +1 是那个分隔逗号
-        constraint_names, target = [], None
+        target = None
+        refs = []                                   # 引用了这一列的主键/索引行
         for start, raw in pieces:
             if not raw.strip():
                 continue
             masked_raw = _mask_comments(raw)
             head = masked_raw.lstrip()
             if _CONSTRAINT_HEAD_RE.match(head):
-                constraint_names.extend(_paren_tokens(head))
+                names = _paren_tokens(head)
+                if old.lower() in [c.lower() for c in names]:
+                    refs.append((start, raw))
                 continue
             got, tail = _leading_name(raw)
             if got and got.lower() == old.lower():
                 target = (start, raw, tail)
         if target is None:
             return text, False, "表「%s」里没有字段「%s」（可能被改写或删除了）" % (name, old)
+        nf = ""
         if want_field:
             nf = str(edits["field"]).strip().strip("`")
-            if nf.lower() != old.lower() and old.lower() in [c.lower() for c in constraint_names]:
-                return text, False, ("字段「%s」被主键或索引列名单引用，改名会留下引用旧列的定义"
-                                     % old)
         start, raw, tail = target
         piece = raw
         ws = len(piece) - len(piece.lstrip())
@@ -398,17 +443,181 @@ def edit_column(text: str, table_name: str, field: str, new_field: str = None,
             spans.append((tail_at + mt.start(1), tail_at + mt.end(1),
                           str(edits["type"]).strip()))
         if want_field:
-            nf = str(edits["field"]).strip().strip("`")
             if nf.lower() != old.lower():
                 quoted = piece[name_at:name_at + 1] == "`"
                 new_name = "`" + nf.replace("`", "``") + "`" if quoted else nf
                 spans.append((name_at, name_end, new_name))
         for a, b, sub in sorted(spans, key=lambda s: s[0], reverse=True):
             piece = piece[:a] + sub + piece[b:]
-        if piece == raw:
+        # 主键/索引那几句里的同一列跟着改：只换列定义不换名单，留下的就是引用旧列的 DDL
+        moved = 0
+        lands = [(start, raw, piece)]
+        if want_field and nf.lower() != old.lower():
+            for r_start, r_raw in refs:
+                patched = _rename_in_column_list(r_raw, old, nf)
+                if patched != r_raw:
+                    lands.append((r_start, r_raw, patched))
+                    moved += 1
+        if piece == raw and not moved:
             return text, False, "填回去的和原来一样，脚本未改"
-        return text[:open_at + 1 + start] + piece + text[open_at + 1 + start + len(raw):], True, ""
+        if len(lands) == 1:
+            new_body = (body[:start] + piece + body[start + len(raw):])
+        else:
+            # 逐段就地替换（全部偏移都按原 body 算），从右往左落笔才不会互相挪位
+            new_body = body
+            for a, b, sub in sorted(lands, key=lambda x: x[0], reverse=True):
+                new_body = new_body[:a] + sub + new_body[a + len(b):]
+        note = "（连带改了 %d 处主键/索引引用）" % moved if moved else ""
+        return text[:open_at + 1] + new_body + text[close:], True, note
     return text, False, "脚本里找不到表「%s」的 CREATE TABLE" % name
+
+
+def _create_body_pieces(text: str, table_name: str):
+    """定位这句 CREATE TABLE 的列定义体：返回 (开括号偏移, 闭括号偏移, [(偏移, 原文), ...])。
+
+    切法与 edit_column 完全相同（顶层逗号切段、`",".join(pieces)` 能原样拼回 body），
+    增删字段都靠这一点保证"只动那一段、其余字节一个不变"。
+    """
+    name = str(table_name or "").strip().strip("`")
+    masked = _mask_comments(text)
+    for m in _CREATE_TABLE_RE.finditer(masked):
+        if m.group(1) != name:
+            continue
+        open_at = masked.find("(", m.end())
+        if open_at == -1:
+            return None, "那句 CREATE TABLE 没有列定义（LIKE / AS SELECT 写法）"
+        close = _match_paren(masked, open_at)
+        if close == -1:
+            return None, "那句 CREATE TABLE 的括号配不上，无法定位列定义"
+        body, body_masked = text[open_at + 1:close], masked[open_at + 1:close]
+        pieces, at = [], 0
+        for raw in _split_top_level(body, body_masked):
+            pieces.append((at, raw))
+            at += len(raw) + 1
+        return (open_at, close, pieces), ""
+    return None, "脚本里找不到表「%s」的 CREATE TABLE" % name
+
+
+def _check_new_column(field: str, type_: str, pieces) -> tuple:
+    """新增字段的前置校验：名字/类型合法，且这句里还没有同名字段。"""
+    nf = str(field or "").strip().strip("`")
+    if not nf:
+        return None, "字段名不能为空"
+    if _FIELD_BAD_RE.search(nf):
+        return None, "字段名不能含空格、引号、反引号或分号：%s" % nf
+    if len(nf) > 64:
+        return None, "字段名超过 64 个字符：%s" % nf
+    nt = str(type_ or "").strip()
+    if not nt:
+        return None, "数据类型不能为空"
+    if _FIELD_BAD_RE.search(nt.replace("(", "").replace(")", "").replace(",", "")):
+        return None, "数据类型写法不对：%s" % nt
+    for _start, raw in pieces:
+        if not raw.strip() or _CONSTRAINT_HEAD_RE.match(_mask_comments(raw).lstrip()):
+            continue
+        got, _tail = _leading_name(raw)
+        if got and got.lower() == nf.lower():
+            return None, "这句 CREATE TABLE 里已经有字段「%s」" % nf
+    return (nf, nt), ""
+
+
+def add_column(text: str, table_name: str, field: str, type_: str,
+               comment: str = "", nullable: bool = True) -> tuple:
+    """在脚本里那张表的列定义末尾补一列，返回 (新文本, 是否改动, 附加说明/原因)。
+
+    新列插在最后一行列定义之后、主键与索引那几句之前——插在约束后面就成了
+    "PRIMARY KEY 后面还有一列"，MySQL 直接拒。缩进跟这句里第一列对齐。
+    只补字段定义：数据不会跟着变，脚本里已有的 INSERT 也不会因此多出一个值。
+    """
+    hit, why = _create_body_pieces(text, table_name)
+    if hit is None:
+        return text, False, why
+    open_at, close, pieces = hit
+    ok, why = _check_new_column(field, type_, pieces)
+    if ok is None:
+        return text, False, why
+    nf, nt = ok
+    indent, seen_col = "  ", False
+    insert_at = len(pieces)
+    for idx, (_start, raw) in enumerate(pieces):
+        if not raw.strip():
+            continue
+        head = _mask_comments(raw).lstrip()
+        if _CONSTRAINT_HEAD_RE.match(head):
+            # 第一句约束之前就是列定义区，新列插在这儿
+            insert_at = idx
+            break
+        if not seen_col:
+            lead = re.match(r"[ \t]+", raw)
+            if lead:
+                indent = lead.group(0)
+            seen_col = True
+    literal = "'" + str(comment or "").strip().replace("'", "''") + "'"
+    line = "\n%s`%s` %s %s COMMENT %s" % (
+        indent, nf, nt, "DEFAULT NULL" if nullable else "NOT NULL", literal)
+    kept = [raw for _start, raw in pieces[:insert_at]] + [line] \
+        + [raw for _start, raw in pieces[insert_at:]]
+    new_body = ",".join(kept)
+    return (text[:open_at + 1] + new_body + text[close:], True,
+            "已补字段 `%s` %s（没有数据值，INSERT 也不会因此多一列）" % (nf, nt))
+
+
+def delete_column(text: str, table_name: str, field: str) -> tuple:
+    """删掉脚本里那张表的某一列，返回 (新文本, 是否改动, 附加说明/原因)。
+
+    连带处理两句：删的是列定义那一行；主键/索引的列名单里引用到它的，一起从名单里去掉，
+    名单因此变空就把那整句约束删掉——留下引用不存在列的 DDL，要等建表时才炸。
+    脚本里的 INSERT 不动（那是数据，不是定义），所以删列之后执行到库时会因为
+    列数对不上报 1136，这一点由调用方在日志里说在前面。
+    """
+    hit, why = _create_body_pieces(text, table_name)
+    if hit is None:
+        return text, False, why
+    open_at, close, pieces = hit
+    old = str(field or "").strip().strip("`")
+    if not old:
+        return text, False, "没给字段名"
+    kept, dropped, refs = [], 0, 0
+    for _start, raw in pieces:
+        if not raw.strip():
+            continue
+        head = _mask_comments(raw).lstrip()
+        if _CONSTRAINT_HEAD_RE.match(head):
+            names = [c.lower() for c in _paren_tokens(head)]
+            if old.lower() in names:
+                patched = _remove_from_column_list(raw, old)
+                refs += 1
+                if patched is None:
+                    continue        # 名单空了：整句约束一起删
+                kept.append(patched)
+                continue
+        else:
+            got, _tail = _leading_name(raw)
+            if got and got.lower() == old.lower():
+                dropped += 1
+                continue
+        kept.append(raw)
+    if not dropped:
+        return text, False, "表「%s」里没有字段「%s」" % (
+            str(table_name or "").strip().strip("`"), old)
+    # 最后一个字段不能删：删完只剩一句空括号，MySQL 直接拒，等于把这张表写成废语句
+    if not [x for x in kept
+            if x.strip() and not _CONSTRAINT_HEAD_RE.match(_mask_comments(x).lstrip())]:
+        return text, False, ("「%s」是这句 CREATE TABLE 里最后一个字段，"
+                             "删掉就没有列定义了；要整张表不要，请直接删那句建表语句"
+                             % old)
+    new_body = ",".join(kept)
+    # 删掉的若是最后一段，闭括号那行原本由它带出来的换行会一起没掉：
+    # 按原 body 的行尾空白补齐，别让 ")" 粘在上一行末尾
+    body = ",".join(raw for _s, raw in pieces)
+    tail = re.search(r"\s*$", body).group(0)
+    have = re.search(r"\s*$", new_body).group(0)
+    if len(have) < len(tail):
+        new_body += tail[len(have):]
+    note = "已删字段 `%s`" % old
+    if refs:
+        note += "（连带清掉 %d 处主键/索引引用）" % refs
+    return text[:open_at + 1] + new_body + text[close:], True, note
 
 
 
