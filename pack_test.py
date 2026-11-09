@@ -844,13 +844,26 @@ check("E18 改类型只换类型词，DEFAULT 与 COMMENT 跟着原样留下",
       and "DECIMAL(10,2)" not in _edit_col("t_demo", "amount",
                                            new_type="DECIMAL(16,3)")[0],
       _edit_col("t_demo", "amount", new_type="DECIMAL(16,3)"))
-check("E19 被主键或索引引用的字段拒绝改名，但注释与类型照改",
-      _edit_col("t_demo", "id", new_field="pk")[1] is False
+check("E19 被主键或索引引用的字段改名：连带改写引用，注释与类型照改",
+      _edit_col("t_demo", "id", new_field="pk")[1] is True
+      and "PRIMARY KEY (`pk`)" in _edit_col("t_demo", "id", new_field="pk")[0]
       and "引用" in _edit_col("t_demo", "id", new_field="pk")[2]
-      and _edit_col("t_demo", "name", new_field="n")[1] is False
+      and _edit_col("t_demo", "name", new_field="n")[1] is True
+      and "KEY `idx_name` (`n`)" in _edit_col("t_demo", "name", new_field="n")[0]
       and _edit_col("t_demo", "id", new_comment="编号")[1] is True
       and _edit_col("t_demo", "id", new_type="BIGINT")[1] is True,
       [_edit_col("t_demo", f, new_field=n) for f, n in (("id", "pk"), ("name", "n"))])
+check("E19b 引用改写的修饰原样保留：前缀长度、DESC、反引号风格都不动",
+      "KEY `idx_no` (`ord_no`(10))"
+      in app_main.edit_column(
+          "CREATE TABLE `t` (\n  `order_no` VARCHAR(32) NOT NULL,\n"
+          "  KEY `idx_no` (`order_no`(10))\n) ENGINE=InnoDB;\n",
+          "t", "order_no", new_field="ord_no")[0]
+      and "KEY `idx_d` (`dt` DESC)"
+      in app_main.edit_column(
+          "CREATE TABLE `t` (\n  `d` DATETIME NOT NULL,\n"
+          "  KEY `idx_d` (`d` DESC)\n) ENGINE=InnoDB;\n",
+          "t", "d", new_field="dt")[0])
 check("E20 空名与非法名拒绝，找不到表或字段也原样返回并给出原因",
       _edit_col("t_demo", "amount", new_field="")[1] is False
       and _edit_col("t_demo", "amount", new_field="a b")[1] is False
@@ -3284,10 +3297,11 @@ _run_box = _op_items[-1]
 _run_row = _run_box.widget().layout()
 _run_items = [_run_row.itemAt(i).widget() for i in range(_run_row.count())]
 check("K21 底部动作条：两颗执行选项在最左，保存/执行/生成四颗在最右（与第一页同一形状）",
-      _op.count() == 3
+      _op.count() == 4
       and _op_items[0] is w.chk_sql_drop
       and _op_items[1] is w.chk_sql_auto_pk
-      and all(x is None for x in _op_items[2:-1])
+      and _op_items[2] is w.lbl_sql_scope
+      and all(x is None for x in _op_items[3:-1])
       and all(x is None for x in _run_items[:-4])
       and _run_items[-4:] == [w.btn_sql_save, w.btn_sql_run,
                               w.btn_sql_gen_std, w.btn_sql_gen_simple],
@@ -5741,13 +5755,17 @@ check("Q9 每张表一个事务：begin 次数等于表数", conn.begins == n_ta
       f"{conn.begins} vs {n_tables}")
 check("Q10 导入线程正常收尾并关闭连接",
       conn.closed is True and not iw.worker.isRunning(), conn.closed)
-check("Q11 成功的文件自动移出待导入列表",
-      iw.tables == [] and iw.file_table.rowCount() == 0, iw.tables)
+check("Q11 导入完成的文件仍留在待导入列表里（要清空或删行都有现成入口）",
+      len(iw.tables) == 2 and iw.file_table.rowCount() == 2
+      and "[保留]" in iw.log.toPlainText(), iw.tables)
 check("Q12 汇总同时写日志与弹窗",
       "全部完成：成功 2 张表" in iw.log.toPlainText()
       and any(t == "导入完成" for t, _ in POPUPS),
       [l for l in iw.log.toPlainText().splitlines() if "全部完成" in l])
-check("Q13 列表空后导入按钮自动禁用", iw.btn_import.isEnabled() is False)
+check("Q13 导入完成后导入按钮仍可用（列表里还有文件，可以再导一次到别的库）",
+      iw.btn_import.isEnabled() is True)
+iw.on_clear()
+check("Q13c 清空列表后导入按钮自动禁用", iw.btn_import.isEnabled() is False)
 check("Q13b 导入收尾后任务位已还，不挂着在跑的任务",
       not iw._tasks, len(iw._tasks))
 
@@ -6975,11 +6993,14 @@ check("R71b 改数据类型只换类型词，DEFAULT 与注释原样留着",
       nw.sql_files[0]["text"].splitlines()[3])
 POPUPS.clear()
 _mt.item(0, 0).setText("pk")
-check("R72 被主键引用的字段拒绝改名：正文不动，弹窗说清为什么",
-      "`id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键'," in nw.sql_files[0]["text"]
-      and "pk" not in nw.sql_files[0]["text"]
-      and POPUPS and "引用" in POPUPS[-1][1],
-      (nw.sql_files[0]["text"].splitlines()[1], POPUPS[-1] if POPUPS else None))
+check("R72 被主键引用的字段改名：连带改写引用，正文与清单一起跟上",
+      "`pk` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键'," in nw.sql_files[0]["text"]
+      and "PRIMARY KEY (`pk`)" in nw.sql_files[0]["text"]
+      and "PRIMARY KEY (`id`)" not in nw.sql_files[0]["text"]
+      and nw.sql_files[0]["modified"]
+      and "[字段改写]" in nw.sql_log.toPlainText(),
+      (nw.sql_files[0]["text"].splitlines()[1],
+       [l for l in nw.sql_log.toPlainText().splitlines() if "[字段改写]" in l][-1:]))
 _meta2 = nw._build_sql_metadata_dialog(0)
 check("R72b 解析缓存跟着改动走：再开一次元数据看到的是新值",
       _meta2 is not None and _meta2.tableWidget().item(1, 1).text() == "金额（元）"
@@ -7471,6 +7492,11 @@ check("R52 改一张表的表名只动这一张，基础表名同步更新",
 check("R52b 改名写进日志，说明后续前缀基于新名算",
       "[表名] adb_table2 → manual_orders（手动修改，后续批量前缀基于新名计算）"
       in rw6.log.toPlainText())
+rw6.file_table.clearSelection()
+_app.processEvents()
+check("R53a 动作条那行小字说清这一下动几张表（没选中 = 全量）",
+      rw6.lbl_scope.text() == "范围：全量（%d 张表）" % len(rw6.tables),
+      rw6.lbl_scope.text())
 rw6.ed_prefix.setText("dim_")
 rw6.on_apply_prefix()
 _app.processEvents()
@@ -7484,6 +7510,35 @@ _app.processEvents()
 check("R53b 清空前缀恢复基础名（手动名保留）",
       [t["table_name"] for t in rw6.tables] == ["ods_t_order", "manual_orders", "users"],
       [t["table_name"] for t in rw6.tables])
+# ---- 按钮区按选中行生效：选中一行，前缀只加在这一行上 ----
+_sel6 = rw6.file_table.selectionModel()
+_sel6.select(rw6.file_table.model().index(1, 0),
+             _sel6.SelectionFlag.Select | _sel6.SelectionFlag.Rows)
+_app.processEvents()
+check("R53c 选中行后那行小字跟着变",
+      rw6.lbl_scope.text() == "范围：选中 1 张表", rw6.lbl_scope.text())
+rw6.ed_prefix.setText("dim_")
+rw6.on_apply_prefix()
+_app.processEvents()
+check("R53d 加了前缀只落在选中的那一行，其余行不动",
+      [t["table_name"] for t in rw6.tables]
+      == ["ods_t_order", "dim_manual_orders", "users"],
+      [t["table_name"] for t in rw6.tables])
+check("R53e 日志里写明这次的作用范围",
+      "[范围] 本次只作用于选中的 1 张表，没选中的一概不动" in rw6.log.toPlainText(),
+      [l for l in rw6.log.toPlainText().splitlines() if "[范围]" in l][-1:])
+rw6.ed_prefix.setText("")
+_sel6.clearSelection()
+_sel6.select(rw6.file_table.model().index(1, 0),
+             _sel6.SelectionFlag.Select | _sel6.SelectionFlag.Rows)
+_app.processEvents()
+rw6.on_apply_prefix()
+_app.processEvents()
+check("R53f 空前缀同样只撤选中行的前缀，其余行保持原样",
+      [t["table_name"] for t in rw6.tables] == ["ods_t_order", "manual_orders", "users"],
+      [t["table_name"] for t in rw6.tables])
+rw6.file_table.clearSelection()
+_app.processEvents()
 POPUPS.clear()
 rw6.file_table.item(1, 2).setText("")
 _app.processEvents()

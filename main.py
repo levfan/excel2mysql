@@ -15,8 +15,7 @@ Excel ⇄ MySQL（PySide6 GUI）
   - 预览 DDL，一键建表并导入数据
   - 解析 / 导入 / 批量改前缀 / 读写 SQL 脚本全部放子线程，配模态进度框（可取消、不卡界面）
   - 逐表日志 + 进度条，单表失败不阻断其余
-  - 导入成功的文件自动移出待导入列表，失败文件保留可重试
-
+  - 导入完成的文件仍留在待导入列表里（不自动抽走），要清空或删行都有现成入口
 依赖：pip install -r requirements.txt   （PySide6 pymysql pandas openpyxl xlrd pypinyin）
 运行：python main.py            打包：双击 一键打包-图形版.bat
 """
@@ -71,6 +70,7 @@ from core.sql_script import (
     set_table_comment, prepend_drop_tables,
     is_dump_script, dump_statements, dump_skip_reason, dump_database_switch,
     edit_column, format_sql, format_refusal, add_auto_pk_create,
+    add_column, delete_column,
     SQL_FORMAT_KEYWORDS, SQL_FORMAT_TYPES,
 )
 from core.naming import clean_prefix, is_valid_prefix, rewrite_versions, swap_first_segment
@@ -121,6 +121,22 @@ NO_DB_HINT = "未选择目标库：请先在上方连接区填好连接信息，
 DB_HINT_UNLOADED = "库列表还没加载：点「连接并加载库」拿到清单，再在这里选库"
 DB_HINT_STALE = "连接信息改过了：下面这份清单来自上一次连接，重新点「连接并加载库」才作数"
 NO_FILE_HINT = "请先添加 Excel 文件或 ZIP 压缩包。"
+
+# 语句头 → 这条语句动的是哪张表。按选中行收窄脚本时用它给语句归类：
+# 认得出的才带走，认不出的（SET / BEGIN / LOCK TABLES 这类整份脚本的壳）留在原地。
+# 顺序与正则里的分支一一对应：CREATE TABLE 要排在 CREATE INDEX 之前判定，
+# 否则 `CREATE TABLE` 会先被 `CREATE ... INDEX` 那条吃掉一半。
+SQL_HEAD_TABLE_RE = re.compile(
+    r"^\s*(?:"
+    r"CREATE\s+(?:TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"|INSERT\s+(?:IGNORE\s+)?INTO\s+"
+    r"|REPLACE\s+INTO\s+"
+    r"|ALTER\s+TABLE\s+"
+    r"|CREATE\s+(?:UNIQUE\s+|FULLTEXT\s+|SPATIAL\s+)?INDEX\s+\S+\s+ON\s+"
+    r"|DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?"
+    r"|TRUNCATE\s+TABLE\s+"
+    r"|DELETE\s+FROM\s+"
+    r")([`\w$]+(?:\.[`\w$]+)?)", re.I)
 
 # 「SQL 执行器」编辑区的开场文本：既是"连不连得上库"的一键自检语句，
 # 也是「插入到编辑区」判断"这段还是默认值、可以直接覆盖掉"的比对基准
@@ -628,6 +644,36 @@ def hline():
     return line
 
 
+def scope_label():
+    """动作条上那句「这一下动几张表」：选中行会悄悄改范围，得摆在按钮旁边说清楚。
+
+    两处讲究都是为了不动窗口的最小宽度：文字取短句（长解释放悬停提示），
+    横向策略设成 Ignored——否则这行字的最小宽度就是整句的像素宽，窄屏上会把
+    主窗口顶出屏幕（这一页的按钮早先就踩过，才套的横向滚动区）。
+    """
+    lbl = QLabel("范围：全量")
+    lbl.setStyleSheet("color: #667085;")
+    lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+    lbl.setMinimumWidth(0)
+    return lbl
+
+
+def equal_heights(*widgets):
+    """同一排里的输入框与按钮统一取同一个高度。
+
+    Qt 按各自样式算出来的高度差 1~2px：输入框 27、普通按钮 28、带 padding 的主按钮 26。
+    单看每一个都正常，排成一行就是一眼能看见的参差（表名前缀那行、底部动作条都踩过），
+    主按钮还会因为比同排矮一截把文字切掉半行。统一按最高的那个钉死。
+    """
+    widgets = [w for w in widgets if w is not None]
+    if not widgets:
+        return
+    h = max(max(w.sizeHint().height(), w.minimumSizeHint().height())
+            for w in widgets)
+    for w in widgets:
+        w.setFixedHeight(h)
+
+
 ROLLBACK_NOTE = ("注意：CREATE/DROP/ALTER 等 DDL 在 MySQL 中隐式提交，不会随事务回滚；"
                  "回滚仅对其后的数据操作生效。")
 
@@ -742,6 +788,24 @@ def build_popup_box(parent, title: str, text: str, kind: str = "information",
 def popup_box(parent, title: str, text: str, kind: str = "information"):
     """消息弹窗都走这一道，确保日志、弹窗和复制出来的是同一份文案。"""
     return build_popup_box(parent, title, text, kind).exec()
+
+
+def confirm_box(parent, title: str, text: str, ok_text: str = "确定",
+                cancel_text: str = "取消", kind: str = "warning") -> bool:
+    """是/否确认：与消息弹窗同一套排版，只把「确定」换成两颗各自写着动作的按钮。
+
+    返回 True = 用户按了 ok_text 那颗。Esc、点关闭、按 cancel_text 都算"不"。
+    删字段这类不可撤回的动作走这一道，不拿"点了就删"赌用户手没抖。
+    """
+    box = build_popup_box(parent, title, text, kind)
+    box.setStandardButtons(QDialogButtonBox.NoButton)
+    bar = box.buttons
+    yes = bar.addButton(ok_text, QDialogButtonBox.AcceptRole)
+    bar.addButton(cancel_text, QDialogButtonBox.RejectRole)
+    yes.setDefault(True)
+    bar.accepted.connect(box.accept)
+    bar.rejected.connect(box.reject)
+    return box.exec() == QDialog.Accepted
 
 
 
@@ -1263,7 +1327,7 @@ def table_prefix_task(tables, prefix, sink):
     sink.set_total(len(tables) + 1)
     apply_table_prefix(tables, prefix, on_item=lambda t: sink.step(t["table_name"]))
     sink.step("重名去重")
-    return {"prefix": prefix, "cancelled": sink.cancelled}
+    return {"prefix": prefix, "n": len(tables), "cancelled": sink.cancelled}
 
 
 def table_replace_task(tables, new_head, sink):
@@ -2474,6 +2538,8 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.ed_prefix, 1)
         prefix_row.addWidget(self.btn_apply_prefix)
         prefix_row.addWidget(self.btn_replace_prefix)
+        # 输入框与两颗按钮同一高度：Qt 各自算出来差 1~2px，并排看就是参差
+        equal_heights(self.ed_prefix, self.btn_apply_prefix, self.btn_replace_prefix)
         fl.addLayout(prefix_row)
 
         btns = QHBoxLayout()
@@ -2554,7 +2620,16 @@ class MainWindow(QWidget):
         self.chk_auto_pk.toggled.connect(self.on_auto_pk_toggled)
         op.addWidget(self.chk_auto_pk)
         op.addStretch(1)
-        op.addSpacing(12)
+        # 动作条上这支小字：这一排按钮这次到底动几张表。选中行会静悄悄地改范围，
+        # 不写出来的话，改完一行名再点前缀的人会以为按钮坏了（只动了一行）。
+        self.lbl_scope = scope_label()
+        self.lbl_scope.setToolTip(
+            "按钮区默认作用于整份清单；在表格里选中几行，就只作用于选中的这几行。\n"
+            "没选中任何行时仍按全量走。")
+        op.addWidget(self.lbl_scope)
+        # 这里原来有一句 op.addSpacing(12) 用来隔开选项与动作按钮；现在中间多了这支小字，
+        # 它自己就是那道间隔，再留 12px 只会把动作条的最小宽度顶宽（主窗口的最小宽度
+        # 本来就贴着 800 宽的小屏，多 6px 就出界）
         self.btn_import = QPushButton("开始导入")
         self.btn_import.setEnabled(False)
         self.btn_import.setStyleSheet(PRIMARY_BUTTON_QSS)
@@ -2580,6 +2655,10 @@ class MainWindow(QWidget):
         self.btn_gen_simple.clicked.connect(self.on_gen_simple)
         op.addWidget(self.btn_gen_std)
         op.addWidget(self.btn_gen_simple)
+        # 这一排五个控件统一高度：主按钮带自己的 padding，sizeHint 比邻近按钮矮 2px，
+        # 之前那一颗蓝按钮的文字被切掉半行，看着像坏了
+        equal_heights(self.chk_drop, self.chk_auto_pk, self.btn_stop, self.btn_import,
+                      self.btn_gen_std, self.btn_gen_simple)
         excel_lay.addWidget(self.excel_action_bar)
 
         self.main_tabs.addTab(excel_page, "Excel 导入")
@@ -2589,6 +2668,11 @@ class MainWindow(QWidget):
         # 切页签 / 切换目标库 / 改主机端口时，刷新状态栏与三页顶部那条指向
         #（host:port 只在状态栏的悬停提示里，改了主机端口要同步，否则提示的是旧地址）
         self.main_tabs.currentChanged.connect(self._on_tab_changed)
+        # 选中行一变就改动作条上那句「作用范围」：范围是这一版的行为核心，
+        # 不能只写在点下去之后的日志里
+        self.file_table.itemSelectionChanged.connect(self._refresh_scope_hint)
+        self.sql_table.itemSelectionChanged.connect(self._refresh_scope_hint)
+        self._refresh_scope_hint()
         self.cb_db.currentIndexChanged.connect(self._on_db_changed)
         self.ed_host.textChanged.connect(self._refresh_db_labels)
         self.ed_port.valueChanged.connect(self._refresh_db_labels)
@@ -2907,6 +2991,8 @@ class MainWindow(QWidget):
         prefix_row.addWidget(self.ed_sql_prefix, 1)
         prefix_row.addWidget(self.btn_sql_prefix)
         prefix_row.addWidget(self.btn_sql_replace)
+        # 与第一页同一档：输入框与两颗按钮同高
+        equal_heights(self.ed_sql_prefix, self.btn_sql_prefix, self.btn_sql_replace)
 
         # 三颗操作按钮排在表格下面第一排（前缀行的下一行），与「Excel 导入」那页
         # 同一位置、同一形状：等宽铺满整行。清空是整份清出清单，不是只删选中行。
@@ -3038,6 +3124,12 @@ class MainWindow(QWidget):
             "已经写了 PRIMARY KEY 的表不补；取消勾选恢复原样，默认不勾选。" % AUTO_PK_FIELD)
         self.chk_sql_auto_pk.toggled.connect(self.on_sql_auto_pk_toggled)
         op.addWidget(self.chk_sql_auto_pk)
+        # 与第一页同一句：这一排按钮这次动几张表，说在按钮旁边
+        self.lbl_sql_scope = scope_label()
+        self.lbl_sql_scope.setToolTip(
+            "按钮区默认作用于整份清单；在表格里选中几行，就只作用于选中的这几行。\n"
+            "没选中任何行时仍按全量走。")
+        op.addWidget(self.lbl_sql_scope)
         # 四颗按钮的总宽比第一页多两颗，直接摊在一行会把主窗口的最小宽度顶到屏幕外：
         # 套一层横向滚动区，正常宽度下照样贴右排开，窄屏才出滚动条，窗口仍能缩回屏幕内
         run_box = QWidget()
@@ -3060,6 +3152,10 @@ class MainWindow(QWidget):
             "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
         run_scroll.setWidget(run_box)
         op.addWidget(run_scroll, 1)
+        # 这一排同样统一高度：主按钮「执行修改后ddl脚本到当前库」带自己的 padding，
+        # 比邻近按钮矮一截时文字会被切掉
+        equal_heights(self.chk_sql_drop, self.chk_sql_auto_pk, self.btn_sql_save,
+                      self.btn_sql_run, self.btn_sql_gen_std, self.btn_sql_gen_simple)
         # 执行层与上方表格区之间的细分隔线：底部动作条不再和表格内容糊成一片
         lay.addWidget(hline())
         lay.addWidget(self.sql_action_bar)
@@ -3117,6 +3213,7 @@ class MainWindow(QWidget):
                     self.sql_table.setItem(i, j, it)
         finally:
             self._refreshing_sql_table = False
+        self._refresh_scope_hint()
 
     def on_sql_table_double_clicked(self, item):
         """当前表名与表注释两列交给编辑器；其余列只是查看这一行对应表的元数据。"""
@@ -3151,7 +3248,71 @@ class MainWindow(QWidget):
                                  upper=self.chk_sql_upper.isChecked(),
                                  lower=self.chk_sql_lower.isChecked(), parent=self,
                                  on_edit=functools.partial(self._apply_sql_field_edit,
-                                                           row_index))
+                                                           row_index),
+                                 on_add=functools.partial(self._apply_sql_add_field,
+                                                          row_index),
+                                 on_delete=functools.partial(
+                                     self._apply_sql_delete_fields, row_index))
+
+    def _sql_columns_now(self, row_index):
+        """按脚本正文重新解析这一张表，返回现在的列清单；解析不出来给 None。"""
+        if not 0 <= row_index < len(self._sql_rows):
+            return None
+        row = self._sql_rows[row_index]
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return None
+        table = ensure_parsed(record).get(row["actual"])
+        return (table or {}).get("columns")
+
+    def _sql_after_edit(self, row_index, record, new_text, note):
+        """字段增删改了正文之后：落正文、重解这一份脚本、刷清单、写日志。"""
+        record["text"] = new_text
+        record["modified"] = True
+        record["tabs"] = extract_create_tables(new_text)
+        # 只重解这一份脚本：增删都在同一句 CREATE TABLE 里，几万行的 dump 也只扫一遍
+        record["parsed"] = {t["table_name"]: t for t in parse_create_tables(new_text)}
+        record.pop("insert_rows", None)          # 正文换了，行数缓存作废
+        self._refresh_sql_table()
+        row = self._sql_rows[row_index]
+        append_log(self.sql_log, "[字段] 表 `%s` %s（已写进脚本；未落盘）"
+                   % (row["actual"], note))
+        return self._sql_columns_now(row_index)
+
+    def _apply_sql_add_field(self, row_index):
+        """「表元数据」弹窗里点「新增字段」：往这句 CREATE TABLE 末尾补一列。
+
+        补完返回新的列清单，弹窗据此整表重铺（新列在最后一行，直接进编辑态）。
+        """
+        if not 0 <= row_index < len(self._sql_rows):
+            return None
+        row = self._sql_rows[row_index]
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return None
+        new_text, changed, why = add_column(
+            record["text"], row["actual"], "is_new_field", "VARCHAR(255)", "新字段")
+        if not changed:
+            self._warn("没能新增字段：%s" % why)
+            return None
+        return self._sql_after_edit(row_index, record, new_text, why)
+
+    def _apply_sql_delete_fields(self, row_index, fields):
+        """「表元数据」弹窗里删字段：一句表一次删完，中途失败就整句不动。"""
+        if not 0 <= row_index < len(self._sql_rows):
+            return None
+        row = self._sql_rows[row_index]
+        record = next((s for s in self.sql_files if s["path"] == row["path"]), None)
+        if record is None:
+            return None
+        text, notes = record["text"], []
+        for field in fields:
+            text, changed, why = delete_column(text, row["actual"], field)
+            if not changed:
+                self._warn("字段「%s」没删：%s" % (field, why))
+                return None
+            notes.append(why)
+        return self._sql_after_edit(row_index, record, text, "；".join(notes))
 
     def _sql_metadata_view(self, table):
         """弹窗看的那一份表定义：勾了「自动补全主键」就在副本上补出 business_id。
@@ -3206,8 +3367,8 @@ class MainWindow(QWidget):
         if "new_type" in kw:
             parts.append("类型 %s → %s" % (before[2], col["type"]))
         append_log(self.sql_log,
-                   "[字段改写] 表 `%s` 的 %s（已写进脚本；未落盘）"
-                   % (row["actual"], "，".join(parts)))
+                   "[字段改写] 表 `%s` 的 %s（已写进脚本；未落盘）%s"
+                   % (row["actual"], "，".join(parts), reason or ""))
         return True
 
     def on_sql_table_item_changed(self, item):
@@ -3427,23 +3588,27 @@ class MainWindow(QWidget):
         if not self._sql_rows:
             self._warn("清单里没有脚本表（空脚本或只有注释），没有数据行数可统计。")
             return
-        total = sum(int(r.get("insert_rows") or 0) for r in self._sql_rows)
+        rows, scope = self._sql_scope()
+        self._log_scope(scope, self.sql_log)
+        total = sum(int(r.get("insert_rows") or 0) for r in rows)
         per_file = {}
-        for r in self._sql_rows:
+        for r in rows:
             per_file[r["base"]] = per_file.get(r["base"], 0) + int(r.get("insert_rows") or 0)
         num = format(total, ",")
         append_log(self.sql_log,
-                   "[统计] 脚本 %d 个、表 %d 张，数据总行数：%s 行"
-                   % (len(per_file), len(self._sql_rows), num))
+                   "[统计] 脚本 %d 个、表 %d 张，数据总行数：%s 行%s"
+                   % (len(per_file), len(rows), num, "（" + scope + "）" if scope else ""))
         lines = ["数据总行数：%s 行" % num, "",
-                 "脚本 %d 个，共 %d 张表。" % (len(per_file), len(self._sql_rows))]
+                 "脚本 %d 个，共 %d 张表。" % (len(per_file), len(rows))]
+        if scope:
+            lines.insert(1, scope + "。")
         if len(per_file) > 1:
             lines.append("")
             lines.extend("  %s：%s 行" % (b, format(n, ","))
                          for b, n in per_file.items())
         popup_box(self, "数据总行数", "\n".join(lines))
 
-    def _sql_ddl_pages(self):
+    def _sql_ddl_pages(self, only=None):
         """一张表一页 DDL：正文取脚本里属于这张表的 CREATE TABLE 语句。
 
         还没落地的改名与字段编辑先算进正文（与保存/执行同一道 `_materialize` 的结果），
@@ -3451,6 +3616,9 @@ class MainWindow(QWidget):
 
         整份脚本只切一遍：以前每张表都重扫并切分一次整份文件，500 张表的整库 dump
         点一次「预览 DDL」要 8.7 秒，界面看起来就是卡死（用户 2026-11-02 报）。
+
+        only 给了（{脚本路径: {表名}}）就只出这几张表的页；表名取的是改名之后的
+        那个名字，因为页是按改名后的正文切出来的。
         """
         pages = []
         for s in self.sql_files:
@@ -3458,6 +3626,9 @@ class MainWindow(QWidget):
             if plan:
                 text, renamed, _nohit = apply_display_renames(text, plan)
                 plan.update({r["old"]: r["new"] for r in renamed})
+            keep = None
+            if only is not None:
+                keep = {plan.get(n, n) for n in (only.get(s["path"]) or ())}
             bodies = {}
             for st in split_sql_statements(text):
                 names = [t["name"] for t in extract_create_tables(st)]
@@ -3467,6 +3638,8 @@ class MainWindow(QWidget):
                 for name in names:
                     bodies.setdefault(name, []).append(one)
             for t in extract_create_tables(text):
+                if keep is not None and t["name"] not in keep:
+                    continue
                 body = "\n\n".join(bodies.get(t["name"], ()))
                 if not body:
                     continue
@@ -3487,13 +3660,19 @@ class MainWindow(QWidget):
         if why:
             self._warn(why)
             return
-        pages = self._sql_ddl_pages()
+        only, scope = self._sql_scope_names()
+        self._log_scope(scope, self.sql_log)
+        pages = self._sql_ddl_pages(only)
         if not pages:
-            self._warn("这些脚本里没有解析出 CREATE TABLE 语句，没有可预览的 DDL。")
+            self._warn("没有解析出 CREATE TABLE 语句，没有可预览的 DDL。"
+                       if not scope else
+                       "选中的这几行没有解析出 CREATE TABLE 语句，没有可预览的 DDL。")
             return
         if self.chk_sql_drop.isChecked():
             pages = [(name, "DROP TABLE IF EXISTS `%s`;\n\n%s" % (name, body))
                      for name, body in pages]
+        append_log(self.sql_log,
+                   "[预览] DDL 共 %d 页%s" % (len(pages), "（" + scope + "）" if scope else ""))
         SqlScriptDdlDialog(pages, self).exec()
 
     def _warn(self, text):
@@ -3522,50 +3701,74 @@ class MainWindow(QWidget):
             self._warn(why)
             return
         prefix = self.ed_sql_prefix.text().strip().replace("`", "").replace("\\", "")
+        only, scope = self._sql_scope_names()
+        self._log_scope(scope, self.sql_log)
         if not prefix:
-            self._clear_sql_display_prefix()
+            self._clear_sql_display_prefix(only)
             return
-        total = 0
+        total, touched = 0, []
         for s in self.sql_files:
+            names = self._sql_scope_in_file(only, s)
+            if not names:
+                continue
             fname = os.path.basename(s["path"])
             current = s.get("display_map") or {}
-            plan, skipped = {}, []
-            for t in s.get("tabs") or extract_create_tables(s["text"]):
-                old = t["name"]
+            plan, skipped = dict(current), []
+            for old in names:
                 shown = current.get(old, old)      # 接在页面上当前显示名之后，不从头计算
                 if shown.startswith(prefix):
-                    if shown != old:
-                        plan[old] = shown          # 已带前缀：保留原显示，不叠也不丢
                     skipped.append(shown)
                     continue
                 plan[old] = prefix + shown
+                total += 1
+                touched.append((fname, old, plan[old]))
             s["display_map"] = plan
-            total += len(plan)
-            if plan:
-                append_log(self.sql_log, 
-                    f"[前缀] {fname}："
-                    + "、".join(f"{o} → {n}（显示）" for o, n in plan.items()))
+            if touched:
+                append_log(self.sql_log,
+                           f"[前缀] {fname}："
+                           + "、".join(f"{o} → {n}（显示）" for f, o, n in touched
+                                       if f == fname))
             if skipped:
-                append_log(self.sql_log, 
-                    f"[跳过] {fname}：已带前缀 {'、'.join(skipped)}")
+                append_log(self.sql_log,
+                           f"[跳过] {fname}：已带前缀 {'、'.join(skipped)}")
         self._refresh_sql_table()
-        append_log(self.sql_log, 
-            f"[前缀完成] 共 {total} 个表名改为显示前缀「{prefix}」"
-            f"（脚本正文未改，点保存/执行/生成时才写入）")
+        append_log(self.sql_log,
+                   f"[前缀完成] 共 {total} 个表名改为显示前缀「{prefix}」"
+                   f"（脚本正文未改，点保存/执行/生成时才写入）")
 
-    def _clear_sql_display_prefix(self):
-        """空前缀再点一次：只撤掉显示层，表名回到脚本里的原名。"""
+    def _sql_scope_in_file(self, only, s):
+        """这份脚本里这次要动的表名；全量时取脚本里的全部表名。"""
+        if only is not None:
+            return [n for n in (only.get(s["path"]) or ()) if n]
+        return [t["name"] for t in (s.get("tabs") or extract_create_tables(s["text"]))]
+
+    def _clear_sql_display_prefix(self, only=None):
+        """空前缀再点一次：只撤掉显示层，表名回到脚本里的原名。
+
+        only 给了就只撤这几张表的显示（按钮区按选中行生效），没给是整份清单。
+        """
         n = 0
         for s in self.sql_files:
-            n += len(s.get("display_map") or {})
-            s["display_map"] = {}
+            plan = s.get("display_map") or {}
+            names = self._sql_scope_in_file(only, s) if only is not None else None
+            if names is None:
+                n += len(plan)
+                s["display_map"] = {}
+                continue
+            keep = {}
+            for old, shown in plan.items():
+                if old in names:
+                    n += 1
+                else:
+                    keep[old] = shown
+            s["display_map"] = keep
         self._refresh_sql_table()
         if n:
-            append_log(self.sql_log, 
-                f"[前缀完成] 前缀已清空，{n} 个表名的显示恢复为脚本中的原名（脚本正文未改）")
+            append_log(self.sql_log,
+                       f"[前缀完成] 前缀已清空，{n} 个表名的显示恢复为脚本中的原名（脚本正文未改）")
         else:
-            append_log(self.sql_log, 
-                "[前缀完成] 前缀为空，表名显示本来就是脚本原名，无需恢复")
+            append_log(self.sql_log,
+                       "[前缀完成] 前缀为空，表名显示本来就是脚本原名，无需恢复")
 
     def on_sql_replace_prefix(self):
         """首段前缀同样只改显示；空前缀视作撤掉显示层。"""
@@ -3573,41 +3776,45 @@ class MainWindow(QWidget):
         if why:
             self._warn(why)
             return
+        only, scope = self._sql_scope_names()
         if not self.ed_sql_prefix.text().strip():
-            self._clear_sql_display_prefix()
+            self._log_scope(scope, self.sql_log)
+            self._clear_sql_display_prefix(only)
             return
         head, why = self._clean_head(self.ed_sql_prefix.text())
         if head is None:
             self._warn(why)
             return
+        self._log_scope(scope, self.sql_log)
         total = 0
         for s in self.sql_files:
+            names = self._sql_scope_in_file(only, s)
+            if not names:
+                continue
             fname = os.path.basename(s["path"])
             current = s.get("display_map") or {}
-            plan, skipped = {}, []
-            for t in s.get("tabs") or extract_create_tables(s["text"]):
-                old = t["name"]
+            plan, skipped, changed = dict(current), [], []
+            for old in names:
                 shown = current.get(old, old)      # 与加前缀同一口径：基于当前显示名换首段
                 new = swap_first_segment(shown, head)
                 if new is None:
-                    if shown != old:
-                        plan[old] = shown          # 没换成（如首段本来就是这个）：保留原显示
                     skipped.append(shown)
                     continue
                 plan[old] = new
+                changed.append((old, new))
+                total += 1
             s["display_map"] = plan
-            total += len(plan)
-            if plan:
-                append_log(self.sql_log, 
-                    f"[换前缀] {fname}："
-                    + "、".join(f"{o} → {n}（显示）" for o, n in plan.items()))
+            if changed:
+                append_log(self.sql_log,
+                           f"[换前缀] {fname}："
+                           + "、".join(f"{o} → {n}（显示）" for o, n in changed))
             if skipped:
-                append_log(self.sql_log, 
-                    f"[跳过] {fname}：未改写 {'、'.join(skipped)}（表名里没有下划线）")
+                append_log(self.sql_log,
+                           f"[跳过] {fname}：未改写 {'、'.join(skipped)}（表名里没有下划线）")
         self._refresh_sql_table()
-        append_log(self.sql_log, 
-            f"[换前缀完成] 共 {total} 个表名改为显示名"
-            f"（脚本正文未改，点保存/执行/生成时才写入）")
+        append_log(self.sql_log,
+                   f"[换前缀完成] 共 {total} 个表名改为显示名"
+                   f"（脚本正文未改，点保存/执行/生成时才写入）")
 
     def _materialize_sql_display(self):
         """把页面显示的表名写进脚本；保存/执行/生成三个动作共用这一道。"""
@@ -3647,6 +3854,13 @@ class MainWindow(QWidget):
             append_log(self.sql_log, "[保存] 没有修改过的脚本文件")
             popup_box(self, "保存完成", "没有修改过的脚本文件，无需保存。")
             return
+        # 保存是按文件落盘的：一份脚本里只要有一张表动过，写出的就是整份正文。
+        # 选中行只决定"改动了哪几张表"，落盘粒度照样是文件，这句得说明白，
+        # 免得用户以为没选中的表在磁盘上没被碰过。
+        if self._sql_scope_rows():
+            append_log(self.sql_log,
+                       "[范围] 本次改动只涉及选中的表；保存按脚本文件落盘，"
+                       "写出的仍是整份正文（没动过的表内容一模一样）")
         self._run_modal("正在保存修改后的脚本…", sql_save_task, (items,),
                         on_done=self._finish_sql_save, log_view=self.sql_log)
 
@@ -3680,7 +3894,10 @@ class MainWindow(QWidget):
         if not self.sql_files:
             self._warn("请先添加 SQL 脚本文件。")
             return
+        idx = self._sql_scope_rows()      # 先记行号：materialize 会重铺清单
         self._materialize_sql_display()
+        only, scope = self._sql_only_after(idx)
+        self._log_scope(scope, self.sql_log)
         overwrite = self.chk_sql_drop.isChecked()
         note = "；已勾选「覆盖已存在表」，执行副本先 DROP 脚本要建的表" if overwrite else ""
         append_log(self.sql_log,
@@ -3688,11 +3905,22 @@ class MainWindow(QWidget):
         items, dropped = [], []
         for s in self.sql_files:
             text = s["text"]
+            if only is not None:
+                names = only.get(s["path"]) or ()
+                text = self._sql_text_for_tables(text, names)
+                if not text:
+                    append_log(self.sql_log,
+                               "! [WARN] 跳过 | %s：选中的表在这份脚本里没有可执行的语句"
+                               % os.path.basename(s["path"]))
+                    continue
             if overwrite:
                 text, tables = prepend_drop_tables(text)
                 if tables:
                     dropped.append((os.path.basename(s["path"]), tables))
             items.append((s["path"], text))
+        if not items:
+            self._warn("选中的表在脚本里没有可执行的语句，没有执行任何脚本。")
+            return
         if overwrite:
             if dropped:
                 for fname, tables in dropped:
@@ -3732,12 +3960,30 @@ class MainWindow(QWidget):
         if not self.sql_files:
             self._warn("请先添加 SQL 脚本文件。")
             return
+        # 行号先记下来：materialize 之后清单会重铺，选中的是"哪几张表"得按行号重新取
+        idx = self._sql_scope_rows()
         self._materialize_sql_display()
+        only, scope = self._sql_only_after(idx)
+        self._log_scope(scope, self.sql_log)
         out_root = program_dir()
         append_log(self.sql_log,
                    f"===== 开始生成{label}excel文件（脚本 %d 个，输出根目录 {out_root}）====="
                    % len(self.sql_files))
-        items = [(s["path"], s["text"]) for s in self.sql_files]
+        items = []
+        for s in self.sql_files:
+            text = s["text"]
+            if only is not None:
+                names = only.get(s["path"]) or ()
+                text = self._sql_text_for_tables(text, names)
+                if not text:
+                    append_log(self.sql_log,
+                               f"[跳过] {os.path.basename(s['path'])}："
+                               f"选中的表在这份脚本里没有可导出的语句")
+                    continue
+            items.append((s["path"], text))
+        if not items:
+            self._warn("选中的表在脚本里没有可导出的语句，没有生成任何文件。")
+            return
         # upper 留在 args 元组里、只把 lower 用关键字绑：_run_modal 会把 sink 追加在
         # 位置参数末尾，upper 一旦也被 partial 绑走，sink 就撞上它（同 3969 行那条教训）
         self._run_modal("正在生成%sexcel文件…" % label,
@@ -4754,6 +5000,116 @@ class MainWindow(QWidget):
                 self.file_table.setItem(i, 6, read_only(pk))
         finally:
             self._refreshing_file_table = False
+        self._refresh_scope_hint()
+
+    # ---- 按钮区的作用对象：选中几行就只改那几行 ----
+    @staticmethod
+    def _selected_rows(table, total):
+        """表格里选中的行号（升序去重）；越界的一律丢掉，选中为空就返回空列表。"""
+        model = table.selectionModel()
+        if model is None:
+            return []
+        return sorted({i.row() for i in model.selectedRows() if 0 <= i.row() < total})
+
+    def _scoped_tables(self):
+        """按钮区这一下作用在哪些表：选了就只给选中的，没选就是整份清单。
+
+        用户口径（2026-11-09）：按钮不该永远作用于全量——选中几行就该只改那几行；
+        一个都没选时仍按整份清单走，两条路都不必先"全选"一次。
+        返回 (表清单, 一句范围说明)；说明为空表示这次是全量。
+        """
+        rows = self._selected_rows(self.file_table, len(self.tables))
+        if not rows:
+            return list(self.tables), ""
+        return ([self.tables[r] for r in rows],
+                "本次只作用于选中的 %d 张表，没选中的一概不动" % len(rows))
+
+    def _log_scope(self, scope, view=None):
+        if scope:
+            append_log(view or self.log, "[范围] " + scope)
+
+    def _refresh_scope_hint(self):
+        """动作条上那句「作用范围」跟着选中行走：两页各一支，没建好就跳过。
+
+        选中行会静悄悄地改按钮范围：改完一行表名再点前缀，如果没这句提示，
+        用户只会看到"只改了一行"然后以为按钮坏了（第一版就是这么被报上来的）。
+        """
+        pairs = ((getattr(self, "lbl_scope", None),
+                  getattr(self, "file_table", None), len(self.tables)),
+                 (getattr(self, "lbl_sql_scope", None),
+                  getattr(self, "sql_table", None), len(self._sql_rows)))
+        for lbl, table, total in pairs:
+            if lbl is None or table is None:
+                continue
+            n = len(self._selected_rows(table, total))
+            if n:
+                lbl.setText("范围：选中 %d 张表" % n)
+            else:
+                lbl.setText("范围：全量（%d 张表）" % total)
+
+    # ---- 第二页同一件事：按选中的表行决定按钮作用范围 ----
+    def _sql_scope_rows(self):
+        """选中的行号；一个都没选就是空列表（按全量走）。"""
+        return self._selected_rows(self.sql_table, len(self._sql_rows))
+
+    def _sql_scope(self):
+        """「SQL 脚本改名」页按钮区的作用对象：选了就只给选中的，没选就是全量。"""
+        idx = self._sql_scope_rows()
+        if not idx:
+            return list(self._sql_rows), ""
+        return ([self._sql_rows[r] for r in idx],
+                "本次只作用于选中的 %d 张表，没选中的一概不动" % len(idx))
+
+    def _sql_scope_names(self):
+        """作用范围摊成 {脚本路径: {表名}}；全量时给 (None, "")。
+
+        取 `actual`——那是脚本正文里现在的表名，也是 display_map 的键、切句后
+        认表名时对得上的那个；清单上看到的 `display` 已经过大小写开关，
+        拿它去正文里找会找不到（勾了转大写时尤其明显）。
+        """
+        rows, scope = self._sql_scope()
+        if not scope:
+            return None, ""
+        out = {}
+        for r in rows:
+            out.setdefault(r["path"], set()).add(r["actual"])
+        return out, scope
+
+    def _sql_only_after(self, idx):
+        """落盘前的最后一步：行号 → {脚本路径: {表名}}。
+
+        保存/生成/执行都会先 `_materialize_sql_display`，正文里的表名会当场
+        换成显示名；所以范围必须在落地之后按同一个行号重新取一遍，
+        否则拿到的是改名之前的老名字。全量时给 (None, "")。
+        """
+        idx = [i for i in idx if 0 <= i < len(self._sql_rows)]
+        if not idx:
+            return None, ""
+        out = {}
+        for i in idx:
+            row = self._sql_rows[i]
+            out.setdefault(row["path"], set()).add(row["actual"])
+        return out, "本次只作用于选中的 %d 张表，没选中的一概不动" % len(idx)
+
+    def _sql_text_for_tables(self, text, names):
+        """从一份脚本里只留属于 names 这几张表的语句。
+
+        生成 excel / 执行这类"整份文件"的动作要按选中行收窄时走这里：语句头认不出
+        表名的（SET / BEGIN / LOCK TABLES 之类）一律不带走——它们是整份脚本的壳，
+        收窄成几张表时带上只会把范围又放大回去。
+        """
+        keep = {n.lower() for n in names}
+        out = []
+        for st in split_sql_statements(text):
+            m = SQL_HEAD_TABLE_RE.match(st.lstrip())
+            if not m:
+                continue
+            target = m.group(1).replace("`", "").split(".")[-1].lower()
+            if target in keep:
+                out.append(st.strip().rstrip(";"))
+        if not out:
+            return ""
+        return ";\n".join(out) + ";\n"
 
     def on_clear(self):
         self.tables.clear()
@@ -4815,7 +5171,9 @@ class MainWindow(QWidget):
         if head is None:
             self._warn(why)
             return
-        self._run_modal("正在替换表名前缀…", table_replace_task, (self.tables, head),
+        tables, scope = self._scoped_tables()
+        self._log_scope(scope)
+        self._run_modal("正在替换表名前缀…", table_replace_task, (tables, head),
                         on_done=self._finish_replace_prefix)
 
     def _finish_replace_prefix(self, res):
@@ -4834,27 +5192,35 @@ class MainWindow(QWidget):
             popup_box(self, "提示", NO_FILE_HINT)
             return
         prefix = self.ed_prefix.text().strip()
-        self._run_modal("正在批量应用表名前缀…", table_prefix_task, (self.tables, prefix),
+        tables, scope = self._scoped_tables()
+        self._log_scope(scope)
+        self._run_modal("正在批量应用表名前缀…", table_prefix_task, (tables, prefix),
                         on_done=self._finish_apply_prefix)
 
     def _finish_apply_prefix(self, res):
         self._refresh_file_table()
+        # 只报"这一下动了几张表"：按选中行生效后再说"全部表名"就把范围说错了
+        n = res.get("n", 0)
         if res["prefix"]:
-            append_log(self.log, f"[前缀] 已为全部表名批量添加前缀「{res['prefix']}」")
+            append_log(self.log, f"[前缀] 已为 {n} 张表名批量添加前缀「{res['prefix']}」")
         else:
-            append_log(self.log, "[前缀] 已移除前缀，恢复基础表名")
+            append_log(self.log, f"[前缀] 已移除前缀，{n} 张表恢复基础表名")
 
     # ---- 表结构预览（弹窗表格） ----
     def on_preview_structure(self):
         if not self.tables:
             popup_box(self, "提示", NO_FILE_HINT)
             return
-        dlg = StructureDialog(self.tables, self)
+        tables, scope = self._scoped_tables()
+        self._log_scope(scope)
+        dlg = StructureDialog(tables, self)
         if dlg.exec():
-            # 用户编辑后回写
-            self.tables = dlg.get_tables()
+            # 弹窗直接改的就是清单里那几个表定义（同一个 dict），不另做回写；
+            # 新增/删除字段时 df 与 columns 由弹窗一起改，这里只刷清单与行上限体检
+            for line in dlg.summary():
+                append_log(self.log, "[结构] " + line)
             self._refresh_file_table()
-            append_log(self.log, "[结构] 已按弹窗确认 %d 张表的字段定义" % len(self.tables))
+            append_log(self.log, "[结构] 已按弹窗确认 %d 张表的字段定义" % len(tables))
 
     # ---- 统计数据总行数 ----
     def on_stat_total_rows(self):
@@ -4865,14 +5231,17 @@ class MainWindow(QWidget):
         if not self.tables:
             popup_box(self, "提示", NO_FILE_HINT)
             return
-        total = sum(len(t["df"]) for t in self.tables)
-        files = len({t["filepath"] for t in self.tables})
+        tables, scope = self._scoped_tables()
+        self._log_scope(scope)
+        total = sum(len(t["df"]) for t in tables)
+        files = len({t["filepath"] for t in tables})
         num = format(total, ",")
+        head = ("选中的 %d 张表" % len(tables)) if scope else \
+               ("待导入文件 %d 个、表 %d 张" % (files, len(tables)))
         append_log(self.log,
-                   "[统计] 待导入文件 %d 个、表 %d 张，数据总行数：%s 行"
-                   % (files, len(self.tables), num))
+                   "[统计] %s，数据总行数：%s 行" % (head, num))
         popup_box(self, "数据总行数",
-                  "数据总行数：%s 行\n\n待导入文件 %d 个，共 %d 张表。" % (num, files, len(self.tables)))
+                  "数据总行数：%s 行\n\n%s。" % (num, head))
 
     def on_file_table_item_changed(self, item) -> None:
         """清单里就地改的两格：表名要过校验，表注释直接写回这张表的定义。"""
@@ -4948,7 +5317,8 @@ class MainWindow(QWidget):
         t = self.tables[row]
         dlg = StructureDialog([t], self)
         if dlg.exec():
-            self.tables[row] = dlg.get_tables()[0]
+            for line in dlg.summary():
+                append_log(self.log, "[结构] " + line)
             self._refresh_file_table()
             append_log(self.log, "[结构] %s 已按弹窗修改" % t["table_name"])
 
@@ -4957,7 +5327,9 @@ class MainWindow(QWidget):
         if not self.tables:
             popup_box(self, "提示", NO_FILE_HINT)
             return
-        dlg = DDLDialog(self.tables, self.chk_drop.isChecked(), self)
+        tables, scope = self._scoped_tables()
+        self._log_scope(scope)
+        dlg = DDLDialog(tables, self.chk_drop.isChecked(), self)
         dlg.exec()
 
     # ---- 生成标准 / 简易 excel 文件 ----
@@ -4972,10 +5344,12 @@ class MainWindow(QWidget):
         if not self.tables:
             self._warn(NO_FILE_HINT)
             return
+        tables, scope = self._scoped_tables()
+        self._log_scope(scope)
         out_root = program_dir()
         title = ("正在生成标准excel文件…" if with_meta else "正在生成简易excel文件…")
         append_log(self.log, f"===== 开始生成{label}excel文件（输出根目录 {out_root}）=====")
-        self._run_modal(title, meta_export_task, (list(self.tables), out_root, with_meta),
+        self._run_modal(title, meta_export_task, (list(tables), out_root, with_meta),
                         on_done=self._finish_meta_export, log_view=self.log)
 
     def _finish_meta_export(self, res):
@@ -5000,9 +5374,11 @@ class MainWindow(QWidget):
         if not db:
             self._warn(NO_DB_HINT)
             return
+        tables, scope = self._scoped_tables()
+        self._log_scope(scope)
         self.btn_import.setEnabled(False)
         self.btn_stop.setEnabled(True)
-        self.worker = ImportWorker(self._conn_cfg(), self.tables, self.chk_drop.isChecked())
+        self.worker = ImportWorker(self._conn_cfg(), list(tables), self.chk_drop.isChecked())
         self.worker.log.connect(self._on_worker_log)
         self.worker.log_error.connect(self._on_worker_error)
         self.worker.table_done.connect(self._on_table_done)
@@ -5059,27 +5435,26 @@ class MainWindow(QWidget):
         append_log(self.log,
                    f"===== 全部完成：成功 {ok} 张表，失败 {fail} 张表 =====",
                    error=bool(fail))
-        # 导入成功的文件从待导入列表移除，失败的保留便于调整后重试
+        # 导入完成的文件仍留在待导入列表里（用户 2026-11-09 点名：执行完不要清空待上传区域）：
+        # 同一批文件常要再导一次到另一个库、或换个前缀再导，自动抽走等于逼人重新拖一遍。
+        # 要清空有「清空待上传文件」，要删几行有 Del，退路都在。
         done_files = {r.get("file") for r in results if r["ok"]}
-        removed = [t for t in self.tables if t.get("filepath") in done_files]
-        kept = [t for t in self.tables if t.get("filepath") not in done_files]
-        if removed:
-            append_log(self.log, 
-                "[清理] 已从待导入列表移除成功文件："
-                + "、".join(os.path.basename(t["filepath"]) for t in removed))
-        if fail and kept:
-            append_log(self.log, 
-                "[保留] 导入失败的文件仍在列表中，可调整后重试："
-                + "、".join(os.path.basename(t["filepath"]) for t in kept))
-        self.tables = kept
+        kept = [t for t in self.tables if t.get("filepath") in done_files]
+        if kept:
+            append_log(self.log,
+                       "[保留] 导入完成的文件仍留在待导入列表："
+                       + "、".join(sorted({os.path.basename(t["filepath"]) for t in kept})))
+        if fail:
+            append_log(self.log,
+                       "[保留] 导入失败的文件同样留在列表里，可调整后重试")
         self._refresh_file_table()
         self.btn_import.setEnabled(bool(self.tables))
         self.btn_stop.setEnabled(False)
         msg = f"成功 {ok} 张表，失败 {fail} 张表。"
-        if removed:
-            msg += f"\n已从待导入列表移除 {len(removed)} 个成功文件。"
+        if kept:
+            msg += f"\n导入完成的 {len(kept)} 张表仍留在待导入列表里。"
         if fail:
-            msg += "\n失败文件保留在列表中，可调整后重试。"
+            msg += "\n失败的表也在列表里，可调整后重试。"
         popup_box(self, "导入完成", msg + "\n详见日志。")
 
 
@@ -5095,97 +5470,303 @@ METADATA_COL_STRETCH = (0, 1, 2)
 
 
 class StructureDialog(QDialog):
+    """表结构预览（可编辑）：一张表一页，字段名/注释/类型/主键可改，也能增删字段。
+
+    保存时先把整份编辑收到副本、校验主键，通过后才统一写回——校验不过就留在编辑态。
+    写回时 columns 与 df 必须同位置一起改：导入走 df.values 按列序号取数，错一格整份数据
+    就串列（core.infer.apply_auto_pk 那条注释同一口径）。新增/删除字段就是会改到列数的操作，
+    所以这里每次都按"行 → 原列序号"重建一份对齐的 df。
+
+    保存过程任何一步抛异常都要弹出来说清楚：以前异常一抛，弹窗不关也不说话，
+    用户只会看到"改了、点保存、没反应"，再打开还是老样子（用户 2026-11-09 点名）。
+    """
+
+    HEADERS = ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "数据类型",
+               "表内数据最大字节长度"]
+
     def __init__(self, tables, parent=None):
         super().__init__(parent)
         self.setWindowTitle("表结构预览（可编辑）")
         fit_client(self, 980, 640)
         self.tables = tables
-        self.editors = []  # 每个 tab 一个 (table_dict, tablewidget)
+        # 每个 tab 一个 (表定义, 表格, 每行对应的原列序号；新增的行为 None)
+        self.editors = []
+        self._notes = []          # 保存成功后的改动摘要，主窗口写进日志
 
         lay = QVBoxLayout(self)
         tip = QLabel("勾选一列或多列作为主键（多列即组合主键，主键约束至多一个）；"
-                     "主键需全列非空且组合唯一，全部不勾选则不设主键")
+                     "主键需全列非空且组合唯一，全部不勾选则不设主键。\n"
+                     "「新增字段」「删除选中字段」改的是这张表的字段清单（表里选中行再按 Del 也是删）。")
         tip.setStyleSheet("color: #666;")
+        tip.setWordWrap(True)
         lay.addWidget(tip)
         self.tabs = style_tab_scroll(QTabWidget())
         for t in tables:
             # 主键列 46、最大字节列 96 与 Swing 侧同一组设计下限；
             # 富余宽度只摊给三列文字，主键勾选框与字节数那两列不动
-            tw = FillWidthTable(len(t["columns"]), 5,
-                                STRUCTURE_COL_FLOORS, STRUCTURE_COL_STRETCH)
+            tw = FillWidthTable(0, 5, STRUCTURE_COL_FLOORS, STRUCTURE_COL_STRETCH)
             style_table_font(tw)
             # 第 4 列是这一列数据在表内的实测最大字节数，不是类型声明的容量；
             # 挨着「数据类型」放时只写"最大字节长度"会被读成 VARCHAR(n) 那一档
-            tw.setHorizontalHeaderLabels(
-                ["主键", "字段名(拼音/首字母)", "字段注释(中文表头)", "数据类型",
-                 "表内数据最大字节长度"])
-            for i, c in enumerate(t["columns"]):
-                cb = QCheckBox()
-                cb.setChecked(bool(c.get("primary_key")))
-                tw.setCellWidget(i, 0, cb)
-                tw.setItem(i, 1, QTableWidgetItem(c["field"]))
-                tw.setItem(i, 2, QTableWidgetItem(c["comment"]))
-                tw.setItem(i, 3, QTableWidgetItem(c["type"]))
-                size_item = QTableWidgetItem(str(c.get("max_len", "")))
-                # 这一列是推断的中间量：改了不会改类型，只会出现"看着改对了、
-                # 建表仍按原类型"的错觉，所以只给看不给改（与 Java 侧同口径）
-                size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
-                tw.setItem(i, 4, size_item)
-            # 列宽由 FillWidthTable 管：底宽 = 设计下限与内容需要取大者，视口富余
-            # 摊给三列文字铺满弹窗；内容超出视口时一列都不压，横向条把尾巴带出来。
-            # （Swing 侧同一算法：AUTO_RESIZE_OFF + Tables.fillOnResize）
-            tw.fit_columns()
+            tw.setHorizontalHeaderLabels(self.HEADERS)
+            tw.setSelectionBehavior(QAbstractItemView.SelectRows)
+            tw.installEventFilter(self)
+            origin = list(range(len(t["columns"])))
+            self._load_rows(tw, t, origin)
+
             # 这张表不另加标题：tab 上写的就是表名，已经贴在表格正上方。
-            # 表注释的输入行也拿掉了——清单里双击那一格就能改，两处都能改同一件事
-            # 就会有两处"到底以谁为准"的口径（用户 2026-10-28 点名）
+            # 增删字段这两颗放在表格上沿，与那一列"字段清单"同一组，不跟弹窗底部的保存挤一起。
+            tools = QHBoxLayout()
+            btn_add = QPushButton("新增字段")
+            btn_add.setToolTip("在这张表的字段末尾补一列：先给一个 is_new_field 占位名，"
+                               "再在表里把字段名、注释、数据类型改成要的\n"
+                               "（新增的列没有数据值，导入时这一列按空值写）")
+            btn_del = QPushButton("删除选中字段")
+            btn_del.setToolTip("把选中的行从字段清单里删掉（可多选，Del 键同一件事）；\n"
+                               "删掉的列以后不再建，主键勾在别的列上照旧生效")
+            btn_add.clicked.connect(functools.partial(self._add_field, t, tw, origin))
+            btn_del.clicked.connect(functools.partial(self._del_field, t, tw, origin))
+            equal_heights(btn_add, btn_del)
+            tools.addWidget(btn_add)
+            tools.addWidget(btn_del)
+            tools.addStretch(1)
+
             page = QWidget()
             page_lay = QVBoxLayout(page)
             page_lay.setContentsMargins(0, 0, 0, 0)
-            page_lay.addWidget(tw)
+            page_lay.addLayout(tools)
+            page_lay.addWidget(tw, 1)
             self.tabs.addTab(page, t["table_name"])
-            self.editors.append((t, tw))
+            self.editors.append((t, tw, origin))
         lay.addWidget(self.tabs)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        # 按钮写成中文的「保存」「取消」：以前是 QDialogButtonBox 的 OK / Cancel，
+        # 中文界面里一颗写着 OK 的按钮，让人拿不准点了到底存不存
+        btns = QDialogButtonBox()
+        self.btn_save = btns.addButton("保存", QDialogButtonBox.AcceptRole)
+        self.btn_cancel = btns.addButton("取消", QDialogButtonBox.RejectRole)
+        self.btn_save.setDefault(True)
         btns.accepted.connect(self._on_accept)
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
 
-    def _on_accept(self):
-        # 先把全部编辑收集到副本，主键校验通过后再写回，避免无效主键污染数据
-        staged = []
-        for (t, tw) in self.editors:
+    # ---- 表格装载与增删 ----
+    def _fill_row(self, tw, row, col, is_new):
+        cb = QCheckBox()
+        cb.setChecked(bool(col.get("primary_key")))
+        tw.setCellWidget(row, 0, cb)
+        tw.setItem(row, 1, QTableWidgetItem(col["field"]))
+        tw.setItem(row, 2, QTableWidgetItem(col["comment"]))
+        tw.setItem(row, 3, QTableWidgetItem(col["type"]))
+        size = "" if is_new or col.get("max_len") in (None, "") else str(col["max_len"])
+        size_item = QTableWidgetItem(size)
+        # 这一列是推断的中间量：改了不会改类型，只会出现"看着改对了、
+        # 建表仍按原类型"的错觉，所以只给看不给改（与 Java 侧同口径）
+        size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
+        if is_new:
+            size_item.setToolTip("新增字段还没有数据，这一格没有实测值")
+        tw.setItem(row, 4, size_item)
+
+    def _load_rows(self, tw, t, origin):
+        cols = t["columns"]
+        tw.setRowCount(len(cols))
+        for i, c in enumerate(cols):
+            self._fill_row(tw, i, c, is_new=origin[i] is None)
+        tw.fit_columns()
+
+    @staticmethod
+    def _free_field(tw):
+        """给新增行找一个当前表里没用过的占位字段名，省得和已有字段撞名。"""
+        used = set()
+        for r in range(tw.rowCount()):
+            it = tw.item(r, 1)
+            if it is not None:
+                used.add(it.text().strip().lower())
+        name, n = "is_new_field", 1
+        while name.lower() in used:
+            n += 1
+            name = "is_new_field_%d" % n
+        return name
+
+    def _add_field(self, t, tw, origin):
+        row = tw.rowCount()
+        tw.insertRow(row)
+        self._fill_row(tw, row, {"field": self._free_field(tw), "comment": "新字段",
+                                 "type": "VARCHAR(255)", "max_len": None}, is_new=True)
+        origin.append(None)
+        tw.clearSelection()
+        tw.selectRow(row)
+        tw.scrollToItem(tw.item(row, 1))
+        tw.setCurrentCell(row, 1)
+        tw.editItem(tw.item(row, 1))
+        tw.fit_columns()
+
+    def _del_field(self, t, tw, origin):
+        rows = sorted({i.row() for i in tw.selectionModel().selectedRows()},
+                      reverse=True)
+        rows = [r for r in rows if 0 <= r < tw.rowCount()]
+        if not rows:
+            popup_box(self, "删除字段",
+                      "先在表里选中要删的行（可以按住 Ctrl 多选），再点这颗按钮。",
+                      "warning")
+            return
+        if len(rows) >= tw.rowCount():
+            popup_box(self, "删除字段",
+                      "这张表只剩这些字段了，全删掉就没有列定义可建表。\n"
+                      "要整张表不要，请在清单里把这一行删掉（Del）。", "warning")
+            return
+        for r in rows:
+            tw.removeRow(r)
+            origin.pop(r)
+        tw.fit_columns()
+
+    def eventFilter(self, obj, event):
+        # Del 与「删除选中字段」同一个动作：两条入口一套规则，不各写一遍
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Delete:
+            for (t, tw, origin) in self.editors:
+                if tw is obj:
+                    self._del_field(t, tw, origin)
+                    return True
+        return super().eventFilter(obj, event)
+
+    # ---- 保存 ----
+    def _collect(self):
+        """把每张表表格里的内容收成 (表定义, 新列清单, 每行对应的原列序号)。"""
+        out = []
+        for (t, tw, origin) in self.editors:
             cols = []
-            for i, c in enumerate(t["columns"]):
-                nc = dict(c)
+            for i in range(tw.rowCount()):
+                src = origin[i]
+                base = dict(t["columns"][src]) if src is not None else {
+                    "field": "", "comment": "", "type": "VARCHAR(255)", "max_len": None}
                 item = tw.item(i, 1)
-                if item and item.text().strip():
-                    nc["field"] = item.text().strip()
+                if item is not None and item.text().strip():
+                    base["field"] = item.text().strip()
                 item = tw.item(i, 2)
                 if item is not None:
-                    nc["comment"] = item.text()
+                    base["comment"] = item.text()
                 item = tw.item(i, 3)
-                if item and item.text().strip():
-                    nc["type"] = item.text().strip()
+                if item is not None and item.text().strip():
+                    base["type"] = item.text().strip()
                 cb = tw.cellWidget(i, 0)
-                nc["primary_key"] = bool(cb and cb.isChecked())
-                cols.append(nc)
-            staged.append((t, cols))
+                base["primary_key"] = bool(cb and cb.isChecked())
+                cols.append(base)
+            out.append((t, cols, list(origin)))
+        return out
 
-        problems = []
-        for t, cols in staged:
-            good, msg = validate_primary_key(t["df"], cols)
-            if not good:
-                problems.append(f"表「{t['table_name']}」：{msg}")
-        if problems:
-            popup_box(self, "主键设置无效",
-                      "\n".join(problems) + "\n\n请调整主键勾选或字段类型后重试。",
-                      "warning")
-            return    # 校验不过不放行，保持弹窗打开让用户调整
+    @staticmethod
+    def _df_positions(t):
+        """原列序号 → df 里的列序号；对不上就是 None（这一列在当前 df 里没有数据）。
 
-        for t, cols in staged:
-            t["columns"] = cols
+        正常情况两者一一对应（同一个序号）。只有"自动补主键的空表"这类 df 比 columns
+        少一列时才需要重对：按列名对——df 的列名就是解析时的中文表头，也等于字段的 comment。
+        """
+        df = t.get("df")
+        old = t.get("columns") or []
+        if df is None:
+            return lambda i: None
+        if df.shape[1] == len(old):
+            return lambda i: i
+        names = [str(x).strip().lower() for x in df.columns]
+        table = []
+        for c in old:
+            key = str(c.get("comment") or "").strip().lower()
+            table.append(names.index(key) if key and key in names else None)
+        return lambda i: table[i] if 0 <= i < len(table) else None
+
+    @staticmethod
+    def _aligned_df(t, cols, picks):
+        """按"新列顺序 → 原列序号"重建一份与 cols 对齐的 df。
+
+        新增的行没有数据，用一列空值占位：导入时按空值写，主键校验也据此判"无数据"。
+        df 本来就跟 columns 对不上的（自动补主键的空表），按 _df_positions 重对一遍，
+        不再按下标硬取、越界崩。
+        """
+        import pandas as pd
+        df = t.get("df")
+        rows = 0 if df is None else len(df)
+        pos = StructureDialog._df_positions(t)
+        frames, names = [], []
+        for i, src in enumerate(picks):
+            at = pos(src) if src is not None else None
+            if at is not None and df is not None and at < df.shape[1]:
+                frames.append(df.iloc[:, at].reset_index(drop=True))
+                names.append(df.columns[at])
+            else:
+                frames.append(pd.Series([None] * rows, dtype=object))
+                names.append(cols[i]["field"])
+        if not frames:
+            return pd.DataFrame(index=range(rows))
+        out = pd.concat(frames, axis=1)
+        out.columns = names
+        return out
+
+    def _on_accept(self):
+        try:
+            staged = self._collect()
+            problems = []
+            for (t, cols, picks) in staged:
+                for i, c in enumerate(cols):
+                    if c.get("primary_key") and picks[i] is None:
+                        problems.append("表「%s」：新增字段「%s」还没有数据，不能作主键"
+                                        % (t["table_name"], c.get("field") or "（空）"))
+                aligned = self._aligned_df(t, cols, picks)
+                good, msg = validate_primary_key(aligned, cols)
+                if not good:
+                    problems.append("表「%s」：%s" % (t["table_name"], msg))
+            if problems:
+                popup_box(self, "主键设置无效",
+                          "\n".join(problems) + "\n\n请调整主键勾选或字段类型后重试。",
+                          "warning")
+                return        # 校验不过不放行，保持弹窗打开让用户调整
+        except Exception as e:                      # 保存失败必须有交代，不许静默
+            popup_box(self, "保存失败",
+                      "这次修改没能保存：\n%s\n\n弹窗保持打开，可以继续调整。"
+                      % describe_db_error(e), "critical")
+            return
+
+        self._notes = []
+        for (t, cols, picks) in staged:
+            self._notes.extend(self._apply(t, cols, picks))
         self.accept()
+
+    def _apply(self, t, cols, picks):
+        """把一张表的编辑落到表定义上，返回改动摘要（主窗口写进日志）。"""
+        old = t["columns"]
+        notes = []
+        gone = [old[i]["field"] for i in range(len(old)) if i not in picks]
+        added = [c["field"] for c, p in zip(cols, picks) if p is None]
+        if gone:
+            notes.append("%s：删除字段 %s" % (t["table_name"], "、".join(gone)))
+        if added:
+            notes.append("%s：新增字段 %s" % (t["table_name"], "、".join(added)))
+        for i, c in enumerate(cols):
+            src = picks[i]
+            if src is None:
+                continue
+            o = old[src]
+            for key, label in (("field", "字段名"), ("comment", "注释"), ("type", "类型")):
+                if str(c.get(key) or "") != str(o.get(key) or ""):
+                    notes.append("%s：%s %s → %s" % (t["table_name"], label,
+                                                     o.get(key) or "（空）",
+                                                     c.get(key) or "（空）"))
+            if bool(c.get("primary_key")) != bool(o.get("primary_key")):
+                notes.append("%s：%s 的主键勾选 %s"
+                             % (t["table_name"], c["field"],
+                                "勾上" if c.get("primary_key") else "取消"))
+        # 列数变了（含 df 本来就跟 columns 对不上那种：自动补主键的空表就是这样）：
+        # 重铺一份对齐的 df，并把上一次"行字节上限体检"的结论作废
+        df = t.get("df")
+        changed_shape = (len(cols) != len(old) or picks != list(range(len(old)))
+                         or (df is not None and df.shape[1] != len(cols)))
+        t["columns"] = cols
+        if changed_shape:
+            t["df"] = self._aligned_df(t, cols, picks)
+            t.pop("row_fit", None)
+        return notes
+
+    def summary(self):
+        return list(self._notes)
 
     def get_tables(self):
         return self.tables
@@ -5201,13 +5782,27 @@ class SqlMetadataDialog(QDialog):
     不再拆成"类型 + 长度"两格。给了 on_edit 时字段名 / 字段注释 / 数据类型三列可改，
     每改一格就调一次回调（回调只管这一列真正变了的那几项）；没给回调时整表只读，
     自检与取证走这一路，不去动脚本。
+
+    给了 on_add / on_delete 时表格上沿多两颗按钮：新增字段、删除选中字段。
+    两个回调都回"这张表新的列清单"（成功）或 None（被拒，弹窗保持原样），
+    弹窗据此整表重铺——新增/删除之后行数与行号都变了，不重铺就点不动下一格。
     """
 
     def __init__(self, table, display_name, upper, parent=None, on_edit=None,
-                 lower=False):
+                 lower=False, on_add=None, on_delete=None):
         super().__init__(parent)
         self.setWindowTitle("表元数据（%s）" % display_name)
         fit_client(self, 980, 640)
+        self._table = table
+        self._display_name = display_name
+        self._on_edit = on_edit
+        self._on_add = on_add
+        self._on_delete = on_delete
+        self._upper = bool(upper)
+        self._lower = bool(lower)
+        self._loading = True
+        self._originals = []          # 每行的 (字段名, 注释, 类型) 原值，用来判断改了哪一格
+
         lay = QVBoxLayout(self)
         head = QLabel("表名：%s    表注释：%s"
                       % (display_name, table.get("table_comment") or "（无）"))
@@ -5222,52 +5817,129 @@ class SqlMetadataDialog(QDialog):
                   "主键与可空照脚本里的定义显示，不在这里改。" \
                   "「表名与字段名转大写」或「转小写」只切换显示，不回写脚本正文。"
         lay.addWidget(QLabel(tip))
-        cols = table.get("columns") or []
-        tw = FillWidthTable(len(cols), 5, METADATA_COL_FLOORS, METADATA_COL_STRETCH)
+
+        tools = QHBoxLayout()
+        self.btn_add = QPushButton("新增字段")
+        self.btn_add.setToolTip("在这张表的字段末尾补一列（占位名 is_new_field，"
+                                "补完在表里改字段名/注释/类型）\n"
+                                "只改脚本里的 CREATE TABLE，INSERT 里的数据一行都不动")
+        self.btn_del = QPushButton("删除选中字段")
+        self.btn_del.setToolTip("把选中的行从这句 CREATE TABLE 里删掉（可多选，Del 键同一件事）；\n"
+                                "主键/索引名单里引用到它的那几项一并清掉")
+        equal_heights(self.btn_add, self.btn_del)
+        tools.addWidget(self.btn_add)
+        tools.addWidget(self.btn_del)
+        tools.addStretch(1)
+        editable = on_edit is not None
+        show_tools = editable and (on_add is not None or on_delete is not None)
+        self.btn_add.setVisible(editable and on_add is not None)
+        self.btn_del.setVisible(editable and on_delete is not None)
+        if show_tools:
+            lay.addLayout(tools)
+        self.btn_add.clicked.connect(self._add_clicked)
+        self.btn_del.clicked.connect(self._del_clicked)
+
+        tw = FillWidthTable(0, 5, METADATA_COL_FLOORS, METADATA_COL_STRETCH)
         style_table_font(tw)
         tw.setHorizontalHeaderLabels(["字段名", "字段注释", "数据类型", "主键", "可空"])
-        self._on_edit = on_edit
-        self._upper = bool(upper)
-        self._lower = bool(lower)
-        self._loading = True
-        self._originals = []          # 每行的 (字段名, 注释, 类型) 原值，用来判断改了哪一格
+        tw.setSelectionBehavior(QAbstractItemView.SelectRows)
+        tw.installEventFilter(self)
+        self.field_table = tw
         if on_edit is not None:
             tw.itemChanged.connect(self._on_item_changed)
-        for i, c in enumerate(cols):
-            field = c["field"]
-            typ = c.get("type") or ""
-            comment = c.get("comment") or ""
-            self._originals.append((field, comment, typ))
-            values = [case_switch(field, upper, lower), comment, typ,
-                      "是" if c.get("primary_key") else "",
-                      "是" if c.get("nullable", True) else "否"]
-            for j, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignCenter if j >= 3 else Qt.AlignLeft | Qt.AlignVCenter)
-                if j >= 3:
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                tw.setItem(i, j, item)
-        self._loading = False
-        tw.setSelectionBehavior(QAbstractItemView.SelectRows)
-        # 与结构弹窗同一档：底宽取"设计下限与内容需要"的大者，富余摊给字段名/注释/
-        # 数据类型三列铺满弹窗；装不下时出横向条，不把超长那一格切掉
-        # （Swing 侧 AUTO_RESIZE_OFF + Tables.fillOnResize 同一算法）
-        tw.fit_columns()
         # 表格左上的标识（与第一页「待导入文件」同一做法）：标题里带列数，
         # 不必滚到表格末尾数这一张表解析出了多少列
-        col_box = QGroupBox("%s（共 %d 列）" % (COLUMN_TABLE_TITLE, len(cols)))
-        cb_lay = QVBoxLayout(col_box)
+        self.col_box = QGroupBox()
+        cb_lay = QVBoxLayout(self.col_box)
         cb_lay.setContentsMargins(6, 2, 6, 6)
         cb_lay.addWidget(tw, 1)
-        lay.addWidget(col_box, 1)
-        self.field_table = tw
+        lay.addWidget(self.col_box, 1)
+        self._load(table.get("columns") or [])
+
         btns = QDialogButtonBox(QDialogButtonBox.Close)
         btns.rejected.connect(self.reject)
         btns.clicked.connect(lambda _: self.reject())
         lay.addWidget(btns)
 
+    def _load(self, cols):
+        """按一份列清单整表重铺：新增/删除之后行号会变，不重铺就点不动下一格。"""
+        self._loading = True
+        try:
+            tw = self.field_table
+            tw.setRowCount(len(cols))
+            self._originals = []
+            for i, c in enumerate(cols):
+                field = c["field"]
+                typ = c.get("type") or ""
+                comment = c.get("comment") or ""
+                self._originals.append((field, comment, typ))
+                values = [case_switch(field, self._upper, self._lower), comment, typ,
+                          "是" if c.get("primary_key") else "",
+                          "是" if c.get("nullable", True) else "否"]
+                for j, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setTextAlignment(
+                        Qt.AlignCenter if j >= 3 else Qt.AlignLeft | Qt.AlignVCenter)
+                    if j >= 3:
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    tw.setItem(i, j, item)
+        finally:
+            self._loading = False
+        self.col_box.setTitle("%s（共 %d 列）" % (COLUMN_TABLE_TITLE, len(cols)))
+        # 与结构弹窗同一档：底宽取"设计下限与内容需要"的大者，富余摊给字段名/注释/
+        # 数据类型三列铺满弹窗；装不下时出横向条，不把超长那一格切掉
+        # （Swing 侧 AUTO_RESIZE_OFF + Tables.fillOnResize 同一算法）
+        self.field_table.fit_columns()
+
     def tableWidget(self):
         return self.field_table
+
+    # ---- 新增 / 删除 ----
+    def _add_clicked(self):
+        if self._on_add is None:
+            return
+        cols = self._on_add()
+        if cols is not None:
+            self._load(cols)
+            if self.field_table.rowCount():
+                row = self.field_table.rowCount() - 1
+                self.field_table.selectRow(row)
+                self.field_table.scrollToBottom()
+                self.field_table.setCurrentCell(row, 0)
+                self.field_table.editItem(self.field_table.item(row, 0))
+
+    def _del_clicked(self):
+        if self._on_delete is None:
+            return
+        rows = sorted({i.row() for i in self.field_table.selectionModel().selectedRows()},
+                      reverse=True)
+        if not rows:
+            popup_box(self, "删除字段",
+                      "先在表里选中要删的字段（可按住 Ctrl 多选），再点这颗按钮。",
+                      "warning")
+            return
+        fields = [self._originals[r][0] for r in rows if 0 <= r < len(self._originals)]
+        if len(fields) >= self.field_table.rowCount():
+            popup_box(self, "删除字段",
+                      "这是这张表最后的字段了，全删掉就没有列定义可建表。", "warning")
+            return
+        if not confirm_box(self, "删除字段",
+                           "从脚本里删掉这些字段？\n%s\n\n"
+                           "主键/索引名单里引用到它们的项会一并清掉；脚本里的 INSERT 数据不动，"
+                           "所以删完再执行到库可能报列数不匹配。\n"
+                           "（脚本文件本身要等「保存修改后ddl脚本」才落盘）"
+                           % "、".join(fields), "删除", "不删"):
+            return
+        cols = self._on_delete(fields)
+        if cols is not None:
+            self._load(cols)
+
+    def eventFilter(self, obj, event):
+        if (obj is self.field_table and event.type() == QEvent.KeyPress
+                and event.key() == Qt.Key_Delete and self._on_delete is not None):
+            self._del_clicked()
+            return True
+        return super().eventFilter(obj, event)
 
     def _on_item_changed(self, item):
         """一格里改了什么都只交这一格对应的项；被拒绝时把这一格填回原值并说清原因。
