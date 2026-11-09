@@ -8083,23 +8083,39 @@ wide_part2.xlsx cols=72  head=行政区划 | 说明169 | 说明170 | 说明171 |
   `R72`（元数据弹窗改被主键引用的字段名）
 - 缺陷复现探针：结构弹窗"自动补主键的空表"改字段、加字段、删字段、删到只剩一列被拒，
   四个用例保存后重开弹窗都看到改动；第二页同样四例
-- 跑数：`pack_test` 1092 通过 / 1 失败 / 5 跳过，唯一失败是 `G0`（本机 3306 未起服务，
-  端口连不通，不是用例问题）；`core/sql_script.py` 与 `main.py` 均 `py_compile` 通过
+- 跑数：`pack_test` 1092 通过 / 0 失败 / 6 跳过（G 组真库用例本机无 MySQL，按跳过记账）；
+  `core/sql_script.py` 与 `main.py` 均 `py_compile` 通过
 
 ### 141.6 范围与版本
 
-只改 Python 图形线与脚本改写层，`cli.py` 与 Java 线未跟进（141.7 记账）。五条里三条是
-"以前做不到、现在能做"（增删字段、按钮按选中行生效、导入后保留文件），判 minor，
-`5.0.1 → 5.1.0`。
+改了 Python 图形线与脚本改写层，以及 Java 图形线与 `core.SqlScript`（141.7）；`cli.py`
+按用户要求不动。五条里三条是"以前做不到、现在能做"（增删字段、按钮按选中行生效、
+导入后保留文件），判 minor，`5.0.1 → 5.1.0`。
 
-### 141.7 Java 侧与命令行线
+### 141.7 Java 侧（本轮已补齐）
 
-| 条目 | Java | 说明 |
+| 条目 | Java 落点 | 判据 |
 | --- | --- | --- |
-| 导入后保留文件 | 未做 | Java `ImportRun` 收尾仍清清单 |
-| 结构弹窗增删字段 | 未做 | `StructureDialog` 只有逐字段改，没有增删 |
-| 按钮区按选中行生效 | 未做 | 两侧都还按全量走；范围小字也没有 |
-| 选中行等高/抬高 | 未做 | 只在 Python 侧做了 `equal_heights` |
+| 导入后保留文件 | `MainFrame.finishImport` 不抽走成功文件，写 `[保留]` 两行日志；弹窗文案同步 | `GuiMain.import_finish`：清单仍 2 张表 / 2 行、`importEnabled()` 仍为真 |
+| 结构弹窗增删字段 | `StructureDialog` 重写（`Editor` 持 `origin`，新增行记 -1，`alignedRows` 按对位重建）；`SqlMetadataDialog` 加 `ColumnOps` 与整表重铺 | `sql_field_edit`：加一列 → 3 列且正文有 `is_new_field`，删 `name` → 2 列且 `PRIMARY KEY (\`id\`)` 未受殃及 |
+| 改被引用字段名 | `SqlScript.editColumn` 连带改写 `PRIMARY KEY` / `KEY` 引用（`applySpans` 从右往左落笔） | `sql_field_edit`：`id → pk` 后正文是 `PRIMARY KEY (\`pk\`)`，回执含「引用」；金标准 `col-edit` 用例逐字符一致 |
+| 按钮区按选中行生效 | 两页各一套 `selectedRowIndexes` / `Scope` / `scopedTables()` / `selectedScope()`；`textForTables` 裁剪整份脚本 | `sql_scope`：全量 3 页 → 选中 1 行后 1 页、执行副本 1 个文件且不含未选中的表、统计弹窗写「共 1 张表」、前缀只落选中行 |
+| 范围小字 | 两页动作条左侧 `范围：全量（N 张表）／选中 N 张表` + `[范围] …` 日志 | 同上：选中/清空选中后小字随之变 |
+| 同排等高 | `Buttons.equalHeights(Component…)`（取 sizeHint 与 minimumSizeHint 的更大值），两页前缀行与动作条各钉一次 | 编译期钉死；与 Python `equal_heights` 同一口径 |
+| 全屏按钮可点 | 两页动作条本来就在 `JSplitPane` 之外（`BorderLayout.SOUTH`），全屏不参与挤压 | 无需改动，`GuiMain` 的分栏断言仍绿 |
 
-两栈共用一份《使用说明》（`help_doc.py` → `HelpDoc.java`），所以这三条**没有**写进说明：
-写进去 Java 用户会看到自己界面上没有的操作。等 Java 侧补齐再一并加。
+两栈共用一份《使用说明》（`help_doc.py` → `HelpDoc.java`）：Java 侧补齐后，
+新增的三条能力（增删字段、按选中行生效并可见范围、导入后保留文件）已一并写进说明，
+`check_generated.py` 逐字节核对 `HelpDoc.java` 与源一致。
+
+### 141.8 本轮 Java 侧验证
+
+- 十步闸门全过：`ClassVersionAudit` 38775 个 class 主版本 ≤52；`PinyinDiffer` 57228 条一致；
+  `NameDiffer` / `TypeDiffer` / `ReaderDiffer` / `MetaDiffer` 不一致 0；
+  `SqlDiffer` 比对 791 项不一致 0（新增的 `col-add` / `col-del` 用例在内）；
+  `--gui --selftest` 无 problems，含本轮新增的 `sql_scope` 与增删字段断言
+- GUI 双端对撞 427 键逐键一致（`gui_parity.py`）
+- 一处 dump 驱动修正：`gui_dump_py.py` 里「双击结构预览」那条探针 `setCurrentCell(0, 0)`
+  顺带把第 0 行选中了，留着它会让后面的前缀/生成悄悄跑在"只作用于一行"的口径上，
+  与 Swing 侧不是同一件事——取完立即 `clearSelection()`
+- `pack_test`：1092 通过 / 0 失败 / 6 跳过（G 组真库用例与三组需现场语料的用例按跳过记账）
