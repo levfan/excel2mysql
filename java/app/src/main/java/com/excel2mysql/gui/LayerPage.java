@@ -31,6 +31,7 @@ public final class LayerPage extends JPanel {
         boolean connected();
         String exportRoot();
         void warn(String text);
+        void inform(String text);
         void informError(String title, String text);
         void runLayerTask(String title, Function<ImportParse.Sink, Object> work, Consumer<Object> onUi);
     }
@@ -97,7 +98,7 @@ public final class LayerPage extends JPanel {
         bar.add(writeMode);
         bar.add(objBtn); bar.add(domBtn); bar.add(adsBtn);
         p.add(bar, BorderLayout.NORTH);
-        p.add(logPanel, BorderLayout.CENTER);
+        p.add(new JScrollPane(logPanel), BorderLayout.CENTER);
         return p;
     }
 
@@ -199,7 +200,7 @@ public final class LayerPage extends JPanel {
                 if (lay == LayerGen.Layer.DOM) { domGenerated = true; }
                 refreshButtonStates();
                 String dir = (String) arr[2];
-                host.warn("已生成 " + lay + "，产物目录：" + dir);
+                host.inform("已生成 " + lay + "，产物目录：" + dir);
             }
         });
     }

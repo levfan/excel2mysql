@@ -2859,6 +2859,10 @@ public final class GuiMain {
         if (titles.size() != 4 || !"SQL 执行器".equals(titles.get(2))) {
             problems.add("第三个页签不对：" + titles);
         }
+        // 第四页签的名字也钉住：layerPage 挂没挂由上面那块管，这条管的是页签标题文案本身。
+        if (titles.size() > 3 && !"分层建模".equals(titles.get(3))) {
+            problems.add("第四个页签不对：" + titles);
+        }
         if (!"执行脚本与临时语句".equals(frame.sqlRunHintText())) {
             problems.add("「SQL 执行器」的提示文案不对：" + frame.sqlRunHintText());
         }
