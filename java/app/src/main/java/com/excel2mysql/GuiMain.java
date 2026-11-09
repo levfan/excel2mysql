@@ -179,6 +179,9 @@ public final class GuiMain {
                     if (lp.adsButton().isEnabled()) {
                         problems.add("仅生成 obj 后 ads 不该亮（dom 未生成）");
                     }
+                    // 产物根用完随手清掉：createTempDirectory 不会自己删，而 deleteOnExit 不递归、
+                    // 底下那层 layer_*/ 留着它就删不掉父目录（上面那份临时映射夹具 mf 是单文件，deleteOnExit 够用）
+                    deleteTree(outRoot);
                 }
                 // 主按钮的底色必须跟着启用状态走：列表还空着时「开始导入」是禁用的，
                 // 涂成强调色会让它看着就能点（现场那句"没导任何东西，点一下颜色才变"）

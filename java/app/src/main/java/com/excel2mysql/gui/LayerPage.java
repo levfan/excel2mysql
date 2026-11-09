@@ -141,6 +141,9 @@ public final class LayerPage extends JPanel {
     public boolean loadMapping(String path) {
         try {
             mapping = MappingFile.loadTableCsv(path);
+            // 换一份映射就把上一份的例外清掉：例外只按 dstTable.dstField 归档，
+            // 不清的话新映射里同名的目标字段会白接手上一场会话改过的规则
+            fieldExceptions.clear();
             mappingLabel.setText(new File(path).getName() + "（" + mapping.tables().size() + " 表）");
             fillTable();
             logPanel.log("- [INFO] LAYER | 载入映射 " + path + " | " + mapping.tables().size() + " 表");
@@ -267,8 +270,10 @@ public final class LayerPage extends JPanel {
                     + " | 建表 " + wr.tablesCreated + " | 影响行 " + wr.rowsAffected
                     + " | 错误 " + wr.errors.size());
         } catch (Exception ex) {
-            sink.logError("x [ERROR] LAYER-EXEC | 连接失败：无法连到 " + cfg.host + ":" + cfg.port
-                    + "（用户 " + cfg.user + "），入库未执行" + LogText.NL
+            // 这句既可能是握手失败（什么都没跑），也可能是连上之后 execute 中途抛（已跑掉一部分），
+            // 所以不写"连接失败…入库未执行"那种只认前一种的断言
+            sink.logError("x [ERROR] LAYER-EXEC | 连接或执行失败：无法连接到 " + cfg.host + ":" + cfg.port
+                    + "（用户 " + cfg.user + "），本层入库未确认全部执行" + LogText.NL
                     + LogText.indentDetail(LogText.describe(ex)));
         } finally {
             if (c != null) { c.close(); }
@@ -278,7 +283,7 @@ public final class LayerPage extends JPanel {
     /**
      * 读源库结构：连上当前数据源后列库填 sourceDb 下拉、再读选中的那一库的用户表结构。
      * DB I/O 全在 worker 里跑（真 GUI 下不在 EDT），库列表/清单落界面在 onUi（EDT）。
-     * 连不上按既有"连接失败＋库列表未加载"口径写日志并 error 弹窗。
+     * 连不上、或连上后读结构中途失败，都按"LAYER | 连接或执行失败＋库列表未加载"口径写日志并 error 弹窗。
      */
     private void readSourceStructure() {
         if (!host.connected()) {
@@ -296,7 +301,8 @@ public final class LayerPage extends JPanel {
                     List<LayerGen.SourceTable> st = LayerGen.readSource(c, db);
                     return new Object[]{dbs, st, null};
                 } catch (Exception ex) {
-                    sink.logError("x [ERROR] LAYER | 连接失败：无法连接到 " + cfg.host + ":" + cfg.port
+                    // 与 executeWrite 那句同口径：这一支也覆盖"握手成了、读结构时抛"，不只算连接失败
+                    sink.logError("x [ERROR] LAYER | 连接或执行失败：无法连接到 " + cfg.host + ":" + cfg.port
                             + "（用户 " + cfg.user + "），库列表未加载" + LogText.NL
                             + LogText.indentDetail(LogText.describe(ex)));
                     return new Object[]{null, null, LogText.describe(ex)};
@@ -326,12 +332,13 @@ public final class LayerPage extends JPanel {
 
     /** 把库列表灌进 sourceDb 下拉；选中项若还在就保持，否则回到首项。由 MainFrame 连接成功时同步。 */
     public void setDatabases(List<String> dbs) {
+        // 空列表不灌：这是一颗可编辑下拉，被清光后 getSelectedItem() 回字面量 null，
+        // String.valueOf 一拼就变成一库叫 "null"。宁可保住上一次/默认那一份值，也不清空成坑。
+        if (dbs == null || dbs.isEmpty()) { return; }
         Object prev = sourceDb.getSelectedItem();
         sourceDb.removeAllItems();
-        if (dbs != null) {
-            for (String d : dbs) { sourceDb.addItem(d); }
-        }
-        if (prev != null && dbs != null && dbs.contains(String.valueOf(prev))) {
+        for (String d : dbs) { sourceDb.addItem(d); }
+        if (prev != null && dbs.contains(String.valueOf(prev))) {
             sourceDb.setSelectedItem(prev);
         }
     }
@@ -386,10 +393,13 @@ public final class LayerPage extends JPanel {
         final javax.swing.table.DefaultTableModel dm = new javax.swing.table.DefaultTableModel(cols, 0) {
             @Override public boolean isCellEditable(int r, int c) { return c >= 3; }
         };
+        final List<String[]> preEdit = new ArrayList<String[]>();
         for (MappingFile.FieldMap f : byTarget.values()) {
-            dm.addRow(new Object[]{f.dstTable, f.dstField, f.srcField,
-                    f.transformRule == null ? "" : f.transformRule,
-                    f.status == null ? "" : f.status});
+            String rule = f.transformRule == null ? "" : f.transformRule;
+            String status = f.status == null ? "" : f.status;
+            dm.addRow(new Object[]{f.dstTable, f.dstField, f.srcField, rule, status});
+            // 逐行留一份"开窗时的那两列值"（已含既有例外）：「确定」只 put 真正改过的行
+            preEdit.add(new String[]{exceptionKey(f.dstTable, f.dstField), rule, status});
         }
         JTable ft = new JTable(dm);
         Tables.style(ft);
@@ -399,11 +409,18 @@ public final class LayerPage extends JPanel {
         JButton ok = new JButton("确定");
         JButton close = new JButton("关闭");
         ok.addActionListener(e -> {
-            for (int r = 0; r < dm.getRowCount(); r++) {
-                String key = exceptionKey(strAt(dm, r, 0), strAt(dm, r, 1));
-                fieldExceptions.put(key, new String[]{strAt(dm, r, 3), strAt(dm, r, 4)});
+            int changed = 0;
+            for (int r = 0; r < dm.getRowCount() && r < preEdit.size(); r++) {
+                String[] pre = preEdit.get(r);
+                String rule = strAt(dm, r, 3);
+                String status = strAt(dm, r, 4);
+                // 没改的行不进例外表：一份"看过没动"的快照会把当前自动草稿值钉死，
+                // 以后引擎或默认口径变了都被这份旧值盖住，条数也会把没改的算成改过
+                if (rule.equals(pre[1]) && status.equals(pre[2])) { continue; }
+                fieldExceptions.put(pre[0], new String[]{rule, status});
+                changed++;
             }
-            logPanel.log("- [INFO] LAYER | 记录源表 " + physical + " 的字段映射例外 " + dm.getRowCount() + " 条");
+            logPanel.log("- [INFO] LAYER | 记录源表 " + physical + " 的字段映射例外 " + changed + " 条（只记改过的）");
             dlg.dispose();
         });
         close.addActionListener(e -> dlg.dispose());
@@ -413,7 +430,20 @@ public final class LayerPage extends JPanel {
         content.add(footer, BorderLayout.SOUTH);
 
         dlg.setContentPane(content);
-        dlg.setSize(UiScale.px(760), UiScale.px(460));
+        // 关窗要真销毁：非模态框默认是 HIDE_ON_CLOSE，点标题栏 X 只藏起来，
+        // 每双击一次就留一颗活着的 owned window（照 StructureDialog 补 DISPOSE_ON_CLOSE）
+        dlg.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE);
+        // Esc 等同「关闭」：这颗框只有「确定」写例外，Esc 关掉不写回，与 StructureDialog 同一形状
+        dlg.getRootPane().getInputMap(javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), "close");
+        dlg.getRootPane().getActionMap().put("close", new javax.swing.AbstractAction() {
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) {
+                dlg.dispose();
+            }
+        });
+        // 尺寸走 Windows.clientSize（同 StructureDialog/SqlMetadataDialog）：setSize 折的是整窗外框，
+        // 760x460 是设计值、由 clientSize 内部折一次，再自行夹进屏幕可用区
+        Windows.clientSize(content, dlg, 760, 460);
         dlg.setLocationRelativeTo(this);
         dlg.setVisible(true);
     }
