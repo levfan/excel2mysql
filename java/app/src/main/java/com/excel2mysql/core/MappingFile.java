@@ -1,18 +1,15 @@
 package com.excel2mysql.core;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /** 层间映射 CSV 的读写。表级 15 列（＋可选 ods物理表名），字段级 11 列。纯离线。 */
@@ -111,12 +108,7 @@ public final class MappingFile {
                         f.dstComment, f.dataElemName, f.dataElemId, f.transformRule,
                         f.governance ? "是" : "否", f.status
                 };
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < cells.length; i++) {
-                    if (i > 0) { sb.append(','); }
-                    sb.append(csvCell(cells[i]));
-                }
-                w.write(sb.toString()); w.write("\r\n");
+                w.write(join(cells)); w.write("\r\n");
             }
         } finally { w.close(); }
     }
@@ -170,10 +162,33 @@ public final class MappingFile {
 
     private static List<String> readLines(String path) throws IOException {
         String text = readTextAuto(new File(path));
-        List<String> lines = new ArrayList<String>();
-        for (String l : text.split("\r\n|\n|\r", -1)) { lines.add(l); }
-        while (!lines.isEmpty() && lines.get(lines.size() - 1).isEmpty()) { lines.remove(lines.size() - 1); }
-        return lines;
+        List<String> records = new ArrayList<String>();
+        StringBuilder cur = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (quoted) {
+                cur.append(ch);
+                if (ch == '"') {
+                    if (i + 1 < text.length() && text.charAt(i + 1) == '"') { cur.append('"'); i++; }
+                    else { quoted = false; }
+                }
+            } else if (ch == '"') {
+                cur.append(ch);
+                quoted = true;
+            } else if (ch == '\n' || ch == '\r') {
+                if (ch == '\r' && i + 1 < text.length() && text.charAt(i + 1) == '\n') { i++; }
+                records.add(cur.toString());
+                cur.setLength(0);
+            } else {
+                cur.append(ch);
+            }
+        }
+        records.add(cur.toString());
+        while (!records.isEmpty() && records.get(records.size() - 1).isEmpty()) {
+            records.remove(records.size() - 1);
+        }
+        return records;
     }
 
     private static byte[] readAll(File f) throws IOException {

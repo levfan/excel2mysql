@@ -28,12 +28,15 @@ public final class MappingFileDiffer {
                 + "采购供应,油料,油料账,t_oil,3,id,采购供应,proc,油料保障,dwd_proc_oil,"
                 + "dim_material,rc,关键词,待核,,ods_cg_oil\n");
         MappingFile m = MappingFile.loadTableCsv(good.getPath());
-        if (m.tables().size() != 1) { bad++; shown.add("解析行数 期望 1 实际 " + m.tables().size()); }
-        MappingFile.TableMap t = m.tables().get(0);
-        if (!"t_oil".equals(t.tableEn) || !"proc".equals(t.domainCode)
-                || !"dwd_proc_oil".equals(t.domainTarget) || !"dim_material".equals(t.objDims)
-                || !"ods_cg_oil".equals(t.odsPhysical)) {
-            bad++; shown.add("列值错位：" + t.tableEn + "/" + t.domainCode + "/" + t.odsPhysical);
+        if (m.tables().size() != 1) {
+            bad++; shown.add("解析行数 期望 1 实际 " + m.tables().size());
+        } else {
+            MappingFile.TableMap t = m.tables().get(0);
+            if (!"t_oil".equals(t.tableEn) || !"proc".equals(t.domainCode)
+                    || !"dwd_proc_oil".equals(t.domainTarget) || !"dim_material".equals(t.objDims)
+                    || !"ods_cg_oil".equals(t.odsPhysical)) {
+                bad++; shown.add("列值错位：" + t.tableEn + "/" + t.domainCode + "/" + t.odsPhysical);
+            }
         }
 
         // 2) 缺列必须报错且指出缺哪列：给全 系统/子领域 两列、只缺 表中文名，
@@ -51,12 +54,22 @@ public final class MappingFileDiffer {
 
         // 3) UTF-8-BOM 与 GBK 都要读得出中文
         File bom = temp("bom.csv", "UTF-8", true, HEADER + "\n采购供应,油料,油料账,t_oil,3,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n");
-        if (!"油料账".equals(MappingFile.loadTableCsv(bom.getPath()).tables().get(0).tableCn)) {
-            bad++; shown.add("UTF-8-BOM 中文读错");
+        MappingFile bomM = MappingFile.loadTableCsv(bom.getPath());
+        if (bomM.tables().size() != 1) {
+            bad++; shown.add("UTF-8-BOM 行数 期望 1 实际 " + bomM.tables().size());
+        } else {
+            if (!"油料账".equals(bomM.tables().get(0).tableCn)) {
+                bad++; shown.add("UTF-8-BOM 中文读错");
+            }
         }
         File gbk = temp("gbk.csv", "GBK", false, HEADER + "\n采购供应,油料,油料账,t_oil,3,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n");
-        if (!"油料账".equals(MappingFile.loadTableCsv(gbk.getPath()).tables().get(0).tableCn)) {
-            bad++; shown.add("GBK 中文读错");
+        MappingFile gbkM = MappingFile.loadTableCsv(gbk.getPath());
+        if (gbkM.tables().size() != 1) {
+            bad++; shown.add("GBK 行数 期望 1 实际 " + gbkM.tables().size());
+        } else {
+            if (!"油料账".equals(gbkM.tables().get(0).tableCn)) {
+                bad++; shown.add("GBK 中文读错");
+            }
         }
 
         // 4) 空文件报错
@@ -69,7 +82,7 @@ public final class MappingFileDiffer {
         // 5) 字段映射写→读往返逐字段一致（含逗号/引号转义）
         List<MappingFile.FieldMap> fm = new ArrayList<MappingFile.FieldMap>();
         MappingFile.FieldMap f = new MappingFile.FieldMap();
-        f.srcTable = "t_oil"; f.srcField = "name"; f.srcComment = "名称,含逗号";
+        f.srcTable = "t_oil"; f.srcField = "name"; f.srcComment = "名称,含逗号与\n换行";
         f.dstTable = "dwd_proc_oil"; f.dstField = "name"; f.dstComment = "名称\"引号\"";
         f.dataElemName = "物资名称"; f.dataElemId = "待赋码"; f.transformRule = "同名直映";
         f.governance = false; f.status = "待核";
