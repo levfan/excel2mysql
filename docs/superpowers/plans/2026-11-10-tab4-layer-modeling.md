@@ -28,14 +28,14 @@
 
 ## 构建与测试命令（所有任务通用，先读这一段）
 
-仓库根：`D:/00.personal/4.code/excel2mysql`，但 **Maven reactor 在 `java/` 子目录**——所有 mvn 命令必须先 `cd java/`，否则报 "Could not find the selected project in the reactor: app"。Git Bash 直调 mvn 必须钉 JAVA_HOME（本机 JDK8 在 `C:/Program Files/Java/jdk1.8.0_202`）。**必须带 git stamp 四参**，否则 appinfo.properties 的 commitFull="未知"，GUI 自检咬"复制出去的提交号不是 40 位十六进制"而 exit 1。
+仓库根：`D:/00.personal/4.code/excel2mysql`，但 **Maven reactor 在 `java/` 子目录**——所有 mvn 命令必须先 `cd java/`，否则报 "Could not find the selected project in the reactor: app"。Git Bash 直调 mvn 必须钉 JAVA_HOME（本机 JDK8 在 `C:/Program Files/Java/jdk1.8.0_202`）。**必须带 git stamp 四参**，否则 appinfo.properties 的 commitFull="未知"，GUI 自检咬"复制出去的提交号不是 40 位十六进制"而 exit 1。**PATH 用 unix 挂载式 `/c/...` 前置**：Git Bash 里 `export PATH="$JAVA_HOME/bin:$PATH"` 会把 `C:/Program Files/.../bin` 在盘符冒号处切散（只塞进一个无用的 `C` 项），裸 `java`/`javac` 是否 JDK8 全凭环境已有 PATH 侥幸；直接跑差分器/自检/`java -jar` 要确定落 JDK8，必须前置 `/c/Program Files/Java/jdk1.8.0_202/bin`（Maven 自身读 JAVA_HOME 不受影响）。
 
-下面是**唯一规范构建命令**。本计划各任务步骤里出现的 `mvn -B -q install -pl app,verify` 一律是这条的简写，实跑时必须展开成下面整段（含 cd java/ 与四参）：
+下面是**唯一规范构建命令**。本计划各任务步骤里出现的 `mvn -B -q install -pl app,verify` 一律是这条的简写，实跑时必须展开成下面整段（含 cd java/、unix PATH、四参）：
 
 ```bash
 cd "D:/00.personal/4.code/excel2mysql/java"
 export JAVA_HOME="C:/Program Files/Java/jdk1.8.0_202"
-export PATH="$JAVA_HOME/bin:$PATH"
+export PATH="/c/Program Files/Java/jdk1.8.0_202/bin:$PATH"
 GC=$(git rev-parse --short HEAD); GCF=$(git rev-parse HEAD); GB=$(git rev-parse --abbrev-ref HEAD)
 GD=false; if [ -n "$(git status --porcelain -uno)" ]; then GD=true; fi
 # 编译 app＋verify（增量；clean 被 IDE 占用时降级 install 并显式说明）
@@ -529,9 +529,9 @@ public final class LayerGenDiffer {
         List<LayerGen.SourceTable> src = source();
         LayerGen.GenOptions o = new LayerGen.GenOptions();
 
-        // dom：t_oil → dwd_proc_oil，同名直映＋治理字段
+        // dom：t_oil→dwd_proc_oil、t_staff→dwd_comp_tech 两张领域目标表，各自同名直映＋治理字段
         LayerGen.LayerOutput dom = LayerGen.genLayer(LayerGen.Layer.DOM, m, src, o);
-        if (dom.tableCount != 1) { bad++; shown.add("dom 表数 期望 1 实际 " + dom.tableCount); }
+        if (dom.tableCount != 2) { bad++; shown.add("dom 表数 期望 2 实际 " + dom.tableCount); }
         if (!dom.ddlSql.contains("USE `dom`;") || !dom.ddlSql.contains("CREATE TABLE `dwd_proc_oil`")
                 || !dom.ddlSql.contains("ENGINE=InnoDB") || !dom.ddlSql.contains("utf8mb4_general_ci")) {
             bad++; shown.add("dom DDL 口径不符");
