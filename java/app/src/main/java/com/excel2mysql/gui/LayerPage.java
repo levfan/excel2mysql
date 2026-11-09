@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /** 第 4 页签：读 ods 建模 obj/dom/ads。映射文件驱动，三按钮按依赖锁，默认只生成脚本。 */
 public final class LayerPage extends JPanel {
@@ -44,14 +45,25 @@ public final class LayerPage extends JPanel {
         void runLayerTask(String title, Function<ImportParse.Sink, Object> work, Consumer<Object> onUi);
     }
 
+    /** 源库下拉的默认项：断连后回到这一份，不留上一台的库列表。 */
+    private static final String DEFAULT_SOURCE_DB = "ods";
+    /**
+     * 库名的安全口径：只允许字母、数字、下划线，且不许空。
+     * 库名是被反引号包进 `USE \`x\`;` 与 `FROM \`x\`.\`t\`` 的裸标识符，界面这四个框又可任意编辑，
+     * 所以"合规"必须是生成前的硬前置，而不是指望用户不去碰它。
+     */
+    private static final Pattern DB_IDENT = Pattern.compile("^[A-Za-z0-9_]+$");
+
     private final Host host;
     private final LogPanel logPanel = new LogPanel();
-    private final JComboBox<String> sourceDb = new JComboBox<String>(new String[]{"ods"});
+    private final JComboBox<String> sourceDb = new JComboBox<String>(new String[]{DEFAULT_SOURCE_DB});
     private final JTextField objDb = new JTextField("obj", 6);
     private final JTextField domDb = new JTextField("dom", 6);
     private final JTextField adsDb = new JTextField("ads", 6);
     private final JLabel mappingLabel = new JLabel("未载入映射");
     private final JCheckBox writeMode = new JCheckBox("同时写入目标库", false);
+    private final JButton loadBtn = new JButton("载入映射文件");
+    private final JButton readSrcBtn = new JButton("读源库结构");
     private final JButton objBtn = new JButton("生成对象层 obj");
     private final JButton domBtn = new JButton("生成领域层 dom");
     private final JButton adsBtn = new JButton("生成主题层 ads");
@@ -65,6 +77,13 @@ public final class LayerPage extends JPanel {
     private List<LayerGen.SourceTable> sourceTables = new ArrayList<LayerGen.SourceTable>();
     private boolean objGenerated;
     private boolean domGenerated;
+    /**
+     * RES_LAYER 有任务在跑吗（由 MainFrame.syncRunStates 按 taskBusy 灌进来）。
+     * 这一位只管"另一个生成任务"互斥，挡不住「载入映射」「读源库结构」这两条会改
+     * mapping／sourceTables／字段例外的入口——生成 worker 正读着同一份，改一半就是竞态，
+     * 所以忙时这几颗一起灰掉（与 Excel 页 syncGenButtons 的 taskBusy(RES_EXCEL) 同口径）。
+     */
+    private boolean layerBusy;
     /** 字段映射例外表：键 dstTable.dstField，值 {转换规则, 映射状态}；生成落盘前覆盖进 out.fieldMapping。 */
     private final Map<String, String[]> fieldExceptions = new ConcurrentHashMap<String, String[]>();
 
@@ -103,16 +122,14 @@ public final class LayerPage extends JPanel {
         row.add(new JLabel("源库"));
         sourceDb.setEditable(true);
         row.add(sourceDb);
-        JButton load = new JButton("载入映射文件");
-        Buttons.secondary(load);
-        load.addActionListener(e -> chooseMapping());
-        row.add(load);
-        JButton readSrc = new JButton("读源库结构");
-        Buttons.secondary(readSrc);
-        readSrc.setToolTipText("<html>连上当前数据源后，读源库这一列的下拉库里的用户表结构，<br>"
+        Buttons.secondary(loadBtn);
+        loadBtn.addActionListener(e -> chooseMapping());
+        row.add(loadBtn);
+        Buttons.secondary(readSrcBtn);
+        readSrcBtn.setToolTipText("<html>连上当前数据源后，读源库这一列的下拉库里的用户表结构，<br>"
                 + "填库列表并绑定映射行的绑定状态；obj/dom 生成依赖这一步。</html>");
-        readSrc.addActionListener(e -> readSourceStructure());
-        row.add(readSrc);
+        readSrcBtn.addActionListener(e -> readSourceStructure());
+        row.add(readSrcBtn);
         row.add(mappingLabel);
         row.add(new JLabel("目标库 obj/dom/ads"));
         row.add(objDb); row.add(domDb); row.add(adsDb);
@@ -177,14 +194,56 @@ public final class LayerPage extends JPanel {
 
     public void refreshButtonStates() {
         boolean ready = mapping != null && !mapping.tables().isEmpty() && !sourceTables.isEmpty();
-        objBtn.setEnabled(ready);
-        domBtn.setEnabled(ready);
-        adsBtn.setEnabled(ready && objGenerated && domGenerated);
+        // 忙时五颗入口一起灰：三颗生成是"同页两个任务踩同一份数据"，载入／读源是
+        // "worker 正读的 mapping／sourceTables 被中途换掉"——RES_LAYER 只挡前者，得在这里一并挡
+        objBtn.setEnabled(ready && !layerBusy);
+        domBtn.setEnabled(ready && !layerBusy);
+        adsBtn.setEnabled(ready && objGenerated && domGenerated && !layerBusy);
+        loadBtn.setEnabled(!layerBusy);
+        readSrcBtn.setEnabled(!layerBusy);
         if (ready && !objGenerated && !domGenerated) {
-            adsBtn.setToolTipText("<html>主题层 ads 从 obj＋dom 汇总。<br>请先生成对象层与领域层。</html>");
+            // 文案与引擎实发一致：ads 的 FROM 只有 dom 明细（genAds 逐主题一条 COUNT(*) FROM dom.<目标表>），
+            // obj／dim 的 JOIN 口径按条款 188 留给业务方核，没产出来就不能在悬浮里声称汇总了它。
+            // 依赖锁本身不变（仍要先出 obj＋dom），这句说的是"生成后会得到什么"。
+            adsBtn.setToolTipText("<html>主题层 ads 只在领域层 dom 的明细上产模板聚合，<br>"
+                    + "对象层与维表的 JOIN 口径留待业务方核（条款 188）。<br>请先生成对象层与领域层。</html>");
         } else {
             adsBtn.setToolTipText(null);
         }
+    }
+
+    /**
+     * RES_LAYER 忙闲由 MainFrame.syncRunStates 灌进来（照 SqlPage.setGenBusy 同一形状）。
+     * 灰的是"会改生成任务正在读的那几份数据"的入口，不只是三颗生成按钮。
+     */
+    public void setLayerBusy(boolean busy) {
+        this.layerBusy = busy;
+        refreshButtonStates();
+    }
+
+    /**
+     * 界面上那四个库名合规吗：逐个非空且只含 [A-Za-z0-9_]，第一条不合规的用人话说出来（返回 null 表示都行）。
+     *
+     * <p>外场真撞的一条：连上一台没有 ods 库的服务器，可编辑的源库下拉是空的，生成照发
+     * `FROM \` \`.\`t_oil\``、`USE \`\`;` —— 交付的 .sql 静默就是坏的，没人会在打开前发现。
+     * 所以这一判在 generateTo 起任务之前跑，不合规就当场拦下，不落一份畸形产物。
+     */
+    public static String checkDbNames(LayerGen.GenOptions o) {
+        String[][] named = {
+                {"源库", o.sourceDb, "ods"}, {"对象层 obj 库", o.objDb, "obj"},
+                {"领域层 dom 库", o.domDb, "dom"}, {"主题层 ads 库", o.adsDb, "ads"}
+        };
+        for (String[] kv : named) {
+            String v = kv[1] == null ? "" : kv[1].trim();
+            if (v.isEmpty()) {
+                return kv[0] + "名为空：这一格要填一个库名（默认 " + kv[2] + "）。"
+                        + "空着产出的 .sql 里 USE 与 FROM 的库名就是空的，交付件直接不可用。";
+            }
+            if (!DB_IDENT.matcher(v).matches()) {
+                return kv[0] + "名「" + v + "」不合规：只允许字母、数字、下划线，不许有反引号、引号、空格或中文。";
+            }
+        }
+        return null;
     }
 
     public boolean adsReady() { return objGenerated && domGenerated; }
@@ -196,7 +255,7 @@ public final class LayerPage extends JPanel {
     /** 从界面字段拼一份生成选项（EDT 上读输入框）；按钮与字段窗都用它，避免两处各读各的。 */
     private LayerGen.GenOptions buildOptions() {
         LayerGen.GenOptions o = new LayerGen.GenOptions();
-        o.sourceDb = String.valueOf(sourceDb.getSelectedItem());
+        o.sourceDb = String.valueOf(sourceDb.getSelectedItem()).trim();
         o.objDb = objDb.getText().trim();
         o.domDb = domDb.getText().trim();
         o.adsDb = adsDb.getText().trim();
@@ -215,18 +274,42 @@ public final class LayerPage extends JPanel {
     public void generateTo(final LayerGen.Layer layer, String rootDir) {
         if (mapping == null) { return; }
         final LayerGen.GenOptions o = buildOptions();
+        // 库名不合规就当堂拦下：外场那台没有 ods 的服务器会让源库下拉空着，硬生成的产物里是
+        // FROM ` `.`t_oil` 与 USE ``;` —— 交付件静默坏掉，比不交付更糟（弹窗＋日志说清改哪儿）
+        String bad = checkDbNames(o);
+        if (bad != null) {
+            logPanel.log("x [ERROR] LAYER | 已拦下 " + layer + " 生成：" + bad);
+            host.informError("库名不合规，未生成", bad);
+            return;
+        }
         final String root = rootDir;
         // 配置只在 EDT 上现读一份传进 worker：口令只在这一步离开输入框，不落文件/日志。
         // writeMode 开时才连库，关时纯落盘（自检断言的就是关态无 DB 副作用）。
         final Config cfg = o.writeMode ? host.currentConfig() : null;
+        // 起任务前在 EDT 上把 worker 要读的三份共享状态拍成快照：这一页的「载入映射」会整体换掉
+        // mapping、清掉例外，「读源库结构」会换掉 sourceTables，而 RES_LAYER 只挡得住再点一次生成。
+        // 312 表的生成跑到一半时点「载入映射」，worker 就会拿新映射配旧源结构——两份各半。
+        // mapping／sourceTables 由各自的 setter 整份替换（不就地改），所以引用快照即足够；
+        // 例外表是就地 put/clear，必须拷一份。
+        final MappingFile mapSnap = mapping;
+        final List<LayerGen.SourceTable> srcSnap = new ArrayList<LayerGen.SourceTable>(sourceTables);
+        final Map<String, String[]> exSnap = snapshotExceptions();
         host.runLayerTask("生成 " + layer, new Function<ImportParse.Sink, Object>() {
             @Override public Object apply(ImportParse.Sink sink) {
-                LayerGen.LayerOutput out = LayerGen.genLayer(layer, mapping, sourceTables, o);
-                applyFieldExceptions(out.fieldMapping);
+                sink.setTotal(2);
+                sink.advance(0, "计算 " + layer + " 层产物（映射 " + mapSnap.tables().size()
+                        + " 表 / 源结构 " + srcSnap.size() + " 表）");
+                LayerGen.LayerOutput out = LayerGen.genLayer(layer, mapSnap, srcSnap, o);
+                if (sink.cancelled()) {
+                    sink.log("! [WARN] LAYER | 已取消：" + layer + " 未落盘，产物未生成");
+                    return null;
+                }
+                applyFieldExceptions(out.fieldMapping, exSnap);
                 String dir = root + File.separator + "layer_"
                         + new java.text.SimpleDateFormat("yyyyMMdd").format(new java.util.Date());
                 new File(dir).mkdirs();
                 String tag = layer.name().toLowerCase();
+                sink.advance(1, "落盘 " + tag + "_ddl / _transform / _field_mapping 到 " + dir);
                 try {
                     writeText(dir + File.separator + tag + "_ddl.sql", out.ddlSql);
                     writeText(dir + File.separator + tag + "_transform.sql", out.transformSql);
@@ -235,9 +318,14 @@ public final class LayerPage extends JPanel {
                     sink.logError("x [ERROR] LAYER | 落盘失败：" + ex.getMessage());
                     return null;
                 }
+                sink.advance(1, "落盘完成");
                 sink.log("- [INFO] LAYER | " + layer + " 表 " + out.tableCount + " 张 | 字段映射 "
                         + out.fieldMapping.size() + " 条 | 未绑定 " + out.unbound.size() + " 张 | 产物 " + dir);
                 for (String w : out.warnings) { sink.log("! [WARN] LAYER | " + w); }
+                if (sink.cancelled()) {
+                    sink.log("! [WARN] LAYER | 已取消：" + layer + " 不入库，只留已落盘的产物 " + dir);
+                    return null;
+                }
                 if (o.writeMode) { executeWrite(layer, o, out, cfg, sink); }
                 return new Object[]{layer, out, dir};
             }
@@ -291,14 +379,24 @@ public final class LayerPage extends JPanel {
             return;
         }
         final Config cfg = host.currentConfig();
-        final String db = String.valueOf(sourceDb.getSelectedItem());
+        final String db = sourceDbName();
         host.runLayerTask("读源库结构 " + db, new Function<ImportParse.Sink, Object>() {
             @Override public Object apply(ImportParse.Sink sink) {
+                sink.setTotal(2);
+                sink.advance(0, "连接 " + cfg.host + ":" + cfg.port);
                 DbClient c = null;
                 try {
                     c = new DbClient(cfg, 5000);   // 5 秒握手超时，同连接区取库列表口径
                     List<String> dbs = c.listDatabases();
-                    List<LayerGen.SourceTable> st = LayerGen.readSource(c, db);
+                    sink.advance(1, "读 " + db + " 的用户表结构");
+                    // 一张表计一项、总数在列完表名时就报出去，「取消」在表与表之间生效：
+                    // 这一支读的是同一个 sink，312 张表时进度框才不是停在 0% 的"准备中"
+                    List<LayerGen.SourceTable> st = LayerGen.readSource(c, db, sink);
+                    if (sink.cancelled()) {
+                        sink.log("! [WARN] LAYER | 已取消：源库 " + db + " 的结构未应用（读到 "
+                                + st.size() + " 张也不覆盖界面上那一份）");
+                        return null;
+                    }
                     return new Object[]{dbs, st, null};
                 } catch (Exception ex) {
                     // 与 executeWrite 那句同口径：这一支也覆盖"握手成了、读结构时抛"，不只算连接失败
@@ -334,6 +432,7 @@ public final class LayerPage extends JPanel {
     public void setDatabases(List<String> dbs) {
         // 空列表不灌：这是一颗可编辑下拉，被清光后 getSelectedItem() 回字面量 null，
         // String.valueOf 一拼就变成一库叫 "null"。宁可保住上一次/默认那一份值，也不清空成坑。
+        // 断连要的是"回到默认库名"，那是 resetSourceDatabases 那条明路，不从这一句的空列表借道。
         if (dbs == null || dbs.isEmpty()) { return; }
         Object prev = sourceDb.getSelectedItem();
         sourceDb.removeAllItems();
@@ -343,11 +442,35 @@ public final class LayerPage extends JPanel {
         }
     }
 
+    /**
+     * 断连收场：源库下拉清掉上一台那一份、回到默认的 "ods"。
+     *
+     * <p>MainFrame.connFailure 的注释要的就是这件事（"留着上一台的库列表会误导读源库结构"），
+     * 但 setDatabases 对空列表是早退的（round 1 那条 "null" 坑的护栏），走那条路什么都不会清、
+     * 旧库名反而一直留在界面上。所以这里给一条专门的复位路：既不留旧列表，也不留空格子——
+     * 空着的源库正是产出 `FROM \` \`.\`t_oil\`` 那份坏交付件的起点，合规判在 generateTo 里兜底。
+     */
+    public void resetSourceDatabases() {
+        sourceDb.removeAllItems();
+        sourceDb.addItem(DEFAULT_SOURCE_DB);
+        sourceDb.setSelectedItem(DEFAULT_SOURCE_DB);
+    }
+
+    /** 当前源库下拉里那份库名（已 trim）；自检与调用方读它，别再去拼 getSelectedItem()。 */
+    public String sourceDbName() {
+        return String.valueOf(sourceDb.getSelectedItem()).trim();
+    }
+
+    /** 例外表在 EDT 上拍的浅拷贝：它是就地 put/clear 的，worker 拿引用会读到改一半的那一份。 */
+    private Map<String, String[]> snapshotExceptions() {
+        return new java.util.LinkedHashMap<String, String[]>(fieldExceptions);
+    }
+
     /** 例外覆盖：把已存的转换规则/映射状态盖到自动草稿出来的字段映射行上（只改 CSV 内容，不动 DDL/SQL）。 */
-    private void applyFieldExceptions(List<MappingFile.FieldMap> rows) {
-        if (rows == null || fieldExceptions.isEmpty()) { return; }
+    private static void applyFieldExceptions(List<MappingFile.FieldMap> rows, Map<String, String[]> exceptions) {
+        if (rows == null || exceptions.isEmpty()) { return; }
         for (MappingFile.FieldMap f : rows) {
-            String[] e = fieldExceptions.get(exceptionKey(f.dstTable, f.dstField));
+            String[] e = exceptions.get(exceptionKey(f.dstTable, f.dstField));
             if (e != null) { f.transformRule = e[0]; f.status = e[1]; }
         }
     }
@@ -360,22 +483,57 @@ public final class LayerPage extends JPanel {
      * 双击行弹字段映射例外窗：以这一张源表为键，把它在 obj/dom 上的自动草稿字段列出来，
      * 转换规则/映射状态两列可改（其余只读）。照 SqlMetadataDialog 的非模态 JDialog＋可编辑
      * DefaultTableModel 形状，OK 把改动按 dstTable.dstField 存进例外表，供下次生成落盘前覆盖。
+     *
+     * <p>草稿是现算的（obj/dom 各跑一次 genLayer）：真映射是 312 张表、上千字段实例，这一算就是
+     * 一两秒到几秒，站在事件分发线程上算等于整窗冻住——这一页别处都守的"UI 不给自己算"，
+     * 这里也得守。所以算法放进 runLayerTask 的 worker，算完回 EDT 建窗（同 SqlPage 双击一行的形状）。
+     * 起任务前照 generateTo 一样把 mapping／sourceTables／例外拍成快照，别让 worker 读到中途换掉的那份。
      */
-    private void openFieldMappingDialog(int row) {
+    private void openFieldMappingDialog(final int row) {
         if (mapping == null) { return; }
         MappingFile.TableMap tm = mapping.tables().get(row);
         final String physical = tm.odsPhysical == null || tm.odsPhysical.isEmpty()
                 ? tm.tableEn : tm.odsPhysical;
-        // 现取一份自动草稿：obj/dom 各跑 genLayer（离线，快），留 srcTable 命中的行，按目标字段去重
-        LayerGen.GenOptions o = buildOptions();
-        Map<String, MappingFile.FieldMap> byTarget = new LinkedHashMap<String, MappingFile.FieldMap>();
-        for (LayerGen.Layer lay : new LayerGen.Layer[]{LayerGen.Layer.OBJ, LayerGen.Layer.DOM}) {
-            LayerGen.LayerOutput out = LayerGen.genLayer(lay, mapping, sourceTables, o);
-            for (MappingFile.FieldMap f : out.fieldMapping) {
-                if (physical.equals(f.srcTable)) { byTarget.put(exceptionKey(f.dstTable, f.dstField), f); }
+        // 输入框只能在 EDT 上读，先拼好选项再交给 worker（worker 里不碰任何 Swing 组件）
+        final LayerGen.GenOptions o = buildOptions();
+        final MappingFile mapSnap = mapping;
+        final List<LayerGen.SourceTable> srcSnap = new ArrayList<LayerGen.SourceTable>(sourceTables);
+        final Map<String, String[]> exSnap = snapshotExceptions();
+        host.runLayerTask("取 " + physical + " 的字段草稿", new Function<ImportParse.Sink, Object>() {
+            @Override public Object apply(ImportParse.Sink sink) {
+                // 一层计一项：obj、dom 各算一遍，留 srcTable 命中的行、按目标字段去重
+                sink.setTotal(2);
+                Map<String, MappingFile.FieldMap> byTarget = new LinkedHashMap<String, MappingFile.FieldMap>();
+                int i = 0;
+                for (LayerGen.Layer lay : new LayerGen.Layer[]{LayerGen.Layer.OBJ, LayerGen.Layer.DOM}) {
+                    if (sink.cancelled()) {
+                        sink.log("! [WARN] LAYER | 已取消：" + physical + " 的字段草稿未列出");
+                        return null;
+                    }
+                    i++;
+                    sink.advance(0, "算 " + lay + " 层字段草稿 第 " + i + "/2 层");
+                    LayerGen.LayerOutput out = LayerGen.genLayer(lay, mapSnap, srcSnap, o);
+                    for (MappingFile.FieldMap f : out.fieldMapping) {
+                        if (physical.equals(f.srcTable)) { byTarget.put(exceptionKey(f.dstTable, f.dstField), f); }
+                    }
+                    sink.advance(1, lay + " 层字段草稿已算");
+                }
+                List<MappingFile.FieldMap> rows = new ArrayList<MappingFile.FieldMap>(byTarget.values());
+                applyFieldExceptions(rows, exSnap);
+                return new Object[]{physical, rows};
             }
-        }
-        applyFieldExceptions(new ArrayList<MappingFile.FieldMap>(byTarget.values()));
+        }, new Consumer<Object>() {
+            @Override public void accept(Object res) {
+                Object[] arr = (Object[]) res;
+                @SuppressWarnings("unchecked")
+                List<MappingFile.FieldMap> rows = (List<MappingFile.FieldMap>) arr[1];
+                showFieldMappingDialog((String) arr[0], rows);
+            }
+        });
+    }
+
+    /** 草稿算好之后在 EDT 上建窗、填表、挂两颗按钮：这一段只碰 Swing，不算任何东西。 */
+    private void showFieldMappingDialog(String physical, List<MappingFile.FieldMap> rows) {
         Window w = SwingUtilities.getWindowAncestor(this);
         Frame owner = (w instanceof Frame) ? (Frame) w : null;
         JDialog dlg = new JDialog(owner, "字段映射（" + physical + "）", false);
@@ -383,18 +541,22 @@ public final class LayerPage extends JPanel {
         JPanel content = new JPanel(new BorderLayout(0, UiScale.px(6)));
         content.setBorder(javax.swing.BorderFactory.createEmptyBorder(
                 UiScale.px(8), UiScale.px(10), UiScale.px(8), UiScale.px(10)));
+        // 文案与数据路一致：这一窗改的东西只进 <层>_field_mapping.csv 的「转换规则／映射状态」两列
+        // （证据与备注），不回写、也不会重算已经生成的转换 SQL——SQL 里的表达式由引擎自己发。
         JLabel head = new JLabel("<html>源表「" + physical + "」映射到的目标字段草稿。<br>"
-                + "「转换规则」「映射状态」两列可直接改，改完点「确定」记下例外；"
-                + "下次生成该层时，这些改动只写进 <层>_field_mapping.csv，不改 DDL 与转换 SQL。<br>"
+                + "「转换规则（登记进映射 CSV）」「映射状态」两列可直接改，改完点「确定」记下例外。<br>"
+                + "<b>这两列是写进 &lt;层&gt;_field_mapping.csv 的转换口径登记（证据/备注），"
+                + "不会改写已生成的 DDL 与转换 SQL</b>；要改 SQL 里的表达式得回到映射与源结构那一层。<br>"
                 + "（还没有自动草稿时，先「读源库结构」并生成 obj/dom）</html>");
         content.add(head, BorderLayout.NORTH);
 
-        final String[] cols = {"目标表", "目标字段", "源字段", "转换规则", "映射状态"};
+        final String[] cols = {"目标表", "目标字段", "源字段",
+                "转换规则（登记进映射 CSV）", "映射状态"};
         final javax.swing.table.DefaultTableModel dm = new javax.swing.table.DefaultTableModel(cols, 0) {
             @Override public boolean isCellEditable(int r, int c) { return c >= 3; }
         };
         final List<String[]> preEdit = new ArrayList<String[]>();
-        for (MappingFile.FieldMap f : byTarget.values()) {
+        for (MappingFile.FieldMap f : rows) {
             String rule = f.transformRule == null ? "" : f.transformRule;
             String status = f.status == null ? "" : f.status;
             dm.addRow(new Object[]{f.dstTable, f.dstField, f.srcField, rule, status});
@@ -403,6 +565,9 @@ public final class LayerPage extends JPanel {
         }
         JTable ft = new JTable(dm);
         Tables.style(ft);
+        ft.getTableHeader().setToolTipText("<html>「转换规则（登记进映射 CSV）」改的是这一行的口径登记，"
+                + "只写进 &lt;层&gt;_field_mapping.csv 作证据／备注，<br>不会改写本层已生成的 _transform.sql。"
+                + "SQL 里的表达式由引擎按映射表＋源结构自己产。</html>");
         content.add(new JScrollPane(ft), BorderLayout.CENTER);
 
         JPanel footer = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(6), 0));
@@ -469,4 +634,10 @@ public final class LayerPage extends JPanel {
     public JButton objButton() { return objBtn; }
     public JButton domButton() { return domBtn; }
     public JButton adsButton() { return adsBtn; }
+    /** 「载入映射文件」那颗：自检按用户的入口点它，也用它判忙时灰没灰（#8）。 */
+    public JButton loadMappingButton() { return loadBtn; }
+    /** 「读源库结构」那颗：同上。 */
+    public JButton readSourceButton() { return readSrcBtn; }
+    /** 对象层库名那一格：自检要往里灌一个不合规的库名，验生成被拦下而不是落一份坏产物（#7）。 */
+    public JTextField objDbField() { return objDb; }
 }

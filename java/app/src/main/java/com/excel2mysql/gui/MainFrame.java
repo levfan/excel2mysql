@@ -1038,9 +1038,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
         }
         dbCombo.setEnabled(false);
         connDirty = false;
-        // 断连后第四页的源库下拉也清干净：留着上一台的库列表会误导"读源库结构"
+        // 断连后第四页的源库下拉也清干净：留着上一台的库列表会误导"读源库结构"。
+        // 走 resetSourceDatabases 这条明路（回到默认 ods）——setDatabases 对空列表是早退的，
+        // 从那儿借道什么都清不掉，旧库名会一直留在界面上
         if (layerPage != null) {
-            layerPage.setDatabases(java.util.Collections.<String>emptyList());
+            layerPage.resetSourceDatabases();
         }
         logError("[连接失败] 无法连接到 " + cfg.host + ":" + cfg.port + "（用户 "
                 + cfg.user + "），库列表未加载" + LogText.NL + LogText.indentDetail(detail));
@@ -1314,9 +1316,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
             sqlRunScriptsBtn.setEnabled(!sqlRunFiles.isEmpty() && !taskBusy(RES_RUN));
         }
         // 第四页三按钮的依赖锁每次统一刷一次：ads 只在 obj＋dom 都生成过之后才亮，
-        // 任务忙闲的互斥由 RES_LAYER 资源位挡（被挡下会日志说明），与 SqlPage.setGenBusy 同口径
+        // 任务忙闲的互斥由 RES_LAYER 资源位挡（被挡下会日志说明），与 SqlPage.setGenBusy 同口径。
+        // 忙闲还得一并落到界面上：那一位在 LayerPage 里不只灰三颗生成，也灰「载入映射」「读源库结构」——
+        // 那两条改的是生成任务正在读的 mapping／sourceTables／字段例外，光靠资源位挡不住（#8）
         if (layerPage != null) {
-            layerPage.refreshButtonStates();
+            layerPage.setLayerBusy(taskBusy(RES_LAYER));
         }
     }
 

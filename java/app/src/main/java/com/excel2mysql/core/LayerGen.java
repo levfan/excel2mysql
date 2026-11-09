@@ -432,15 +432,34 @@ public final class LayerGen {
         public List<String> errors = new ArrayList<String>();
     }
 
-    /** 读源库用户表结构（VIEW 排除），列按 ORDINAL_POSITION 序。 */
+    /** 读源库用户表结构（VIEW 排除），列按 ORDINAL_POSITION 序。不报进度、也不可中止的调用方走这一句。 */
     public static List<SourceTable> readSource(DbClient db, String sourceDb) throws java.sql.SQLException {
+        return readSource(db, sourceDb, ImportParse.LOG_ONLY);
+    }
+
+    /**
+     * 读源库用户表结构，并把进度与中止接到调用方的 sink 上：一张表计一项，总数在动手前先报一次
+     * （同 ImportRun.run 的 setTotal→advance 形状）。312 张表的元数据要读几十秒，不接这两根线时
+     * 进度框一直停在 0%「准备中」、那颗「取消」也无人接（spec §11 承诺的是可中止的非模态进度）。
+     * 取消在表与表之间生效，已读到的那些如实交回，不算失败。
+     */
+    public static List<SourceTable> readSource(DbClient db, String sourceDb, ImportParse.Sink sink)
+            throws java.sql.SQLException {
         List<SourceTable> out = new ArrayList<SourceTable>();
         java.sql.DatabaseMetaData md = db.connection().getMetaData();
         List<String> tableNames = new ArrayList<String>();
         java.sql.ResultSet ts = md.getTables(sourceDb, null, "%", new String[]{"TABLE"});
         try { while (ts.next()) { tableNames.add(ts.getString("TABLE_NAME")); } } finally { ts.close(); }
         java.util.Collections.sort(tableNames);
+        final int n = tableNames.size();
+        sink.setTotal(n);
+        int done = 0;
         for (String tn : tableNames) {
+            if (sink.cancelled()) {
+                sink.log("! [WARN] LAYER | 已取消：源库 " + sourceDb + " 停在第 " + (done + 1)
+                        + "/" + n + " 张，剩余表未读（已读 " + done + " 张照实返回）");
+                break;
+            }
             String comment = "";
             java.sql.ResultSet tt = md.getTables(sourceDb, null, tn, new String[]{"TABLE"});
             try { if (tt.next()) { comment = tt.getString("REMARKS"); } } finally { tt.close(); }
@@ -462,6 +481,8 @@ public final class LayerGen {
             try { while (pk.next()) { pkFields.add(pk.getString("COLUMN_NAME")); } } finally { pk.close(); }
             for (Infer.Column c : cols) { c.primaryKey = pkFields.contains(c.field); }
             out.add(new SourceTable(tn, comment == null ? "" : comment, cols));
+            done++;
+            sink.advance(1, "读 " + sourceDb + "." + tn + " 结构 第 " + done + "/" + n + " 张");
         }
         return out;
     }
@@ -518,8 +539,24 @@ public final class LayerGen {
             return wr;   // 进不去目标库就别往下走，绝不让语句漂到别的库
         } finally { us.close(); }
         // DDL 按 ";\n" 拆（与 DbClient.createTable 同口径）；USE 头已在上面坐实，这里再遇 USE 是同库空操作
-        for (String stmt : splitStatements(out.ddlSql)) {
-            if (stmt.trim().isEmpty()) { continue; }
+        // 进度与中止按语句计项：总数在动手前一次报出（312 张表时是几百条），
+        // 「取消」在下一条语句开工前生效，已经跑掉的那些不回滚、也不谎报成没跑
+        List<String> ddlStmts = splitStatements(out.ddlSql);
+        List<String> dmlStmts = splitStatements(out.transformSql);
+        sink.setTotal(ddlStmts.size() + dmlStmts.size());
+        int pos = 0;
+        int ddlTotal = ddlStmts.size();
+        for (String stmt : ddlStmts) {
+            if (sink.cancelled()) {
+                sink.log("! [WARN] LAYER-EXEC | 已取消：库 " + targetDb + " 的 DDL 停在第 "
+                        + (pos + 1) + "/" + ddlTotal + " 条，剩余语句未执行");
+                return wr;
+            }
+            pos++;
+            if (stmt.trim().isEmpty()) {
+                sink.advance(1, "DDL 第 " + pos + "/" + ddlTotal + " 条（空语句跳过）");
+                continue;
+            }
             java.sql.Statement s = db.connection().createStatement();
             try {
                 s.execute(stmt);
@@ -528,9 +565,20 @@ public final class LayerGen {
             } catch (java.sql.SQLException e) {
                 noteError(wr, sink, "LAYER-DDL", "DDL 失败", stmt, targetDb, e);
             } finally { s.close(); }
+            sink.advance(1, "DDL 第 " + pos + "/" + ddlTotal + " 条 · " + stmtHead(stmt));
         }
-        for (String stmt : splitStatements(out.transformSql)) {
-            if (stmt.trim().isEmpty()) { continue; }
+        int dmlTotal = dmlStmts.size();
+        for (String stmt : dmlStmts) {
+            if (sink.cancelled()) {
+                sink.log("! [WARN] LAYER-EXEC | 已取消：库 " + targetDb + " 的转换 SQL 停在第 "
+                        + (pos + 1) + "/" + (ddlTotal + dmlTotal) + " 条，剩余语句未执行");
+                return wr;
+            }
+            pos++;
+            if (stmt.trim().isEmpty()) {
+                sink.advance(1, "转换 第 " + (pos - ddlTotal) + "/" + dmlTotal + " 条（空语句跳过）");
+                continue;
+            }
             java.sql.Statement s = db.connection().createStatement();
             try {
                 int n = s.executeUpdate(stmt);
@@ -539,6 +587,7 @@ public final class LayerGen {
             } catch (java.sql.SQLException e) {
                 noteError(wr, sink, "LAYER-DML", "转换失败", stmt, targetDb, e);
             } finally { s.close(); }
+            sink.advance(1, "转换 第 " + (pos - ddlTotal) + "/" + dmlTotal + " 条 · " + stmtHead(stmt));
         }
         return wr;
     }

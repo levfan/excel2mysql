@@ -179,6 +179,10 @@ public final class GuiMain {
                     if (lp.adsButton().isEnabled()) {
                         problems.add("仅生成 obj 后 ads 不该亮（dom 未生成）");
                     }
+                    // 库名不合规要当场拦下：不许静默产出一份 USE `` / FROM ` `.`t` 的坏交付件
+                    layer_db_guard(lp, frame, problems);
+                    // RES_LAYER 忙时这一页会改共享状态的入口必须全灰（生成 worker 正读着那份映射与源结构）
+                    layer_busy_lock(lp, problems);
                     // 产物根用完随手清掉：createTempDirectory 不会自己删，而 deleteOnExit 不递归、
                     // 底下那层 layer_*/ 留着它就删不掉父目录（上面那份临时映射夹具 mf 是单文件，deleteOnExit 够用）
                     deleteTree(outRoot);
@@ -2581,6 +2585,78 @@ public final class GuiMain {
         t.selectAll();
         if (t.getSelectedText() == null || !t.getSelectedText().equals(t.getText())) {
             problems.add(who + "选不出整行文字：" + t.getSelectedText());
+        }
+    }
+
+    /**
+     * 第四页的库名校验闸：obj 那一格依次改成空串、纯空白、一串带反引号的，三次点生成都不许落产物。
+     *
+     * <p>钉的是外场真撞的那一支：连上一台没有 ods 库的服务器，可编辑的源库下拉是空的，
+     * 少这道校验就会交出一份 `USE ` `;`、`FROM ` `.`t_oil`` 的坏 .sql —— 它一句错都不报，
+     * 只有打开交付件的人才看得出来。所以判据是"临时根里一个 layer_ 开头的产物目录都不许有"，
+     * 而不是"有没有报错"：拦不下时产物照样落得整整齐齐。
+     */
+    private static void layer_db_guard(com.excel2mysql.gui.LayerPage lp, MainFrame frame,
+                                       List<String> problems) {
+        String keep = lp.objDbField().getText();
+        String[] bad = {"", "   ", "ods`x`"};
+        for (String v : bad) {
+            lp.objDbField().setText(v);
+            java.io.File root;
+            try {
+                root = java.nio.file.Files.createTempDirectory("e2m-layer-guard").toFile();
+            } catch (java.io.IOException e) {
+                problems.add("建库名校验用例的临时产物根失败：" + e);
+                break;
+            }
+            lp.generateTo(com.excel2mysql.core.LayerGen.Layer.OBJ, root.getPath());
+            if (hasLayerDir(root)) {
+                problems.add("obj 库名填的是「" + v + "」却没拦下，产物照落了（交付件里是空/坏库名）");
+            }
+            if (!lp.logPanel().isErrorLine("已拦下 OBJ 生成")) {
+                problems.add("拦下不合规库名没在第四页日志里按错误级说理由");
+            }
+            if (!frame.lastDialogIsError() || !frame.lastDialogText().contains("库名")) {
+                problems.add("拦下不合规库名没有以出错弹窗说清是哪一格，正文：" + frame.lastDialogText());
+            }
+            deleteTree(root);
+        }
+        lp.objDbField().setText(keep);
+    }
+
+    /** 这一趟有没有真落 layer_ 开头的产物目录：库名被拦下时必须一个都没有。 */
+    private static boolean hasLayerDir(java.io.File root) {
+        java.io.File[] ds = root.listFiles();
+        if (ds == null) {
+            return false;
+        }
+        for (java.io.File d : ds) {
+            if (d.isDirectory() && d.getName().startsWith("layer_")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * RES_LAYER 忙时的第四页入口闸：生成 worker 读的是 mapping／sourceTables／字段例外这三份，
+     * 「载入映射文件」与「读源库结构」改的正是同一份，所以忙时五颗入口一起灰才叫防住竞态
+     * （RES_LAYER 资源位本身只挡"再点一次生成"，挡不住那两条改数据的入口）。
+     */
+    private static void layer_busy_lock(com.excel2mysql.gui.LayerPage lp, List<String> problems) {
+        lp.setLayerBusy(true);
+        if (lp.loadMappingButton().isEnabled()) {
+            problems.add("忙时「载入映射文件」还能点，会把生成任务正读的那份映射换掉");
+        }
+        if (lp.readSourceButton().isEnabled()) {
+            problems.add("忙时「读源库结构」还能点，会把生成任务正读的源结构换掉");
+        }
+        if (lp.objButton().isEnabled() || lp.domButton().isEnabled()) {
+            problems.add("忙时第四页的生成按钮还能点，两个任务会踩同一份数据");
+        }
+        lp.setLayerBusy(false);
+        if (!lp.loadMappingButton().isEnabled() || !lp.readSourceButton().isEnabled()) {
+            problems.add("任务收了摊，「载入映射文件」／「读源库结构」却没恢复可点");
         }
     }
 
