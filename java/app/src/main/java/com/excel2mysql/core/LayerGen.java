@@ -126,7 +126,7 @@ public final class LayerGen {
                 }
             }
             addGovernance(cols, GOV_OBJ_DOM);
-            ddl.append(Ddl.buildDdl(target, target, cols, true)).append("\n\n");
+            ddl.append(Ddl.buildDdl(target, target, cols, true)).append(";\n\n");
             for (MappingFile.TableMap t : e.getValue()) {
                 SourceTable s = bind(t, map);
                 dml.append(domInsert(target, s, cols, o)).append("\n\n");
@@ -184,7 +184,7 @@ public final class LayerGen {
                 }
             }
             addGovernance(cols, GOV_OBJ_DOM);
-            ddl.append(Ddl.buildDdl(dim, dim, cols, true)).append("\n\n");
+            ddl.append(Ddl.buildDdl(dim, dim, cols, true)).append(";\n\n");
             List<String> branches = new ArrayList<String>();
             for (SourceTable s : e.getValue()) {
                 branches.add(objSelect(dim, pk, s, cols, o));
@@ -234,7 +234,7 @@ public final class LayerGen {
             String target = "ads_" + theme;
             List<Infer.Column> cols = new ArrayList<Infer.Column>();
             cols.addAll(governanceCols(GOV_ADS));
-            ddl.append(Ddl.buildDdl(target, "主题 " + theme + "（待核）", cols, true)).append("\n\n");
+            ddl.append(Ddl.buildDdl(target, "主题 " + theme + "（待核）", cols, true)).append(";\n\n");
             String domTable = e.getValue().get(0).domainTarget;
             dml.append("-- 主题 ").append(theme).append(" 聚合模板，指标口径待业务方核改（条款 188）\n")
                .append("INSERT INTO `").append(target).append("` (`stat_date`, `dim_key_json`, `idx_code`, `src_row_cnt`, `excluded_row_cnt`, `etl_batch_id`, `quality_flag`) ")
@@ -338,5 +338,119 @@ public final class LayerGen {
             sb.append(parts.get(i));
         }
         return sb.toString();
+    }
+
+    // ---- 连库 I/O（Task 3）----
+    public static final class WriteResult {
+        public int tablesCreated;
+        public long rowsAffected;
+        public List<String> errors = new ArrayList<String>();
+    }
+
+    /** 读源库用户表结构（VIEW 排除），列按 ORDINAL_POSITION 序。 */
+    public static List<SourceTable> readSource(DbClient db, String sourceDb) throws java.sql.SQLException {
+        List<SourceTable> out = new ArrayList<SourceTable>();
+        java.sql.DatabaseMetaData md = db.connection().getMetaData();
+        List<String> tableNames = new ArrayList<String>();
+        java.sql.ResultSet ts = md.getTables(sourceDb, null, "%", new String[]{"TABLE"});
+        try { while (ts.next()) { tableNames.add(ts.getString("TABLE_NAME")); } } finally { ts.close(); }
+        java.util.Collections.sort(tableNames);
+        for (String tn : tableNames) {
+            String comment = "";
+            java.sql.ResultSet tt = md.getTables(sourceDb, null, tn, new String[]{"TABLE"});
+            try { if (tt.next()) { comment = tt.getString("REMARKS"); } } finally { tt.close(); }
+            List<Infer.Column> cols = new ArrayList<Infer.Column>();
+            java.sql.ResultSet cs = md.getColumns(sourceDb, null, tn, "%");
+            try {
+                while (cs.next()) {
+                    Infer.Column c = new Infer.Column();
+                    c.field = cs.getString("COLUMN_NAME");
+                    c.comment = cs.getString("REMARKS");
+                    c.type = jdbcTypeToDdl(cs.getInt("DATA_TYPE"), cs.getInt("COLUMN_SIZE"), cs.getInt("DECIMAL_DIGITS"));
+                    c.maxLen = cs.getInt("COLUMN_SIZE");
+                    c.nullable = cs.getInt("NULLABLE") != java.sql.DatabaseMetaData.columnNoNulls;
+                    cols.add(c);
+                }
+            } finally { cs.close(); }
+            java.sql.ResultSet pk = md.getPrimaryKeys(sourceDb, null, tn);
+            Set<String> pkFields = new LinkedHashSet<String>();
+            try { while (pk.next()) { pkFields.add(pk.getString("COLUMN_NAME")); } } finally { pk.close(); }
+            for (Infer.Column c : cols) { c.primaryKey = pkFields.contains(c.field); }
+            out.add(new SourceTable(tn, comment == null ? "" : comment, cols));
+        }
+        return out;
+    }
+
+    private static String jdbcTypeToDdl(int jdbcType, int size, int digits) {
+        switch (jdbcType) {
+            case java.sql.Types.INTEGER: return "INT";
+            case java.sql.Types.BIGINT: return "BIGINT";
+            case java.sql.Types.SMALLINT: return "SMALLINT";
+            case java.sql.Types.TINYINT: return "TINYINT";
+            case java.sql.Types.DECIMAL: case java.sql.Types.NUMERIC:
+                return "DECIMAL(" + Math.max(size, 1) + "," + Math.max(digits, 0) + ")";
+            case java.sql.Types.DOUBLE: case java.sql.Types.FLOAT: case java.sql.Types.REAL: return "DOUBLE";
+            case java.sql.Types.DATE: return "DATE";
+            case java.sql.Types.TIMESTAMP: return "DATETIME";
+            case java.sql.Types.TIME: return "TIME";
+            case java.sql.Types.BIT: case java.sql.Types.BOOLEAN: return "TINYINT(1)";
+            case java.sql.Types.LONGVARCHAR: case java.sql.Types.CLOB: return "TEXT";
+            default: return "VARCHAR(" + (size > 0 && size <= 16383 ? size : 255) + ")";
+        }
+    }
+
+    /** 入库：建库（若缺）→建表→执行转换 SQL。单条失败隔离记 errors，不掀整轮。 */
+    public static WriteResult execute(LayerOutput out, String targetDb, DbClient db, ImportParse.Sink sink)
+            throws java.sql.SQLException {
+        WriteResult wr = new WriteResult();
+        java.sql.Statement st = db.connection().createStatement();
+        try {
+            st.execute("CREATE DATABASE IF NOT EXISTS `" + targetDb + "` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci");
+            db.connection().commit();
+        } finally { st.close(); }
+        // DDL 按 ";\n" 拆（与 DbClient.createTable 同口径），USE 头先跑
+        for (String stmt : splitStatements(out.ddlSql)) {
+            if (stmt.trim().isEmpty()) { continue; }
+            java.sql.Statement s = db.connection().createStatement();
+            try {
+                s.execute(stmt);
+                db.connection().commit();
+                if (stmt.trim().toUpperCase().startsWith("CREATE TABLE")) { wr.tablesCreated++; }
+            } catch (java.sql.SQLException e) {
+                wr.errors.add("DDL 失败：" + e.getMessage());
+                sink.logError("x [ERROR] LAYER-DDL | " + e.getMessage());
+            } finally { s.close(); }
+        }
+        for (String stmt : splitStatements(out.transformSql)) {
+            if (stmt.trim().isEmpty()) { continue; }
+            java.sql.Statement s = db.connection().createStatement();
+            try {
+                int n = s.executeUpdate(stmt);
+                db.connection().commit();
+                if (n > 0) { wr.rowsAffected += n; }
+            } catch (java.sql.SQLException e) {
+                wr.errors.add("转换失败：" + e.getMessage());
+                sink.logError("x [ERROR] LAYER-DML | " + e.getMessage());
+            } finally { s.close(); }
+        }
+        return wr;
+    }
+
+    /** 按 ";\n" 拆语句，但保留语句内的分号（注释行里的 -- 不拆）。与 DbClient.createTable 同口径。 */
+    private static List<String> splitStatements(String sql) {
+        List<String> out = new ArrayList<String>();
+        StringBuilder cur = new StringBuilder();
+        String[] lines = sql.split("\n", -1);
+        for (String line : lines) {
+            cur.append(line).append("\n");
+            if (line.trim().endsWith(";")) {
+                String s = cur.toString().trim();
+                if (s.endsWith(";")) { s = s.substring(0, s.length() - 1); }
+                out.add(s);
+                cur.setLength(0);
+            }
+        }
+        if (cur.toString().trim().length() > 0) { out.add(cur.toString().trim()); }
+        return out;
     }
 }

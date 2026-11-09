@@ -66,6 +66,17 @@ public final class LayerGenDiffer {
             bad++; shown.add("ads 缺模板聚合 GROUP BY/COUNT(*)");
         }
 
+        // 建表语句必须以分号终止：否则整层拼接后 splitStatements 粘连、交付 .sql 在 mysql 客户端跑不动
+        if (!dom.ddlSql.contains("COMMENT='dwd_proc_oil';") || !dom.ddlSql.contains("COMMENT='dwd_comp_tech';")) {
+            bad++; shown.add("dom DDL 建表语句未以分号终止");
+        }
+        if (!obj.ddlSql.contains("COMMENT='dim_material';")) {
+            bad++; shown.add("obj DDL 建表语句未以分号终止");
+        }
+        if (!ads.ddlSql.contains("（待核）';")) {
+            bad++; shown.add("ads DDL 建表语句未以分号终止");
+        }
+
         // 未绑定：映射里的表在源结构里找不到 → 记 unbound，不掀整轮
         List<LayerGen.SourceTable> partial = new ArrayList<LayerGen.SourceTable>();
         partial.add(src.get(0)); // 只给 t_oil，t_staff 缺
