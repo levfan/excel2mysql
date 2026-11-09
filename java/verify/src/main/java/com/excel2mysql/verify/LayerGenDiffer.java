@@ -73,6 +73,9 @@ public final class LayerGenDiffer {
         if (!obj.ddlSql.contains("COMMENT='dim_material';")) {
             bad++; shown.add("obj DDL 建表语句未以分号终止");
         }
+        if (!obj.ddlSql.startsWith("USE `obj`;")) {
+            bad++; shown.add("obj DDL 缺 USE `obj`; 头（execute 的一致性校验/前置 USE 全靠它）");
+        }
         if (!ads.ddlSql.contains("（待核）';")) {
             bad++; shown.add("ads DDL 建表语句未以分号终止");
         }

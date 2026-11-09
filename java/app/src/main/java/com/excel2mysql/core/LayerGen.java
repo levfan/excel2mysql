@@ -421,7 +421,18 @@ public final class LayerGen {
             sink.logError("x [ERROR] LAYER-DB | 建库失败：" + e.getMessage());
             return wr;   // 库没建成，后面 USE/建表必炸，直接收摊
         } finally { st.close(); }
-        // DDL 按 ";\n" 拆（与 DbClient.createTable 同口径），USE 头先跑
+        // 会话目标库设为**前置条件**：显式 USE 并单独隔离失败——不能只靠下面循环里那条会被
+        // continue-on-error 忽略的 USE 头。否则 USE 一旦失败，后续未限定的 DROP/CREATE 会落到
+        // 上一次 execute 的库或 URL 目录库（E2M_DB），静默毁同名表。先 USE 成，语句才准往下跑。
+        java.sql.Statement us = db.connection().createStatement();
+        try {
+            us.execute("USE `" + targetDb + "`");
+            db.connection().commit();
+        } catch (java.sql.SQLException e) {
+            noteError(wr, sink, "LAYER-USE", "切库失败", "USE `" + targetDb + "`", targetDb, e);
+            return wr;   // 进不去目标库就别往下走，绝不让语句漂到别的库
+        } finally { us.close(); }
+        // DDL 按 ";\n" 拆（与 DbClient.createTable 同口径）；USE 头已在上面坐实，这里再遇 USE 是同库空操作
         for (String stmt : splitStatements(out.ddlSql)) {
             if (stmt.trim().isEmpty()) { continue; }
             java.sql.Statement s = db.connection().createStatement();
@@ -430,7 +441,7 @@ public final class LayerGen {
                 db.connection().commit();
                 if (stmt.trim().toUpperCase().startsWith("CREATE TABLE")) { wr.tablesCreated++; }
             } catch (java.sql.SQLException e) {
-                noteError(wr, sink, "LAYER-DDL", "DDL 失败", stmt, e);
+                noteError(wr, sink, "LAYER-DDL", "DDL 失败", stmt, targetDb, e);
             } finally { s.close(); }
         }
         for (String stmt : splitStatements(out.transformSql)) {
@@ -441,7 +452,7 @@ public final class LayerGen {
                 db.connection().commit();
                 if (n > 0) { wr.rowsAffected += n; }
             } catch (java.sql.SQLException e) {
-                noteError(wr, sink, "LAYER-DML", "转换失败", stmt, e);
+                noteError(wr, sink, "LAYER-DML", "转换失败", stmt, targetDb, e);
             } finally { s.close(); }
         }
         return wr;
@@ -458,14 +469,14 @@ public final class LayerGen {
     /** 逐条报错日志上限：超过就只报一次"另有更多"，与 SqlFileRun 的汇总口径一致，312 表时不刷屏。 */
     private static final int MAX_LOGGED_ERRORS = 15;
 
-    /** 单条失败记账：错误串带语句头部（312 表时才知道炸在哪条）；逐条日志有上限。 */
+    /** 单条失败记账：错误串带**落库名＋语句头部**（312 表时才知道炸在哪个库哪条）；逐条日志有上限。 */
     private static void noteError(WriteResult wr, ImportParse.Sink sink, String tag,
-                                  String kind, String stmt, java.sql.SQLException e) {
-        wr.errors.add(kind + "[" + stmtHead(stmt) + "]：" + e.getMessage());
+                                  String kind, String stmt, String db, java.sql.SQLException e) {
+        wr.errors.add(kind + "（库 " + db + "）[" + stmtHead(stmt) + "]：" + e.getMessage());
         if (wr.errors.size() < MAX_LOGGED_ERRORS) {
-            sink.logError("x [ERROR] " + tag + " | " + stmtHead(stmt) + "：" + e.getMessage());
+            sink.logError("x [ERROR] " + tag + " | 库 " + db + " · " + stmtHead(stmt) + "：" + e.getMessage());
         } else if (wr.errors.size() == MAX_LOGGED_ERRORS) {
-            sink.logError("! [WARN] " + tag + " | 另有更多语句报错未逐条列出（见 errors 汇总）");
+            sink.logError("! [WARN] " + tag + " | 库 " + db + " 另有更多语句报错未逐条列出（见 errors 汇总）");
         }
     }
 
