@@ -403,10 +403,23 @@ public final class LayerGen {
     public static WriteResult execute(LayerOutput out, String targetDb, DbClient db, ImportParse.Sink sink)
             throws java.sql.SQLException {
         WriteResult wr = new WriteResult();
+        // targetDb 与 DDL 里的 `USE \`x\`;` 头必须一致——两者是两个事实源，调用方（Task4/5）给错库时，
+        // 语句会经 USE 落进另一个库、还在这库留个空壳。宁可记账不执行，也不能默默写错库。
+        String useDb = firstUseTarget(out.ddlSql);
+        if (useDb != null && !useDb.equals(targetDb)) {
+            wr.errors.add("目标库不一致：USE `" + useDb + "` 但 targetDb=" + targetDb + "，已跳过执行");
+            sink.logError("x [ERROR] LAYER-EXEC | 目标库不一致，未执行：" + useDb + " vs " + targetDb);
+            return wr;
+        }
+        // 建库也纳入单条失败隔离：权限/磁盘错记进 errors、收摊返回，不再抛出掀整轮（与下面循环同口径）。
         java.sql.Statement st = db.connection().createStatement();
         try {
             st.execute("CREATE DATABASE IF NOT EXISTS `" + targetDb + "` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci");
             db.connection().commit();
+        } catch (java.sql.SQLException e) {
+            wr.errors.add("建库失败[" + targetDb + "]：" + e.getMessage());
+            sink.logError("x [ERROR] LAYER-DB | 建库失败：" + e.getMessage());
+            return wr;   // 库没建成，后面 USE/建表必炸，直接收摊
         } finally { st.close(); }
         // DDL 按 ";\n" 拆（与 DbClient.createTable 同口径），USE 头先跑
         for (String stmt : splitStatements(out.ddlSql)) {
@@ -417,8 +430,7 @@ public final class LayerGen {
                 db.connection().commit();
                 if (stmt.trim().toUpperCase().startsWith("CREATE TABLE")) { wr.tablesCreated++; }
             } catch (java.sql.SQLException e) {
-                wr.errors.add("DDL 失败：" + e.getMessage());
-                sink.logError("x [ERROR] LAYER-DDL | " + e.getMessage());
+                noteError(wr, sink, "LAYER-DDL", "DDL 失败", stmt, e);
             } finally { s.close(); }
         }
         for (String stmt : splitStatements(out.transformSql)) {
@@ -429,11 +441,37 @@ public final class LayerGen {
                 db.connection().commit();
                 if (n > 0) { wr.rowsAffected += n; }
             } catch (java.sql.SQLException e) {
-                wr.errors.add("转换失败：" + e.getMessage());
-                sink.logError("x [ERROR] LAYER-DML | " + e.getMessage());
+                noteError(wr, sink, "LAYER-DML", "转换失败", stmt, e);
             } finally { s.close(); }
         }
         return wr;
+    }
+
+    /** 从 DDL 串里取第一个 `USE \`x\`;` 的库名；没有返回 null。 */
+    private static String firstUseTarget(String ddl) {
+        int i = ddl.indexOf("USE `");
+        if (i < 0) { return null; }
+        int j = ddl.indexOf('`', i + 5);
+        return j < 0 ? null : ddl.substring(i + 5, j);
+    }
+
+    /** 逐条报错日志上限：超过就只报一次"另有更多"，与 SqlFileRun 的汇总口径一致，312 表时不刷屏。 */
+    private static final int MAX_LOGGED_ERRORS = 15;
+
+    /** 单条失败记账：错误串带语句头部（312 表时才知道炸在哪条）；逐条日志有上限。 */
+    private static void noteError(WriteResult wr, ImportParse.Sink sink, String tag,
+                                  String kind, String stmt, java.sql.SQLException e) {
+        wr.errors.add(kind + "[" + stmtHead(stmt) + "]：" + e.getMessage());
+        if (wr.errors.size() < MAX_LOGGED_ERRORS) {
+            sink.logError("x [ERROR] " + tag + " | " + stmtHead(stmt) + "：" + e.getMessage());
+        } else if (wr.errors.size() == MAX_LOGGED_ERRORS) {
+            sink.logError("! [WARN] " + tag + " | 另有更多语句报错未逐条列出（见 errors 汇总）");
+        }
+    }
+
+    private static String stmtHead(String stmt) {
+        String s = stmt.trim();
+        return s.length() <= 60 ? s : s.substring(0, 60) + "…";
     }
 
     /** 按 ";\n" 拆语句，但保留语句内的分号（注释行里的 -- 不拆）。与 DbClient.createTable 同口径。 */

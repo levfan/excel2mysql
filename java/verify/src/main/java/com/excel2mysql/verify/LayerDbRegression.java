@@ -53,9 +53,10 @@ public final class LayerDbRegression {
             exec(db, "INSERT INTO `" + SRC + "`.`t_oil` VALUES ('1','油料甲'),('2','油料乙')");
 
             List<LayerGen.SourceTable> src = LayerGen.readSource(db, SRC);
-            if (src.size() != 1 || src.get(0).columns.size() != 2) {
-                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 1 表 2 列 实际 "
-                        + src.size() + " 表");
+            if (src.size() != 1) {
+                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 1 表 实际 " + src.size());
+            } else if (src.get(0).columns.size() != 2) {
+                bad++; System.out.println("x [ERROR] READ-SOURCE | t_oil 期望 2 列 实际 " + src.get(0).columns.size());
             }
 
             MappingFile m = mapping();
@@ -65,9 +66,13 @@ public final class LayerDbRegression {
             for (LayerGen.Layer layer : new LayerGen.Layer[]{LayerGen.Layer.DOM, LayerGen.Layer.OBJ, LayerGen.Layer.ADS}) {
                 LayerGen.LayerOutput out = LayerGen.genLayer(layer, m, src, o);
                 String targetDb = layer == LayerGen.Layer.DOM ? DOM : layer == LayerGen.Layer.OBJ ? OBJ : ADS;
+                if (!created.contains(targetDb)) { created.add(targetDb); } // 先登记：execute 若中途抛，探针库也在清理账上
                 LayerGen.WriteResult wr = LayerGen.execute(out, targetDb, db, ImportParse.LOG_ONLY);
-                if (!created.contains(targetDb)) { created.add(targetDb); }
                 if (!wr.errors.isEmpty()) { bad++; System.out.println("x [ERROR] EXEC | " + layer + " " + wr.errors); }
+                if (layer == LayerGen.Layer.DOM && (wr.tablesCreated != 1 || wr.rowsAffected != 2)) {
+                    bad++; System.out.println("x [ERROR] WRITE-RESULT | dom 期望 建表1/影响2 实际 "
+                            + wr.tablesCreated + "/" + wr.rowsAffected);
+                }
             }
 
             long domRows = count(db, DOM, "dwd_proc_oil");
@@ -113,17 +118,29 @@ public final class LayerDbRegression {
     }
 
     private static long count(DbClient db, String schema, String table) throws Exception {
-        Statement st = db.connection().createStatement();
+        Statement st = null;
         try {
+            st = db.connection().createStatement();
             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM `" + schema + "`.`" + table + "`");
             rs.next(); long n = rs.getLong(1); rs.close(); return n;
-        } finally { st.close(); }
+        } catch (java.sql.SQLException e) {
+            // 表没建成时 executeQuery 会抛：这里报可读 FAIL 并返回 -1，让调用点计入 bad、
+            // 流程继续走到跑后残留校验（否则异常掀掉 main，SIDE-EFFECT 那条最该跑的反而没跑）
+            System.out.println("x [ERROR] COUNT | " + schema + "." + table + " 读行数失败：" + e.getMessage());
+            return -1L;
+        } finally { if (st != null) { st.close(); } }
     }
 
     private static String scalar(DbClient db, String sql) throws Exception {
-        Statement st = db.connection().createStatement();
-        try { ResultSet rs = st.executeQuery(sql); String s = rs.next() ? rs.getString(1) : null; rs.close(); return s; }
-        finally { st.close(); }
+        Statement st = null;
+        try {
+            st = db.connection().createStatement();
+            ResultSet rs = st.executeQuery(sql);
+            String s = rs.next() ? rs.getString(1) : null; rs.close(); return s;
+        } catch (java.sql.SQLException e) {
+            System.out.println("x [ERROR] SCALAR | 取值失败：" + e.getMessage());
+            return null;
+        } finally { if (st != null) { st.close(); } }
     }
 
     private static Set<String> databases(Connection c) throws Exception {
