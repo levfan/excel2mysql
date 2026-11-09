@@ -113,24 +113,28 @@ public final class LayerGen {
         StringBuilder dml = new StringBuilder("USE `" + o.domDb + "`;\n\n");
         for (Map.Entry<String, List<MappingFile.TableMap>> e : groups.entrySet()) {
             String target = e.getKey();
+            // 条款 184 的整编实况就是多源归一（层间映射初稿 312 源表 → 26 领域目标表，23 个多源）。
+            // 合并表要装下所有源的列，缺列的源那一支只能插 NULL，所以：源侧 NOT NULL 一律不许携带、
+            // 各源主键一律不许并成复合主键，主键只归治理字段 entity_id（每行 UUID() 生成，天然唯一）。
+            // 单源目标（1:1 路）保持原样：源主键照旧携带，不在这条路上做任何改变。
+            boolean multi = isMultiSource(e.getValue(), map);
             List<Infer.Column> cols = new ArrayList<Infer.Column>();
             Set<String> seen = new LinkedHashSet<String>();
-            String pk = null;
             for (MappingFile.TableMap t : e.getValue()) {
                 SourceTable s = bind(t, map);
                 for (Infer.Column c : s.columns) {
-                    if (seen.add(c.field)) {
-                        cols.add(copyCol(c, c.primaryKey));
-                        if (c.primaryKey && pk == null) { pk = c.field; }
-                    }
+                    if (seen.add(c.field)) { cols.add(multi ? copyMerged(c) : copyCol(c, c.primaryKey)); }
                 }
             }
             addGovernance(cols, GOV_OBJ_DOM);
+            if (multi) { markEntityIdPk(cols); }
             ddl.append(Ddl.buildDdl(target, target, cols, true)).append(";\n\n");
             for (MappingFile.TableMap t : e.getValue()) {
                 SourceTable s = bind(t, map);
-                dml.append(domInsert(target, s, cols, o)).append("\n\n");
-                addFieldMaps(out, s, target, cols, o);
+                // dom 不产生成主键之外的键值：uuidPk 只在多源时钉 entity_id，src_entity_id 归 obj（条款 186）
+                ColExpr x = new ColExpr(s, multi ? "entity_id" : null, null, o);
+                dml.append(domInsert(target, cols, x)).append("\n\n");
+                addFieldMaps(out, s, target, cols, x);
             }
             out.tableCount++;
         }
@@ -139,16 +143,36 @@ public final class LayerGen {
         return out;
     }
 
-    private static String domInsert(String target, SourceTable s, List<Infer.Column> cols, GenOptions o) {
-        StringBuilder select = new StringBuilder();
-        Set<String> srcFields = new LinkedHashSet<String>();
-        for (Infer.Column c : s.columns) { srcFields.add(c.field); }
-        for (Infer.Column c : cols) {
-            if (select.length() > 0) { select.append(", "); }
-            if (srcFields.contains(c.field)) { select.append("`").append(c.field).append("`"); }
-            else { select.append(govExpr(c.field, o)); }
+    /** 该目标组是否由两张以上不同源表归并而来（同一源表重复登记不算多源）。 */
+    private static boolean isMultiSource(List<MappingFile.TableMap> group, Map<String, SourceTable> map) {
+        Set<String> names = new LinkedHashSet<String>();
+        for (MappingFile.TableMap t : group) {
+            SourceTable s = bind(t, map);
+            if (s != null) { names.add(s.name); }
         }
-        return "INSERT INTO `" + target + "` SELECT " + select + " FROM " + qualify(o.sourceDb, s.name) + ";";
+        return names.size() > 1;
+    }
+
+    /**
+     * 多源合并表的主键：只认治理字段 entity_id，不并各源主键。
+     * 顺手把类型收到 VARCHAR(64)——它是 UUID() 生成的 36 字符键，而当主键就要建索引，
+     * 治理字段默认的 VARCHAR(255) 在 utf8mb4 下是 1020 字节，老行格式（COMPACT，索引 767 上限）
+     * 建不出来；obj 的维度主键本来就是 VARCHAR(64)，同一口径。单源路不动这里的列。
+     */
+    private static void markEntityIdPk(List<Infer.Column> cols) {
+        for (Infer.Column c : cols) {
+            if ("entity_id".equals(c.field)) {
+                c.primaryKey = true;
+                c.type = "VARCHAR(64)";
+                return;
+            }
+        }
+    }
+
+    private static String domInsert(String target, List<Infer.Column> cols, ColExpr x) {
+        List<String> proj = new ArrayList<String>();
+        for (Infer.Column c : cols) { proj.add(x.selectExpr(c.field)); }
+        return "INSERT INTO `" + target + "` SELECT " + join(proj, ", ") + " FROM " + x.from() + ";";
     }
 
     // ---- obj：按涉及对象维度抽实体，十类按实际命中 ----
@@ -174,21 +198,27 @@ public final class LayerGen {
         for (Map.Entry<String, List<SourceTable>> e : dimSources.entrySet()) {
             String dim = e.getKey();
             String pk = DIM_PK.get(dim);
+            // 多源维度同 dom：一整条 UNION ALL 里谁缺列就得插 NULL，源侧 NOT NULL 携带进来是 1048
+            // 丢整张维表；主键本来就是 DIM_PK 那一个（每支 UUID() 生成），不并源主键。单源维表照旧。
+            boolean multi = e.getValue().size() > 1;
             List<Infer.Column> cols = new ArrayList<Infer.Column>();
             cols.add(col(pk, "VARCHAR(64)", dim + " 主键", true));
             Set<String> seen = new LinkedHashSet<String>();
             seen.add(pk);
             for (SourceTable s : e.getValue()) {
                 for (Infer.Column c : s.columns) {
-                    if (!c.primaryKey && seen.add(c.field)) { cols.add(copyCol(c, false)); }
+                    if (!c.primaryKey && seen.add(c.field)) {
+                        cols.add(multi ? copyMerged(c) : copyCol(c, false));
+                    }
                 }
             }
             addGovernance(cols, GOV_OBJ_DOM);
             ddl.append(Ddl.buildDdl(dim, dim, cols, true)).append(";\n\n");
             List<String> branches = new ArrayList<String>();
             for (SourceTable s : e.getValue()) {
-                branches.add(objSelect(dim, pk, s, cols, o));
-                addFieldMaps(out, s, dim, cols, o);
+                ColExpr x = new ColExpr(s, pk, firstPk(s), o);
+                branches.add(objSelect(s, cols, x));
+                addFieldMaps(out, s, dim, cols, x);
             }
             dml.append("INSERT INTO `").append(dim).append("` ").append(join(branches, "\nUNION ALL\n")).append(";\n\n");
             out.tableCount++;
@@ -198,25 +228,22 @@ public final class LayerGen {
         return out;
     }
 
-    private static String objSelect(String dim, String pk, SourceTable s, List<Infer.Column> cols, GenOptions o) {
-        String srcPk = firstPk(s);
-        StringBuilder select = new StringBuilder("SELECT DISTINCT ");
-        Set<String> srcFields = new LinkedHashSet<String>();
-        for (Infer.Column c : s.columns) { srcFields.add(c.field); }
-        boolean first = true;
-        for (Infer.Column c : cols) {
-            if (!first) { select.append(", "); }
-            first = false;
-            if (c.field.equals(pk)) { select.append("UUID() AS `").append(pk).append("`"); }
-            else if (c.field.equals("src_entity_id")) { select.append("`").append(srcPk).append("` AS `src_entity_id`"); }
-            else if (srcFields.contains(c.field)) { select.append("`").append(c.field).append("`"); }
-            else { select.append(govExpr(c.field, o)); }
-        }
-        select.append(" FROM ").append(qualify(o.sourceDb, s.name));
-        return select.toString();
+    /**
+     * obj 的一支：去重放内层派生表（只对业务列＋作 src_entity_id 的源主键做 DISTINCT），
+     * 生成键（UUID()/NOW()/字面量）全放外层。
+     * 老写法 `SELECT DISTINCT UUID() AS pk, …` 里 UUID() 每行都不同，DISTINCT 永远撞不出重复行，
+     * 大事实表喂进来的维度于是「一行一维」（条款 183/186 的去重没发生）。
+     */
+    private static String objSelect(SourceTable s, List<Infer.Column> cols, ColExpr x) {
+        List<String> outer = new ArrayList<String>();
+        for (Infer.Column c : cols) { outer.add(x.selectExpr(c.field)); }
+        List<String> inner = new ArrayList<String>();
+        for (String f : x.dedupCols(cols)) { inner.add("`" + f + "`"); }
+        return "SELECT " + join(outer, ", ")
+                + " FROM (SELECT DISTINCT " + join(inner, ", ") + " FROM " + x.from() + ") AS e_" + s.name;
     }
 
-    // ---- ads：按主题归属在 obj＋dom 上产模板聚合 ----
+    // ---- ads：按主题归属在 dom 上产模板聚合（条款 188 口径待业务方核，故不产 obj JOIN，FROM 只有 dom）----
     private static LayerOutput genAds(MappingFile m, List<SourceTable> src, GenOptions o) {
         LayerOutput out = new LayerOutput();
         out.layer = Layer.ADS;
@@ -273,6 +300,64 @@ public final class LayerGen {
         return n;
     }
 
+    /** 多源合并列：既不携带源主键、也不携带源侧 NOT NULL——缺列那一支要插 NULL，带着约束整表炸 1048。 */
+    private static Infer.Column copyMerged(Infer.Column c) {
+        Infer.Column n = c.copied();
+        n.primaryKey = false;
+        n.nullable = Boolean.TRUE;
+        return n;
+    }
+
+    /**
+     * 一条「源表 → 目标表」分支上，目标列取值表达式的唯一事实源。
+     * 转换 SQL（domInsert／objSelect）和 <层>_field_mapping.csv 的「转换规则」（addFieldMaps）都从这里取：
+     * 两处各写一份时，CSV 会把 pk／src_entity_id 记成 `NULL AS …`，而 SQL 实发 `UUID() AS …`／
+     * `` `源主键` AS … ``，两份交付证据自相矛盾（条款 208/186）。
+     */
+    private static final class ColExpr {
+        private final Set<String> srcFields;
+        private final String uuidPk;
+        private final String srcPk;
+        private final GenOptions o;
+        private final String srcFrom;
+
+        ColExpr(SourceTable s, String uuidPk, String srcPk, GenOptions o) {
+            this.srcFields = new LinkedHashSet<String>();
+            for (Infer.Column c : s.columns) { srcFields.add(c.field); }
+            this.uuidPk = uuidPk;
+            // 源主键得真在源列里才当 src_entity_id 用，否则退成治理占位（别引用不存在的列）
+            this.srcPk = srcPk != null && srcFields.contains(srcPk) ? srcPk : null;
+            this.o = o;
+            this.srcFrom = qualify(o.sourceDb, s.name);
+        }
+
+        String from() { return srcFrom; }
+
+        /** 该目标列是否直接取同名源列——只有这类列进派生表的 DISTINCT 投影。 */
+        boolean refsSource(String field) {
+            if (field.equals(uuidPk)) { return false; }
+            if ("src_entity_id".equals(field) && srcPk != null) { return false; }
+            return srcFields.contains(field);
+        }
+
+        String selectExpr(String field) {
+            if (field.equals(uuidPk)) { return "UUID() AS `" + field + "`"; }
+            if ("src_entity_id".equals(field) && srcPk != null) { return "`" + srcPk + "` AS `src_entity_id`"; }
+            if (srcFields.contains(field)) { return "`" + field + "`"; }
+            return govExpr(field, o);
+        }
+
+        /** 参与 DISTINCT 的列：业务列＋作 src_entity_id 的源主键；生成键一个都不进（进了就永不去重）。 */
+        List<String> dedupCols(List<Infer.Column> cols) {
+            List<String> out = new ArrayList<String>();
+            for (Infer.Column c : cols) {
+                if (refsSource(c.field) && !out.contains(c.field)) { out.add(c.field); }
+            }
+            if (srcPk != null && !out.contains(srcPk)) { out.add(srcPk); }
+            return out;
+        }
+    }
+
     private static List<Infer.Column> governanceCols(String[] names) {
         List<Infer.Column> out = new ArrayList<Infer.Column>();
         for (String n : names) {
@@ -311,21 +396,21 @@ public final class LayerGen {
     }
 
     private static void addFieldMaps(LayerOutput out, SourceTable s, String target,
-                                     List<Infer.Column> cols, GenOptions o) {
-        Set<String> srcFields = new LinkedHashSet<String>();
+                                     List<Infer.Column> cols, ColExpr x) {
         Map<String, Infer.Column> srcByName = new LinkedHashMap<String, Infer.Column>();
-        for (Infer.Column c : s.columns) { srcFields.add(c.field); srcByName.put(c.field, c); }
+        for (Infer.Column c : s.columns) { srcByName.put(c.field, c); }
         for (Infer.Column c : cols) {
             MappingFile.FieldMap f = new MappingFile.FieldMap();
             f.dstTable = target; f.dstField = c.field; f.dstComment = c.comment;
             f.dataElemName = ""; f.dataElemId = "待赋码"; f.status = "待核";
-            if (srcFields.contains(c.field)) {
+            // 表达式与转换 SQL 同源（ColExpr 一处生成），CSV 不再出现「SQL 发 UUID()、规则写 NULL」
+            if (x.refsSource(c.field)) {
                 Infer.Column sc = srcByName.get(c.field);
                 f.srcTable = s.name; f.srcField = c.field; f.srcComment = sc.comment;
                 f.transformRule = "同名直映"; f.governance = false;
             } else {
                 f.srcTable = s.name; f.srcField = ""; f.srcComment = "自动补治理字段";
-                f.transformRule = govExpr(c.field, o); f.governance = true;
+                f.transformRule = x.selectExpr(c.field); f.governance = true;
             }
             out.fieldMapping.add(f);
         }

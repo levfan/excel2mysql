@@ -11,7 +11,9 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /** 离线撞三层生成：DDL 口径、治理字段齐备、字段映射 100% 覆盖、转换 SQL 形状、依赖与未绑定。 */
 public final class LayerGenDiffer {
@@ -56,7 +58,7 @@ public final class LayerGenDiffer {
             if (!obj.transformSql.contains("UUID()")) { bad++; shown.add("obj 缺 entity_id=UUID()"); }
         }
 
-        // ads：从 obj＋dom 出，模板聚合＋表 6-4 字段
+        // ads：模板聚合只 FROM dom（188 口径待核，obj JOIN 未产，注释与 FROM 必须一致）＋表 6-4 字段
         LayerGen.LayerOutput ads = LayerGen.genLayer(LayerGen.Layer.ADS, m, src, o);
         if (!ads.ddlSql.contains("USE `ads`;")) { bad++; shown.add("ads 目标库不对"); }
         for (String g : LayerGen.GOV_ADS) {
@@ -86,6 +88,97 @@ public final class LayerGenDiffer {
         LayerGen.LayerOutput dom2 = LayerGen.genLayer(LayerGen.Layer.DOM, m, partial, o);
         if (dom2.unbound.isEmpty()) { bad++; shown.add("缺源表却没记 unbound"); }
 
+        // ---- 多源合并（条款 184 本职：真实层间映射 312 源表 → 26 领域表，23 个多源）----
+        // 上面两套夹具都是「一目标一源」，合并路零覆盖，这条补上：两张字段互缺的源表同归一个
+        // 领域目标表、同喂一个维度。缺列的源只能插 NULL，所以合并表不许携带源侧 NOT NULL、
+        // 不许把两张源的主键并成复合主键。
+        MappingFile mm = multiMapping();
+        List<LayerGen.SourceTable> msrc = multiSource();
+        LayerGen.LayerOutput mdom = LayerGen.genLayer(LayerGen.Layer.DOM, mm, msrc, o);
+        DdlTable mdomT = parseTable(mdom.ddlSql, "dwd_multi_oil");
+        if (mdom.tableCount != 1 || mdomT.fields.isEmpty()) {
+            bad++; shown.add("多源 dom 没合并成一张 dwd_multi_oil 表数 " + mdom.tableCount + " 列 " + mdomT.fields.size());
+        } else {
+            for (String need : new String[]{"id", "name", "log_id", "amount", "note", "entity_id"}) {
+                if (!mdomT.fields.contains(need)) { bad++; shown.add("多源 dom 合并缺列 " + need); }
+            }
+            List<String> strict = new ArrayList<String>(mdomT.notNull);
+            strict.remove("entity_id");
+            if (!strict.isEmpty()) {
+                bad++; shown.add("多源 dom 合并表携带源侧 NOT NULL（缺列的源插 NULL 就是 1048）：" + strict);
+            }
+            if (mdomT.pkLines.size() != 1 || !"PRIMARY KEY (`entity_id`)".equals(mdomT.pkLines.get(0))) {
+                bad++; shown.add("多源 dom 主键须恰为一条 entity_id 实际 " + mdomT.pkLines);
+            }
+            // 被喂 NULL 的目标列必须在 DDL 里可空，否则语句在严格模式整表失败
+            Set<String> mdomNull = nullFedCols(mdom.transformSql);
+            if (!mdomNull.contains("amount") || !mdomNull.contains("log_id")) {
+                bad++; shown.add("多源 dom 夹具没跑到「本源缺列插 NULL」amount/log_id 实喂 " + mdomNull);
+            }
+            for (String f : mdomNull) {
+                if (mdomT.notNull.contains(f)) {
+                    bad++; shown.add("多源 dom 往 NOT NULL 列喂 NULL：" + f + "（1048，表留空）");
+                }
+            }
+            if (countMapping(mdom.fieldMapping, mdomT.fields) < mdomT.fields.size()) {
+                bad++; shown.add("多源 dom 字段映射未覆盖全部合并列");
+            }
+        }
+
+        // obj：两张源表喂同一个 dim_material
+        LayerGen.LayerOutput mobj = LayerGen.genLayer(LayerGen.Layer.OBJ, mm, msrc, o);
+        DdlTable mobjT = parseTable(mobj.ddlSql, "dim_material");
+        if (mobjT.fields.isEmpty()) {
+            bad++; shown.add("多源 obj 没建出 dim_material");
+        } else {
+            List<String> strict = new ArrayList<String>(mobjT.notNull);
+            strict.remove("material_id");
+            if (!strict.isEmpty()) {
+                bad++; shown.add("多源 obj 维表携带源侧 NOT NULL：" + strict);
+            }
+            if (mobjT.pkLines.size() != 1 || !"PRIMARY KEY (`material_id`)".equals(mobjT.pkLines.get(0))) {
+                bad++; shown.add("多源 obj 维表主键须恰为一条 material_id 实际 " + mobjT.pkLines);
+            }
+            for (String f : nullFedCols(mobj.transformSql)) {
+                if (mobjT.notNull.contains(f)) { bad++; shown.add("多源 obj 往 NOT NULL 列喂 NULL：" + f); }
+            }
+        }
+        // 去重形状：DISTINCT 圈业务列（含作 src_entity_id 的源主键），生成键（UUID()/NOW()/字面量）放外层
+        // ——SELECT DISTINCT UUID() 里每行 UUID 都不同，DISTINCT 永远撞不出重复行（条款 183/186）
+        if (mobj.transformSql.contains("SELECT DISTINCT UUID()")) {
+            bad++; shown.add("obj 仍是 SELECT DISTINCT UUID() 旧形状：每行 UUID 不同，DISTINCT 不去重");
+        }
+        int branches = msrc.size();
+        if (countOccurrences(mobj.transformSql, "FROM (SELECT DISTINCT") != branches) {
+            bad++; shown.add("obj 去重派生表条数 期望 " + branches + "（每源一支）实际 "
+                    + countOccurrences(mobj.transformSql, "FROM (SELECT DISTINCT"));
+        }
+        for (String proj : distinctProjections(mobj.transformSql)) {
+            if (proj.contains("UUID()")) { bad++; shown.add("obj DISTINCT 投影里还有生成键：" + proj); }
+            if (!proj.contains("`name`") && !proj.contains("`amount`")) {
+                bad++; shown.add("obj DISTINCT 投影没圈业务列：" + proj);
+            }
+        }
+        // 证据同源：<层>_field_mapping.csv 的「转换规则」必须就是 SQL 实发的那个表达式
+        for (MappingFile.FieldMap f : mobj.fieldMapping) {
+            if (!f.governance || f.transformRule == null) { continue; }
+            if (!mobj.transformSql.contains(f.transformRule)) {
+                bad++; shown.add("obj 映射 CSV 与转换 SQL 不同源：" + f.dstField + " CSV「"
+                        + f.transformRule + "」SQL 无此表达式");
+            }
+        }
+        for (MappingFile.FieldMap f : mdom.fieldMapping) {
+            if (!f.governance || f.transformRule == null) { continue; }
+            if (!mdom.transformSql.contains(f.transformRule)) {
+                bad++; shown.add("dom 映射 CSV 与转换 SQL 不同源：" + f.dstField + " CSV「" + f.transformRule + "」");
+            }
+        }
+
+        // ads 注释诚实：模板聚合只 FROM dom（188 口径待核），不许声称产了 obj JOIN
+        if (ads.transformSql.contains("JOIN") || ads.transformSql.contains("obj.")) {
+            bad++; shown.add("ads 模板出现了 obj JOIN，与段注释口径需同步改写");
+        }
+
         System.out.println("- [INFO] LAYER-DIFF | 不一致 " + bad + " 处");
         for (String s : shown) { System.out.println("     " + s); }
         if (bad > 0) { System.out.println("x [ERROR] LAYER-DIFF | 三层生成与口径不符"); System.exit(1); }
@@ -100,6 +193,114 @@ public final class LayerGenDiffer {
             if (t.startsWith("`") && !t.startsWith("PRIMARY")) { n++; }
         }
         return n;
+    }
+
+    /** CREATE TABLE 体的最小解析：列序、哪些列 NOT NULL、有几条 PRIMARY KEY。 */
+    private static final class DdlTable {
+        final List<String> fields = new ArrayList<String>();
+        final Set<String> notNull = new LinkedHashSet<String>();
+        final List<String> pkLines = new ArrayList<String>();
+    }
+
+    private static DdlTable parseTable(String ddl, String table) {
+        DdlTable t = new DdlTable();
+        boolean in = false;
+        for (String line : ddl.split("\n")) {
+            String s = line.trim();
+            if (!in) {
+                if (s.startsWith("CREATE TABLE `" + table + "`")) { in = true; }
+                continue;
+            }
+            if (s.startsWith(")")) { in = false; continue; }
+            if (s.startsWith("PRIMARY KEY")) {
+                t.pkLines.add(s.endsWith(",") ? s.substring(0, s.length() - 1).trim() : s);
+                continue;
+            }
+            if (s.startsWith("`") && s.indexOf('`', 1) > 1) {
+                String name = s.substring(1, s.indexOf('`', 1));
+                t.fields.add(name);
+                if (s.contains("NOT NULL")) { t.notNull.add(name); }
+            }
+        }
+        return t;
+    }
+
+    /** 转换 SQL 里被喂 NULL 的目标列名集合——「NULL AS `x`」的每一支都算（多源合并的合法命门）。 */
+    private static Set<String> nullFedCols(String sql) {
+        Set<String> out = new LinkedHashSet<String>();
+        String mark = "NULL AS `";
+        int i = 0;
+        while ((i = sql.indexOf(mark, i)) >= 0) {
+            int j = sql.indexOf('`', i + mark.length());
+            if (j < 0) { break; }
+            out.add(sql.substring(i + mark.length(), j));
+            i = j;
+        }
+        return out;
+    }
+
+    /** obj 各支里 DISTINCT 的投影串（"SELECT DISTINCT " 到其后的 " FROM " 之间）。 */
+    private static List<String> distinctProjections(String sql) {
+        List<String> out = new ArrayList<String>();
+        String mark = "SELECT DISTINCT ";
+        int i = 0;
+        while ((i = sql.indexOf(mark, i)) >= 0) {
+            int from = sql.indexOf(" FROM ", i + mark.length());
+            if (from < 0) { break; }
+            out.add(sql.substring(i + mark.length(), from));
+            i = from;
+        }
+        return out;
+    }
+
+    private static int countOccurrences(String s, String needle) {
+        int n = 0;
+        for (int i = s.indexOf(needle); i >= 0; i = s.indexOf(needle, i + needle.length())) { n++; }
+        return n;
+    }
+
+    private static int countMapping(List<MappingFile.FieldMap> rows, List<String> fields) {
+        Set<String> hit = new LinkedHashSet<String>();
+        for (MappingFile.FieldMap f : rows) {
+            if (fields.contains(f.dstField)) { hit.add(f.dstField); }
+        }
+        return hit.size();
+    }
+
+    private static MappingFile multiMapping() throws IOException {
+        String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
+                + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
+        // 两张源表字段互缺（t_oil 无 log_id/amount/note、t_oil_log 无 name），却同归一张领域表、同喂一个维度
+        String body =
+                "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_multi_oil,dim_material,rc,关键词,待核,\n"
+                + "采购供应,油料,油料出入库流水,t_oil_log,3,log_id,采购供应,proc,油料保障,dwd_multi_oil,dim_material,rc,关键词,待核,\n";
+        File f = File.createTempFile("layerdiff-multi-", ".csv");
+        f.deleteOnExit();
+        Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
+        try { w.write('﻿'); w.write(header); w.write(body); } finally { w.close(); }
+        return MappingFile.loadTableCsv(f.getPath());
+    }
+
+    /** 多源夹具的源结构：两张表各自带 NOT NULL 业务列，合并后谁都不许留着这个约束。 */
+    private static List<LayerGen.SourceTable> multiSource() {
+        List<LayerGen.SourceTable> s = new ArrayList<LayerGen.SourceTable>();
+        List<Infer.Column> a = new ArrayList<Infer.Column>();
+        a.add(mcol("id", true, true));
+        a.add(mcol("name", false, true));
+        s.add(new LayerGen.SourceTable("t_oil", "油料账", a));
+        List<Infer.Column> b = new ArrayList<Infer.Column>();
+        b.add(mcol("log_id", true, true));
+        b.add(mcol("amount", false, true));
+        b.add(mcol("note", false, false));
+        s.add(new LayerGen.SourceTable("t_oil_log", "油料出入库流水", b));
+        return s;
+    }
+
+    private static Infer.Column mcol(String field, boolean pk, boolean notNull) {
+        Infer.Column c = new Infer.Column();
+        c.field = field; c.type = "VARCHAR(255)"; c.comment = field; c.maxLen = 255;
+        c.primaryKey = pk; c.nullable = notNull ? Boolean.FALSE : Boolean.TRUE;
+        return c;
     }
 
     private static MappingFile mapping() throws IOException {

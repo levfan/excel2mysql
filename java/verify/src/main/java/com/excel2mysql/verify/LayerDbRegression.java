@@ -46,15 +46,23 @@ public final class LayerDbRegression {
         }
         List<String> created = new ArrayList<String>();
         try {
-            // 造源库与一张源表（两行）
+            // 造源库与源表：t_oil（2 行）之外，再给两张「同归一个领域目标表」的源表——
+            // 条款 184 的实况是 312 源表整编进 26 领域表、23 个多源（最宽 dwd_med_care 56 源），
+            // 一表一源的夹具撞不到合并路，这里用真 MySQL 撞一次。
             exec(db, "CREATE DATABASE `" + SRC + "` DEFAULT CHARSET utf8mb4");
             created.add(SRC);
-            exec(db, "CREATE TABLE `" + SRC + "`.`t_oil` (`id` VARCHAR(64) NOT NULL, `name` VARCHAR(255), PRIMARY KEY (`id`)) ENGINE=InnoDB");
+            exec(db, "CREATE TABLE `" + SRC + "`.`t_oil` (`id` VARCHAR(64) NOT NULL, `name` VARCHAR(255) NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB");
             exec(db, "INSERT INTO `" + SRC + "`.`t_oil` VALUES ('1','油料甲'),('2','油料乙')");
+            // 与 t_oil 字段互缺、还各带 NOT NULL 业务列：合并后谁都得能往里插 NULL
+            exec(db, "CREATE TABLE `" + SRC + "`.`t_oil_log` (`log_id` VARCHAR(64) NOT NULL, `amount` INT NOT NULL, `note` VARCHAR(255), PRIMARY KEY (`log_id`)) ENGINE=InnoDB");
+            exec(db, "INSERT INTO `" + SRC + "`.`t_oil_log` VALUES ('l1',10,'甲'),('l2',20,NULL),('l3',30,'丙')");
+            // 无主键、且有两行完全相同：只喂维度，用来真撞「派生表 DISTINCT 去重、生成键在外层」
+            exec(db, "CREATE TABLE `" + SRC + "`.`t_oil_use` (`use_id` VARCHAR(64), `material_name` VARCHAR(255), `qty` INT) ENGINE=InnoDB");
+            exec(db, "INSERT INTO `" + SRC + "`.`t_oil_use` VALUES ('u1','油料甲',10),('u1','油料甲',10),('u2','油料乙',5)");
 
             List<LayerGen.SourceTable> src = LayerGen.readSource(db, SRC);
-            if (src.size() != 1) {
-                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 1 表 实际 " + src.size());
+            if (src.size() != 3) {
+                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 3 表 实际 " + src.size());
             } else if (src.get(0).columns.size() != 2) {
                 bad++; System.out.println("x [ERROR] READ-SOURCE | t_oil 期望 2 列 实际 " + src.get(0).columns.size());
             }
@@ -69,16 +77,35 @@ public final class LayerDbRegression {
                 if (!created.contains(targetDb)) { created.add(targetDb); } // 先登记：execute 若中途抛，探针库也在清理账上
                 LayerGen.WriteResult wr = LayerGen.execute(out, targetDb, db, ImportParse.LOG_ONLY);
                 if (!wr.errors.isEmpty()) { bad++; System.out.println("x [ERROR] EXEC | " + layer + " " + wr.errors); }
-                if (layer == LayerGen.Layer.DOM && (wr.tablesCreated != 1 || wr.rowsAffected != 2)) {
-                    bad++; System.out.println("x [ERROR] WRITE-RESULT | dom 期望 建表1/影响2 实际 "
+                if (layer == LayerGen.Layer.DOM && (wr.tablesCreated != 1 || wr.rowsAffected != 5)) {
+                    bad++; System.out.println("x [ERROR] WRITE-RESULT | dom 期望 建表1/影响5 实际 "
                             + wr.tablesCreated + "/" + wr.rowsAffected);
                 }
             }
 
+            // 多源合并真跑通：两张字段互缺的源表灌进同一张 dwd_proc_oil，缺列那一支插 NULL
             long domRows = count(db, DOM, "dwd_proc_oil");
-            if (domRows != 2) { bad++; System.out.println("x [ERROR] COUNT | dom dwd_proc_oil 期望 2 行 实际 " + domRows); }
+            if (domRows != 5) { bad++; System.out.println("x [ERROR] COUNT | dom 合并表 dwd_proc_oil 期望 5 行 实际 " + domRows); }
+            long fromOil = scalarLong(db, "SELECT COUNT(*) FROM `" + DOM + "`.`dwd_proc_oil` WHERE `name` IS NOT NULL");
+            long fromLog = scalarLong(db, "SELECT COUNT(*) FROM `" + DOM + "`.`dwd_proc_oil` WHERE `log_id` IS NOT NULL");
+            if (fromOil != 2 || fromLog != 3) {
+                bad++; System.out.println("x [ERROR] MERGE | 合并表两源行数 期望 2/3 实际 " + fromOil + "/" + fromLog);
+            }
+            // 主键归 entity_id（每行 UUID()）：非空且 5 行各不相同，复合主键／NULL 主键都过不了这两条
+            long pkNonNull = scalarLong(db, "SELECT COUNT(*) FROM `" + DOM + "`.`dwd_proc_oil` WHERE `entity_id` IS NOT NULL");
+            long pkDistinct = scalarLong(db, "SELECT COUNT(DISTINCT `entity_id`) FROM `" + DOM + "`.`dwd_proc_oil`");
+            if (pkNonNull != 5 || pkDistinct != 5) {
+                bad++; System.out.println("x [ERROR] PK | dom entity_id 主键 非空/唯一 期望 5/5 实际 "
+                        + pkNonNull + "/" + pkDistinct);
+            }
             long objRows = count(db, OBJ, "dim_material");
-            if (objRows != 2) { bad++; System.out.println("x [ERROR] COUNT | obj dim_material 期望 2 行 实际 " + objRows); }
+            // 2（t_oil）＋3（t_oil_log）＋2（t_oil_use 三行里有两行完全相同，去重后塌成 2）
+            if (objRows != 7) { bad++; System.out.println("x [ERROR] COUNT | obj dim_material 期望 7 行 实际 " + objRows); }
+            long dedup = scalarLong(db, "SELECT COUNT(*) FROM `" + OBJ + "`.`dim_material` WHERE `src_entity_id` = 'u1'");
+            if (dedup != 1) {
+                bad++; System.out.println("x [ERROR] DEDUP | obj 派生表去重 期望 src_entity_id='u1' 1 行 实际 " + dedup
+                        + "（UUID() 混进 DISTINCT 就永不去重）");
+            }
             // entity_id 必须是 UUID 且非空、src_entity_id 保留来源
             String entityId = scalar(db, "SELECT `entity_id` FROM `" + OBJ + "`.`dim_material` LIMIT 1");
             if (entityId == null || entityId.length() < 32) { bad++; System.out.println("x [ERROR] UUID | obj entity_id 不像 UUID：" + entityId); }
@@ -105,7 +132,10 @@ public final class LayerDbRegression {
     private static MappingFile mapping() throws IOException {
         String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
                 + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
-        String body = "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n";
+        // 前两行同归 dwd_proc_oil（多源合并）；t_oil_use 不设领域目标表，只喂维度（撞去重用）
+        String body = "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n"
+                + "采购供应,油料,油料出入库流水,t_oil_log,3,log_id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n"
+                + "采购供应,油料,油料消耗,t_oil_use,3,,采购供应,proc,油料保障,,dim_material,rc,关键词,待核,\n";
         File f = File.createTempFile("layerdb-", ".csv"); f.deleteOnExit();
         Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
         try { w.write('﻿'); w.write(header); w.write(body); } finally { w.close(); }
@@ -140,6 +170,19 @@ public final class LayerDbRegression {
         } catch (java.sql.SQLException e) {
             System.out.println("x [ERROR] SCALAR | 取值失败：" + e.getMessage());
             return null;
+        } finally { if (st != null) { st.close(); } }
+    }
+
+    /** 单值计数查询：表没建成/列不存在时记一条可读 FAIL 返回 -1，让流程走到跑后残留校验。 */
+    private static long scalarLong(DbClient db, String sql) throws Exception {
+        Statement st = null;
+        try {
+            st = db.connection().createStatement();
+            ResultSet rs = st.executeQuery(sql);
+            long n = rs.next() ? rs.getLong(1) : -1L; rs.close(); return n;
+        } catch (java.sql.SQLException e) {
+            System.out.println("x [ERROR] SCALAR | 计数失败：" + e.getMessage());
+            return -1L;
         } finally { if (st != null) { st.close(); } }
     }
 
