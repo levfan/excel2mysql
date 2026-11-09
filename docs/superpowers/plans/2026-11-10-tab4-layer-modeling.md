@@ -1434,13 +1434,15 @@ git commit -m "feat(core): 分层建模读源库结构与入库执行，DDL 语�
 **Interfaces:**
 - Consumes: `MappingFile`、`LayerGen`、`MainFrame.runTask`、`LogPanel`、`PageIntro`、`Tables`、`Buttons`、`UiScale`。
 - Produces:
-  - `LayerPage.Host` 接口：`Config currentConfig(); boolean connected(); String exportRoot(); void warn(String text); void informError(String title, String text); void runLayerTask(String title, Function<ImportParse.Sink,Object> work, Consumer<Object> onUi);`
+  - `LayerPage.Host` 接口：`Config currentConfig(); boolean connected(); String exportRoot(); void warn(String text); void inform(String text); void informError(String title, String text); void runLayerTask(String title, Function<ImportParse.Sink,Object> work, Consumer<Object> onUi);`（warn/inform/informError/currentConfig/connected/exportRoot 全部复用 MainFrame 已有的 SqlPage.Host 实现，签名一致，无新方法）
   - `LayerPage(Host host)` 构造；`LogPanel logPanel()`；`javax.swing.JButton objButton()/domButton()/adsButton()`；`boolean loadMapping(String path)`（载入并填清单，返回是否成功）；`void setSourceTables(List<LayerGen.SourceTable>)`；`void refreshButtonStates()`（依赖锁）；`boolean adsReady()`（obj＋dom 均已生成）；`void generateTo(LayerGen.Layer layer, String rootDir)`（显式产物根，自检用）。
   - MainFrame：`public static final String RES_LAYER = "layer";`＋RES_LABEL 条目；`implements SqlPage.Host, LayerPage.Host`；`public void runLayerTask(...)` 委托 runTask 指 layerPage.logPanel()、资源位 RES_LAYER。
 
 - [ ] **Step 1: 写失败测试（GuiMain selftest 追加）**
 
 在 `GuiMain.java` selftest 段（`static_texts(frame, problems);` 调用之后、添加夹具之前的位置）追加第四页断言。先 Read 该段定位插入点（selftest 里 `MainFrame frame = new MainFrame();` 之后那一串 problems.add 检查附近），插入：
+
+> 加第 4 页会连带两处 GuiMain 记账（实现时实测必须改、否则整轮 selftest 红）：① `STATIC_TEXTS` 白名单要收新页的 PageIntro 文案 `"读 ods 建模 obj/dom/ads"`，否则 static_texts 覆盖面计数判红；② 原 `titles.size() != 3` 断言改 `!= 4` 且补钉 `"分层建模".equals(titles.get(3))` 第 4 页签标题。两处都是"加页就必改"的机械项，不是削任何既有断言。Task 5 若再动 selftest，注意别把这两项改回。
 
 ```java
                 // 第四页：页签存在、三按钮默认灰（未载入映射）、ads 依赖锁
@@ -1533,6 +1535,7 @@ public final class LayerPage extends JPanel {
         boolean connected();
         String exportRoot();
         void warn(String text);
+        void inform(String text);
         void informError(String title, String text);
         void runLayerTask(String title, Function<ImportParse.Sink, Object> work, Consumer<Object> onUi);
     }
@@ -1564,7 +1567,7 @@ public final class LayerPage extends JPanel {
         Buttons.secondary(objBtn);
         Buttons.secondary(domBtn);
         Buttons.secondary(adsBtn);
-        setLayout(new BorderLayout(0, UiScale.px(6));
+        setLayout(new BorderLayout(0, UiScale.px(6)));
         add(buildTop(), BorderLayout.NORTH);
         Tables.style(table);
         add(new JScrollPane(table), BorderLayout.CENTER);
@@ -1599,7 +1602,7 @@ public final class LayerPage extends JPanel {
         bar.add(writeMode);
         bar.add(objBtn); bar.add(domBtn); bar.add(adsBtn);
         p.add(bar, BorderLayout.NORTH);
-        p.add(logPanel, BorderLayout.CENTER);
+        p.add(new JScrollPane(logPanel), BorderLayout.CENTER);
         return p;
     }
 
@@ -1701,7 +1704,7 @@ public final class LayerPage extends JPanel {
                 if (lay == LayerGen.Layer.DOM) { domGenerated = true; }
                 refreshButtonStates();
                 String dir = (String) arr[2];
-                host.warn("已生成 " + lay + "，产物目录：" + dir);
+                host.inform("已生成 " + lay + "，产物目录：" + dir);
             }
         });
     }
