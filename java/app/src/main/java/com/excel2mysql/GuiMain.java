@@ -111,6 +111,45 @@ public final class GuiMain {
                 ui_guidance(frame, problems);
                 // 静态文字这一族趁窗口刚建好、正文还没被任何一条用例改过之前判
                 static_texts(frame, problems);
+                // 第四页：页签存在、三按钮默认灰（未载入映射）、ads 依赖锁
+                if (frame.layerPage() == null) {
+                    problems.add("第四页 layerPage 没挂上");
+                } else {
+                    com.excel2mysql.gui.LayerPage lp = frame.layerPage();
+                    if (lp.objButton().isEnabled() || lp.domButton().isEnabled() || lp.adsButton().isEnabled()) {
+                        problems.add("未载入映射时第四页三按钮却可点");
+                    }
+                    // 载入一份临时映射＋源结构后 obj/dom 亮、ads 仍灰（未生成）
+                    java.io.File mf = java.io.File.createTempFile("selftest-layer-", ".csv");
+                    mf.deleteOnExit();
+                    java.io.Writer mw = new java.io.OutputStreamWriter(
+                            new java.io.FileOutputStream(mf), java.nio.charset.StandardCharsets.UTF_8);
+                    mw.write('﻿');
+                    mw.write("系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n");
+                    mw.write("采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n");
+                    mw.close();
+                    if (!lp.loadMapping(mf.getPath())) {
+                        problems.add("第四页载入映射失败");
+                    }
+                    java.util.List<com.excel2mysql.core.LayerGen.SourceTable> st =
+                            new java.util.ArrayList<com.excel2mysql.core.LayerGen.SourceTable>();
+                    java.util.List<com.excel2mysql.core.Infer.Column> cs =
+                            new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+                    com.excel2mysql.core.Infer.Column c1 = new com.excel2mysql.core.Infer.Column();
+                    c1.field = "id"; c1.type = "VARCHAR(64)"; c1.comment = "主键"; c1.primaryKey = true; c1.maxLen = 64;
+                    com.excel2mysql.core.Infer.Column c2 = new com.excel2mysql.core.Infer.Column();
+                    c2.field = "name"; c2.type = "VARCHAR(255)"; c2.comment = "名称"; c2.maxLen = 255;
+                    cs.add(c1); cs.add(c2);
+                    st.add(new com.excel2mysql.core.LayerGen.SourceTable("t_oil", "油料账", cs));
+                    lp.setSourceTables(st);
+                    lp.refreshButtonStates();
+                    if (!lp.objButton().isEnabled() || !lp.domButton().isEnabled()) {
+                        problems.add("载入映射＋源结构后 obj/dom 按钮却没亮");
+                    }
+                    if (lp.adsButton().isEnabled()) {
+                        problems.add("obj/dom 未生成时 ads 按钮却亮了（依赖锁失效）");
+                    }
+                }
                 // 主按钮的底色必须跟着启用状态走：列表还空着时「开始导入」是禁用的，
                 // 涂成强调色会让它看着就能点（现场那句"没导任何东西，点一下颜色才变"）
                 if (frame.importButton().isEnabled()) {
@@ -2518,6 +2557,7 @@ public final class GuiMain {
      */
     private static final String[] STATIC_TEXTS = {
             "中英表头建模，回写库", "解析建表语句，回写库", "执行脚本与临时语句",
+            "读 ods 建模 obj/dom/ads",
             "主机：", "端口：", "用户名：", "密码：", "目标库：",
             "命名规则：", "命名规则：", "表名前缀：", "表名前缀：",
             "SQL 文本", "执行结果", "还没有执行结果"};
@@ -2816,7 +2856,7 @@ public final class GuiMain {
         frame.selectTab(0);
         frame.validate();
         List<String> titles = frame.tabTitles();
-        if (titles.size() != 3 || !"SQL 执行器".equals(titles.get(2))) {
+        if (titles.size() != 4 || !"SQL 执行器".equals(titles.get(2))) {
             problems.add("第三个页签不对：" + titles);
         }
         if (!"执行脚本与临时语句".equals(frame.sqlRunHintText())) {

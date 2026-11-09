@@ -44,7 +44,7 @@ import java.util.Map;
  * 每个会耗时的入口都是"子线程算数据 + 模态进度框 + 主线程落界面"三段，
  * 界面从不自己算——两条路共用 core 里同一个工作函数，测的就是线上跑的那段。
  */
-public final class MainFrame extends JFrame implements SqlPage.Host {
+public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.Host {
 
     private static final String NO_FILE_HINT = LogText.NO_FILE_HINT;
     private static final String APPLY_PREFIX_TIP =
@@ -118,6 +118,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     public static final String RES_RUN = "run";
     /** 连库取库列表占自己一位：它不动任何一页的列表，导入跑到一半也该能换库。 */
     public static final String RES_CONN = "conn";
+    /** 分层建模页的生成任务一位：这一页在跑时另三页照点不误，与 SQL 执行器同口径。 */
+    public static final String RES_LAYER = "layer";
     /** 资源位的人话名字：被挡下的那句要说清楚在等的是哪一样东西。 */
     private static final Map<String, String> RES_LABEL =
             new java.util.LinkedHashMap<String, String>();
@@ -127,6 +129,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         RES_LABEL.put(RES_SQL, "SQL 脚本改名页的脚本列表");
         RES_LABEL.put(RES_RUN, "SQL 执行器页的执行结果区（编辑区 SQL 与脚本清单共用）");
         RES_LABEL.put(RES_CONN, "连接区（连库取库列表）");
+        RES_LABEL.put(RES_LAYER, "分层建模页的生成任务");
     }
 
     /**
@@ -159,6 +162,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
     /** 改过主机/端口/用户名/密码：手上这份库清单来自上一次连接，不再作数（只说，不拦）。 */
     private boolean connDirty;
     private SqlPage sqlPage;
+    /** 第四页「分层建模」：只在构造期建一次，Host 回调与自检都走它。 */
+    private LayerPage layerPage;
     private ProgressDialog lastTask;
     /** 最近一次请求的任务标题：原地模式不弹框，标题也要留痕才断言得了"用的是 Python 原话"。 */
     private String lastTaskTitle = "";
@@ -266,6 +271,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         tabs.addTab("Excel 导入", buildCenter());
         tabs.addTab("SQL 脚本改名", sqlPage);
         tabs.addTab("SQL 执行器", buildSqlRunPage());
+        layerPage = new LayerPage(this);
+        tabs.addTab("分层建模", layerPage);
         add(tabs, BorderLayout.CENTER);
         // Ctrl+V 的绑定要放在三页都建完之后：文本控件的改挂是遍历这棵树做的，
         // 早一步遍历只会扑空（那时树里还没有输入框与 SQL 编辑区）
@@ -1297,6 +1304,11 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
         if (sqlRunScriptsBtn != null) {
             sqlRunScriptsBtn.setEnabled(!sqlRunFiles.isEmpty() && !taskBusy(RES_RUN));
         }
+        // 第四页三按钮的依赖锁每次统一刷一次：ads 只在 obj＋dom 都生成过之后才亮，
+        // 任务忙闲的互斥由 RES_LAYER 资源位挡（被挡下会日志说明），与 SqlPage.setGenBusy 同口径
+        if (layerPage != null) {
+            layerPage.refreshButtonStates();
+        }
     }
 
     /**
@@ -1756,6 +1768,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
                            java.util.function.Function<ImportParse.Sink, Object> work,
                            java.util.function.Consumer<Object> onUi) {
         runTask(title, work, onUi, sqlPage == null ? null : sqlPage.logPanel());
+    }
+
+    /**
+     * 第四页「分层建模」的生成任务走同一套任务框架：日志落在分层建模页自己那块面板，
+     * 只占 RES_LAYER 一位——这一页在跑生成时另三页的按钮不该跟着锁住。
+     */
+    @Override
+    public void runLayerTask(String title,
+                             java.util.function.Function<ImportParse.Sink, Object> work,
+                             java.util.function.Consumer<Object> onUi) {
+        runTask(title, work, onUi, layerPage == null ? null : layerPage.logPanel(),
+                new String[]{RES_LAYER});
     }
 
     /**
@@ -2733,6 +2757,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host {
 
     public SqlPage sqlPage() {
         return sqlPage;
+    }
+
+    public com.excel2mysql.gui.LayerPage layerPage() {
+        return layerPage;
     }
 
     /** 切到第几页签：与用户点页签走的是同一个模型，渲染对照与自检都用它。 */
