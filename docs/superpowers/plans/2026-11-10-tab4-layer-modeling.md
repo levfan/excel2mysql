@@ -28,17 +28,23 @@
 
 ## 构建与测试命令（所有任务通用，先读这一段）
 
-仓库根：`D:/00.personal/4.code/excel2mysql`。Git Bash 直调 mvn 必须钉 JAVA_HOME（本机 JDK8 在 `C:/Program Files/Java/jdk1.8.0_202`）：
+仓库根：`D:/00.personal/4.code/excel2mysql`，但 **Maven reactor 在 `java/` 子目录**——所有 mvn 命令必须先 `cd java/`，否则报 "Could not find the selected project in the reactor: app"。Git Bash 直调 mvn 必须钉 JAVA_HOME（本机 JDK8 在 `C:/Program Files/Java/jdk1.8.0_202`）。**必须带 git stamp 四参**，否则 appinfo.properties 的 commitFull="未知"，GUI 自检咬"复制出去的提交号不是 40 位十六进制"而 exit 1。
+
+下面是**唯一规范构建命令**。本计划各任务步骤里出现的 `mvn -B -q install -pl app,verify` 一律是这条的简写，实跑时必须展开成下面整段（含 cd java/ 与四参）：
 
 ```bash
-cd "D:/00.personal/4.code/excel2mysql"
+cd "D:/00.personal/4.code/excel2mysql/java"
 export JAVA_HOME="C:/Program Files/Java/jdk1.8.0_202"
 export PATH="$JAVA_HOME/bin:$PATH"
+GC=$(git rev-parse --short HEAD); GCF=$(git rev-parse HEAD); GB=$(git rev-parse --abbrev-ref HEAD)
+GD=false; if [ -n "$(git status --porcelain -uno)" ]; then GD=true; fi
 # 编译 app＋verify（增量；clean 被 IDE 占用时降级 install 并显式说明）
-mvn -B -q install -pl app,verify
+mvn -B -q install -pl app,verify -Dgit.commit="$GC" -Dgit.commitFull="$GCF" -Dgit.branch="$GB" -Dgit.dirty="$GD"
 # 收集 verify 运行时依赖（差分器 classpath 需要）
 mvn -B -q -pl verify dependency:copy-dependencies -DoutputDirectory=target/lib -DincludeScope=runtime
 ```
+
+差分器与自检的相对路径（`app/target/...`、`verify/fixtures`）均以 `java/` 为 cwd，故跑完构建后**留在 java/ 目录**继续跑下面这些命令。
 
 差分器（离线，无 DB）跑法，classpath 用 `;` 分隔（Windows）：
 
@@ -161,9 +167,10 @@ public final class MappingFileDiffer {
             bad++; shown.add("列值错位：" + t.tableEn + "/" + t.domainCode + "/" + t.odsPhysical);
         }
 
-        // 2) 缺列必须报错且指出缺哪列
+        // 2) 缺列必须报错且指出缺哪列：给全 系统/子领域 两列、只缺 表中文名，
+        //    验证器要跳过在位的列、点出第一个真正缺的必填列（不能只报最前面那列）
         File miss = temp("miss.csv", "UTF-8", false,
-                "系统,表英文名\n采购供应,t_oil\n");
+                "系统,子领域,表英文名\n采购供应,油料,t_oil\n");
         try {
             MappingFile.loadTableCsv(miss.getPath());
             bad++; shown.add("缺列却没报错");
