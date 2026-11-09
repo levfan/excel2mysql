@@ -182,7 +182,7 @@ public final class GuiMain {
                     // 库名不合规要当场拦下：不许静默产出一份 USE `` / FROM ` `.`t` 的坏交付件
                     layer_db_guard(lp, frame, problems);
                     // RES_LAYER 忙时这一页会改共享状态的入口必须全灰（生成 worker 正读着那份映射与源结构）
-                    layer_busy_lock(lp, problems);
+                    layer_busy_lock(lp, frame, problems);
                     // 产物根用完随手清掉：createTempDirectory 不会自己删，而 deleteOnExit 不递归、
                     // 底下那层 layer_*/ 留着它就删不掉父目录（上面那份临时映射夹具 mf 是单文件，deleteOnExit 够用）
                     deleteTree(outRoot);
@@ -2642,9 +2642,19 @@ public final class GuiMain {
      * RES_LAYER 忙时的第四页入口闸：生成 worker 读的是 mapping／sourceTables／字段例外这三份，
      * 「载入映射文件」与「读源库结构」改的正是同一份，所以忙时五颗入口一起灰才叫防住竞态
      * （RES_LAYER 资源位本身只挡"再点一次生成"，挡不住那两条改数据的入口）。
+     *
+     * <p>这一判真占资源位而不是直接调 setter：顺带钉住 MainFrame.syncRunStates 里
+     * `setLayerBusy(taskBusy(RES_LAYER))` 那根接线，接线被人拆掉时这里立刻红。
      */
-    private static void layer_busy_lock(com.excel2mysql.gui.LayerPage lp, List<String> problems) {
-        lp.setLayerBusy(true);
+    private static void layer_busy_lock(com.excel2mysql.gui.LayerPage lp, MainFrame frame,
+                                        List<String> problems) {
+        if (!frame.startTask(MainFrame.RES_LAYER)) {
+            problems.add("自检占不住 RES_LAYER 资源位，忙时禁用这一判没跑成");
+            return;
+        }
+        if (!lp.layerBusy()) {
+            problems.add("占住 RES_LAYER 后 LayerPage 没被告知忙（syncRunStates 的接线断了）");
+        }
         if (lp.loadMappingButton().isEnabled()) {
             problems.add("忙时「载入映射文件」还能点，会把生成任务正读的那份映射换掉");
         }
@@ -2654,7 +2664,10 @@ public final class GuiMain {
         if (lp.objButton().isEnabled() || lp.domButton().isEnabled()) {
             problems.add("忙时第四页的生成按钮还能点，两个任务会踩同一份数据");
         }
-        lp.setLayerBusy(false);
+        frame.endTask();
+        if (lp.layerBusy()) {
+            problems.add("任务收了摊 LayerPage 还停在忙态，第四页五颗入口会一直灰着");
+        }
         if (!lp.loadMappingButton().isEnabled() || !lp.readSourceButton().isEnabled()) {
             problems.add("任务收了摊，「载入映射文件」／「读源库结构」却没恢复可点");
         }

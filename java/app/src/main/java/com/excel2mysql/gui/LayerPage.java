@@ -221,6 +221,9 @@ public final class LayerPage extends JPanel {
         refreshButtonStates();
     }
 
+    /** 这一页此刻被 RES_LAYER 占着吗（自检读它判 syncRunStates 那根接线在不在）。 */
+    public boolean layerBusy() { return layerBusy; }
+
     /**
      * 界面上那四个库名合规吗：逐个非空且只含 [A-Za-z0-9_]，第一条不合规的用人话说出来（返回 null 表示都行）。
      *
