@@ -411,6 +411,84 @@ public final class SqlScript {
     }
 
     /**
+     * 主键/索引行括号名单里的 old 换成 new，引号风格跟着原来那一个走。
+     *
+     * 只动名单里的标识符：`col`(10) 那种前缀长度、DESC/ASC 这些修饰原样留着——
+     * 名单是按顶层逗号切的，改写走"只换标识符 token"这条路就不会碰到修饰。
+     * 对应 core/sql_script.py 的 _rename_in_column_list。
+     */
+    private static String renameInColumnList(String piece, String oldName, String newName) {
+        String masked = maskComments(piece);
+        int open = masked.indexOf('(');
+        if (open < 0) {
+            return piece;
+        }
+        int close = matchParen(masked, open);
+        if (close < 0) {
+            return piece;
+        }
+        Matcher m = IDENT_TOKEN.matcher(piece.substring(open + 1, close));
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            String tok = m.group();
+            if (!trimIdent(tok).equalsIgnoreCase(oldName)) {
+                m.appendReplacement(sb, Matcher.quoteReplacement(tok));
+                continue;
+            }
+            String rep = tok.trim().startsWith("`")
+                    ? "`" + newName.replace("`", "``") + "`" : newName;
+            m.appendReplacement(sb, Matcher.quoteReplacement(rep));
+        }
+        m.appendTail(sb);
+        return piece.substring(0, open + 1) + sb.toString() + piece.substring(close);
+    }
+
+    /**
+     * 主键/索引行的列名单里去掉 field；名单因此变空时返回 null（整句约束一起删）。
+     * 对应 core/sql_script.py 的 _remove_from_column_list。
+     */
+    private static String removeFromColumnList(String piece, String field) {
+        String masked = maskComments(piece);
+        int open = masked.indexOf('(');
+        if (open < 0) {
+            return piece;
+        }
+        int close = matchParen(masked, open);
+        if (close < 0) {
+            return piece;
+        }
+        String[] parts = piece.substring(open + 1, close).split(",", -1);
+        List<String> kept = new ArrayList<String>();
+        for (String part : parts) {
+            if (leadingName(part).name.equalsIgnoreCase(field)) {
+                continue;
+            }
+            kept.add(part);
+        }
+        if (kept.size() == parts.length) {
+            return piece;
+        }
+        if (kept.isEmpty()) {
+            return null;
+        }
+        return piece.substring(0, open + 1) + join(kept, ",") + piece.substring(close);
+    }
+
+    private static String join(List<String> parts, String sep) {
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (sb.length() > 0) {
+                sb.append(sep);
+            }
+            sb.append(p);
+        }
+        return sb.toString();
+    }
+
+    private static final Pattern IDENT_TOKEN =
+            Pattern.compile("`[^`]*`|[A-Za-z_][A-Za-z0-9_$]*");
+
+    /**
      * 列定义里 COMMENT 字面量的 {起, 止}（含关键字）；只有关键字没有字面量、
      * 或者根本没提到 COMMENT 时返回 null。掩码副本用来认关键字，取值走原文。
      */
@@ -446,8 +524,8 @@ public final class SqlScript {
      *
      * 只动那一行的那一段：字段名换标识符、类型换名字后面那个类型词（UNSIGNED、NOT NULL、
      * DEFAULT、AUTO_INCREMENT 原样留着），注释换 COMMENT 的字面量、原来没有就补在内容末尾。
-     * 被主键或索引名单引用的字段拒绝改名——索引行写的还是旧名字，放过去就生成一句
-     * 引用不存在列的 DDL，等建表时才炸比在这儿拒绝难查得多。
+     * 改名连带改主键/索引那几句的列名单：只换列定义不换名单，留下的是引用旧列的定义，
+     * 报错要等建表时才炸，比在这儿说清难查得多。名单里的 `col`(10)、DESC 这些修饰原样留着。
      * 同名表被写两遍只改第一处，与表注释、元数据导出「同名表只按第一处」是同一条规则。
      * 判定与 Python 侧的 edit_column 逐形状对撞（金标准 op "col-edit"）。
      */
@@ -517,7 +595,9 @@ public final class SqlScript {
             String body = src.substring(open + 1, close);
             String bodyMasked = masked.substring(open + 1, close);
             List<String> pieces = splitTopLevel(body, bodyMasked);
-            List<String> constraintNames = new ArrayList<String>();
+            // 引用了这一列的主键/索引行：改名时它们的列名单要跟着换，不然留下的是引用旧列的定义
+            List<Integer> refAts = new ArrayList<Integer>();
+            List<String> refRaws = new ArrayList<String>();
             int start = -1;
             String raw = null;
             int nameEnd = -1;
@@ -527,7 +607,13 @@ public final class SqlScript {
                     String maskedPiece = maskComments(piece);
                     String headMasked = lstrip(maskedPiece);
                     if (CONSTRAINT_HEAD.matcher(headMasked).find()) {
-                        constraintNames.addAll(parenTokens(headMasked));
+                        for (String ref : parenTokens(headMasked)) {
+                            if (ref.equalsIgnoreCase(old)) {
+                                refAts.add(Integer.valueOf(at));
+                                refRaws.add(piece);
+                                break;
+                            }
+                        }
                     } else {
                         NameAt na = leadingName(piece);
                         if (!na.name.isEmpty() && na.name.equalsIgnoreCase(old) && raw == null) {
@@ -542,14 +628,6 @@ public final class SqlScript {
             if (raw == null) {
                 out.reason = "表「" + name + "」里没有字段「" + old + "」（可能被改写或删除了）";
                 return out;
-            }
-            if (wantField && !nf.equalsIgnoreCase(old)) {
-                for (String ref : constraintNames) {
-                    if (ref.equalsIgnoreCase(old)) {
-                        out.reason = "字段「" + old + "」被主键或索引列名单引用，改名会留下引用旧列的定义";
-                        return out;
-                    }
-                }
             }
             // 三处替换按从右到左落笔，先动的段落不会挪后动的偏移
             List<int[]> spans = new ArrayList<int[]>();
@@ -583,33 +661,313 @@ public final class SqlScript {
                 spans.add(new int[]{ws, nameEnd});
                 subs.add(quoted ? "`" + nf.replace("`", "``") + "`" : nf);
             }
-            Integer[] order = new Integer[spans.size()];
-            for (int i = 0; i < order.length; i++) {
-                order[i] = i;
-            }
-            final List<int[]> ref = spans;
-            java.util.Arrays.sort(order, new java.util.Comparator<Integer>() {
-                @Override
-                public int compare(Integer a, Integer b) {
-                    return ref.get(b)[0] - ref.get(a)[0];
-                }
-            });
-            String patched = raw;
-            for (int idx : order) {
-                int[] sp = spans.get(idx);
-                patched = patched.substring(0, sp[0]) + subs.get(idx) + patched.substring(sp[1]);
-            }
-            if (patched.equals(raw)) {
+            String patched = applySpans(raw, spans, subs);
+            if (patched.equals(raw) && !(wantField && !nf.equalsIgnoreCase(old)
+                    && !refRaws.isEmpty())) {
                 out.reason = "填回去的和原来一样，脚本未改";
                 return out;
             }
-            int from = open + 1 + start;
-            out.text = src.substring(0, from) + patched + src.substring(from + raw.length());
+            // 主键/索引那几句里的同一列跟着改；所有偏移都按原 body 算，从右往左落笔才不会互相挪位
+            List<int[]> lands = new ArrayList<int[]>();
+            List<String> landSubs = new ArrayList<String>();
+            int moved = 0;
+            if (!patched.equals(raw)) {
+                lands.add(new int[]{start, start + raw.length()});
+                landSubs.add(patched);
+            }
+            if (wantField && !nf.equalsIgnoreCase(old)) {
+                for (int i = 0; i < refRaws.size(); i++) {
+                    String before = refRaws.get(i);
+                    String after = renameInColumnList(before, old, nf);
+                    if (after.equals(before)) {
+                        continue;
+                    }
+                    int rAt = refAts.get(i).intValue();
+                    lands.add(new int[]{rAt, rAt + before.length()});
+                    landSubs.add(after);
+                    moved++;
+                }
+            }
+            if (lands.isEmpty()) {
+                out.reason = "填回去的和原来一样，脚本未改";
+                return out;
+            }
+            String newBody = applySpans(body, lands, landSubs);
+            out.text = src.substring(0, open + 1) + newBody + src.substring(close);
             out.changed = true;
+            out.reason = moved > 0 ? "（连带改了 " + moved + " 处主键/索引引用）" : "";
             return out;
         }
         out.reason = "脚本里找不到表「" + name + "」的 CREATE TABLE";
         return out;
+    }
+
+    /**
+     * 按 {起, 止} 补丁替换：从右往左落笔，先动的段落不会挪后动的偏移。
+     * 字段改写（一处字段名 + 若干处主键/索引引用）与列定义体改写走同一条路。
+     */
+    private static String applySpans(String base, List<int[]> spans, List<String> subs) {
+        Integer[] order = new Integer[spans.size()];
+        for (int i = 0; i < order.length; i++) {
+            order[i] = i;
+        }
+        final List<int[]> ref = spans;
+        java.util.Arrays.sort(order, new java.util.Comparator<Integer>() {
+            @Override
+            public int compare(Integer a, Integer b) {
+                return ref.get(b)[0] - ref.get(a)[0];
+            }
+        });
+        String out = base;
+        for (int idx : order) {
+            int[] sp = spans.get(idx);
+            out = out.substring(0, sp[0]) + subs.get(idx) + out.substring(sp[1]);
+        }
+        return out;
+    }
+
+    /** 一句 CREATE TABLE 的列定义体：开/闭括号在原文里的偏移，以及按顶层逗号切出来的每一段。 */
+    private static final class BodyPieces {
+        int open;
+        int close;
+        String body = "";
+        final List<Integer> starts = new ArrayList<Integer>();
+        final List<String> pieces = new ArrayList<String>();
+    }
+
+    /**
+     * 定位这句 CREATE TABLE 的列定义体。切法与 editColumn 完全相同
+     * （顶层逗号切段、再按 "," 拼回去能原样还原 body），增删字段都靠这一点保证
+     * "只动那一段、其余字节一个不变"。对应 core/sql_script.py 的 _create_body_pieces。
+     */
+    private static BodyPieces bodyOf(String text, String tableName, String[] why) {
+        String name = trimIdent(tableName);
+        String masked = maskComments(text);
+        Matcher head = CREATE_TABLE.matcher(masked);
+        while (head.find()) {
+            if (!name.equals(head.group(1))) {
+                continue;
+            }
+            int open = masked.indexOf('(', head.end());
+            if (open < 0) {
+                why[0] = "那句 CREATE TABLE 没有列定义（LIKE / AS SELECT 写法）";
+                return null;
+            }
+            int close = matchParen(masked, open);
+            if (close < 0) {
+                why[0] = "那句 CREATE TABLE 的括号配不上，无法定位列定义";
+                return null;
+            }
+            BodyPieces out = new BodyPieces();
+            out.open = open;
+            out.close = close;
+            out.body = text.substring(open + 1, close);
+            String bodyMasked = masked.substring(open + 1, close);
+            int at = 0;
+            for (String piece : splitTopLevel(out.body, bodyMasked)) {
+                out.starts.add(Integer.valueOf(at));
+                out.pieces.add(piece);
+                at += piece.length() + 1;
+            }
+            return out;
+        }
+        why[0] = "脚本里找不到表「" + name + "」的 CREATE TABLE";
+        return null;
+    }
+
+    /** 新增字段的前置校验：名字/类型合法，且这句里还没有同名字段。 */
+    private static String checkNewColumn(String field, String type, BodyPieces body) {
+        String nf = trimIdent(field);
+        if (nf.isEmpty()) {
+            return "字段名不能为空";
+        }
+        if (FIELD_BAD.matcher(nf).find()) {
+            return "字段名不能含空格、引号、反引号或分号：" + nf;
+        }
+        if (nf.length() > 64) {
+            return "字段名超过 64 个字符：" + nf;
+        }
+        String nt = type == null ? "" : type.trim();
+        if (nt.isEmpty()) {
+            return "数据类型不能为空";
+        }
+        if (FIELD_BAD.matcher(nt.replace("(", "").replace(")", "").replace(",", "")).find()) {
+            return "数据类型写法不对：" + nt;
+        }
+        for (String raw : body.pieces) {
+            if (raw.trim().isEmpty()) {
+                continue;
+            }
+            if (CONSTRAINT_HEAD.matcher(lstrip(maskComments(raw))).find()) {
+                continue;
+            }
+            if (leadingName(raw).name.equalsIgnoreCase(nf)) {
+                return "这句 CREATE TABLE 里已经有字段「" + nf + "」";
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 在脚本里那张表的列定义末尾补一列，返回 (新正文, 是否改动, 说明/原因)。
+     *
+     * 新列插在最后一行列定义之后、主键与索引那几句之前——插在约束后面就成了
+     * "PRIMARY KEY 后面还有一列"，MySQL 直接拒。缩进跟这句里第一列对齐。
+     * 只补字段定义：数据不会跟着变，脚本里已有的 INSERT 也不会因此多出一个值。
+     * 与 core/sql_script.py 的 add_column 逐形状对撞（金标准 op "col-add"）。
+     */
+    public static ColumnEdit addColumn(String text, String tableName, String field,
+                                       String type, String comment, boolean nullable) {
+        ColumnEdit out = new ColumnEdit();
+        out.text = text == null ? "" : text;
+        String[] why = new String[]{""};
+        BodyPieces body = bodyOf(out.text, tableName, why);
+        if (body == null) {
+            out.reason = why[0];
+            return out;
+        }
+        String bad = checkNewColumn(field, type, body);
+        if (!bad.isEmpty()) {
+            out.reason = bad;
+            return out;
+        }
+        String nf = trimIdent(field);
+        String nt = type.trim();
+        String indent = "  ";
+        boolean seenCol = false;
+        int insertAt = body.pieces.size();
+        for (int i = 0; i < body.pieces.size(); i++) {
+            String raw = body.pieces.get(i);
+            if (raw.trim().isEmpty()) {
+                continue;
+            }
+            if (CONSTRAINT_HEAD.matcher(lstrip(maskComments(raw))).find()) {
+                insertAt = i;
+                break;
+            }
+            if (!seenCol) {
+                Matcher lead = LEADING_WS.matcher(raw);
+                if (lead.find()) {
+                    indent = lead.group();
+                }
+                seenCol = true;
+            }
+        }
+        String literal = "'" + (comment == null ? "" : comment.trim()).replace("'", "''") + "'";
+        String line = "\n" + indent + "`" + nf + "` " + nt + " "
+                + (nullable ? "DEFAULT NULL" : "NOT NULL") + " COMMENT " + literal;
+        List<String> kept = new ArrayList<String>();
+        for (int i = 0; i < body.pieces.size(); i++) {
+            if (i == insertAt) {
+                kept.add(line);
+            }
+            kept.add(body.pieces.get(i));
+        }
+        if (insertAt >= body.pieces.size()) {
+            kept.add(line);
+        }
+        String newBody = join(kept, ",");
+        out.text = out.text.substring(0, body.open + 1) + newBody + out.text.substring(body.close);
+        out.changed = true;
+        out.reason = "已补字段 `" + nf + "` " + nt + "（没有数据值，INSERT 也不会因此多一列）";
+        return out;
+    }
+
+    /**
+     * 删掉脚本里那张表的某一列，连带清掉主键/索引名单里对它的引用（名单空了整句约束一起删）。
+     *
+     * 脚本里的 INSERT 不动（那是数据，不是定义），所以删列之后执行到库时会因为列数对不上
+     * 报 1136，这一点由调用方在日志里说在前面。最后一个字段不许删：删完只剩空括号，
+     * MySQL 直接拒，等于把这张表写成废语句。
+     * 与 core/sql_script.py 的 delete_column 逐形状对撞（金标准 op "col-del"）。
+     */
+    public static ColumnEdit deleteColumn(String text, String tableName, String field) {
+        ColumnEdit out = new ColumnEdit();
+        out.text = text == null ? "" : text;
+        String[] why = new String[]{""};
+        BodyPieces body = bodyOf(out.text, tableName, why);
+        if (body == null) {
+            out.reason = why[0];
+            return out;
+        }
+        String old = trimIdent(field);
+        if (old.isEmpty()) {
+            out.reason = "没给字段名";
+            return out;
+        }
+        List<String> kept = new ArrayList<String>();
+        int dropped = 0;
+        int refs = 0;
+        for (String raw : body.pieces) {
+            if (raw.trim().isEmpty()) {
+                continue;
+            }
+            if (CONSTRAINT_HEAD.matcher(lstrip(maskComments(raw))).find()) {
+                boolean hit = false;
+                for (String ref : parenTokens(lstrip(maskComments(raw)))) {
+                    if (ref.equalsIgnoreCase(old)) {
+                        hit = true;
+                        break;
+                    }
+                }
+                if (hit) {
+                    String patched = removeFromColumnList(raw, old);
+                    refs++;
+                    if (patched == null) {
+                        continue;      // 名单空了：整句约束一起删
+                    }
+                    kept.add(patched);
+                    continue;
+                }
+            } else if (leadingName(raw).name.equalsIgnoreCase(old)) {
+                dropped++;
+                continue;
+            }
+            kept.add(raw);
+        }
+        if (dropped == 0) {
+            out.reason = "表「" + trimIdent(tableName) + "」里没有字段「" + old + "」";
+            return out;
+        }
+        boolean anyColumn = false;
+        for (String raw : kept) {
+            if (raw.trim().isEmpty()) {
+                continue;
+            }
+            if (!CONSTRAINT_HEAD.matcher(lstrip(maskComments(raw))).find()) {
+                anyColumn = true;
+                break;
+            }
+        }
+        if (!anyColumn) {
+            out.reason = "「" + old + "」是这句 CREATE TABLE 里最后一个字段，"
+                    + "删掉就没有列定义了；要整张表不要，请直接删那句建表语句";
+            return out;
+        }
+        String newBody = join(kept, ",");
+        // 删掉的若是最后一段，闭括号那行原本由它带出来的换行会一起没掉：
+        // 按原 body 的行尾空白补齐，别让 ")" 粘在上一行末尾
+        String tail = trailingWs(body.body);
+        String have = trailingWs(newBody);
+        if (have.length() < tail.length()) {
+            newBody += tail.substring(have.length());
+        }
+        out.text = out.text.substring(0, body.open + 1) + newBody + out.text.substring(body.close);
+        out.changed = true;
+        out.reason = "已删字段 `" + old + "`"
+                + (refs > 0 ? "（连带清掉 " + refs + " 处主键/索引引用）" : "");
+        return out;
+    }
+
+    private static final Pattern LEADING_WS = Pattern.compile("^[ \\t]+");
+
+    /** 行尾空白（含换行）：删最后一列时按它补齐，免得闭括号粘到上一行。 */
+    private static String trailingWs(String s) {
+        int i = s.length();
+        while (i > 0 && Character.isWhitespace(s.charAt(i - 1))) {
+            i--;
+        }
+        return s.substring(i);
     }
 
     /** 「自动补全主键」在预览副本里写出的类型词：跟着脚本正文的小写走。 */

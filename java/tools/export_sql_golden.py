@@ -27,7 +27,8 @@ from core.mysql_io import build_ddl, build_insert_sql, _convert  # noqa: E402
 from core.naming import clean_prefix, is_valid_prefix, swap_first_segment  # noqa: E402
 from core.sql_execute import render_table  # noqa: E402
 from core.sql_script import (  # noqa: E402
-    apply_table_prefix_sql, edit_column, extract_create_tables, format_sql,
+    add_column, apply_table_prefix_sql, delete_column, edit_column,
+    extract_create_tables, format_sql,
     parse_insert_rows, replace_first_segment_sql, parse_create_tables,
     set_table_comment, split_sql_statements,
 )
@@ -129,6 +130,19 @@ COLUMN_EDITS = [
     ("id", None, None, ""),
     ("id", None, None, "a;b"),
 ]
+
+# 新增/删除字段的语料：名字合法与否、插在约束之前、缩进跟第一列、
+# 删到最后一个字段被拒、删列连带清主键/索引引用——每条都踩住一条规则
+COLUMN_ADDS = [
+    ("remark", "VARCHAR(255)", "备注", True),
+    ("amount", "INT", "重复名字", True),
+    ("", "INT", "空名字", True),
+    ("a b", "INT", "名字带空格", True),
+    ("n", "", "空类型", True),
+    ("n2", "DECIMAL(10,2) UNSIGNED", "带''引号''的", False),
+    ("n3", "a;b", "类型带分号", True),
+]
+COLUMN_DELETES = ["id", "amount", "name", "note", "v", "a", "nope", ""]
 
 # 格式化语料：每条都踩住一条规则，两栈输出必须逐字节相同
 FORMAT_INPUTS = [
@@ -347,6 +361,16 @@ def sql_cases():
                 # Java 侧按 int 读，这里统一成整数才不会出现单边 Cast 失败
                 yield {"op": "col-edit", "in": text, "table": t["name"], "field": fld,
                        "new_field": nf, "new_comment": nc, "new_type": nt,
+                       "out": new_text, "changed": 1 if changed else 0, "reason": reason}
+            for fld, typ, cmt, nullable in COLUMN_ADDS:
+                new_text, changed, reason = add_column(text, t["name"], fld, typ, cmt,
+                                                       nullable)
+                yield {"op": "col-add", "in": text, "table": t["name"], "field": fld,
+                       "type": typ, "comment": cmt, "nullable": 1 if nullable else 0,
+                       "out": new_text, "changed": 1 if changed else 0, "reason": reason}
+            for fld in COLUMN_DELETES:
+                new_text, changed, reason = delete_column(text, t["name"], fld)
+                yield {"op": "col-del", "in": text, "table": t["name"], "field": fld,
                        "out": new_text, "changed": 1 if changed else 0, "reason": reason}
 
 

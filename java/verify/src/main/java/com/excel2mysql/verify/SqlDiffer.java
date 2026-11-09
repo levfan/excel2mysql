@@ -152,6 +152,30 @@ public final class SqlDiffer {
                         abbrev(got.text) + " changed=" + (got.changed ? 1 : 0)
                                 + " reason=" + got.reason,
                         abbrev(want) + " changed=" + wantChanged + " reason=" + wantReason);
+            } else if ("col-add".equals(op) || "col-del".equals(op)) {
+                // 增删字段：插在哪一段、缩进跟谁对齐、删到最后一个字段被拒、
+                // 删列连带清掉主键/索引引用——落点错一处写出来的就是跑不了的 DDL
+                checked++;
+                String table = (String) rec.get("table");
+                String fld = (String) rec.get("field");
+                SqlScript.ColumnEdit got;
+                if ("col-add".equals(op)) {
+                    got = SqlScript.addColumn(in, table, fld, (String) rec.get("type"),
+                            (String) rec.get("comment"),
+                            ((Number) rec.get("nullable")).intValue() != 0);
+                } else {
+                    got = SqlScript.deleteColumn(in, table, fld);
+                }
+                String want = (String) rec.get("out");
+                int wantChanged = ((Number) rec.get("changed")).intValue();
+                String wantReason = (String) rec.get("reason");
+                boolean same = got.text.equals(want)
+                        && (got.changed ? 1 : 0) == wantChanged
+                        && got.reason.equals(wantReason);
+                report(op + "(" + table + "." + fld + ")", in, same,
+                        abbrev(got.text) + " changed=" + (got.changed ? 1 : 0)
+                                + " reason=" + got.reason,
+                        abbrev(want) + " changed=" + wantChanged + " reason=" + wantReason);
             } else if ("clean".equals(op)) {
                 checked++;
                 String got = Prefix.clean(in);
