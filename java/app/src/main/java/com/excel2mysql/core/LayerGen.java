@@ -126,8 +126,15 @@ public final class LayerGen {
                     if (seen.add(c.field)) { cols.add(multi ? copyMerged(c) : copyCol(c, c.primaryKey)); }
                 }
             }
+            // entity_id 若来自源列（与治理字段撞名），addGovernance 会跳过补治、markEntityIdPk 会把这一
+            // 源列当主键，而各支 INSERT 又用 UUID() 覆盖它——源值被静默吞掉。撞名不常见，但不能不响。
+            boolean entityIdFromSource = multi && seen.contains("entity_id");
             addGovernance(cols, GOV_OBJ_DOM);
             if (multi) { markEntityIdPk(cols); }
+            if (entityIdFromSource) {
+                out.warnings.add("多源合并表 " + target + " 有源列名为 entity_id、与治理字段撞名："
+                        + "主键 entity_id 将由 UUID() 生成并覆盖源值（待核，186 溯源）");
+            }
             ddl.append(Ddl.buildDdl(target, target, cols, true)).append(";\n\n");
             for (MappingFile.TableMap t : e.getValue()) {
                 SourceTable s = bind(t, map);
@@ -240,7 +247,7 @@ public final class LayerGen {
         List<String> inner = new ArrayList<String>();
         for (String f : x.dedupCols(cols)) { inner.add("`" + f + "`"); }
         return "SELECT " + join(outer, ", ")
-                + " FROM (SELECT DISTINCT " + join(inner, ", ") + " FROM " + x.from() + ") AS e_" + s.name;
+                + " FROM (SELECT DISTINCT " + join(inner, ", ") + " FROM " + x.from() + ") AS `e_" + s.name + "`";
     }
 
     // ---- ads：按主题归属在 dom 上产模板聚合（条款 188 口径待业务方核，故不产 obj JOIN，FROM 只有 dom）----

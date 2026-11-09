@@ -329,7 +329,14 @@ public final class LayerPage extends JPanel {
                     sink.log("! [WARN] LAYER | 已取消：" + layer + " 不入库，只留已落盘的产物 " + dir);
                     return null;
                 }
-                if (o.writeMode) { executeWrite(layer, o, out, cfg, sink); }
+                if (o.writeMode) {
+                    executeWrite(layer, o, out, cfg, sink);
+                    // 入库途中被取消：execute 的分条循环已 break、只灌了部分，不能再报"已生成"。
+                    if (sink.cancelled()) {
+                        sink.log("! [WARN] LAYER | 已取消：" + layer + " 入库中断，产物已落盘 " + dir);
+                        return null;
+                    }
+                }
                 return new Object[]{layer, out, dir};
             }
         }, new Consumer<Object>() {
