@@ -44,8 +44,16 @@ public final class MappingFile {
     public List<TableMap> tables() { return tables; }
 
     public static MappingFile loadTableCsv(String path) throws IOException {
-        List<String> lines = readLines(path);
-        if (lines.isEmpty()) { throw new IOException("映射文件为空：" + path); }
+        return parseTableCsv(readTextAuto(new File(path)), path);
+    }
+
+    /** jar 内资源模板与磁盘文件走同一条校验：列名按名取、缺列即报。 */
+    public static MappingFile parseTableCsv(String text, String sourceName) throws IOException {
+        if (text != null && !text.isEmpty() && text.charAt(0) == '\uFEFF') {
+            text = text.substring(1);
+        }
+        List<String> lines = splitRecords(text);
+        if (lines.isEmpty()) { throw new IOException("映射文件为空：" + sourceName); }
         List<String> header = parseCsvLine(lines.get(0));
         for (String need : TABLE_COLS) {
             if (!header.contains(need)) { throw new IOException("映射文件缺列：" + need); }
@@ -161,7 +169,10 @@ public final class MappingFile {
     }
 
     private static List<String> readLines(String path) throws IOException {
-        String text = readTextAuto(new File(path));
+        return splitRecords(readTextAuto(new File(path)));
+    }
+
+    private static List<String> splitRecords(String text) {
         List<String> records = new ArrayList<String>();
         StringBuilder cur = new StringBuilder();
         boolean quoted = false;
