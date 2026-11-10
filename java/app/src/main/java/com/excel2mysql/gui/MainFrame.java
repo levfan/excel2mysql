@@ -930,11 +930,6 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
         connDirty = false;
         importBtn.setEnabled(!tables.isEmpty());
         log("[已加载] 可用数据库：" + String.join(", ", dbs));
-        // 第四页源库下拉跟着这趟连上的那台列出的库走：与主库下拉 reloadDatabases 同源同步，
-        // 否则换了服务器，第四页还停在上一次的库列表里，读源结构会读错库
-        if (layerPage != null) {
-            layerPage.setDatabases(dbs);
-        }
         refreshDbLabels();
     }
 
@@ -1038,12 +1033,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
         }
         dbCombo.setEnabled(false);
         connDirty = false;
-        // 断连后第四页的源库下拉也清干净：留着上一台的库列表会误导"读源库结构"。
-        // 走 resetSourceDatabases 这条明路（回到默认 ods）——setDatabases 对空列表是早退的，
-        // 从那儿借道什么都清不掉，旧库名会一直留在界面上
-        if (layerPage != null) {
-            layerPage.resetSourceDatabases();
-        }
+        // 第四页源库跟着顶部这格走：清空后 readSourceStructure 会拦下并提示先选库，不会拿旧库名去读
         logError("[连接失败] 无法连接到 " + cfg.host + ":" + cfg.port + "（用户 "
                 + cfg.user + "），库列表未加载" + LogText.NL + LogText.indentDetail(detail));
         refreshDbLabels();

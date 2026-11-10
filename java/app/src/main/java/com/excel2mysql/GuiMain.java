@@ -116,6 +116,19 @@ public final class GuiMain {
                     problems.add("第四页 layerPage 没挂上");
                 } else {
                     com.excel2mysql.gui.LayerPage lp = frame.layerPage();
+                    // 源库不再有本页输入口：顶部连接栏选中的那个库就是源库，这一页不许再摆下拉
+                    if (hasCombo(lp)) {
+                        problems.add("第四页还留着自己的下拉输入（源库应取顶部连接栏所选库）");
+                    }
+                    String topDb = frame.selectedDatabase();
+                    String srcDb = lp.sourceDbName();
+                    if (topDb.isEmpty()) {
+                        if (!"ods".equals(srcDb)) {
+                            problems.add("顶部没选库时第四页源库没按脚本兜底 ods，实际：" + srcDb);
+                        }
+                    } else if (!topDb.equals(srcDb)) {
+                        problems.add("第四页源库没跟着顶部所选库走：顶部 " + topDb + "，第四页 " + srcDb);
+                    }
                     // 内置映射模板：第四页一打开就要有可看的列口径，且能原样导出成用户可编辑的 CSV
                     if (lp.mappingRowCount() != 2) {
                         problems.add("第四页没默认载入内置映射模板：应 2 行示例，实际 "
@@ -2623,7 +2636,7 @@ public final class GuiMain {
     /**
      * 第四页的库名校验闸：obj 那一格依次改成空串、纯空白、一串带反引号的，三次点生成都不许落产物。
      *
-     * <p>钉的是外场真撞的那一支：连上一台没有 ods 库的服务器，可编辑的源库下拉是空的，
+     * <p>钉的是外场真撞的那一支：源库取顶部连接栏所选库、目标库随手可编辑，一旦空着，
      * 少这道校验就会交出一份 `USE ` `;`、`FROM ` `.`t_oil`` 的坏 .sql —— 它一句错都不报，
      * 只有打开交付件的人才看得出来。所以判据是"临时根里一个 layer_ 开头的产物目录都不许有"，
      * 而不是"有没有报错"：拦不下时产物照样落得整整齐齐。
@@ -2654,6 +2667,19 @@ public final class GuiMain {
             deleteTree(root);
         }
         lp.objDbField().setText(keep);
+    }
+
+    /** 这一页的控件树里还有没有下拉框：源库改取顶部连接栏后，本页不该再有任何 JComboBox。 */
+    private static boolean hasCombo(java.awt.Container root) {
+        for (java.awt.Component c : root.getComponents()) {
+            if (c instanceof javax.swing.JComboBox) {
+                return true;
+            }
+            if (c instanceof java.awt.Container && hasCombo((java.awt.Container) c)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 这一趟有没有真落 layer_ 开头的产物目录：库名被拦下时必须一个都没有。 */

@@ -9,7 +9,6 @@ import com.excel2mysql.core.MappingFile;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
-import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -45,7 +44,7 @@ public final class LayerPage extends JPanel {
         void runLayerTask(String title, Function<ImportParse.Sink, Object> work, Consumer<Object> onUi);
     }
 
-    /** 源库下拉的默认项：断连后回到这一份，不留上一台的库列表。 */
+    /** 顶部连接栏还没选库时的脚本源库兜底（沿用旧默认，不另设输入口）。 */
     private static final String DEFAULT_SOURCE_DB = "ods";
     /**
      * 库名的安全口径：只允许字母、数字、下划线，且不许空。
@@ -58,7 +57,6 @@ public final class LayerPage extends JPanel {
 
     private final Host host;
     private final LogPanel logPanel = new LogPanel();
-    private final JComboBox<String> sourceDb = new JComboBox<String>(new String[]{DEFAULT_SOURCE_DB});
     private final JTextField objDb = new JTextField("obj", 6);
     private final JTextField domDb = new JTextField("dom", 6);
     private final JTextField adsDb = new JTextField("ads", 6);
@@ -123,9 +121,6 @@ public final class LayerPage extends JPanel {
         JPanel p = new JPanel(new BorderLayout());
         p.add(PageIntro.of("读 ods 建模 obj/dom/ads"), BorderLayout.NORTH);
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
-        row.add(new JLabel("源库"));
-        sourceDb.setEditable(true);
-        row.add(sourceDb);
         Buttons.secondary(loadBtn);
         loadBtn.addActionListener(e -> chooseMapping());
         row.add(loadBtn);
@@ -135,8 +130,8 @@ public final class LayerPage extends JPanel {
         exportTplBtn.addActionListener(e -> chooseExportTemplate());
         row.add(exportTplBtn);
         Buttons.secondary(readSrcBtn);
-        readSrcBtn.setToolTipText("<html>连上当前数据源后，读源库这一列的下拉库里的用户表结构，<br>"
-                + "填库列表并绑定映射行的绑定状态；obj/dom 生成依赖这一步。</html>");
+        readSrcBtn.setToolTipText("<html>连上当前数据源后，读顶部连接栏所选库的用户表结构，<br>"
+                + "填源表清单并绑定映射行的绑定状态；obj/dom 生成依赖这一步。</html>");
         readSrcBtn.addActionListener(e -> readSourceStructure());
         row.add(readSrcBtn);
         row.add(mappingLabel);
@@ -295,10 +290,10 @@ public final class LayerPage extends JPanel {
     public boolean layerBusy() { return layerBusy; }
 
     /**
-     * 界面上那四个库名合规吗：逐个非空且只含 [A-Za-z0-9_]，第一条不合规的用人话说出来（返回 null 表示都行）。
+     * 四份库名合规吗：逐个非空且只含 [A-Za-z0-9_]，第一条不合规的用人话说出来（返回 null 表示都行）。
      *
-     * <p>外场真撞的一条：连上一台没有 ods 库的服务器，可编辑的源库下拉是空的，生成照发
-     * `FROM \` \`.\`t_oil\``、`USE \`\`;` —— 交付的 .sql 静默就是坏的，没人会在打开前发现。
+     * <p>源库取自顶部连接栏所选库，三个目标库是本页的输入框。外场真撞的一条：源库/目标库一旦空着，
+     * 生成照发 `FROM \` \`.\`t_oil\``、`USE \`\`;` —— 交付的 .sql 静默就是坏的，没人会在打开前发现。
      * 所以这一判在 generateTo 起任务之前跑，不合规就当场拦下，不落一份畸形产物。
      */
     public static String checkDbNames(LayerGen.GenOptions o) {
@@ -309,7 +304,7 @@ public final class LayerPage extends JPanel {
         for (String[] kv : named) {
             String v = kv[1] == null ? "" : kv[1].trim();
             if (v.isEmpty()) {
-                return kv[0] + "名为空：这一格要填一个库名（默认 " + kv[2] + "）。"
+                return kv[0] + "名为空：需要先确定库名（默认 " + kv[2] + "）。"
                         + "空着产出的 .sql 里 USE 与 FROM 的库名就是空的，交付件直接不可用。";
             }
             if (!DB_IDENT.matcher(v).matches()) {
@@ -328,7 +323,7 @@ public final class LayerPage extends JPanel {
     /** 从界面字段拼一份生成选项（EDT 上读输入框）；按钮与字段窗都用它，避免两处各读各的。 */
     private LayerGen.GenOptions buildOptions() {
         LayerGen.GenOptions o = new LayerGen.GenOptions();
-        o.sourceDb = String.valueOf(sourceDb.getSelectedItem()).trim();
+        o.sourceDb = sourceDbName();
         o.objDb = objDb.getText().trim();
         o.domDb = domDb.getText().trim();
         o.adsDb = adsDb.getText().trim();
@@ -347,8 +342,9 @@ public final class LayerPage extends JPanel {
     public void generateTo(final LayerGen.Layer layer, String rootDir) {
         if (mapping == null) { return; }
         final LayerGen.GenOptions o = buildOptions();
-        // 库名不合规就当堂拦下：外场那台没有 ods 的服务器会让源库下拉空着，硬生成的产物里是
-        // FROM ` `.`t_oil` 与 USE ``;` —— 交付件静默坏掉，比不交付更糟（弹窗＋日志说清改哪儿）
+        // 库名不合规就当堂拦下：源库跟着顶部连接栏走（未选时按脚本默认 ods 兜底），三个目标库随手可编辑；
+        // 一旦空着或带反引号，产物里就是 FROM ` `.`t_oil` 与 USE ``;` —— 交付件静默坏掉，
+        // 比不交付更糟（弹窗＋日志说清改哪儿）
         String bad = checkDbNames(o);
         if (bad != null) {
             logPanel.log("x [ERROR] LAYER | 已拦下 " + layer + " 生成：" + bad);
@@ -449,17 +445,21 @@ public final class LayerPage extends JPanel {
     }
 
     /**
-     * 读源库结构：连上当前数据源后列库填 sourceDb 下拉、再读选中的那一库的用户表结构。
-     * DB I/O 全在 worker 里跑（真 GUI 下不在 EDT），库列表/清单落界面在 onUi（EDT）。
-     * 连不上、或连上后读结构中途失败，都按"LAYER | 连接或执行失败＋库列表未加载"口径写日志并 error 弹窗。
+     * 读源库结构：源库就是顶部连接栏选中的那个库，本页不再单独输入。
+     * DB I/O 全在 worker 里跑（真 GUI 下不在 EDT），清单落界面在 onUi（EDT）。
+     * 连不上、或连上后读结构中途失败，都按"LAYER | 连接或执行失败＋源库结构未加载"口径写日志并 error 弹窗。
      */
     private void readSourceStructure() {
         if (!host.connected()) {
-            host.warn("未连接数据库，无法读取源库结构：请先在顶部连接并加载库列表。");
+            host.warn("未连接数据库，无法读取源库结构：请先在顶部连接。");
             return;
         }
         final Config cfg = host.currentConfig();
-        final String db = sourceDbName();
+        final String db = cfg == null || cfg.database == null ? "" : cfg.database.trim();
+        if (db.isEmpty()) {
+            host.warn("顶部还没选库：请先在连接栏选择一个库，源库结构从它读。");
+            return;
+        }
         host.runLayerTask("读源库结构 " + db, new Function<ImportParse.Sink, Object>() {
             @Override public Object apply(ImportParse.Sink sink) {
                 sink.setTotal(2);
@@ -467,7 +467,6 @@ public final class LayerPage extends JPanel {
                 DbClient c = null;
                 try {
                     c = new DbClient(cfg, 5000);   // 5 秒握手超时，同连接区取库列表口径
-                    List<String> dbs = c.listDatabases();
                     sink.advance(1, "读 " + db + " 的用户表结构");
                     // 一张表计一项、总数在列完表名时就报出去，「取消」在表与表之间生效：
                     // 这一支读的是同一个 sink，312 张表时进度框才不是停在 0% 的"准备中"
@@ -477,13 +476,13 @@ public final class LayerPage extends JPanel {
                                 + st.size() + " 张也不覆盖界面上那一份）");
                         return null;
                     }
-                    return new Object[]{dbs, st, null};
+                    return new Object[]{st, null};
                 } catch (Exception ex) {
                     // 与 executeWrite 那句同口径：这一支也覆盖"握手成了、读结构时抛"，不只算连接失败
                     sink.logError("x [ERROR] LAYER | 连接或执行失败：无法连接到 " + cfg.host + ":" + cfg.port
-                            + "（用户 " + cfg.user + "），库列表未加载" + LogText.NL
+                            + "（用户 " + cfg.user + "），源库结构未加载" + LogText.NL
                             + LogText.indentDetail(LogText.describe(ex)));
-                    return new Object[]{null, null, LogText.describe(ex)};
+                    return new Object[]{null, LogText.describe(ex)};
                 } finally {
                     if (c != null) { c.close(); }
                 }
@@ -491,54 +490,24 @@ public final class LayerPage extends JPanel {
         }, new Consumer<Object>() {
             @Override public void accept(Object res) {
                 Object[] arr = (Object[]) res;
-                if (arr[2] != null) {
-                    host.informError("读取源库结构失败", String.valueOf(arr[2]));
+                if (arr[1] != null) {
+                    host.informError("读取源库结构失败", String.valueOf(arr[1]));
                     return;
                 }
                 @SuppressWarnings("unchecked")
-                List<String> dbs = (List<String>) arr[0];
-                @SuppressWarnings("unchecked")
-                List<LayerGen.SourceTable> st = (List<LayerGen.SourceTable>) arr[1];
-                setDatabases(dbs);
+                List<LayerGen.SourceTable> st = (List<LayerGen.SourceTable>) arr[0];
                 setSourceTables(st);
-                logPanel.log("- [INFO] LAYER | 读源库 " + db + " | 用户表 " + st.size()
-                        + " 张 | 库列表 " + (dbs == null ? 0 : dbs.size()) + " 个");
+                logPanel.log("- [INFO] LAYER | 读源库 " + db + " | 用户表 " + st.size() + " 张");
                 host.inform("已读取源库结构：库 " + db + " 共 " + st.size() + " 张用户表");
             }
         });
     }
 
-    /** 把库列表灌进 sourceDb 下拉；选中项若还在就保持，否则回到首项。由 MainFrame 连接成功时同步。 */
-    public void setDatabases(List<String> dbs) {
-        // 空列表不灌：这是一颗可编辑下拉，被清光后 getSelectedItem() 回字面量 null，
-        // String.valueOf 一拼就变成一库叫 "null"。宁可保住上一次/默认那一份值，也不清空成坑。
-        // 断连要的是"回到默认库名"，那是 resetSourceDatabases 那条明路，不从这一句的空列表借道。
-        if (dbs == null || dbs.isEmpty()) { return; }
-        Object prev = sourceDb.getSelectedItem();
-        sourceDb.removeAllItems();
-        for (String d : dbs) { sourceDb.addItem(d); }
-        if (prev != null && dbs.contains(String.valueOf(prev))) {
-            sourceDb.setSelectedItem(prev);
-        }
-    }
-
-    /**
-     * 断连收场：源库下拉清掉上一台那一份、回到默认的 "ods"。
-     *
-     * <p>MainFrame.connFailure 的注释要的就是这件事（"留着上一台的库列表会误导读源库结构"），
-     * 但 setDatabases 对空列表是早退的（round 1 那条 "null" 坑的护栏），走那条路什么都不会清、
-     * 旧库名反而一直留在界面上。所以这里给一条专门的复位路：既不留旧列表，也不留空格子——
-     * 空着的源库正是产出 `FROM \` \`.\`t_oil\`` 那份坏交付件的起点，合规判在 generateTo 里兜底。
-     */
-    public void resetSourceDatabases() {
-        sourceDb.removeAllItems();
-        sourceDb.addItem(DEFAULT_SOURCE_DB);
-        sourceDb.setSelectedItem(DEFAULT_SOURCE_DB);
-    }
-
-    /** 当前源库下拉里那份库名（已 trim）；自检与调用方读它，别再去拼 getSelectedItem()。 */
+    /** 源库名取顶部连接栏所选库（已 trim）；没选库时按脚本兜底 "ods"，不另设输入口。 */
     public String sourceDbName() {
-        return String.valueOf(sourceDb.getSelectedItem()).trim();
+        Config cfg = host.currentConfig();
+        String db = cfg == null || cfg.database == null ? "" : cfg.database.trim();
+        return db.isEmpty() ? DEFAULT_SOURCE_DB : db;
     }
 
     /** 例外表在 EDT 上拍的浅拷贝：它是就地 put/clear 的，worker 拿引用会读到改一半的那一份。 */
