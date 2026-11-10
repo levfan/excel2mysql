@@ -210,23 +210,21 @@ public final class SqlPage extends JPanel {
     public static final int XLSX_MAX_ROWS = 1048576;
     public static final int SQL_EXPORT_ROW_CAP = XLSX_MAX_ROWS * 2 / 3;
 
-    /** 两颗生成按钮的说明与「Excel 导入」页那两颗同一口径，只是数据源换成了脚本正文。 */
+    /**
+     * 两颗生成按钮的说明与「Excel 导入」页那两颗同一口径，只是数据源换成了脚本正文。
+     *
+     * <p>只写一行：这一排在窗口最下沿，多行的长提示会被摆到按钮那一片上面，把右边的同类
+     * 按钮整个盖住，看不见也就点不上（用户 2026-11-11 报的第 5 条）。行上限那个数留在这一行里，
+     * 因为日志与「使用说明」报的是出处而不是这个数；2/3 的来历与没有 INSERT 时剩什么，
+     * 写在「使用说明」的生成件那一节。
+     */
     private static final String GEN_STD_TIP = String.format(
-            "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-                    + "Sheet1「元数据」是脚本里解析出的字段定义，"
-                    + "Sheet2「数据」是表头加脚本里 INSERT 的数据\n"
-                    + "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
-                    + "超出的只在日志点名；"
-                    + "脚本里没有 INSERT 就只剩表头，这一张仍是给下游填数据的模板）\n"
-                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖",
+            "在程序同级建 sql_meta_data_file_年月日 目录，"
+                    + "每张表一个 xlsx（元数据 + 数据两个 Sheet，每张最多 %d 行）",
             SQL_EXPORT_ROW_CAP);
     private static final String GEN_SIMPLE_TIP = String.format(
-            "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-                    + "只留「数据」一个 Sheet，表头是脚本里那些字段的英文名，"
-                    + "下面是 INSERT 的数据\n"
-                    + "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
-                    + "超出的只在日志点名）\n"
-                    + "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖",
+            "在程序同级建 sql_simple_meta_data_file_年月日 目录，"
+                    + "每张表一个 xlsx（只有数据 Sheet，每张最多 %d 行）",
             SQL_EXPORT_ROW_CAP);
     private JButton genStd;
     private JButton genSimple;

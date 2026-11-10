@@ -423,6 +423,8 @@ public final class GuiMain {
                 prefix_and_labels(frame, problems);
                 // 前缀行那一排：输入框与两颗按钮的可见高度必须齐平
                 prefix_row_heights(frame, problems);
+                // 生成按钮的悬浮提示只许一行，多行会盖住同一排右边的按钮
+                gen_tips_stay_short(frame, problems);
                 // 拖拽区与页内进度条：真拖进来走的必须是和选择器同一个入口
                 drop_and_progress(frame, files, problems);
                 // 导入收尾：成功文件移出、失败保留，日志与弹窗用的是同一句话
@@ -2870,6 +2872,38 @@ public final class GuiMain {
         }
     }
 
+    /**
+     * 底部动作条那两颗生成按钮的悬浮提示必须只有一行。
+     *
+     * <p>这一排贴在窗口最下沿：提示写成几行就会被摆到按钮那一片上面，把右边的同类按钮整个
+     * 盖住，看不见就等于点不上（用户 2026-11-11 报的第 5 条，全屏时最明显）。
+     * 每张表最多写多少行、没有 INSERT 时剩什么，这些细节归「使用说明」。
+     */
+    private static void gen_tips_stay_short(MainFrame frame, List<String> problems) {
+        int seen = 0;
+        for (javax.swing.JButton b : frame.buttons()) {
+            String t = b.getText();
+            if (!"生成标准excel文件".equals(t) && !"生成简易excel文件".equals(t)) {
+                continue;
+            }
+            seen++;
+            String tip = b.getToolTipText() == null ? "" : b.getToolTipText();
+            if (tip.contains("\n") || tip.contains("<br>") || tip.startsWith("<html>")) {
+                problems.add("「" + t + "」的悬浮提示又是多行的，会盖住同一排右边的按钮："
+                        + tip.replace("\n", "\\n"));
+            }
+            // 上限按最窄的目标机算：120 显示列约合 840 物理像素，1024 宽也放得下，
+            // 放不下就会被拆成两行，又回到压住按钮那一档
+            if (com.excel2mysql.gui.PopupText.width(tip) > 120) {
+                problems.add("「" + t + "」的悬浮提示长到 "
+                        + com.excel2mysql.gui.PopupText.width(tip) + " 列，一行放不下就会压住按钮");
+            }
+        }
+        if (seen < 4) {
+            problems.add("只扫到 " + seen + " 颗生成按钮，这条判据没覆盖两页");
+        }
+    }
+
     /** 这棵子树上的全部件。 */
     private static void collectAll(java.awt.Component c, java.util.List<java.awt.Component> out) {
         out.add(c);
@@ -4070,10 +4104,16 @@ public final class GuiMain {
         String cap = String.valueOf(com.excel2mysql.gui.SqlPage.SQL_EXPORT_ROW_CAP);
         for (javax.swing.JButton b : new javax.swing.JButton[]{std, simple}) {
             String tip = b.getToolTipText() == null ? "" : b.getToolTipText();
-            if (!tip.contains(cap) || !tip.contains("1048576")) {
-                problems.add("生成按钮的说明没把上限口径说清（" + cap + " / 1048576）："
+            // 悬停那一行只报得出"最多几行"这个数；1048576 与 2/3 的来历在「使用说明」里，
+            // 两处合起来才是完整口径——把来历也塞进 tooltip 就又变成压住按钮的多行提示了
+            if (!tip.contains(cap)) {
+                problems.add("生成按钮的说明没报出行上限 " + cap + "："
                         + tip.replace((char) 10, (char) 32));
             }
+        }
+        String help = com.excel2mysql.gui.HelpDoc.html();
+        if (!help.contains("1048576") || !help.contains(cap)) {
+            problems.add("「使用说明」没写清行上限的数与来历（" + cap + " / 1048576）");
         }
 
         String outRoot = new java.io.File(dir, "out").getPath();

@@ -771,14 +771,16 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
         // 两个生成按钮排在「开始导入」右侧：它们和导入用的是同一份已解析表定义，
         // 放在同一排才看得出"这是同一件事的另一种出口"，而不是另一功能
         genStd = new JButton("生成标准excel文件");
-        // Qt 的 tooltip 认 "\n"，Swing 只认 HTML 换行，所以话术原样、换行换个写法
-        genStd.setToolTipText("<html>在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：<br>"
-                + "Sheet1「元数据」是建表用的字段定义，Sheet2「数据」是数据行</html>");
+        // tooltip 只留一行：这一排在窗口最下沿，几行的长提示会被摆到按钮上面那一片，
+        // 把右边的同类按钮整个盖住，看不见也就点不上（用户 2026-11-11 报的第 5 条）。
+        // 完整形状写在「使用说明」的生成件那一节。
+        genStd.setToolTipText("在程序同级建 meta_data_file_年月日 目录，"
+                + "每张表一个 xlsx（元数据 + 数据两个 Sheet）");
         genStd.setEnabled(false);
         genStd.addActionListener(e -> generateExcel(true));
         genSimple = new JButton("生成简易excel文件");
-        genSimple.setToolTipText("<html>在程序同级建 simple_meta_data_file_年月日 目录，"
-                + "每张表一个 xlsx：<br>只留「数据」一个 Sheet</html>");
+        genSimple.setToolTipText("在程序同级建 simple_meta_data_file_年月日 目录，"
+                + "每张表一个 xlsx（只有数据 Sheet）");
         genSimple.setEnabled(false);
         genSimple.addActionListener(e -> generateExcel(false));
         // 动作条上这支小字：这一排按钮这次到底动几张表。选中行会静悄悄地改范围，

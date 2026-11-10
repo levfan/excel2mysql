@@ -2643,14 +2643,14 @@ class MainWindow(QWidget):
         # 放在同一排才看得出"这是同一件事的另一种出口"，而不是另一功能
         self.btn_gen_std = QPushButton("生成标准excel文件")
         self.btn_gen_std.setToolTip(
-            "在程序同级建 meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-            "Sheet1「元数据」是建表用的字段定义，Sheet2「数据」是数据行")
+            "在程序同级建 meta_data_file_年月日 目录，"
+            "每张表一个 xlsx（元数据 + 数据两个 Sheet）")
         self.btn_gen_std.setEnabled(False)
         self.btn_gen_std.clicked.connect(self.on_gen_standard)
         self.btn_gen_simple = QPushButton("生成简易excel文件")
         self.btn_gen_simple.setToolTip(
-            "在程序同级建 simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-            "只留「数据」一个 Sheet")
+            "在程序同级建 simple_meta_data_file_年月日 目录，"
+            "每张表一个 xlsx（只有数据 Sheet）")
         self.btn_gen_simple.setEnabled(False)
         self.btn_gen_simple.clicked.connect(self.on_gen_simple)
         op.addWidget(self.btn_gen_std)
@@ -3036,24 +3036,15 @@ class MainWindow(QWidget):
         # 数据源换成了脚本正文，列定义看 CREATE TABLE、数据看 INSERT
         self.btn_sql_gen_std = QPushButton("生成标准excel文件")
         self.btn_sql_gen_std.setToolTip(
-            "在程序同级建 sql_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-            "Sheet1「元数据」是脚本里解析出的字段定义，"
-            "Sheet2「数据」是表头加脚本里 INSERT 的数据\n"
-            "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
-            "超出的只在日志点名；"
-            "脚本里没有 INSERT 就只剩表头，这一张仍是给下游填数据的模板）\n"
-            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖"
+            "在程序同级建 sql_meta_data_file_年月日 目录，"
+            "每张表一个 xlsx（元数据 + 数据两个 Sheet，每张最多 %d 行）"
             % SQL_EXPORT_ROW_CAP)
         self.btn_sql_gen_std.setEnabled(False)
         self.btn_sql_gen_std.clicked.connect(lambda: self.on_sql_gen_excel("标准", True))
         self.btn_sql_gen_simple = QPushButton("生成简易excel文件")
         self.btn_sql_gen_simple.setToolTip(
-            "在程序同级建 sql_simple_meta_data_file_年月日 目录，每张表一个 xlsx：\n"
-            "只留「数据」一个 Sheet，表头是脚本里那些字段的英文名，"
-            "下面是 INSERT 的数据\n"
-            "（每张表最多写 %d 行，按 Excel 单表上限 1048576 的 2/3 算，"
-            "超出的只在日志点名）\n"
-            "目录名带 sql_ 前缀，与「Excel 导入」那一页的生成件互不覆盖"
+            "在程序同级建 sql_simple_meta_data_file_年月日 目录，"
+            "每张表一个 xlsx（只有数据 Sheet，每张最多 %d 行）"
             % SQL_EXPORT_ROW_CAP)
         self.btn_sql_gen_simple.setEnabled(False)
         self.btn_sql_gen_simple.clicked.connect(lambda: self.on_sql_gen_excel("简易", False))
