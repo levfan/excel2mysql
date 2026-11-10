@@ -96,7 +96,7 @@ public final class HelpDoc {
                     "这两个入口的图标上。包没解全时它们会弹窗说清缺哪个文件；还想看到 Java 的原始报错与退出码，" + NL +
                     "用 <code>启动-调试.bat</code>，它故意留着控制台。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-5.1.0.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-5.2.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
