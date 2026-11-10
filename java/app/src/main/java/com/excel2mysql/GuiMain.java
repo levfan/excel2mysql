@@ -6459,8 +6459,8 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
         try {
-            if (hd.tocCount() != 16) {
-                problems.add("说明目录应有 16 章（与 help_doc.py 同步，改了要重导 HelpDoc.java），"
+            if (hd.tocCount() != 17) {
+                problems.add("说明目录应有 17 章（与 help_doc.py 同步，改了要重导 HelpDoc.java），"
                         + "实际 " + hd.tocCount());
             }
             if (hd.bodyLength() < 2000) {

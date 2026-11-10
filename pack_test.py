@@ -5257,6 +5257,11 @@ check("P3c 第三个页签「SQL 执行器」在使用说明里有专节",
       any(x[0] == "sqlrun" and "SQL 执行器页" in x[1] for x in HELP_SECTIONS)
       and "示例 (?)" in _html and "全部成功才提交" in _html,
       [x[0] for x in HELP_SECTIONS])
+check("P3d 第四个页签「分层建模」有专节，判领域写清权重与不猜",
+      any(x[0] == "layer" and "分层建模页" in x[1] for x in HELP_SECTIONS)
+      and "按表注释命中「人员」" in _html and "都没有可识别的业务名词" in _html
+      and "不支持 Ctrl+V" in _html,
+      [x[0] for x in HELP_SECTIONS])
 
 pw = app_main.MainWindow()
 hd = HelpDialog(pw)
