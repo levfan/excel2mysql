@@ -341,6 +341,12 @@ public final class StructureDialog extends JDialog {
      */
     private boolean applyEdits() {
         problems.clear();
+        // 编辑器还开着时模型里是旧值：先把那一格提交，否则"敲完直接点保存"的改动会静默丢掉
+        for (Editor ed : editors) {
+            if (ed.view.getCellEditor() != null) {
+                ed.view.getCellEditor().stopCellEditing();
+            }
+        }
         List<List<Infer.Column>> staged = new ArrayList<List<Infer.Column>>();
         List<List<List<Object>>> stagedRows = new ArrayList<List<List<Object>>>();
         List<List<Object>> stagedHeaders = new ArrayList<List<Object>>();
@@ -433,6 +439,27 @@ public final class StructureDialog extends JDialog {
     public String modelValue(int tabIndex, int row, int col) {
         Object v = editors.get(tabIndex).model.getValueAt(row, col);
         return v == null ? "" : String.valueOf(v);
+    }
+
+    /** 自检用：这张字段表是不是"焦点一离开就提交"（与 Qt 同一档）。 */
+    public boolean commitsOnFocusLost(int tabIndex) {
+        return Tables.terminatesEditOnFocusLost(editors.get(tabIndex).view);
+    }
+
+    /**
+     * 自检用：像用户那样开一格编辑器把字敲进去，但不提交——编辑器还开着。
+     *
+     * 自检在 EDT 上抢不到焦点，所以这条只走"挂着未提交的编辑器直接点保存"那一路。
+     */
+    public void typeIntoCell(int tabIndex, int row, int col, String text) {
+        JTable t = editors.get(tabIndex).view;
+        if (!t.editCellAt(row, col)) {
+            throw new IllegalStateException("第 " + col + " 列开不了编辑器");
+        }
+        java.awt.Component c = t.getEditorComponent();
+        if (c instanceof javax.swing.JTextField) {
+            ((javax.swing.JTextField) c).setText(text);
+        }
     }
 
     public int rowCount(int tabIndex) {

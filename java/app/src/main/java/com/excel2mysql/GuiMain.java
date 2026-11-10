@@ -844,6 +844,48 @@ public final class GuiMain {
             problems.add("弹窗确认后注释没写回表定义");
         }
 
+        // 用户最常见的敲法是按完字直接点「保存」，不按回车也不点别处：这一格此时还开着
+        // 编辑器，模型里是旧值。Swing 默认不提交，改动就静默丢掉（用户 2026-11-11 报的第 2 条）。
+        com.excel2mysql.gui.StructureDialog pending =
+                new com.excel2mysql.gui.StructureDialog(null, results, frame.logPanel());
+        pending.pack();
+        if (!pending.commitsOnFocusLost(0)) {
+            problems.add("结构弹窗的字段表没开\"焦点一离开就提交\"：敲完直接点保存会丢改动");
+        }
+        String pendingText = "敲完没提交就点保存";
+        pending.typeIntoCell(0, 0, 2, pendingText);
+        if (pending.modelValue(0, 0, 2).equals(pendingText)) {
+            problems.add("自检没造出\"编辑器还挂着\"的状态，这条等于没验");
+        }
+        if (!pending.pressOk()) {
+            problems.add("挂着未提交的编辑器时保存被拦住：" + String.join(" | ", pending.problems()));
+        } else if (!pendingText.equals(frame.tables().get(0).columns.get(0).comment)) {
+            problems.add("挂着未提交的编辑器点保存，注释写回的是旧值："
+                    + frame.tables().get(0).columns.get(0).comment);
+        }
+        pending.dispose();
+
+        // 横扫同类：界面上每一张表都要开这一档，漏一张就是漏一处"敲完点别处就丢改动"。
+        // 判据走真控件，不数调用点——谁新建一张表忘了过 Tables.style，这条就红。
+        java.util.List<javax.swing.JTable> everyTable = new java.util.ArrayList<javax.swing.JTable>();
+        collectTables(frame, everyTable);
+        for (java.awt.Window w : fitCheckDialogs(frame)) {
+            collectTables(w, everyTable);
+            w.dispose();
+        }
+        int unforgiving = 0;
+        for (javax.swing.JTable t : everyTable) {
+            if (!com.excel2mysql.gui.Tables.terminatesEditOnFocusLost(t)) {
+                unforgiving++;
+            }
+        }
+        if (everyTable.size() < 4) {
+            problems.add("横扫只找到 " + everyTable.size() + " 张表，这条判据没覆盖到界面");
+        }
+        if (unforgiving > 0) {
+            problems.add("界面上有 " + unforgiving + " 张表没开\"焦点一离开就提交\"");
+        }
+
         // 空表（0 数据行）手工指定主键：非空与唯一在空集上天然成立，应放行；
         // 类型门槛不能因此跳过。
         java.util.List<com.excel2mysql.core.Infer.Column> emptyCols =
@@ -2822,6 +2864,19 @@ public final class GuiMain {
         if (c instanceof java.awt.Container) {
             for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
                 collectStatic(kid, out);
+            }
+        }
+    }
+
+    /** 这棵子树上的每一张表格：横扫"焦点一离开就提交"有没有漏掉哪一张。 */
+    private static void collectTables(java.awt.Component c,
+                                      java.util.List<javax.swing.JTable> out) {
+        if (c instanceof javax.swing.JTable) {
+            out.add((javax.swing.JTable) c);
+        }
+        if (c instanceof java.awt.Container) {
+            for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
+                collectTables(kid, out);
             }
         }
     }

@@ -222,6 +222,14 @@ public final class Tables {
         return UiScale.font(Font.PLAIN, UiScale.fontPt(POINT_SIZE));
     }
 
+    /** BasicTableUI 读的那把键：焦点离开表格时是否替用户提交还开着的编辑器。 */
+    public static final String TERMINATE_EDIT_ON_FOCUS_LOST = "terminateEditOnFocusLost";
+
+    /** 这一张表开没开"焦点一离开就提交"。 */
+    public static boolean terminatesEditOnFocusLost(javax.swing.JTable table) {
+        return Boolean.TRUE.equals(table.getClientProperty(TERMINATE_EDIT_ON_FOCUS_LOST));
+    }
+
     /** 设内容字体、表头字体与行高；返回同一个表方便链式调用。 */
     public static javax.swing.JTable style(javax.swing.JTable table) {
         Font f = font();
@@ -229,6 +237,10 @@ public final class Tables {
         table.getTableHeader().setFont(f);
         FontMetrics fm = table.getFontMetrics(f);
         table.setRowHeight(fm.getHeight() + UiScale.px(6));
+        // Swing 这一档默认不开：敲完一格直接点「保存」，焦点移到按钮但编辑器没提交，
+        // 读回来的还是旧值——改动静默丢掉。Qt 在焦点离开时就提交，两栈必须同一口径。
+        // JTable 没有对应的 setter，开的是 BasicTableUI 认的那个客户端属性。
+        table.putClientProperty(TERMINATE_EDIT_ON_FOCUS_LOST, Boolean.TRUE);
         return table;
     }
 
