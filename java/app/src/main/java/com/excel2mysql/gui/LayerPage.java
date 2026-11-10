@@ -2,10 +2,15 @@ package com.excel2mysql.gui;
 
 import com.excel2mysql.core.Config;
 import com.excel2mysql.core.DbClient;
+import com.excel2mysql.core.DomainGuess;
 import com.excel2mysql.core.ImportParse;
+import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.LayerGen;
 import com.excel2mysql.core.LogText;
 import com.excel2mysql.core.MappingFile;
+import com.excel2mysql.core.Names;
+import com.excel2mysql.core.PinyinLoader;
+import com.excel2mysql.core.TableBuilder;
 
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -38,6 +43,8 @@ public final class LayerPage extends JPanel {
         Config currentConfig();
         boolean connected();
         String exportRoot();
+        /** 与「Excel 导入」页同一个会话级解压目录：关窗口一次清掉，不在这页另起一个。 */
+        String zipSessionDir();
         void warn(String text);
         void inform(String text);
         void informError(String title, String text);
@@ -64,6 +71,9 @@ public final class LayerPage extends JPanel {
     private final JCheckBox writeMode = new JCheckBox("同时写入目标库", false);
     private final JButton loadBtn = new JButton("载入映射文件");
     private final JButton exportTplBtn = new JButton("导出映射模板");
+    /** 免配模板那条路的入口：拖进来的是标准/简易 Excel 或装它们的 ZIP。 */
+    private final DropArea fileDrop = new DropArea(this::guessFromFiles, this::chooseGuessFiles,
+            DropArea.LAYER_HINT, null);
     private final JButton readSrcBtn = new JButton("读源库结构");
     private final JButton objBtn = new JButton("生成对象层 obj");
     private final JButton domBtn = new JButton("生成领域层 dom");
@@ -138,7 +148,128 @@ public final class LayerPage extends JPanel {
         row.add(new JLabel("目标库 obj/dom/ads"));
         row.add(objDb); row.add(domDb); row.add(adsDb);
         p.add(row, BorderLayout.CENTER);
+        // 免配模板那条路的入口摆在最上沿：与「Excel 导入」页同一块虚线区、同一套拖法
+        fileDrop.setPreferredSize(new java.awt.Dimension(UiScale.px(1100), UiScale.px(84)));
+        p.add(fileDrop, BorderLayout.SOUTH);
         return p;
+    }
+
+    private void chooseGuessFiles() {
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("选择要识别领域的 Excel 或 ZIP");
+        fc.setMultiSelectionEnabled(true);
+        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+                "Excel 与 ZIP（.xlsx / .xls / .zip）", "xlsx", "xls", "zip"));
+        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            List<String> paths = new ArrayList<String>();
+            for (File f : fc.getSelectedFiles()) {
+                paths.add(f.getPath());
+            }
+            guessFromFiles(paths);
+        }
+    }
+
+    /**
+     * 拖进来或选进来的文件：解析 → 按文件名与表内元数据判领域 → 覆盖界面上那份映射。
+     *
+     * <p>不连库、不写库：这一条只产映射行，obj/dom/ads 三颗仍按原来的依赖锁走。
+     */
+    private void guessFromFiles(final List<String> paths) {
+        if (paths == null || paths.isEmpty()) {
+            logPanel.log("! [WARN] LAYER | 没有可识别的文件：拖进来的路径是空的");
+            return;
+        }
+        if (layerBusy) {
+            host.warn("这一页正有任务在跑，等它结束再识别领域。");
+            return;
+        }
+        final List<String> picked = new ArrayList<String>(paths);
+        host.runLayerTask("按文件识别领域", new Function<ImportParse.Sink, Object>() {
+            @Override public Object apply(ImportParse.Sink sink) {
+                try {
+                    Names nm = new Names(PinyinLoader.get());
+                    TableBuilder builder = new TableBuilder(new Infer(nm), nm);
+                    ImportParse.Outcome oc = ImportParse.parse(picked, new ArrayList<String>(),
+                            host.zipSessionDir(), 1, builder, sink);
+                    if (sink.cancelled()) {
+                        sink.log("! [WARN] LAYER | 已取消：解出的 " + oc.tables.size()
+                                + " 张表不覆盖界面上那一份映射");
+                        return null;
+                    }
+                    return new Object[]{DomainGuess.guess(inputsOf(oc), nm), oc, null};
+                } catch (Exception ex) {
+                    sink.logError("x [ERROR] LAYER | 识别领域失败：" + ex.getMessage());
+                    return new Object[]{null, null, String.valueOf(ex.getMessage())};
+                }
+            }
+        }, new Consumer<Object>() {
+            @SuppressWarnings("unchecked")
+            @Override public void accept(Object res) {
+                if (res == null) {
+                    return;      // 取消那一支：只留日志，不动界面上现存的映射
+                }
+                Object[] arr = (Object[]) res;
+                if (arr[2] != null) {
+                    host.informError("按文件识别领域失败", String.valueOf(arr[2]));
+                    return;
+                }
+                List<DomainGuess.Verdict> vs = (List<DomainGuess.Verdict>) arr[0];
+                ImportParse.Outcome oc = (ImportParse.Outcome) arr[1];
+                if (vs == null || vs.isEmpty()) {
+                    logPanel.log("! [WARN] LAYER | 这些文件里没解出可识别的表（"
+                            + picked.size() + " 个入口），映射不改");
+                    host.inform("这些文件里没解出可识别的表，映射没有改动。");
+                    return;
+                }
+                List<MappingFile.TableMap> rows = new ArrayList<MappingFile.TableMap>();
+                int pending = 0;
+                for (DomainGuess.Verdict v : vs) {
+                    rows.add(v.map);
+                    logPanel.log((v.guessed ? "+ [OK] LAYER | " : "! [WARN] LAYER | ")
+                            + DomainGuess.describe(v));
+                    if (!v.guessed) {
+                        pending++;
+                    }
+                }
+                mapping = MappingFile.ofTables(rows);
+                // 与「载入映射文件」同一口径：换一份映射就清掉上一场的字段例外
+                fieldExceptions.clear();
+                mappingLabel.setText("按文件识别（" + rows.size() + " 表"
+                        + (pending == 0 ? "" : "，" + pending + " 张待确认") + "）");
+                fillTable();
+                refreshButtonStates();
+                host.inform("已按 " + picked.size() + " 个入口识别出 " + rows.size() + " 张表的领域，"
+                        + (pending == 0 ? "全部判出。"
+                                : "其中 " + pending + " 张判不出，日志已逐表点名，可在映射文件里补。")
+                        + (oc.failed == 0 ? "" : "另有 " + oc.failed + " 个文件解析失败。"));
+            }
+        });
+    }
+
+    /** 解出来的表 → 判定输入：文件名、包名、表注释与字段注释，全在解析结果里，不再回读磁盘。 */
+    private static List<DomainGuess.Input> inputsOf(ImportParse.Outcome oc) {
+        List<DomainGuess.Input> out = new ArrayList<DomainGuess.Input>();
+        for (TableBuilder.Result r : oc.tables) {
+            DomainGuess.Input in = new DomainGuess.Input();
+            String path = r.table.filepath == null ? "" : r.table.filepath;
+            in.fileName = new File(path).getName();
+            String origin = oc.zipOrigin.get(path);
+            if (origin != null) {
+                int bang = origin.indexOf('!');
+                in.system = bang > 0 ? origin.substring(0, bang) : origin;
+            }
+            in.tableCn = r.table.tableComment == null ? "" : r.table.tableComment;
+            in.tableEn = r.table.tableName == null ? "" : r.table.tableName;
+            in.fieldCount = r.table.columns.size();
+            for (com.excel2mysql.core.Infer.Column c : r.table.columns) {
+                in.fieldComments.add(c.comment == null ? "" : c.comment);
+                if (c.primaryKey && in.pkField.isEmpty()) {
+                    in.pkField = c.field == null ? "" : c.field;
+                }
+            }
+            out.add(in);
+        }
+        return out;
     }
 
     private JPanel buildBottom() {
@@ -680,6 +811,8 @@ public final class LayerPage extends JPanel {
     }
 
     public LogPanel logPanel() { return logPanel; }
+    /** 免配模板那条路的拖拽区：自检按用户的方式把文件丢进去。 */
+    public DropArea layerDropArea() { return fileDrop; }
     public JButton objButton() { return objBtn; }
     public JButton domButton() { return domBtn; }
     public JButton adsButton() { return adsBtn; }
@@ -687,6 +820,8 @@ public final class LayerPage extends JPanel {
     public JButton loadMappingButton() { return loadBtn; }
     public JButton exportTemplateButton() { return exportTplBtn; }
     public int mappingRowCount() { return model.getRowCount(); }
+    /** 自检读的是真映射，不是界面上那几列文字。 */
+    public MappingFile mapping() { return mapping; }
     public String mappingLabelText() { return mappingLabel.getText(); }
     /** 「读源库结构」那颗：同上。 */
     public JButton readSourceButton() { return readSrcBtn; }

@@ -41,6 +41,11 @@ public final class MappingFile {
 
     private MappingFile(List<TableMap> tables) { this.tables = tables; }
 
+    /** 程序自己生成的映射行（第四页按文件识别领域）也走这一个对象，生成链不分两条。 */
+    public static MappingFile ofTables(List<TableMap> tables) {
+        return new MappingFile(new ArrayList<TableMap>(tables));
+    }
+
     public List<TableMap> tables() { return tables; }
 
     public static MappingFile loadTableCsv(String path) throws IOException {

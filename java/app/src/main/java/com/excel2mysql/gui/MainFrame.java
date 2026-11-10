@@ -2178,7 +2178,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
          * 开发机长二三十字符，客户数据包里还有几十字的中文文件名与目录层级，
          * 顶到 Windows 的 260 上限时症状是"拖进来就报"，而且只在现场报、开发机不复现。
          */
-    private String zipSessionDir() {
+    /** LayerPage.Host 要的就是这一只：与「Excel 导入」页共用同一个会话级解压目录。 */
+    public String zipSessionDir() {
         if (zipSessionDir == null) {
             File base = new File(System.getProperty("java.io.tmpdir"),
                     "e2m-" + System.nanoTime());

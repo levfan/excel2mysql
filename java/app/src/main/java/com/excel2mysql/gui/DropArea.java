@@ -45,6 +45,14 @@ public final class DropArea extends javax.swing.JPanel {
     public static final String RUN_HINT =
             "将 SQL 脚本拖到此处，或点击选择文件\n"
             + "（支持 .sql，可多选；按列表顺序执行）\n" + PASTE_HINT;
+    /**
+     * 第四页（分层建模）：拖进来的是要归类的表。这一页没接粘贴入口，所以那句
+     * "Ctrl+V 直接添加"不能照抄——写了就是句兑现不了的承诺。
+     */
+    public static final String LAYER_HINT =
+            "将 Excel 文件或 ZIP 压缩包拖到此处，或点击选择文件\n"
+            + "（标准件与简易件都认；按文件名与表内元数据判每张表属于哪个领域，"
+            + "判不出的逐表点名）";
     private static final Color LINE = new Color(0xa8, 0xbc, 0xd8);
     private static final Color LINE_HOVER = new Color(0x2f, 0x6f, 0xeb);
     private static final Color BG = new Color(0xea, 0xf2, 0xfd);

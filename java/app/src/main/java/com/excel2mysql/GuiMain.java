@@ -1,5 +1,6 @@
 package com.excel2mysql;
 
+import com.excel2mysql.core.DomainGuess;
 import com.excel2mysql.gui.MainFrame;
 import com.excel2mysql.gui.SqlSamples;
 import com.excel2mysql.gui.UiScale;
@@ -256,6 +257,9 @@ public final class GuiMain {
                 } catch (java.io.IOException e) {
                     problems.add("建拆分产物临时目录失败：" + e);
                 }
+                // 第四页免配模板那条路：拖一堆 Excel/ZIP 进去判领域。
+                // 排在拆分产物目录指走之后——这一条真解析夹具，宽表要是按现场口径写回夹具目录就脏了
+                layer_domain_guess(frame, dir, problems);
                 String addSummary = frame.addFiles(files);
                 // 有了待导入的表，同一颗按钮要转回强调色（禁用色留在上面那条断言里钉着）
                 if (!frame.importButton().isEnabled()) {
@@ -2687,6 +2691,178 @@ public final class GuiMain {
      * 只有打开交付件的人才看得出来。所以判据是"临时根里一个 layer_ 开头的产物目录都不许有"，
      * 而不是"有没有报错"：拦不下时产物照样落得整整齐齐。
      */
+    /**
+     * 第四页免配模板那条路：按文件名与表内元数据判每张表属于哪个领域。
+     *
+     * <p>判得准不准是业务口径，名词表可以一直加；这三件事不许退化——数不到名词就不猜
+     * （逐表点名，绝不塞进某个领域凑数）、同一名词在多张表上共用一个领域码与一张领域目标表
+     * （分组才是这条路的产物）、依据要写出来（哪个词在哪个来源被数到几次）。
+     */
+    private static void layer_domain_guess(MainFrame frame, String dir, List<String> problems) {
+        com.excel2mysql.gui.LayerPage lp = frame.layerPage();
+        if (lp == null) {
+            problems.add("第四页没挂上，判领域这条用例没跑");
+            return;
+        }
+        com.excel2mysql.core.Names nm =
+                new com.excel2mysql.core.Names(com.excel2mysql.core.PinyinLoader.get());
+        // 1) 表注释命中：领域、领域码、领域目标表、主题、依据、对象维度各钉一处
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> one =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        one.add(guessIn("人员信息表（人事处）.xlsx", "", "人员信息表", "ren_yuan_xin_xi",
+                3, "xing_ming", new String[]{"姓名", "所属机构", "入职日期"}));
+        com.excel2mysql.core.DomainGuess.Verdict a = DomainGuess.guess(one, nm).get(0);
+        if (!a.guessed || !"人员".equals(a.domain)) {
+            problems.add("表注释里的「人员」没被判成领域：" + DomainGuess.describe(a));
+        }
+        if (!"DOM01".equals(a.map.domainCode)) {
+            problems.add("第一个领域没拿到 DOM01：" + a.map.domainCode);
+        }
+        if (a.map.domainTarget == null || !a.map.domainTarget.startsWith("dwd_")
+                || a.map.domainTarget.length() <= 4) {
+            problems.add("领域目标表不是 dwd_ 开头的全拼：" + a.map.domainTarget);
+        }
+        if (!"人员主题".equals(a.map.theme)) {
+            problems.add("主题归属没跟着领域走：" + a.map.theme);
+        }
+        if (!a.basis.contains("按表注释命中「人员」")) {
+            problems.add("依据没写明命中来自表注释：" + a.basis);
+        }
+        if (a.map.objDims == null || !a.map.objDims.contains("dim_")) {
+            problems.add("字段注释里的「机构」没汇成涉及对象维度：" + a.map.objDims);
+        }
+        if (!"自动识别".equals(a.map.status)) {
+            problems.add("判出来的行状态不是自动识别：" + a.map.status);
+        }
+        // 2) 同分取表注释里更靠前的那个：设备与人员都命中，谁先出现算谁
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> tie =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        tie.add(guessIn("台账.xlsx", "", "设备人员台账", "tai_zhang", 1, "", new String[]{}));
+        com.excel2mysql.core.DomainGuess.Verdict t = DomainGuess.guess(tie, nm).get(0);
+        if (!"设备".equals(t.domain)) {
+            problems.add("同分没按表注释里更靠前的名词判：" + t.domain);
+        }
+        // 3) 数不到名词就不猜
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> none =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        none.add(guessIn("临时导出.xlsx", "", "临时表", "lin_shi", 2, "", new String[]{"甲", "乙"}));
+        com.excel2mysql.core.DomainGuess.Verdict n = DomainGuess.guess(none, nm).get(0);
+        if (n.guessed || !"待确认".equals(n.map.status)
+                || !n.basis.contains("都没有可识别的业务名词")) {
+            problems.add("判不出却被塞了领域：" + DomainGuess.describe(n));
+        }
+        if (!DomainGuess.describe(n).contains("判不出领域")) {
+            problems.add("判不出的那句日志没点名：" + DomainGuess.describe(n));
+        }
+        // 4) 分组：两张人员表共用领域码与目标表，采购另起一档
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> group =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        group.add(guessIn("人员信息表.xlsx", "", "人员信息表", "t_a", 1, "", new String[]{}));
+        group.add(guessIn("人员花名册.xlsx", "", "人员花名册", "t_b", 1, "", new String[]{}));
+        group.add(guessIn("采购台账.xlsx", "", "", "t_c", 1, "", new String[]{}));
+        java.util.List<com.excel2mysql.core.DomainGuess.Verdict> g =
+                DomainGuess.guess(group, nm);
+        if (!g.get(0).map.domainCode.equals(g.get(1).map.domainCode)
+                || !g.get(0).map.domainTarget.equals(g.get(1).map.domainTarget)) {
+            problems.add("同领域的两张表没分到同一组：" + g.get(0).map.domainCode + " / "
+                    + g.get(1).map.domainCode);
+        }
+        if (!"DOM02".equals(g.get(2).map.domainCode) || !"采购".equals(g.get(2).domain)) {
+            problems.add("按文件名命中失败或领域码排错：" + g.get(2).domain + " "
+                    + g.get(2).map.domainCode);
+        }
+        if (!g.get(2).basis.contains("按文件名命中「采购」")) {
+            problems.add("文件名那条依据没写出来：" + g.get(2).basis);
+        }
+        // 5) 压缩包名当系统：一个包通常就是同一个业务系统导出来的。
+        // 文件名里故意不带名词——文件名比包名更靠近这张表，带了就轮到文件名的依据
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> sys =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        sys.add(guessIn("明细.xlsx", "财务系统", "", "ming_xi", 1, "", new String[]{}));
+        com.excel2mysql.core.DomainGuess.Verdict s = DomainGuess.guess(sys, nm).get(0);
+        if (!"财务系统".equals(s.map.system) || !s.basis.contains("按压缩包名命中")) {
+            problems.add("包名没进系统列或依据没写来源：" + s.map.system + " | " + s.basis);
+        }
+        // 6) 走用户真入口：拖进第四页那块虚线区
+        if (!lp.layerDropArea().acceptsDrops() || !lp.layerDropArea().hasClickAction()) {
+            problems.add("第四页的拖拽区没接拖或没接点击选择");
+        }
+        if (!com.excel2mysql.gui.DropArea.LAYER_HINT.equals(lp.layerDropArea().hintText())) {
+            problems.add("第四页拖拽区的引导句不是这一页那句：" + lp.layerDropArea().hintText());
+        }
+        if (lp.layerDropArea().hintText().contains("Ctrl+V")) {
+            problems.add("第四页没接粘贴入口，引导句里不许写 Ctrl+V");
+        }
+        java.util.List<String> drop = new java.util.ArrayList<String>();
+        java.io.File[] kids = new java.io.File(dir).listFiles();
+        if (kids != null) {
+            java.util.Arrays.sort(kids);
+            for (java.io.File f : kids) {
+                String low = f.getName().toLowerCase();
+                if (low.endsWith(".xlsx") || low.endsWith(".xls") || low.endsWith(".zip")) {
+                    drop.add(f.getPath());
+                }
+            }
+        }
+        if (drop.size() < 5) {
+            problems.add("判领域的端到端只拿到 " + drop.size() + " 个夹具，不够判");
+            return;
+        }
+        int before = lp.mappingRowCount();
+        lp.layerDropArea().fireDrop(drop);
+        if (!lp.mappingLabelText().startsWith("按文件识别")) {
+            problems.add("拖进文件后没换成识别结果：" + lp.mappingLabelText());
+        }
+        if (lp.mappingRowCount() < 5 || lp.mappingRowCount() == before) {
+            problems.add("识别结果没覆盖映射表：" + lp.mappingRowCount() + " 行（原来 "
+                    + before + " 行）");
+        }
+        if (lp.mapping() == null) {
+            problems.add("识别结果没落到 mapping 上");
+            return;
+        }
+        boolean hitPerson = false;
+        boolean hitPending = false;
+        for (com.excel2mysql.core.MappingFile.TableMap m : lp.mapping().tables()) {
+            if ("人员".equals(m.domain) && m.domainTarget != null
+                    && m.domainTarget.startsWith("dwd_")) {
+                hitPerson = true;
+            }
+            if ("待确认".equals(m.status)) {
+                hitPending = true;
+            }
+        }
+        String log = lp.logPanel().text();
+        if (!hitPerson || !log.contains("→ 领域「人员」")) {
+            problems.add("夹具里的「人员信息表」没被判成人员领域，日志也没点名："
+                    + tailOf(log).replace((char) 10, ' '));
+        }
+        if (!hitPending || !log.contains("判不出领域")) {
+            problems.add("判不出的表没被标成待确认或没在日志逐表点名");
+        }
+        if (!log.contains("LAYER")) {
+            problems.add("识别这一条没在日志留痕");
+        }
+    }
+
+    /** 造一条判定输入（用例底座，不走界面也不连库）。 */
+    private static com.excel2mysql.core.DomainGuess.Input guessIn(String fileName, String system,
+                                                                  String tableCn, String tableEn,
+                                                                  int fieldCount, String pkField,
+                                                                  String[] comments) {
+        com.excel2mysql.core.DomainGuess.Input in = new com.excel2mysql.core.DomainGuess.Input();
+        in.fileName = fileName;
+        in.system = system;
+        in.tableCn = tableCn;
+        in.tableEn = tableEn;
+        in.fieldCount = fieldCount;
+        in.pkField = pkField;
+        for (String c : comments) {
+            in.fieldComments.add(c);
+        }
+        return in;
+    }
+
     private static void layer_db_guard(com.excel2mysql.gui.LayerPage lp, MainFrame frame,
                                        List<String> problems) {
         String keep = lp.objDbField().getText();
