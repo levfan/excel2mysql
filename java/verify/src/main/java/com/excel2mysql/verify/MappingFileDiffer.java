@@ -99,6 +99,32 @@ public final class MappingFileDiffer {
             }
         }
 
+        // 6) 随包内置模板要能按同一条路径读回：模板缺一列，用户导出的就是一份载不进的 CSV
+        java.io.InputStream tplIn = MappingFileDiffer.class.getResourceAsStream("/layer_mapping_template.csv");
+        if (tplIn == null) {
+            bad++; shown.add("classpath 里没有 layer_mapping_template.csv");
+        } else {
+            try {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = tplIn.read(buf)) > 0) { bos.write(buf, 0, n); }
+                MappingFile tpl = MappingFile.parseTableCsv(
+                        new String(bos.toByteArray(), Charset.forName("UTF-8")), "内置模板");
+                if (tpl.tables().size() != 2) {
+                    bad++; shown.add("内置模板行数 期望 2 实际 " + tpl.tables().size());
+                } else {
+                    MappingFile.TableMap t0 = tpl.tables().get(0);
+                    if (t0.tableEn.isEmpty() || t0.domainTarget.isEmpty()
+                            || t0.objDims.isEmpty() || t0.theme.isEmpty() || t0.status.isEmpty()) {
+                        bad++; shown.add("内置模板示例行关键列为空：" + t0.tableEn + "/" + t0.domainTarget);
+                    }
+                }
+            } finally {
+                tplIn.close();
+            }
+        }
+
         System.out.println("- [INFO] MAP-DIFF | 不一致 " + bad + " 处");
         for (String s : shown) { System.out.println("     " + s); }
         if (bad > 0) { System.out.println("x [ERROR] MAP-DIFF | 映射文件读写不等价"); System.exit(1); }

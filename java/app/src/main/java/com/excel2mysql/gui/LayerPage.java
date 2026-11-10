@@ -53,6 +53,8 @@ public final class LayerPage extends JPanel {
      * 所以"合规"必须是生成前的硬前置，而不是指望用户不去碰它。
      */
     private static final Pattern DB_IDENT = Pattern.compile("^[A-Za-z0-9_]+$");
+    /** jar 内自带的映射模板：第四页一打开就能看到 15 列＋可选 ods物理表名 该填什么。 */
+    private static final String TEMPLATE_RES = "/layer_mapping_template.csv";
 
     private final Host host;
     private final LogPanel logPanel = new LogPanel();
@@ -63,6 +65,7 @@ public final class LayerPage extends JPanel {
     private final JLabel mappingLabel = new JLabel("未载入映射");
     private final JCheckBox writeMode = new JCheckBox("同时写入目标库", false);
     private final JButton loadBtn = new JButton("载入映射文件");
+    private final JButton exportTplBtn = new JButton("导出映射模板");
     private final JButton readSrcBtn = new JButton("读源库结构");
     private final JButton objBtn = new JButton("生成对象层 obj");
     private final JButton domBtn = new JButton("生成领域层 dom");
@@ -113,6 +116,7 @@ public final class LayerPage extends JPanel {
         domBtn.addActionListener(e -> generate(LayerGen.Layer.DOM));
         adsBtn.addActionListener(e -> generate(LayerGen.Layer.ADS));
         refreshButtonStates();
+        loadBuiltinTemplate();
     }
 
     private JPanel buildTop() {
@@ -125,6 +129,11 @@ public final class LayerPage extends JPanel {
         Buttons.secondary(loadBtn);
         loadBtn.addActionListener(e -> chooseMapping());
         row.add(loadBtn);
+        Buttons.secondary(exportTplBtn);
+        exportTplBtn.setToolTipText("<html>把内置模板原样导出成 CSV（UTF-8 带 BOM，Excel 直接打开），<br>"
+                + "按列填好后再点「载入映射文件」。</html>");
+        exportTplBtn.addActionListener(e -> chooseExportTemplate());
+        row.add(exportTplBtn);
         Buttons.secondary(readSrcBtn);
         readSrcBtn.setToolTipText("<html>连上当前数据源后，读源库这一列的下拉库里的用户表结构，<br>"
                 + "填库列表并绑定映射行的绑定状态；obj/dom 生成依赖这一步。</html>");
@@ -153,6 +162,67 @@ public final class LayerPage extends JPanel {
         if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             loadMapping(fc.getSelectedFile().getPath());
         }
+    }
+
+    private void chooseExportTemplate() {
+        JFileChooser fc = new JFileChooser();
+        fc.setDialogTitle("导出层间映射模板");
+        fc.setSelectedFile(new File("层间映射模板.csv"));
+        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            exportTemplateTo(fc.getSelectedFile());
+        }
+    }
+
+    /** 打开页面就载入 jar 内模板，让「15 列各填什么」一眼可见；载入真实映射即整体替换。 */
+    public boolean loadBuiltinTemplate() {
+        try {
+            mapping = MappingFile.parseTableCsv(readTemplateText(), "内置映射模板");
+            fieldExceptions.clear();
+            mappingLabel.setText("内置映射模板（" + mapping.tables().size() + " 表）");
+            fillTable();
+            logPanel.log("- [INFO] LAYER | 载入内置映射模板 | " + mapping.tables().size()
+                    + " 表（示例，可点「导出映射模板」编辑后载入）");
+            refreshButtonStates();
+            return true;
+        } catch (Exception ex) {
+            logPanel.log("! [WARN] LAYER | 内置映射模板读不了：" + ex.getMessage());
+            return false;
+        }
+    }
+
+    /** 把 jar 内模板原样写到 dest：用户在 Excel 里改完再走「载入映射文件」。 */
+    public boolean exportTemplateTo(File dest) {
+        try {
+            java.io.FileOutputStream out = new java.io.FileOutputStream(dest);
+            try { out.write(readTemplateBytes()); } finally { out.close(); }
+            logPanel.log("- [INFO] LAYER | 已导出映射模板 " + dest.getPath());
+            host.inform("已导出映射模板：" + dest.getPath() + "，按列填好后点「载入映射文件」");
+            return true;
+        } catch (Exception ex) {
+            host.informError("导出映射模板失败", ex.getMessage());
+            logPanel.log("x [ERROR] LAYER | 导出映射模板失败：" + ex.getMessage());
+            return false;
+        }
+    }
+
+    private byte[] readTemplateBytes() throws java.io.IOException {
+        java.io.InputStream in = LayerPage.class.getResourceAsStream(TEMPLATE_RES);
+        if (in == null) {
+            throw new java.io.IOException("jar 里没找到 " + TEMPLATE_RES);
+        }
+        try {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) { bos.write(buf, 0, n); }
+            return bos.toByteArray();
+        } finally {
+            in.close();
+        }
+    }
+
+    private String readTemplateText() throws java.io.IOException {
+        return new String(readTemplateBytes(), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     public boolean loadMapping(String path) {
@@ -646,6 +716,9 @@ public final class LayerPage extends JPanel {
     public JButton adsButton() { return adsBtn; }
     /** 「载入映射文件」那颗：自检按用户的入口点它，也用它判忙时灰没灰（#8）。 */
     public JButton loadMappingButton() { return loadBtn; }
+    public JButton exportTemplateButton() { return exportTplBtn; }
+    public int mappingRowCount() { return model.getRowCount(); }
+    public String mappingLabelText() { return mappingLabel.getText(); }
     /** 「读源库结构」那颗：同上。 */
     public JButton readSourceButton() { return readSrcBtn; }
     /** 对象层库名那一格：自检要往里灌一个不合规的库名，验生成被拦下而不是落一份坏产物（#7）。 */

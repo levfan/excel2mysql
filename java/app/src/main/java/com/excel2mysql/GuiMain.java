@@ -116,8 +116,40 @@ public final class GuiMain {
                     problems.add("第四页 layerPage 没挂上");
                 } else {
                     com.excel2mysql.gui.LayerPage lp = frame.layerPage();
+                    // 内置映射模板：第四页一打开就要有可看的列口径，且能原样导出成用户可编辑的 CSV
+                    if (lp.mappingRowCount() != 2) {
+                        problems.add("第四页没默认载入内置映射模板：应 2 行示例，实际 "
+                                + lp.mappingRowCount() + " 行");
+                    }
+                    if (!lp.mappingLabelText().contains("内置映射模板")) {
+                        problems.add("默认模板载入后标签没写明是内置模板：" + lp.mappingLabelText());
+                    }
+                    java.io.File tplRoot = java.nio.file.Files.createTempDirectory("e2m-layer-tpl").toFile();
+                    java.io.File tplFile = new java.io.File(tplRoot, "层间映射模板.csv");
+                    if (!lp.exportTemplateTo(tplFile)) {
+                        problems.add("第四页导出映射模板失败");
+                    } else {
+                        try {
+                            com.excel2mysql.core.MappingFile tpl = com.excel2mysql.core.MappingFile
+                                    .loadTableCsv(tplFile.getPath());
+                            if (tpl.tables().size() != 2) {
+                                problems.add("导出的映射模板读回不是 2 行示例，实际 " + tpl.tables().size());
+                            } else {
+                                com.excel2mysql.core.MappingFile.TableMap t0 = tpl.tables().get(0);
+                                if (t0.tableEn == null || t0.tableEn.isEmpty()
+                                        || t0.domainTarget == null || t0.domainTarget.isEmpty()
+                                        || t0.objDims == null || t0.objDims.isEmpty()
+                                        || t0.theme == null || t0.theme.isEmpty()) {
+                                    problems.add("导出的映射模板示例行关键列（表英文名/领域目标表/涉及对象维度/主题归属）为空");
+                                }
+                            }
+                        } catch (Exception ex) {
+                            problems.add("导出的映射模板读不回：" + ex.getMessage());
+                        }
+                    }
+                    deleteTree(tplRoot);
                     if (lp.objButton().isEnabled() || lp.domButton().isEnabled() || lp.adsButton().isEnabled()) {
-                        problems.add("未载入映射时第四页三按钮却可点");
+                        problems.add("只有内置模板、未读源结构时第四页三按钮却可点");
                     }
                     // 载入一份临时映射＋源结构后 obj/dom 亮、ads 仍灰（未生成）
                     java.io.File mf = java.io.File.createTempFile("selftest-layer-", ".csv");
