@@ -4119,12 +4119,13 @@ public final class GuiMain {
         String outRoot = new java.io.File(dir, "out").getPath();
         page.generateExcel(true, outRoot);
         String log = taskLog.text() + page.logPanel().text();
-        if (!log.contains("! [WARN] 说明 | `t_gen`：列 id 的")
-                || !log.contains("（丢了 UNSIGNED）")) {
+        if (!log.contains("! [WARN] 说明 | `t_gen`：列 id 按 ")
+                || !log.contains("元数据 Sheet 装不下它的列级属性：UNSIGNED")) {
             problems.add("近似掉的 UNSIGNED 没在日志里点名："
                     + tailOf(log).replace((char) 10, (char) 32));
         }
-        if (!log.contains("列 st 的") || !log.contains("取值列表 'a','b'")) {
+        if (!log.contains("列 st 的") || !log.contains("取值列表 'a','b'")
+                || !log.contains("改按 TEXT 导出")) {
             problems.add("ENUM 列被近似却没说明");
         }
         if (!log.contains("表名 t_dup2 在本脚本里被定义了多次")) {

@@ -726,9 +726,9 @@ QLabel 的最小宽度就是整句宽度，加上三颗按钮把整窗最小宽�
 
 | DDL 写法 | 落到元数据 | 日志说明 |
 | --- | --- | --- |
-| `bigint(20) unsigned` | `BIGINT` + 长度 `20` | `列 id 的 BIGINT(20) 装不进元数据 Sheet，按 BIGINT 导出（丢了 UNSIGNED）` |
-| `varchar(64) character set utf8mb4` | `VARCHAR` + `64` | 同上，丢了 CHARACTER SET |
-| `enum('a','b')` | `TEXT` | 括号里不是数字，照原样写会产出只有 ENUM、没有取值的非法 DDL |
+| `bigint(20) unsigned` | `BIGINT` + 长度 `20` | `列 id 按 BIGINT(20) 导出，元数据 Sheet 装不下它的列级属性：UNSIGNED` |
+| `varchar(64) character set utf8mb4` | `VARCHAR` + `64` | 同上，列级属性是字符集/排序规则 |
+| `enum('a','b')` | `TEXT` | `列 st 的 ENUM('a','b') 元数据 Sheet 装不下（取值列表 'a','b'），改按 TEXT 导出`——括号里不是数字，照原样写会产出只有 ENUM、没有取值的非法 DDL |
 | `CREATE TABLE t LIKE s` / `… AS SELECT` | 不导出 | 这条语句里没有列定义 |
 | 同名表定义两次 | 只按第一处 | 说明是哪一处被采纳、哪一处被跳过 |
 

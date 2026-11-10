@@ -1651,8 +1651,15 @@ def parse_create_tables(text: str) -> list:
                             "primary_key": inline_pk, "nullable": not not_null,
                             "_lost": lost})
             if lost:
-                notes.append("列 %s 的 %s 装不进元数据 Sheet，按 %s 导出（丢了 %s）"
-                             % (field, src, typ, lost))
+                # 装不下的东西分两种：类型后面那串列级属性（类型照旧导出）与整个类型被换掉
+                # （ENUM 的取值列表等）。原先那一句把两者说成同一件事，"char(1) 装不进、
+                # 按 char(1) 导出"看着像自相矛盾，用户 2026-11-11 就是被这句问住的。
+                if typ == src:
+                    notes.append("列 %s 按 %s 导出，元数据 Sheet 装不下它的列级属性：%s"
+                                 % (field, typ, lost))
+                else:
+                    notes.append("列 %s 的 %s 元数据 Sheet 装不下（%s），改按 %s 导出"
+                                 % (field, src, lost, typ))
         if pk_from_constraint:
             wanted = set(x.lower() for x in pk_from_constraint)
             for c in columns:

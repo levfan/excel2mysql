@@ -6850,8 +6850,9 @@ finally:
     app_main.program_dir = _pdir
 _glog = gw.sql_log.toPlainText()
 check("R35 近似掉的类型逐列点名（UNSIGNED 与 ENUM 各一条）",
-      "! [WARN] 说明 | `t_gen`：列 id 的" in _glog and "（丢了 UNSIGNED）" in _glog
-      and "取值列表 'a','b'" in _glog,
+      "! [WARN] 说明 | `t_gen`：列 id 按 " in _glog
+      and "元数据 Sheet 装不下它的列级属性：UNSIGNED" in _glog
+      and "取值列表 'a','b'" in _glog and "改按 TEXT 导出" in _glog,
       [l for l in _glog.splitlines() if "说明" in l])
 check("R36 同名表第二处与没有列定义的 LIKE 都给出说明",
       "表名 t_dup9 在本脚本里被定义了多次" in _glog

@@ -1495,8 +1495,14 @@ public final class SqlScript {
                 col.primaryKey = INLINE_PK.matcher(maskedTail).find();
                 col.nullable = Boolean.valueOf(!NOT_NULL.matcher(maskedTail).find());
                 if (!nt[3].isEmpty()) {
-                    notes.add("列 " + field + " 的 " + nt[2] + " 装不进元数据 Sheet，按 "
-                            + col.type + " 导出（丢了 " + nt[3] + "）");
+                    // 装不下的东西分两种：类型后面那串列级属性（类型照旧导出）与整个类型被换掉
+                    // （ENUM 的取值列表等）。原先那一句把两者说成同一件事，"char(1) 装不进、
+                    // 按 char(1) 导出"看着像自相矛盾，用户 2026-11-11 就是被这句问住的。
+                    notes.add(nt[2].equals(col.type)
+                            ? "列 " + field + " 按 " + col.type + " 导出，"
+                                    + "元数据 Sheet 装不下它的列级属性：" + nt[3]
+                            : "列 " + field + " 的 " + nt[2] + " 元数据 Sheet 装不下（"
+                                    + nt[3] + "），改按 " + col.type + " 导出");
                 }
                 cols.add(col);
             }
