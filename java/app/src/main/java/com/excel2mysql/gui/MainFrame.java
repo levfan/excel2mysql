@@ -671,6 +671,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
         // 输入框与两颗按钮排成一行，高度按最高的那个钉死：不钉的话输入框比按钮矮一截，
         // 全屏时更明显（用户 2026-11-09 报的第 4 条，与 main.py 的 equal_heights 同口径）
         Buttons.equalHeights(prefixField, applyPrefix, replacePrefix);
+        Buttons.insetFieldFrame(prefixField);
 
         JButton clear = new JButton("清空待上传文件");
         clear.addActionListener(e -> clearAll());

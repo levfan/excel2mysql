@@ -424,7 +424,10 @@ public final class SqlPage extends JPanel {
         });
 
         // 前缀行按 Python 的 addWidget(ed_sql_prefix, 1)：输入框吃掉剩余宽度，两颗按钮贴右
-        JPanel prefixBtns = flow();
+        // 这一排的包装面板竖间隙必须是 0：BorderLayout 把中间输入框拉到整行最高那一档，
+        // 面板带 3px 竖间隙就把整行顶高 6px，按钮还是自己的高度，输入框就显出"高一截"
+        JPanel prefixBtns = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.LEFT, UiScale.px(6), 0));
         prefixBtns.add(apply);
         prefixBtns.add(replace);
         JPanel prefixRow = new JPanel(new BorderLayout(UiScale.px(6), 0));
@@ -435,6 +438,7 @@ public final class SqlPage extends JPanel {
         // 输入框与两颗按钮排成一行，高度按最高的那个钉死：不钉的话输入框比按钮矮一截，
         // 一眼就能看出参差（与 main.py 的 equal_heights 同一处、同一口径）
         Buttons.equalHeights(prefixField, apply, replace);
+        Buttons.insetFieldFrame(prefixField);
 
         // 保存/执行/生成四颗动作按钮与覆盖开关挪到底部动作条（与第一页同一形状）：
         // 开关在左、按钮在右，且都在分隔条之外，不跟着表格段被挤压

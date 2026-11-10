@@ -163,6 +163,33 @@ public final class Buttons {
         }
     }
 
+    /**
+     * 与主题按钮排成一行的输入框：把可见边框上下各内缩 1px，并钉回原来那一档高度。
+     *
+     * Windows 主题把按钮的边框画在控件边界内 1px（150% 屏实测：35px 高的按钮只显出
+     * 33px 的框），输入框的边框却正正画在边界上——边界钉平了肉眼仍差 2px，
+     * 用户看到的"输入框比按钮高一截"就是这 2px。
+     */
+    public static void insetFieldFrame(javax.swing.JTextField field) {
+        java.awt.Dimension pinned = field.getPreferredSize();
+        field.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createEmptyBorder(1, 0, 1, 0), field.getBorder()));
+        // 加边框会把首选高度顶上去，整行跟着长高；钉回 equalHeights 定下的那一档
+        field.setPreferredSize(pinned);
+    }
+
+    /** 输入框可见边框相对控件边界内缩了几个像素（自检与取证读的是真边框，不是记号）。 */
+    public static int fieldFrameInset(javax.swing.JTextField field) {
+        javax.swing.border.Border b = field.getBorder();
+        if (b instanceof javax.swing.border.CompoundBorder) {
+            javax.swing.border.Border out = ((javax.swing.border.CompoundBorder) b).getOutsideBorder();
+            if (out != null) {
+                return out.getBorderInsets(field).top;
+            }
+        }
+        return 0;
+    }
+
     private static javax.swing.border.Border edge(Color color) {
         return BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(color, 1),

@@ -421,6 +421,8 @@ public final class GuiMain {
                 structure_dialog(frame, problems);
                 // 前缀两个按钮与「覆盖已存在表」勾选：文案、幂等、跳过口径都要和 Python 一致
                 prefix_and_labels(frame, problems);
+                // 前缀行那一排：输入框与两颗按钮的可见高度必须齐平
+                prefix_row_heights(frame, problems);
                 // 拖拽区与页内进度条：真拖进来走的必须是和选择器同一个入口
                 drop_and_progress(frame, files, problems);
                 // 导入收尾：成功文件移出、失败保留，日志与弹窗用的是同一句话
@@ -2865,6 +2867,73 @@ public final class GuiMain {
             for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
                 collectStatic(kid, out);
             }
+        }
+    }
+
+    /** 这棵子树上的全部件。 */
+    private static void collectAll(java.awt.Component c, java.util.List<java.awt.Component> out) {
+        out.add(c);
+        if (c instanceof java.awt.Container) {
+            for (java.awt.Component kid : ((java.awt.Container) c).getComponents()) {
+                collectAll(kid, out);
+            }
+        }
+    }
+
+    /**
+     * 两页「表名前缀」那一行：输入框与两颗按钮必须一样高。
+     *
+     * <p>边界相等还不够——Windows 主题把按钮的边框画在控件边界内 1px，输入框的边框正正画在
+     * 边界上，边界钉平了肉眼仍差 2px（用户 2026-11-11 报的第 4 条）。所以这里判两件事：
+     * 整行的首选高度没被包装面板的竖间隙顶高，以及输入框的可见边框确实内缩了那一像素。
+     */
+    private static void prefix_row_heights(MainFrame frame, List<String> problems) {
+        java.util.List<java.awt.Component> all = new java.util.ArrayList<java.awt.Component>();
+        collectAll(frame, all);
+        int rows = 0;
+        for (java.awt.Component c : all) {
+            if (!(c instanceof javax.swing.JButton)
+                    || !"批量应用前缀".equals(((javax.swing.JButton) c).getText())) {
+                continue;
+            }
+            java.awt.Component row = c.getParent();
+            while (row != null && !(row instanceof java.awt.Container
+                    && ((java.awt.Container) row).getLayout() instanceof java.awt.BorderLayout)) {
+                row = row.getParent();
+            }
+            if (row == null) {
+                continue;
+            }
+            rows++;
+            java.util.List<java.awt.Component> kids = new java.util.ArrayList<java.awt.Component>();
+            collectAll(row, kids);
+            int rowH = row.getPreferredSize().height;
+            for (java.awt.Component k : kids) {
+                if (k instanceof javax.swing.JTextField
+                        && !(k instanceof com.excel2mysql.gui.StaticText)) {
+                    javax.swing.JTextField field = (javax.swing.JTextField) k;
+                    if (field.getPreferredSize().height != rowH) {
+                        problems.add("第 " + rows + " 处前缀行：输入框首选高 "
+                                + field.getPreferredSize().height + " 与整行 " + rowH + " 不等");
+                    }
+                    if (com.excel2mysql.gui.Buttons.fieldFrameInset(field) != 1) {
+                        problems.add("第 " + rows + " 处前缀行：输入框的可见边框没内缩那 1px，"
+                                + "与主题按钮仍差 2px");
+                    }
+                }
+                if (k instanceof javax.swing.JButton
+                        && ((javax.swing.JButton) k).getText().contains("前缀")) {
+                    if (((javax.swing.JButton) k).getPreferredSize().height != rowH) {
+                        problems.add("第 " + rows + " 处前缀行：按钮「"
+                                + ((javax.swing.JButton) k).getText() + "」首选高 "
+                                + ((javax.swing.JButton) k).getPreferredSize().height
+                                + " 与整行 " + rowH + " 不等");
+                    }
+                }
+            }
+        }
+        if (rows < 2) {
+            problems.add("只找到 " + rows + " 处「表名前缀」行，这条判据没覆盖到两页");
         }
     }
 
