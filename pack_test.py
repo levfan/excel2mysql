@@ -6833,16 +6833,17 @@ try:
     gw.on_sql_add_files()
 finally:
     app_main.QFileDialog.getOpenFileNames = staticmethod(_orig_gofn4)
-check("R34 有脚本后两颗按钮亮起，tooltip 说清数据行取自 INSERT 并写明每张表的行数上限",
+check("R34 有脚本后按钮亮起，tooltip 报出行上限且只占一行，来历写在使用说明里",
       gw.btn_sql_gen_std.isEnabled() and gw.btn_sql_gen_simple.isEnabled()
       and gw.btn_sql_save.isEnabled() and gw.btn_sql_run.isEnabled()
-      and "INSERT" in gw.btn_sql_gen_std.toolTip()
       and str(app_main.SQL_EXPORT_ROW_CAP) in gw.btn_sql_gen_std.toolTip()
-      # 说明里要点出这个数的来历：xlsx 单表上限的 2/3，而不是随手定的一个条数
-      and "1048576" in gw.btn_sql_gen_std.toolTip()
-      and "1048576" in gw.btn_sql_gen_simple.toolTip()
-      and "INSERT" in gw.btn_sql_gen_simple.toolTip()
-      and "不含数据行" not in gw.btn_sql_gen_std.toolTip(),
+      and str(app_main.SQL_EXPORT_ROW_CAP) in gw.btn_sql_gen_simple.toolTip()
+      # 一行是硬要求：这一排贴在窗口最下沿，多行的提示会被摆到按钮那一片上面，
+      # 把同排右边的按钮整个盖住（用户 2026-11-11 报的第 5 条）
+      and "\n" not in gw.btn_sql_gen_std.toolTip()
+      and "\n" not in gw.btn_sql_gen_simple.toolTip()
+      # 数据行取自 INSERT、这个数是 xlsx 单表上限 1048576 的 2/3——这两句归「使用说明」
+      and "1048576" in _html and "INSERT" in _html,
       gw.btn_sql_gen_std.toolTip().replace("\n", " ")[:80])
 gout = os.path.join(_tmpdir, "sqlgen_out")
 _pdir = app_main.program_dir
