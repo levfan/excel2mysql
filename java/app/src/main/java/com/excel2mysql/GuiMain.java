@@ -89,6 +89,9 @@ public final class GuiMain {
         // 不是它的复印件（对应 main.py:137 的 MODAL_PROGRESS）。
         // 模态那一支两条线都没有自动化覆盖，交付前手工点一次，见 GUI-对齐清单.md 第 10 节。
         com.excel2mysql.gui.MainFrame.modalProgress = false;
+        // 第五页「写入 MySQL 目标库」的确认框同理：自检跑的是真入口，
+        // 模态框会把事件分发线程钉住。弹框本身因此未覆盖，只判它的文案与触发条件
+        com.excel2mysql.gui.DmPage.confirmWrite = false;
         final CountDownLatch done = new CountDownLatch(1);
         final int[] result = {0};
         // 账本与窗口要能拿到事件分发线程外面：真线程那一支必须站在 EDT 之外等
@@ -139,19 +142,89 @@ public final class GuiMain {
                         }
                     }
                     dm_ddl_selftest(problems);
-                    dp.setTablesForSelftest(
-                            java.util.Collections.singletonList(dmFixture()));
-                    if (dp.tableRowCount() != 1) {
-                        problems.add("灌进一份结构后第五页清单不是 1 行：" + dp.tableRowCount());
+                    // 驱动那一格进页就得说话，不用点了连接才知道
+                    if (dp.driverText().isEmpty()
+                            || (com.excel2mysql.core.DmReader.driverPresent()
+                                ? !dp.driverText().startsWith("达梦驱动")
+                                : !dp.driverText().contains("缺达梦驱动")
+                                    || !dp.driverText().contains(
+                                            com.excel2mysql.core.DmReader.driverDir().getPath()))) {
+                        problems.add("驱动状态那一格没把话说全：" + dp.driverText());
+                    }
+                    java.util.List<com.excel2mysql.core.DmMysql.Table> three =
+                            new java.util.ArrayList<com.excel2mysql.core.DmMysql.Table>();
+                    three.add(dmFixture());
+                    three.add(dmFixtureNamed("T_OIL_ITEM", "油料出入库明细"));
+                    three.add(dmFixtureNamed("T_PERSON", "人员花名册"));
+                    dp.setTablesForSelftest(three);
+                    if (dp.tableRowCount() != 3) {
+                        problems.add("灌进三份结构后第五页清单不是 3 行：" + dp.tableRowCount());
+                    }
+                    if (!dp.summaryText().contains("已读回 3 张")
+                            || !dp.summaryText().contains("选中 0 张")
+                            || dp.summaryText().contains("显示")) {
+                        problems.add("未过滤时清单摘要不对：" + dp.summaryText());
                     }
                     if (!dp.generateEnabled()) {
                         problems.add("已读回结构，第五页「生成 MySQL DDL」却还是灰的");
+                    }
+                    // 过滤：视图行号与读回顺序不是一回事，选中范围全靠这层换算
+                    dp.filterForSelftest("item");
+                    if (dp.tableRowCount() != 1 || dp.tableIndexAtRow(0) != 1
+                            || !dp.summaryText().contains("显示 1")
+                            || !dp.summaryText().contains("已读回 3 张")) {
+                        problems.add("按表名过滤没筛对：" + dp.tableRowCount() + " 行 / 首行是第 "
+                                + dp.tableIndexAtRow(0) + " 张 / " + dp.summaryText());
+                    }
+                    // 过滤是这一页找表的唯一办法：400 张表下逐键重铺清单必须仍在几十毫秒级，
+                    // 否则打字时界面会一顿一顿的（阈值按实测量级放宽一个数量级）
+                    java.util.List<com.excel2mysql.core.DmMysql.Table> many =
+                            new java.util.ArrayList<com.excel2mysql.core.DmMysql.Table>();
+                    for (int mi = 0; mi < 400; mi++) {
+                        many.add(dmFixtureNamed("T_OIL_" + mi, "油料台账第 " + mi + " 张"));
+                    }
+                    dp.setTablesForSelftest(many);
+                    long mf0 = System.nanoTime();
+                    dp.filterForSelftest("OIL_39");
+                    long mfMs = (System.nanoTime() - mf0) / 1000000L;
+                    if (dp.tableRowCount() != 11) {
+                        problems.add("400 张表下过滤命中数不对：期望 11，实际 " + dp.tableRowCount());
+                    }
+                    if (mfMs > 200L) {
+                        problems.add("400 张表重铺清单要 " + mfMs + " 毫秒，打字会卡（阈值 200）");
+                    }
+                    dp.setTablesForSelftest(three);
+                    dp.clearFilterForSelftest();
+                    if (dp.tableRowCount() != 3 || !dp.logPanel().text().contains("已清空过滤")) {
+                        problems.add("清空过滤没回到全量或没在日志留痕：" + dp.tableRowCount());
+                    }
+                    // 改了模式没重连：这份结构已经不代表当前输入，生成要拦下
+                    dp.schemaFieldForSelftest("OTHER_SCHEMA");
+                    if (!dp.structureIsStale() || !dp.summaryText().contains("连接参数已改动")) {
+                        problems.add("改了模式却没标脏：" + dp.summaryText());
+                    }
+                    if (dp.generate() != null || !dp.logPanel().text().contains("已拦下生成")) {
+                        problems.add("结构已脏时生成没被拦下");
+                    }
+                    dp.schemaFieldForSelftest("SYSDBA");
+                    dp.setTablesForSelftest(three);
+                    if (dp.structureIsStale()) {
+                        problems.add("重新灌入结构后脏标记没清掉");
+                    }
+                    if (!dp.suggestedSaveName().startsWith("dm_to_mysql_SYSDBA_")
+                            || !dp.suggestedSaveName().endsWith(".sql")) {
+                        problems.add("默认保存名没带模式与时间：" + dp.suggestedSaveName());
                     }
                     String dmSqlText = dp.generate() == null ? "" : dp.outputText();
                     if (!dmSqlText.contains("CREATE TABLE `t_oil`")
                             || !dmSqlText.contains("PRIMARY KEY (`id`)")
                             || !dmSqlText.contains("COMMENT='油料保障台账'")) {
                         problems.add("第五页生成的 DDL 不像样：" + dmSqlText);
+                    }
+                    // 写入确认那句要把真正会动的表列出来（弹框由 confirmWrite=false 关掉）
+                    if (!dp.writeConfirmPreview().contains("T_OIL")
+                            || !dp.writeConfirmPreview().contains("T_PERSON")) {
+                        problems.add("写入确认里没列出要动的表：" + dp.writeConfirmPreview());
                     }
                     if (!dp.saveEnabled()) {
                         problems.add("生成完「保存到 .sql」却还是灰的");
@@ -3060,6 +3133,14 @@ public final class GuiMain {
         c.dbDefault = def;
         c.comment = comment;
         return c;
+    }
+
+    /** 只换表名与注释的简版夹具：给过滤与摘要用，翻译口径仍由 dmFixture 那条判。 */
+    private static com.excel2mysql.core.DmMysql.Table dmFixtureNamed(String table, String cm) {
+        com.excel2mysql.core.DmMysql.Table t = dmFixture();
+        t.name = table;
+        t.comment = cm;
+        return t;
     }
 
     /** 一张覆盖面够宽的达梦表：主键、变长、定标数、大对象、时间戳、非法列名各来一样。 */

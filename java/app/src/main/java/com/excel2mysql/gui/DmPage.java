@@ -61,6 +61,20 @@ public final class DmPage extends JPanel {
     private final JCheckBox dropExisting = new JCheckBox("先 DROP 已存在表", false);
     private final JCheckBox lowerNames = new JCheckBox("表名与字段名转小写", true);
     private final JLabel listLabel = new JLabel("未连接达梦");
+    /** 驱动在不在，进页就该看得见，不该等点了连接才知道。 */
+    private final JLabel driverLabel = new JLabel();
+    /** 清单过滤：一个模式几百张表时，只找得到滚动条。 */
+    private final JTextField filterBox = new JTextField(14);
+    private final JButton clearFilterBtn = new JButton("清空过滤");
+    /** 视图第 n 行对应 tables 里的第几条：过滤后选中范围要靠它换算。 */
+    private final List<Integer> shownRows = new ArrayList<Integer>();
+    /** 结构是从哪个模式读的、读回之后连接参数又改过没有。 */
+    private String loadedFrom = "";
+    /** 连上时读到的服务端版本：只在摘要末尾说一句，不占第二行。 */
+    private String serverVersion = "";
+    private boolean stale;
+    /** 上一次生成真正含哪些表：写入前的确认要把表名列给它看。 */
+    private final List<String> lastTables = new ArrayList<String>();
     private final JTextArea output = new JTextArea(12, 60);
 
     private final javax.swing.table.DefaultTableModel model =
@@ -73,6 +87,13 @@ public final class DmPage extends JPanel {
     /** 连上之后读回的结构；生成只用这一份，不在生成时再连一次库。 */
     private final List<DmMysql.Table> tables = new ArrayList<DmMysql.Table>();
     private DmMysql.Output lastOut;
+
+    /**
+     * 写入 MySQL 前是否弹一句确认。勾了「先 DROP 已存在表」时这是不可逆动作，
+     * 默认要确认；自检跑的是这同一个入口，模态框会把事件分发线程钉住，
+     * 所以留类级开关由自检置 false（与 MainFrame.modalProgress 同一处理）。
+     */
+    public static boolean confirmWrite = true;
 
     public DmPage(Host host) {
         this.host = host;
@@ -91,7 +112,100 @@ public final class DmPage extends JPanel {
         output.setEditable(false);
         output.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
                 UiScale.fontPt(UiScale.UI_POINT_SIZE)));
+        table.getSelectionModel().addListSelectionListener(e -> refreshSummary());
+        javax.swing.event.DocumentListener onFilter = new javax.swing.event.DocumentListener() {
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { refill(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { refill(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { refill(); }
+        };
+        filterBox.getDocument().addDocumentListener(onFilter);
+        // 连接参数一改，手上这份结构就跟当前输入对不上了：这一格是达梦那边的口径，
+        // 改完不重连就拿旧结构生成，最容易出的事是模式换了、表名却还是上一本的
+        javax.swing.event.DocumentListener onParams = new javax.swing.event.DocumentListener() {
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { markStale(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { markStale(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { markStale(); }
+        };
+        hostField.getDocument().addDocumentListener(onParams);
+        portField.getDocument().addDocumentListener(onParams);
+        userField.getDocument().addDocumentListener(onParams);
+        schemaField.getDocument().addDocumentListener(onParams);
+        paramField.getDocument().addDocumentListener(onParams);
+        refreshDriverLabel();
+        refreshSummary();
         refreshButtonStates();
+    }
+
+    /** 驱动那一格的话：找到了报文件名，没找到就把放哪儿说全。 */
+    private void refreshDriverLabel() {
+        if (DmReader.driverPresent()) {
+            driverLabel.setText("达梦驱动：" + DmReader.driverJars().size() + " 个");
+            driverLabel.setForeground(new java.awt.Color(0x2e, 0x7d, 0x32));
+        } else {
+            driverLabel.setText("缺达梦驱动 → 放 " + DmReader.driverDir().getPath());
+            driverLabel.setForeground(new java.awt.Color(0xb3, 0x26, 0x1d));
+        }
+        driverLabel.setToolTipText("<html>" + DmReader.describeDrivers() + "<br>"
+                + DmReader.missingDriverHint().replace("<", "&lt;") + "</html>");
+    }
+
+    private void markStale() {
+        if (!loadedFrom.isEmpty() && !stale) {
+            stale = true;
+            refreshSummary();
+        }
+    }
+
+    /** 清单那一行的摘要：总数 / 显示数 / 选中数 / 结构是不是当前参数读的那一份。 */
+    private void refreshSummary() {
+        StringBuilder sb = new StringBuilder();
+        if (stale) {
+            sb.append("⚠ 结构读自 ").append(loadedFrom).append("，连接参数已改动 —— 先重连；");
+        }
+        if (tables.isEmpty()) {
+            sb.append("未连接达梦");
+        } else {
+            sb.append("已读回 ").append(tables.size()).append(" 张（模式 ")
+                    .append(loadedFrom).append("）");
+            if (!serverVersion.isEmpty()) {
+                sb.append("｜").append(serverVersion);
+            }
+            if (shownRows.size() != tables.size()) {
+                sb.append("｜显示 ").append(shownRows.size());
+            }
+            sb.append("｜选中 ").append(table.getSelectedRowCount()).append(" 张");
+        }
+        listLabel.setText(sb.toString());
+        listLabel.setToolTipText(stale
+                ? "连接参数与读回结构时用的那一份不一致了：点「连达梦并列表」重连，生成会先被拦下"
+                : null);
+    }
+
+    /** 按当前过滤条件重铺清单，并记住视图行对应的是第几张表。 */
+    private void refill() {
+        model.setRowCount(0);
+        shownRows.clear();
+        String kw = filterBox.getText() == null ? "" : filterBox.getText().trim().toLowerCase(
+                java.util.Locale.ROOT);
+        for (int i = 0; i < tables.size(); i++) {
+            DmMysql.Table t = tables.get(i);
+            String hay = (t.name + " " + t.comment).toLowerCase(java.util.Locale.ROOT);
+            if (!kw.isEmpty() && !hay.contains(kw)) {
+                continue;
+            }
+            shownRows.add(Integer.valueOf(i));
+            model.addRow(new Object[]{t.name, t.comment, Integer.valueOf(t.columns.size()),
+                    joinNames(t.primaryKeys)});
+        }
+        refreshSummary();
+    }
+
+    private void clearFilter() {
+        boolean dirty = !filterBox.getText().isEmpty();
+        filterBox.setText("");
+        refill();
+        logPanel.log("- [INFO] DM | " + (dirty ? "已清空过滤，清单回到 " : "过滤本来就是空的，仍是 ")
+                + tables.size() + " 张表");
     }
 
     private JPanel buildTop() {
@@ -114,6 +228,7 @@ public final class DmPage extends JPanel {
         row.add(new JLabel("驱动参数"));
         row.add(paramField);
         row.add(connectBtn);
+        row.add(driverLabel);
         p.add(row, BorderLayout.CENTER);
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
         row2.add(new JLabel("MySQL 目标库"));
@@ -133,6 +248,13 @@ public final class DmPage extends JPanel {
         JPanel p = new JPanel(new BorderLayout());
         JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
         head.add(listLabel);
+        filterBox.setToolTipText("<html>按表名与表注释即时过滤清单；"
+                + "过滤只影响看得见的行，生成范围仍按选中的算。</html>");
+        head.add(new JLabel("过滤"));
+        head.add(filterBox);
+        Buttons.secondary(clearFilterBtn);
+        clearFilterBtn.addActionListener(e -> clearFilter());
+        head.add(clearFilterBtn);
         p.add(head, BorderLayout.NORTH);
         p.add(new JScrollPane(output), BorderLayout.CENTER);
         p.add(logPanel, BorderLayout.SOUTH);
@@ -168,6 +290,37 @@ public final class DmPage extends JPanel {
 
     public LogPanel logPanel() {
         return logPanel;
+    }
+
+    /** 自检与探针读这几样：驱动那一格、清单摘要、过滤与脏标记。 */
+    public String driverText() {
+        return driverLabel.getText();
+    }
+
+    public String summaryText() {
+        return listLabel.getText();
+    }
+
+    public void filterForSelftest(String v) {
+        filterBox.setText(v == null ? "" : v);
+    }
+
+    public void clearFilterForSelftest() {
+        clearFilter();
+    }
+
+    /** 视图第 view 行对应读回清单里的第几张（没过滤时等于 view 本身）。 */
+    public int tableIndexAtRow(int view) {
+        return view >= 0 && view < shownRows.size() ? shownRows.get(view).intValue() : -1;
+    }
+
+    public boolean structureIsStale() {
+        return stale;
+    }
+
+    /** 写入确认的文案（自检不开弹框，判这句话本身）。 */
+    public String writeConfirmPreview() {
+        return previewNames(lastTables);
     }
 
     /** 自检用：把模式名填进去，走的是用户敲同一格的那条路。 */
@@ -250,17 +403,15 @@ public final class DmPage extends JPanel {
 
     private void applyTables(List<DmMysql.Table> read, String version) {
         tables.clear();
-        model.setRowCount(0);
-        for (DmMysql.Table t : read) {
-            tables.add(t);
-            model.addRow(new Object[]{t.name, t.comment, Integer.valueOf(t.columns.size()),
-                    joinNames(t.primaryKeys)});
-        }
-        String tail = version == null || version.isEmpty() ? "" : " | " + version;
-        listLabel.setText("已读回 " + tables.size() + " 张表（模式 " + schemaField.getText().trim()
-                + "）" + tail);
-        logPanel.log("+ [OK] DM | 读回 " + tables.size() + " 张表结构" + tail
-                + "，选中行点「生成 MySQL DDL」");
+        tables.addAll(read);
+        loadedFrom = schemaField.getText().trim();
+        serverVersion = version == null ? "" : version;
+        stale = false;
+        refill();
+        refreshDriverLabel();
+        logPanel.log("+ [OK] DM | 读回 " + tables.size() + " 张表结构（模式 " + loadedFrom
+                + (serverVersion.isEmpty() ? "" : " | " + serverVersion)
+                + "），选中行点「生成 MySQL DDL」；一行都不选则按全部 " + tables.size() + " 张生成");
         if (targetDbField.getText().trim().isEmpty()) {
             Config mysql = host.currentConfig();
             if (mysql != null && mysql.database != null) {
@@ -289,6 +440,14 @@ public final class DmPage extends JPanel {
             host.warn("还没读回表结构：先点「连达梦并列表」。");
             return null;
         }
+        if (stale) {
+            logPanel.error("x [ERROR] DM-DDL | 已拦下生成：手上这份结构读自模式 "
+                    + loadedFrom + "，而连接参数已经改过。先点「连达梦并列表」重连，"
+                    + "不然生成的是上一个模式的表");
+            host.warn("结构读自模式 " + loadedFrom + "，连接参数随后改过："
+                    + "先点「连达梦并列表」重连再生成。");
+            return null;
+        }
         List<DmMysql.Table> picked = selectedTables();
         if (picked.isEmpty()) {
             host.warn("清单里选中的行一张表都没有，没有生成任何语句。");
@@ -297,6 +456,10 @@ public final class DmPage extends JPanel {
         DmMysql.Output out = DmMysql.script(picked, targetDbField.getText().trim(),
                 dropExisting.isSelected(), lowerNames.isSelected());
         lastOut = out;
+        lastTables.clear();
+        for (DmMysql.Table one : picked) {
+            lastTables.add(one.name);
+        }
         output.setText(out.sql);
         output.setCaretPosition(0);
         logPanel.log("+ [OK] DM-DDL | 生成 " + out.tables + " 张表的建表语句 | 译名跳过 "
@@ -318,8 +481,9 @@ public final class DmPage extends JPanel {
         }
         List<DmMysql.Table> out = new ArrayList<DmMysql.Table>();
         for (int row : rows) {
-            if (row >= 0 && row < tables.size()) {
-                out.add(tables.get(row));
+            // 清单可能正被过滤着：视图行第 3 行未必是 tables 里的第 3 条
+            if (row >= 0 && row < shownRows.size()) {
+                out.add(tables.get(shownRows.get(row).intValue()));
             }
         }
         return out;
@@ -354,9 +518,65 @@ public final class DmPage extends JPanel {
         return true;
     }
 
+    /**
+     * 写入前那一句确认。
+     *
+     * <p>勾了「先 DROP 已存在表」时这一步不可恢复，把要动的表名先列出来再点；
+     * 自检跑的是同一个入口，靠 {@link #confirmWrite} 关掉弹框，只判文案与条件。
+     */
+    private boolean askWriteConfirm(Config cfg) {
+        String db = targetDbField.getText().trim();
+        if (db.isEmpty()) {
+            db = cfg.database == null ? "" : cfg.database.trim();
+        }
+        StringBuilder msg = new StringBuilder("<html>将在 MySQL 库 <b>").append(escHtml(db))
+                .append("</b> 执行 ").append(lastOut.tables).append(" 张表的建表语句");
+        if (dropExisting.isSelected()) {
+            msg.append("，并先 DROP 同名表（<b>不可恢复</b>）");
+        }
+        msg.append("。<br>涉及表：").append(escHtml(previewNames(lastTables)))
+                .append("<br><br>确认执行？</html>");
+        int pick = javax.swing.JOptionPane.showConfirmDialog(this, msg.toString(),
+                "确认写入 MySQL", javax.swing.JOptionPane.OK_CANCEL_OPTION,
+                dropExisting.isSelected() ? javax.swing.JOptionPane.WARNING_MESSAGE
+                        : javax.swing.JOptionPane.QUESTION_MESSAGE);
+        if (pick != javax.swing.JOptionPane.OK_OPTION) {
+            logPanel.log("- [INFO] DM-EXEC | 已取消写入，库 " + db + " 一条语句都没执行");
+            return false;
+        }
+        return true;
+    }
+
+    private static String previewNames(List<String> names) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < names.size() && i < 6; i++) {
+            if (sb.length() > 0) {
+                sb.append("、");
+            }
+            sb.append(names.get(i));
+        }
+        if (names.size() > 6) {
+            sb.append(" 等 ").append(names.size()).append(" 张");
+        }
+        return sb.length() == 0 ? "（无）" : sb.toString();
+    }
+
+    private static String escHtml(String v) {
+        return v == null ? "" : v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    /** 默认文件名带模式与时间：同一模式跑两次不该把上一份盖掉。 */
+    public String suggestedSaveName() {
+        String sch = loadedFrom.isEmpty() ? schemaField.getText().trim() : loadedFrom;
+        sch = sch.replaceAll("[^A-Za-z0-9_]", "");
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss")
+                .format(new java.util.Date());
+        return "dm_to_mysql" + (sch.isEmpty() ? "" : "_" + sch) + "_" + stamp + ".sql";
+    }
+
     private void chooseSavePath() {
         javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
-        fc.setSelectedFile(new File("dm_to_mysql.sql"));
+        fc.setSelectedFile(new File(suggestedSaveName()));
         if (fc.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) {
             logPanel.log("- [INFO] DM-SAVE | 取消保存，没动任何文件");
             return;
@@ -383,7 +603,14 @@ public final class DmPage extends JPanel {
             logPanel.log("! [WARN] DM-EXEC | 脚本开头写的是 USE `" + want + "`，与顶部所选库 "
                     + cfg.database + " 不是同一本，执行时会切过去");
         }
-        final String script = lastOut.sql;
+        if (stale) {
+            host.warn("结构读自模式 " + loadedFrom + " 且参数已改动：先重连、重新生成再写入。");
+            return;
+        }
+        String script = lastOut.sql;
+        if (confirmWrite && !askWriteConfirm(cfg)) {
+            return;
+        }
         host.runDmTask("正在把达梦结构写入 MySQL…", new Function<ImportParse.Sink, Object>() {
             @Override public Object apply(ImportParse.Sink sink) {
                 DbClient db = null;
