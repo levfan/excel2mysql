@@ -195,6 +195,8 @@ public final class GuiMain {
                     if (lp.adsButton().isEnabled()) {
                         problems.add("obj/dom 未生成时 ads 按钮却亮了（依赖锁失效）");
                     }
+                    // 读源库一次会往日志里写几百行；日志区若跟着内容涨，会把表格与拖拽区盖掉
+                    layer_log_bounded(frame, lp, problems);
                     // 只生成模式：显式产物根指临时目录（仿 sql_gen_excel 的 generateExcel(true,outRoot)），
                     // 不污染 programDir；modalProgress=false 下 runLayerTask 原地跑完、关态不连库。
                     // 先注入一条字段映射例外，验它在落盘前覆盖进 obj 的 _field_mapping.csv（写回这条路）
@@ -6052,6 +6054,44 @@ public final class GuiMain {
             problems.add("第一页日志默认没有压到最小高度：高 "
                     + frame.logBoxHeight() + " / 最小 " + frame.logBoxMinHeight());
         }
+    }
+
+    /**
+     * 第四页日志区：读源库一次会写几百行，日志框不能跟着内容长高。
+     * 直接往日志文档灌几百行（entries 不动，后面的断言读的仍是真日志），
+     * 切到这一页按生产尺寸排一次版，验表格区还有高度、日志段没越到上半边。
+     */
+    private static void layer_log_bounded(MainFrame frame, com.excel2mysql.gui.LayerPage lp,
+                                          List<String> problems) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 400; i++) {
+            sb.append("+ [OK] LAYER | 表 t_").append(i)
+                    .append(" → 领域「工程类」/「建设管理」\n");
+        }
+        lp.logPanel().setText(sb.toString());
+        frame.selectTab(3);
+        // 与生产同一条摆窗口径：setSize 管的是外框，会把后面"客户区 1650x1170"那条压红
+        com.excel2mysql.gui.Windows.clientSize(frame.getContentPane(), frame, 1100, 780);
+        frame.validate();
+        java.awt.BorderLayout bl = (java.awt.BorderLayout) lp.getLayout();
+        java.awt.Component north = (java.awt.Component) bl.getLayoutComponent(
+                java.awt.BorderLayout.NORTH);
+        java.awt.Component center = (java.awt.Component) bl.getLayoutComponent(
+                java.awt.BorderLayout.CENTER);
+        java.awt.Component south = (java.awt.Component) bl.getLayoutComponent(
+                java.awt.BorderLayout.SOUTH);
+        if (center.getHeight() <= 0) {
+            problems.add("第四页日志过百行后表格区被压没了：高 " + center.getHeight());
+        }
+        if (south.getY() < north.getHeight()) {
+            problems.add("第四页日志区越到上半边盖住拖拽区：y=" + south.getY()
+                    + "，顶部高 " + north.getHeight());
+        }
+        if (south.getPreferredSize().height > wantPx(260)) {
+            problems.add("第四页日志区高度跟着内容涨：" + south.getPreferredSize().height);
+        }
+        frame.selectTab(0);
+        frame.validate();
     }
 
     private static void sql_page(MainFrame frame, List<String> problems) {

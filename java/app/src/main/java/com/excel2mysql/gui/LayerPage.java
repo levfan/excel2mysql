@@ -428,7 +428,13 @@ public final class LayerPage extends JPanel {
         bar.add(writeMode);
         bar.add(objBtn); bar.add(domBtn); bar.add(adsBtn);
         p.add(bar, BorderLayout.NORTH);
-        p.add(new JScrollPane(logPanel), BorderLayout.CENTER);
+        JScrollPane logScroll = new JScrollPane(logPanel);
+        // 高度不能跟着日志内容走：JTextPane 的 preferred 高度随行数无限涨，这块又在
+        // BorderLayout.SOUTH 上，读一次源库写几百行时会按 preferred 撑到上万像素、起点
+        // 跑到窗口上方，把中间的表格和上面的拖拽区整个盖住。钉死高度后日志多长都只在这个
+        // 框里滚（第一、三页靠 JSplitPane 的分隔条天然有这层约束，这一页没有分栏）。
+        logScroll.setPreferredSize(new java.awt.Dimension(0, UiScale.px(200)));
+        p.add(logScroll, BorderLayout.CENTER);
         return p;
     }
 
