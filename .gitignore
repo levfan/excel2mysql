@@ -272,3 +272,6 @@ java/out/
 # 打包时由 build_exe38.py 原样拷进 dist\excel2mysql-cli\win7_sp1_patch\ 并逐文件核 md5；
 # 目录不在就照常出包，但日志与产物说明都会明写"本次没带补丁"。
 win7_sp1_patch/
+
+# 现场拿到的达梦 JDBC 驱动（第三方二进制，公开仓库不入库；出包时随包带）
+java/assets/drivers/

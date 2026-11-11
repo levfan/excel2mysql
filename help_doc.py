@@ -1072,11 +1072,14 @@ dump 里认 <code>DELIMITER</code> 指令，触发器与存储过程的整句不
 <tr><td>4</td><td><b>「保存到 .sql」</b>落一份 UTF-8 脚本；<b>「写入 MySQL 目标库」</b>把这份脚本
 发到 MySQL 执行，用的就是「SQL 执行器」那套逐条执行与事务口径，日志也写在同一页下方</td></tr>
 </table>
-<p class="tip"><b>达梦驱动要自己放一步</b>：本工具不打包达梦的 JDBC 驱动（第三方许可与包体都不合适）。
-第一次用这一页，把达梦安装目录 <code>drivers\\java</code> 下的 <code>DmJdbcDriver18.jar</code>
-（或同版本的达梦 JDBC 包）复制到<b>程序同级的 <code>drivers</code> 文件夹</b>里，重开程序再连。
-没放驱动时点连接，会在本页日志里写清缺什么、放到哪儿，其余三页照常用；
-这一页的翻译逻辑本身不依赖驱动。</p>
+<p class="tip"><b>达梦的 JDBC 驱动不进仓库</b>（第三方二进制）。Java 交付包里预建了程序同级的
+<code>drivers</code> 这一层，出包时现场备着驱动就一并带上，打开包就能直接连；
+没带上或版本不匹配时，把达梦安装目录 <code>drivers\java</code> 下的
+<code>DmJdbcDriver*.jar</code> 丢进这个文件夹（文件名不用改，里面的 <code>README.txt</code> 是同一套步骤），
+重开程序再连。放在别处读不到——程序只扫自己同级的那个 <code>drivers</code> 目录，
+不扫当前工作目录，也不读系统 <code>CLASSPATH</code>。
+这一页连不上时，本页日志会分清「没找到驱动」「驱动不认这条连接串」「网络通信异常」三种情况，
+其余四页照常用；这一页的翻译逻辑本身不依赖驱动。</p>
 <p>MySQL 目标库那一格填的是脚本开头的 <code>USE</code>；留空则不写 <code>USE</code>，
 「写入 MySQL 目标库」落在顶部连接栏所选的那本库。两者不是同一本库时，日志会先点出来再执行。</p>
 <p>类型与注释按下面这套口径翻：</p>

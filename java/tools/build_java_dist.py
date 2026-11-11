@@ -399,6 +399,80 @@ def copy_project_doc(dist):
     return text
 
 
+DRIVERS_NOTE = u"""达梦（DM8）JDBC 驱动放置处
+
+第五个页签「达梦 → MySQL」要连达梦库读表结构。它用的驱动不在本包里
+（第三方许可与包体的原因），第一次用请自己补一步：
+
+1. 在装了达梦的机器上找驱动 jar：
+   达梦安装目录\\drivers\\java\\DmJdbcDriver18.jar
+   本包自带 Java 8 运行环境，请选支持 JDK 1.8 的那一版驱动。
+2. 把这个 jar 复制进本文件所在的 drivers 文件夹，文件名不用改。
+3. 重开程序，切到「达梦 → MySQL」页，填主机、端口（达梦默认 5236）、
+   用户名、口令与模式名（通常就是登录用户名，例如 SYSDBA），
+   点「连达梦并列表」。
+
+不放会怎样：只有这一页连不上达梦，点下去会在本页日志里写清缺什么、放到哪；
+其余四个页签与命令行版都不受影响。
+
+放别处读不到：程序只扫它自己同级的那个 drivers 文件夹，
+不扫当前工作目录，也不读系统 CLASSPATH。多个 jar 会逐个试，
+挑第一个认 jdbc:dm:// 这条串的；换了 jar 要重开程序才生效。
+"""
+
+
+
+
+DM_DRIVER_STAGE = os.path.join(JAVA_DIR, "assets", "drivers")
+
+DRIVERS_NOTE_BUNDLED = u"""达梦（DM8）JDBC 驱动
+
+本包已随带驱动：DmJdbcDriver8 系列见本目录下的 %s，
+第五个页签「达梦 → MySQL」开箱就能连达梦，不用再做放置这一步。
+
+现场达梦版本与本包这份差得远、或连上报驱动版本不匹配时，换掉本目录里的 jar 即可：
+把达梦安装目录 drivers\\java 下对应版本的 DmJdbcDriver*.jar 放进来（文件名不用改），
+删掉原来那份，重开程序。程序只扫本目录，多个 jar 会逐个试，
+挑第一个认 jdbc:dm:// 这条串的；换了 jar 要重开程序才生效。
+
+连不上时看本页日志：它会把「没找到驱动」「驱动不认这条连接串」「网络通信异常」
+三种情况分开说，分别对应放错目录、地址端口写错、达梦服务没起或防火墙挡了。
+
+不放驱动会怎样：只有第五页连不上达梦，其余四个页签与命令行版都不受影响。
+"""
+
+
+def write_drivers_dir(dist):
+    """预建 drivers 目录并放一份放置说明：达梦驱动不随包分发，但放置口得在包里看得见。
+
+    没有这一层时，用户要自己凭日志里那句话去新建目录、猜目录名；打包时预建好，
+    打开包就能看见"驱动放这儿"，文件名也不要求他改。
+    """
+    dst_dir = os.path.join(dist, "drivers")
+    if not os.path.isdir(dst_dir):
+        os.makedirs(dst_dir)
+    # 现场拿到的驱动 jar 放在 java/assets/drivers/（不入库，公开仓库不带第三方二进制）：
+    # 有就跟着包走，用户不用自己找 jar；没有就只留目录与说明，由用户按说明放。
+    bundled = []
+    if os.path.isdir(DM_DRIVER_STAGE):
+        for name in sorted(os.listdir(DM_DRIVER_STAGE)):
+            if name.lower().endswith(".jar"):
+                shutil.copy2(os.path.join(DM_DRIVER_STAGE, name),
+                             os.path.join(dst_dir, name))
+                bundled.append(name)
+    note = (DRIVERS_NOTE_BUNDLED % "、".join(bundled)) if bundled else DRIVERS_NOTE
+    dst = os.path.join(dst_dir, "README.txt")
+    write_shipped_text(dst, note.encode("utf-8"))
+    if lone_lf_count(dst):
+        fail("drivers/README.txt 有纯 LF 行尾，记事本打开是一整行")
+    for name in bundled:
+        got = os.path.join(dst_dir, name)
+        if not os.path.isfile(got) or os.path.getsize(got) == 0:
+            fail("驱动 jar 没跟着进包：%s" % name)
+    ok("预建 drivers 目录 + 放置说明（README.txt，CRLF）%s"
+       % ("，随包带驱动 " + "、".join(bundled) if bundled else "（本次未随包带驱动）"))
+
+
 def max_class_major(jar_path):
     """扫 jar 里每个 class 的主版本号。
 
@@ -551,11 +625,13 @@ def main():
     write_launchers(dist, version)
     size = human(dir_size(dist))
     doc = copy_project_doc(dist)
+    write_drivers_dir(dist)
 
-    for want in ("conn.ini", "README.md", os.path.join("assets", "app_icon.svg")):
+    for want in ("conn.ini", "README.md", os.path.join("assets", "app_icon.svg"),
+                 os.path.join("drivers", "README.txt")):
         if not os.path.isfile(os.path.join(dist, want)):
             fail("产物里缺 %s" % want)
-    ok("产物含 conn.ini、README.md 与 assets/app_icon.svg")
+    ok("产物含 conn.ini、README.md、assets/app_icon.svg 与预建的 drivers 放置口")
     # 这两份是现场用记事本改的：留一个纯 LF，Win7 记事本就把它当一整行显示，
     # 改口令的人要在看不见换行的文本里摸黑插字
     for want in SHIPPED_TEXT_FILES:
