@@ -388,22 +388,38 @@ public final class LayerPage extends JPanel {
     }
 
     /**
-     * 系统列取「这张表属于哪个业务系统」：ZIP 里取包内的一级目录，散装文件取它的父目录名。
-     * 目录先验比表名可靠——同一个系统导出的几百张表，表名里各说各的对象，目录只有一个。
+     * 系统列取「这张表属于哪个业务系统」：ZIP 里取包内的系统目录，散装文件取往上最近的
+     * 已登记系统目录。数据集常有「系统/分类/表」两层，直接的父目录是分类而不是系统，
+     * 所以从深往浅找第一个命中条款先验的目录名；都认不出才退回归属父目录。
      */
     private static String systemOf(String path, String origin) {
         if (origin != null) {
             int bang = origin.indexOf('!');
             String inner = bang >= 0 ? origin.substring(bang + 1) : "";
             String norm = inner.replace('\\', '/');
-            int slash = norm.indexOf('/');
-            if (slash > 0) {
-                return norm.substring(0, slash);
+            String[] seg = norm.split("/");
+            for (int i = seg.length - 1; i >= 0; i--) {
+                if (isKnownSystem(seg[i])) {
+                    return seg[i];
+                }
+            }
+            if (seg.length > 1 && !seg[0].isEmpty()) {
+                return seg[0];
             }
             return bang > 0 ? origin.substring(0, bang) : "";
         }
         File parent = new File(path).getParentFile();
+        for (File p = parent; p != null; p = p.getParentFile()) {
+            if (isKnownSystem(p.getName())) {
+                return p.getName();
+            }
+        }
         return parent == null ? "" : parent.getName();
+    }
+
+    private static boolean isKnownSystem(String name) {
+        return name != null && !name.isEmpty()
+                && com.excel2mysql.core.Taxonomy.prior(name, "") != null;
     }
 
     private JPanel buildBottom() {

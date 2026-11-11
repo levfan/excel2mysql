@@ -2877,6 +2877,38 @@ public final class GuiMain {
             problems.add("判领域的端到端只拿到 " + drop.size() + " 个夹具，不够判");
             return;
         }
+        // 8b) 嵌套目录：数据集的「系统/分类/表」两层，系统要取最近的已登记祖先，
+        //     不能把「油料保障」这种分类目录当系统名写进映射
+        java.io.File nestedCat = null;
+        try {
+            nestedCat = new java.io.File(new java.io.File(
+                    java.nio.file.Files.createTempDirectory("e2m-layer-nested").toFile(),
+                    "军油工程"), "油料保障");
+        } catch (java.io.IOException ex) {
+            problems.add("嵌套目录用例建临时目录失败：" + ex.getMessage());
+        }
+        if (nestedCat != null) {
+            if (!nestedCat.mkdirs()) {
+                problems.add("嵌套目录用例没建出目录：" + nestedCat);
+            } else {
+                java.io.File copy = new java.io.File(nestedCat, "人员信息表（人事处）.xlsx");
+                try {
+                    java.nio.file.Files.copy(
+                            new java.io.File(dir, "人员信息表（人事处）.xlsx").toPath(),
+                            copy.toPath());
+                    lp.layerDropArea().fireDrop(java.util.Collections.singletonList(copy.getPath()));
+                    com.excel2mysql.core.MappingFile.TableMap nested = lp.mapping() == null
+                            || lp.mapping().tables().isEmpty() ? null : lp.mapping().tables().get(0);
+                    if (nested == null || !"军油工程".equals(nested.system)
+                            || !"采购供应".equals(nested.domain)) {
+                        problems.add("嵌套目录没取到系统先验：" + (nested == null ? "无行"
+                                : nested.system + " / " + nested.domain));
+                    }
+                } catch (java.io.IOException ex) {
+                    problems.add("嵌套目录用例复制夹具失败：" + ex.getMessage());
+                }
+            }
+        }
         int before = lp.mappingRowCount();
         lp.layerDropArea().fireDrop(drop);
         if (!lp.mappingLabelText().startsWith("按文件识别")) {
