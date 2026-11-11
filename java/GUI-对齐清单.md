@@ -8397,3 +8397,26 @@ CENTER 高度被算成 -19830。
 - Python 图形版不加这一页（没有可用的达梦 Python 驱动，且第四页已有 Java-only 先例），双端对撞的缺口按上面记
 - 版本号 5.5.1 → 5.6.0：老用户多出一件以前做不到的事（连达梦搬结构），旧做法一字未动，按 minor 定档
 - 本轮未出包；`dist` 里仍是 5.5.0 的包，要 5.6.0 从当前提交重出
+
+## 151. 用现场达梦驱动把第五页的连接路径验穿，并让包自带驱动（2026-11-12）
+
+### 151.1 改的是什么
+
+| 改动 | 口径 |
+| --- | --- |
+| 驱动类名 | 现场那份 `DmJdbcDriver8-8.1.5.45.jar` 注册的是 `dm.jdbc.driver.DmDriver`（服务文件实测），兜底类名列表补上真名，原先只写了 `DMDriver` |
+| 握手超时 | 连接串默认补 `connectTimeout=5000`（驱动参数实测支持），用户自己在「驱动参数」里写了就不覆盖：地址不可达时驱动原先一路等到 TCP 超时 |
+| 随包驱动 | 打包预建 `<包>\drivers\` 并放一份 `README.txt`（CRLF）；`java/assets/drivers/*.jar` 里有驱动就一并带进包，没有就只留目录与说明。该目录进 `.gitignore`：第三方二进制不入公开仓库，包是本地介质 |
+| 使用说明 | 第五页那条 tip 改成"包里已预建 drivers，出包时现场备着驱动就带上"，并把连不上的三种话（没找到驱动 / 驱动不认这条串 / 网络通信异常）写清 |
+
+### 151.2 跑数
+
+- 驱动包体检：486 条目、479 个 class、最高主版本 52（JDK 8 可用）、`META-INF/services/java.sql.Driver` 内容为 `dm.jdbc.driver.DmDriver`
+- 真驱动走产品代码路径（用包内 jre、在临时工作目录里跑）：`driverPresent=true`、`describeDrivers` 列出随包 jar、拼出的串是 `jdbc:dm://127.0.0.1:5236?schema=SYSDBA&connectTimeout=5000`、自定义参数不重复；`open()` 失败为 `dm.jdbc.driver.DMException：网络通信异常`——驱动发现、URL 组装、异常分类三段都验到，唯独"连上真达梦读目录视图"仍未实测（本机无达梦实例）
+- 出包：十步闸门 + 冻结态 `--gui --selftest` 全过，`pack_test` 1121 / 0 / 5、`pack_test38` 264 / 0 / 1，退出码全 0
+- 包：`dist\excel2mysql-java-5.6.0-win64\`，205 个文件；zip 106.4 MB，md5 `7d081418070fd56916e30c02e5fb8e8c`；随包提交号 `cb9ab02`（未提交改动 false）
+
+### 151.3 记账
+
+- 版本号沿用 5.6.0：这个号从未外发，第一次出的那份（203 文件、无 drivers）已被同号覆盖，不构成"同号两包"
+- 包里的 `drivers\README.txt` 与随包 jar 只是本地介质；仓库里 `java/assets/drivers/` 已忽略，公开仓库仍不含第三方二进制
