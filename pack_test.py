@@ -2294,11 +2294,11 @@ _groups = []
 for _s in app_main.SQL_SAMPLES:
     if not _groups or _groups[-1] != _s.group:
         _groups.append(_s.group)
-check("F31 示例库 126 条、13 个分组，七个字段都非空且短标题够短",
-      len(app_main.SQL_SAMPLES) == 126 and len(_groups) == 13
+check("F31 示例库 132 条、13 个分组，七个字段都非空且短标题够短",
+      len(app_main.SQL_SAMPLES) == 132 and len(_groups) == 13
       and all(s.group and s.title and s.desc and s.scenario and s.problem
               and s.keywords and s.sql for s in app_main.SQL_SAMPLES)
-      and len({(s.group, s.title) for s in app_main.SQL_SAMPLES}) == 126
+      and len({(s.group, s.title) for s in app_main.SQL_SAMPLES}) == 132
       and max(len(s.title) for s in app_main.SQL_SAMPLES) <= 12
       and all(s.title != s.desc for s in app_main.SQL_SAMPLES),
       (len(app_main.SQL_SAMPLES), max(len(s.title) for s in app_main.SQL_SAMPLES)))
@@ -2321,11 +2321,11 @@ def _visible_leaves(dlg):
 
 
 _dlg = app_main.SqlSamplesDialog(w.sql_run_input)
-check("F32 示例对话框标题带条数，目录第一层是 13 个分组、第二层 126 条",
-      _dlg.windowTitle() == "SQL 示例（126 条）"
+check("F32 示例对话框标题带条数，目录第一层是 13 个分组、第二层 132 条",
+      _dlg.windowTitle() == "SQL 示例（132 条）"
       and _dlg.tree.topLevelItemCount() == 13
-      and len(_visible_leaves(_dlg)) == 126
-      and _dlg.lbl_hits.text() == "共 126 条，分 13 组",
+      and len(_visible_leaves(_dlg)) == 132
+      and _dlg.lbl_hits.text() == "共 132 条，分 13 组",
       (_dlg.windowTitle(), _dlg.tree.topLevelItemCount(), _dlg.lbl_hits.text()))
 check("F33 叶子只写短标题（长的那句挪到右侧介绍），打开即选中第一条",
       _dlg.tree.topLevelItem(0).text(0) == "建库与选库"
@@ -2592,7 +2592,7 @@ check("F38b 搜索框按关键词过滤，命中的条目与 matches 判的完�
        [leaf.data(0, app_main.Qt.UserRole) for leaf in _visible_leaves(_dlg)]
        == [i for i, s in enumerate(app_main.SQL_SAMPLES)
            if app_main.sample_matches(s, "注释")])[2]
-      and _dlg.lbl_hits.text() == "命中 %d 条（共 126 条）"
+      and _dlg.lbl_hits.text() == "命中 %d 条（共 132 条）"
           % sum(1 for s in app_main.SQL_SAMPLES if app_main.sample_matches(s, "注释")),
       (_dlg.lbl_hits.text(), len(_visible_leaves(_dlg))))
 check("F38c 过滤后整组没命中就不摆出来，有命中的组自动展开",
@@ -2615,13 +2615,13 @@ _dlg.search.setText("绝不存在的关键词")
 _app.processEvents()
 check("F38f 一条都没命中也要说清下一步，不许留一片空白目录",
       _visible_leaves(_dlg) == []
-      and _dlg.lbl_hits.text() == "没有命中：换个关键词，或清空搜索框回到全部 126 条",
+      and _dlg.lbl_hits.text() == "没有命中：换个关键词，或清空搜索框回到全部 132 条",
       _dlg.lbl_hits.text())
 _dlg.search.setText("")
 _app.processEvents()
-check("F38g 清空搜索框回到全量 126 条、13 组",
-      len(_visible_leaves(_dlg)) == 126 and _dlg.tree.topLevelItemCount() == 13
-      and _dlg.lbl_hits.text() == "共 126 条，分 13 组", _dlg.lbl_hits.text())
+check("F38g 清空搜索框回到全量 132 条、13 组",
+      len(_visible_leaves(_dlg)) == 132 and _dlg.tree.topLevelItemCount() == 13
+      and _dlg.lbl_hits.text() == "共 132 条，分 13 组", _dlg.lbl_hits.text())
 # 独立顶层窗口才有原生最小化/最大化：挂在主窗口底下的对话框在 Windows 上只有那颗关闭叉，
 # 主窗口最小化时它还留在屏上挡路。判据取窗口标志，因为按钮本身是系统画的。
 _dlg_flags = int(_dlg.windowFlags())
@@ -3550,6 +3550,7 @@ _SF_INPUTS = [s.sql for s in app_main.SQL_SAMPLES] + [
     "-- 头注\nselect 1; -- 尾注\n# 井号注\nselect 2;",
     "select 'a;b' as x, `c;d` from t",
     "select @@version, database(), count(1) from dual",
+    "insert into t (a,b) values (1,2) on duplicate key update a=values(a), b=values(b);",
     "SELECT " + ", ".join("c%d" % i for i in range(30)) + " FROM wide_table",
 ]
 check("SF1 格式化幂等：全部输入排两次与排一次逐字相同",
@@ -3577,6 +3578,12 @@ _SF_WANT = ("CREATE TABLE `t_a` (\n"
             ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;")
 check("SF4 写死的期望串：关键字与类型大写、反引号名与字符串原样、字段一行一个",
       format_sql(_SF_RAW) == _SF_WANT, format_sql(_SF_RAW))
+_SF_UPSERT_RAW = ("insert into t (a,b) values (1,2)"
+                  " on duplicate key update a=values(a), b=values(b);")
+_SF_UPSERT_WANT = ("INSERT INTO t(a, b)\nVALUES (1, 2)\n"
+                   "  ON DUPLICATE KEY UPDATE\n  a = VALUES(a),\n  b = VALUES(b);")
+check("SF4b ON DUPLICATE KEY UPDATE 是一个从句：UPDATE 不顶格，赋值里 VALUES(x) 贴紧写",
+      format_sql(_SF_UPSERT_RAW) == _SF_UPSERT_WANT, format_sql(_SF_UPSERT_RAW))
 check("SF5 空输入与只有注释的输入不炸，且结果可判读",
       format_sql("") == "" and format_sql("   \n ") == ""
       and format_sql("-- 只有一句注释") == "-- 只有一句注释",

@@ -1,4 +1,4 @@
-"""逐条把 SQL 执行器的 126 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
+"""逐条把 SQL 执行器的 132 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
 
 每条之前重建一次临时环境。有几条天然依赖前一条的产物（加列之后才能改列名、
 建了索引才能删索引、建了映射落地表才能按它统计），这类依赖在 PREREQ 里显式声明并先跑一遍，
@@ -24,13 +24,13 @@ AUX = "ods_data"
 
 # 序号（从 1 开始）→ 需要先执行的序号
 PREREQ = {10: [8], 13: [11], 30: [8], 47: [6], 79: [6], 82: [6],
-          115: [8], 117: [7], 124: [6], 125: [6]}
+          121: [8], 123: [7], 130: [6], 131: [6]}
 
 # 序号 → 本条之前要先跑的语句。回写那三条要求业务表已经有回写列，真实流程里这一步
 # 就是"先加一列"（加列那条示例教的是同一个动作）；把它放在这里而不是预置进夹具，
 # 是因为预置会让生成宽表那条的 SELECT a.*, b.new_code 撞 Duplicate column。
 ADD_WRITE_BACK = ["ALTER TABLE t_order ADD COLUMN new_code VARCHAR(64) COMMENT '回写的新编码'"]
-SETUP = {i: ADD_WRITE_BACK for i in (120, 121, 123)}
+SETUP = {i: ADD_WRITE_BACK for i in (126, 127, 129)}
 
 
 def conn(db=None):
@@ -111,8 +111,8 @@ def cleanup():
 
 
 def main():
-    if len(SAMPLES) != 126:
-        print("条数不是 126：%d" % len(SAMPLES))
+    if len(SAMPLES) != 132:
+        print("条数不是 132：%d" % len(SAMPLES))
         return 1
     fails = []
     for i, sample in enumerate(SAMPLES, 1):

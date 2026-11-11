@@ -2172,9 +2172,10 @@ public final class SqlScript {
             "COMMENT", "COMMIT",
             "CONCAT", "CONDITION", "CONSTRAINT", "CONTINUE", "CONVERT", "CREATE", "CROSS",
             "DATABASE", "DEALLOCATE", "DEFAULT", "DELETE", "DESC", "DESCRIBE", "DISTINCT",
-            "DO", "DROP", "ELSE", "END", "ENGINE", "ESCAPE", "EXCEPT", "EXCLUDE",
-            "EXECUTE", "EXISTS", "EXPLAIN", "FETCH", "FIRST", "FOR", "FORCE", "FOREIGN",
-            "FROM", "FULL", "FUNCTION", "GRANT", "GROUP", "HAVING", "IF", "IGNORE", "IN",
+            "DO", "DROP", "DUPLICATE", "ELSE", "END", "ENGINE", "ESCAPE", "EXCEPT",
+            "EXCLUDE", "EXECUTE", "EXISTS", "EXPLAIN", "FETCH", "FIRST", "FOR", "FORCE",
+            "FOREIGN", "FROM", "FULL", "FUNCTION", "GRANT", "GROUP", "HAVING", "IF",
+            "IGNORE", "IN",
             "INDEX", "INHERITS", "INNER", "INSERT", "INTERSECT", "INTERVAL", "INTO",
             "IS", "JOIN", "KEY", "LAST", "LEFT", "LIKE", "LIMIT", "MODE", "MODIFY",
             "NAMES", "NATURAL", "NOT", "NULL", "NULLS", "OF", "OFFSET", "ON", "OPTION",
@@ -2569,6 +2570,8 @@ public final class SqlScript {
         String clause = "";
         boolean listed = false;
         boolean splitSelect = false;
+        boolean dupTail = false;      // 是否已进入 ON DUPLICATE KEY UPDATE 的赋值段
+        boolean dupBreakNext = false; // 刚写完 UPDATE，第一个赋值要另起一行
         FmtState st = new FmtState();
         for (int idx = 0; idx < sig.size(); idx++) {
             String kind = sig.get(idx)[0];
@@ -2579,6 +2582,9 @@ public final class SqlScript {
             String prevUp = "word".equals(prevKind)
                     ? prevText.toUpperCase(Locale.ROOT) : "";
             String prev2Text = idx >= 2 ? sig.get(idx - 2)[1] : "";
+            String prev2Kind = idx >= 2 ? sig.get(idx - 2)[0] : "";
+            String prev2Up = "word".equals(prev2Kind)
+                    ? prev2Text.toUpperCase(Locale.ROOT) : "";
             String prevPunct = "punct".equals(prevKind) ? prevText : "";
             // 等号是 punct，prevUp 只对 word 有值，这里必须拿原文比
             boolean tightEq = "=".equals(prevText)
@@ -2623,10 +2629,23 @@ public final class SqlScript {
                 st.nextMode = "item";
                 flushLines(lines, cur, listed, depth, st);
                 continue;
+            } else if ("punct".equals(kind) && ",".equals(text) && depth == 0
+                    && dupTail) {
+                // ON DUPLICATE KEY UPDATE 的赋值段：一个赋值一行，与 SET 清单同形
+                cur.add(gap(cur, emit, prevKind, prevUp, tightEq, tightComma,
+                        prevPunct, false) + emit);
+                st.nextMode = "item";
+                flushLines(lines, cur, listed, depth, st);
+                continue;
             }
 
             boolean breakWord = false;
             boolean condChain = false;
+            if (dupBreakNext && "word".equals(kind)) {
+                st.nextMode = "item";     // 赋值段挂到 ON DUPLICATE KEY UPDATE 底下
+                flushLines(lines, cur, listed, depth, st);
+                dupBreakNext = false;
+            }
             if ("word".equals(kind) && !cur.isEmpty()) {
                 boolean joinHead = (FMT_JOIN_HEADS.contains(up) && joinAhead(sig, idx))
                         || ("JOIN".equals(up) && !FMT_JOIN_HEADS.contains(prevUp));
@@ -2639,6 +2658,13 @@ public final class SqlScript {
                             || joinHead
                             || (FMT_PAIR.contains(up) && "BY".equals(nextWord(sig, idx)))
                             || condChain;
+                    // `ON DUPLICATE KEY UPDATE` 是一个整体从句：UPDATE 不能当新语句顶格，
+                    // 赋值里的 VALUES(x) 也不是 VALUES 子句，都不能断行
+                    if (("UPDATE".equals(up) && "KEY".equals(prevUp)
+                            && "DUPLICATE".equals(prev2Up))
+                            || (dupTail && "VALUES".equals(up))) {
+                        breakWord = false;
+                    }
                 } else {
                     // 括号里的条件链也拆开：编辑器不折行，一条 WHERE 里三四个 OR 挤
                     // 在一行就要横向拖两百多列才看完
@@ -2655,13 +2681,23 @@ public final class SqlScript {
                 // 超过这一列就在下一个逗号处折行：只在已经够长时才折，短清单照旧一行
                 flushLines(lines, cur, listed, depth, st);
             }
+            if ("word".equals(kind) && depth == 0 && "UPDATE".equals(up)
+                    && "KEY".equals(prevUp) && "DUPLICATE".equals(prev2Up)) {
+                dupTail = true;
+                dupBreakNext = true;
+            }
             if ("word".equals(kind) && depth == 0 && FMT_BREAK.contains(up)) {
                 // 只在从句关键词上更新"现在在哪一段"，否则走到 AND 时 clause 已变成表名
                 clause = up;
             }
             if (!cur.isEmpty()) {
-                cur.add(gap(cur, emit, prevKind, prevUp, tightEq, tightComma,
-                        prevPunct, false) + emit);
+                if ("punct".equals(kind) && "(".equals(text) && dupTail
+                        && "word".equals(prevKind) && "VALUES".equals(prevUp)) {
+                    cur.add(emit);        // 赋值里的 VALUES(x) 按函数贴紧写
+                } else {
+                    cur.add(gap(cur, emit, prevKind, prevUp, tightEq, tightComma,
+                            prevPunct, false) + emit);
+                }
             } else {
                 cur.add(emit);
             }

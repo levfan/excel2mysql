@@ -713,8 +713,8 @@ SQL_FORMAT_KEYWORDS = frozenset((
     "COMMIT",
     "CONCAT", "CONDITION", "CONSTRAINT", "CONTINUE", "CONVERT", "CREATE", "CROSS",
     "DATABASE", "DEALLOCATE", "DEFAULT", "DELETE", "DESC", "DESCRIBE", "DISTINCT",
-    "DO", "DROP", "ELSE", "END", "ENGINE", "ESCAPE", "EXCEPT", "EXCLUDE", "EXECUTE",
-    "EXISTS", "EXPLAIN", "FETCH", "FIRST", "FOR", "FORCE", "FOREIGN", "FROM",
+    "DO", "DROP", "DUPLICATE", "ELSE", "END", "ENGINE", "ESCAPE", "EXCEPT", "EXCLUDE",
+    "EXECUTE", "EXISTS", "EXPLAIN", "FETCH", "FIRST", "FOR", "FORCE", "FOREIGN", "FROM",
     "FULL", "FUNCTION", "GRANT", "GROUP", "HAVING", "IF", "IGNORE", "IN",
     "INDEX", "INHERITS", "INNER", "INSERT", "INTERSECT", "INTERVAL", "INTO",
     "IS", "JOIN", "KEY", "LAST", "LEFT", "LIKE", "LIMIT", "MODE", "MODIFY",
@@ -957,6 +957,8 @@ def _format_one_statement(tokens):
     mode = ""               # 正在攒的这一行属于哪一档："" 顶格 / item 清单行 / cont 续行
     next_mode = ""          # 下一次换行之后那一行的档位
     split_select = False    # 眼前这段 SELECT 的顶层清单要不要逐列成行
+    dup_tail = False        # 是否已进入 ON DUPLICATE KEY UPDATE 的赋值段
+    dup_break_next = False  # 刚写完 UPDATE，第一个赋值要另起一行
 
     def indent_now():
         # 建表字段清单与 SELECT 清单项、条件续行同一档缩进（两格）：
@@ -1009,6 +1011,7 @@ def _format_one_statement(tokens):
         prev_kind, prev_text = sig[idx - 1] if idx else ("", "")
         prev_up = prev_text.upper() if prev_kind == "word" else ""
         prev2_kind, prev2_text = sig[idx - 2] if idx >= 2 else ("", "")
+        prev2_up = prev2_text.upper() if prev2_kind == "word" else ""
         prev_punct = prev_text if prev_kind == "punct" else "\""
         # 上一个 token 是等号、再上一个正好是表选项那几位 → 这一位也贴紧
         # （等号是 punct，prev_up 只对 word 有值，这里必须拿原文比）
@@ -1046,8 +1049,18 @@ def _format_one_statement(tokens):
             next_mode = "item"
             flush()
             continue
+        elif kind == "punct" and text == "," and depth == 0 and dup_tail:
+            # ON DUPLICATE KEY UPDATE 的赋值段：一个赋值一行，与 SET 清单同形
+            cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
+            next_mode = "item"
+            flush()
+            continue
 
         break_word = False
+        if dup_break_next and kind == "word":
+            next_mode = "item"       # 赋值段挂到 ON DUPLICATE KEY UPDATE 底下
+            flush()
+            dup_break_next = False
         if kind == "word" and cur:
             join_head = (up in _SQL_JOIN_HEADS and _sql_join_ahead(sig, idx)) or (
                 up == "JOIN" and prev_up not in _SQL_JOIN_HEADS)
@@ -1060,6 +1073,11 @@ def _format_one_statement(tokens):
                     or join_head
                     or (up in _SQL_PAIR_WORDS and _sql_next_word(sig, idx) == "BY")
                     or cond_chain)
+                # `ON DUPLICATE KEY UPDATE` 是一个整体从句：UPDATE 不能当新语句顶格，
+                # 赋值里的 VALUES(x) 也不是 VALUES 子句，都不能断行
+                if ((up == "UPDATE" and prev_up == "KEY" and prev2_up == "DUPLICATE")
+                        or (dup_tail and up == "VALUES")):
+                    break_word = False
             else:
                 # 括号里的条件链也拆开：编辑器不折行，一条 WHERE 里三四个 OR 挤
                 # 在一行就要横向拖两百多列才看完
@@ -1074,13 +1092,21 @@ def _format_one_statement(tokens):
             # 清单挤成一行要横向拖两百多格。只在这一条已经够长时才折，
             # 短清单照旧留在一行，读起来不碎。
             flush()
+        if (kind == "word" and depth == 0 and up == "UPDATE"
+                and prev_up == "KEY" and prev2_up == "DUPLICATE"):
+            dup_tail = True
+            dup_break_next = True
         if kind == "word" and depth == 0 and up in _SQL_BREAK_WORDS:
             # 只在从句关键词上更新"现在在哪一段"：按每个词都覆盖的话，
             # `WHERE a = 1 AND ...` 里走到 AND 时 clause 已经变成表名了
             clause = up
 
         if cur:
-            cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
+            if (kind == "punct" and text == "(" and dup_tail
+                    and prev_kind == "word" and prev_up == "VALUES"):
+                cur.append(emit)        # 赋值里的 VALUES(x) 按函数贴紧写
+            else:
+                cur.append(gap(emit, prev_kind, prev_up, tight_eq, tight_comma, prev_punct) + emit)
         else:
             cur.append(emit)
         if kind == "word" and depth == 0 and up == "SELECT":

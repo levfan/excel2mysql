@@ -161,6 +161,9 @@ FORMAT_INPUTS = [
     "INSERT INTO t (a,b) VALUES ('x;1', 'y''2')",
     "select 'a;b' as x, `c;d` from t",
     "UPDATE t SET a=1, b=2 WHERE id=3",
+    "insert into t (a,b) values (1,2) on duplicate key update a=values(a), b=values(b);",
+    "INSERT INTO `t_m` (`id`, `name`) SELECT `id`, `name` FROM `t_s` "
+    "ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);",
     "DELETE FROM t LIMIT 1",
     "SELECT CASE WHEN a>1 THEN 'x' ELSE 'y' END AS c FROM t",
     "select a from (select b as a from t) x where a in (1,2,3)",
@@ -311,7 +314,7 @@ def sql_cases():
                "extract": extract_create_tables(text),
                "split": split_sql_statements(text)}
     # 格式化：期望值一律由 Python 侧真函数产出，Java 的 SqlScript.formatSql 必须
-    # 逐字节相同。语料取三处——脚本夹具、126 条示例正文、以及几条专门踩规则的输入
+    # 逐字节相同。语料取三处——脚本夹具、132 条示例正文、以及几条专门踩规则的输入
     # （类型括号、表选项等号、条件链、注释与引号里的分号）。
     # 幂等与"切分不变"这两条性质在 Python 用例集里钉（pack_test 的 Q 组），
     # 这里只钉"两栈输出相同"——相同 + Python 侧正确，就传递出 Java 侧正确。

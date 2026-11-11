@@ -35,7 +35,7 @@ public final class SqlSamples {
         }
     }
 
-    /** 共 126 条，顺序即对话框里目录的顺序。 */
+    /** 共 132 条，顺序即对话框里目录的顺序。 */
     public static final Sample[] ALL = new Sample[] {
         new Sample("建库与选库",
                 "建库", "建库（字符集与排序规则一次写全，避免事后改表）",
@@ -998,6 +998,163 @@ public final class SqlSamples {
                     "  ON TRIM(a.name) = TRIM(b.name)" + NL +
                     "  AND a.biz_date BETWEEN b.eff_date" + NL +
                     "  AND COALESCE(b.exp_date, '9999-12-31');"),
+        new Sample("编码映射与关联",
+                "映射整批写入", "映射整批写入：按映射关系把源表整批插进目标表（只落匹配上的行）",
+                "新表刚建好，要按字典把源表里能对上的行一次性灌进去。",
+                "手抄编码或逐行改，量一大就会漏行、抄错码。",
+                "整批写入 INSERT SELECT JOIN 灌数 映射",
+                            "CREATE TABLE t_order_mapped (" + NL +
+                    "  id BIGINT NOT NULL," + NL +
+                    "  order_no VARCHAR(64) NOT NULL," + NL +
+                    "  name VARCHAR(64)," + NL +
+                    "  new_code VARCHAR(64)," + NL +
+                    "  PRIMARY KEY (id)" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;" + NL +
+                    "INSERT INTO t_order_mapped(id, order_no, name, new_code)" + NL +
+                    "SELECT" + NL +
+                    "  a.id," + NL +
+                    "  a.order_no," + NL +
+                    "  a.name," + NL +
+                    "  b.new_code" + NL +
+                    "FROM t_order a" + NL +
+                    "JOIN t_dict b" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.cat_code = b.cat_code;" + NL +
+                    "SELECT *" + NL +
+                    "FROM t_order_mapped" + NL +
+                    "ORDER BY id;"),
+        new Sample("编码映射与关联",
+                "未匹配一并落库", "匹配结果整表落库：匹配与未匹配都留行，带匹配状态",
+                "匹配完要留底，没匹配上的也得看得出来，不能悄悄丢掉。",
+                "只插匹配上的行，未匹配的从表里消失，事后无从补录。",
+                "未匹配 落库 LEFT JOIN 状态 CASE WHEN 留底",
+                            "CREATE TABLE t_order_match (" + NL +
+                    "  id BIGINT NOT NULL," + NL +
+                    "  order_no VARCHAR(64) NOT NULL," + NL +
+                    "  name VARCHAR(64)," + NL +
+                    "  new_code VARCHAR(64)," + NL +
+                    "  match_status VARCHAR(16)," + NL +
+                    "  PRIMARY KEY (id)" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;" + NL +
+                    "INSERT INTO t_order_match(id, order_no, name, new_code, match_status)" + NL +
+                    "SELECT" + NL +
+                    "  a.id," + NL +
+                    "  a.order_no," + NL +
+                    "  a.name," + NL +
+                    "  b.new_code," + NL +
+                    "  CASE WHEN b.new_code IS NULL THEN '未匹配' ELSE '成功' END" + NL +
+                    "FROM t_order a" + NL +
+                    "LEFT JOIN t_dict b" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.cat_code = b.cat_code;" + NL +
+                    "SELECT" + NL +
+                    "  match_status," + NL +
+                    "  COUNT(*) AS 条数" + NL +
+                    "FROM t_order_match" + NL +
+                    "GROUP BY match_status;"),
+        new Sample("编码映射与关联",
+                "重跑不重复", "重跑不重复：主键冲突时更新，同一条映射重跑只留一份",
+                "映射每天跑一遍，源端名称或编码会变，重复执行不能堆行。",
+                "直接 INSERT 重跑会撞主键，先删后插又有一段时间查不到。",
+                "重跑 幂等 主键冲突 ON DUPLICATE KEY UPDATE 更新",
+                            "CREATE TABLE t_map_upsert (" + NL +
+                    "  old_code VARCHAR(64) NOT NULL," + NL +
+                    "  name VARCHAR(64)," + NL +
+                    "  new_code VARCHAR(64)," + NL +
+                    "  PRIMARY KEY (old_code)" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;" + NL +
+                    "INSERT INTO t_map_upsert(old_code, name, new_code)" + NL +
+                    "VALUES ('A01', '旧名称', 'X000');" + NL +
+                    "INSERT INTO t_map_upsert(old_code, name, new_code)" + NL +
+                    "SELECT" + NL +
+                    "  a.old_code," + NL +
+                    "  a.name," + NL +
+                    "  b.new_code" + NL +
+                    "FROM t_order a" + NL +
+                    "JOIN t_dict b" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.cat_code = b.cat_code" + NL +
+                    "  ON DUPLICATE KEY UPDATE" + NL +
+                    "  name = VALUES(name)," + NL +
+                    "  new_code = VALUES(new_code);" + NL +
+                    "SELECT *" + NL +
+                    "FROM t_map_upsert" + NL +
+                    "ORDER BY old_code;"),
+        new Sample("编码映射与关联",
+                "增量补录", "增量补录：只插目标表还没有的旧编码，已落脚的不动",
+                "目标表已经有一批映射，只把新增的那部分补进去。",
+                "全量重灌一遍，已有行被反复覆盖，人工改过的字段也会丢。",
+                "增量 NOT EXISTS 补录 幂等 已有不动",
+                            "CREATE TABLE t_map_incremental (" + NL +
+                    "  old_code VARCHAR(64) NOT NULL," + NL +
+                    "  name VARCHAR(64)," + NL +
+                    "  new_code VARCHAR(64)," + NL +
+                    "  PRIMARY KEY (old_code)" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;" + NL +
+                    "INSERT INTO t_map_incremental(old_code, name, new_code)" + NL +
+                    "VALUES ('A01', '甲产品', 'N01');" + NL +
+                    "INSERT INTO t_map_incremental(old_code, name, new_code)" + NL +
+                    "SELECT" + NL +
+                    "  a.old_code," + NL +
+                    "  a.name," + NL +
+                    "  b.new_code" + NL +
+                    "FROM t_order a" + NL +
+                    "JOIN t_dict b" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.cat_code = b.cat_code" + NL +
+                    "WHERE NOT EXISTS (SELECT 1 FROM t_map_incremental t WHERE t.old_code = a.old_code);" + NL +
+                    "SELECT *" + NL +
+                    "FROM t_map_incremental" + NL +
+                    "ORDER BY old_code;"),
+        new Sample("编码映射与关联",
+                "回填目标表", "回填目标表：目标表已有行，按映射把新编码 UPDATE 进去",
+                "业务表先灌进来，编码后补；用映射表把新编码回填到原行。",
+                "只在查询时关联，下游直接读表时拿到的还是空编码。",
+                "回填 UPDATE JOIN 已有行 新编码 落表",
+                            "CREATE TABLE t_order_backfill (" + NL +
+                    "  id BIGINT NOT NULL," + NL +
+                    "  order_no VARCHAR(64) NOT NULL," + NL +
+                    "  name VARCHAR(64)," + NL +
+                    "  cat_code VARCHAR(32)," + NL +
+                    "  new_code VARCHAR(64)," + NL +
+                    "  PRIMARY KEY (id)" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;" + NL +
+                    "INSERT INTO t_order_backfill(id, order_no, name, cat_code)" + NL +
+                    "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  name," + NL +
+                    "  cat_code" + NL +
+                    "FROM t_order;" + NL +
+                    "UPDATE t_order_backfill t" + NL +
+                    "JOIN t_dict d" + NL +
+                    "  ON TRIM(t.name) = TRIM(d.name)" + NL +
+                    "  AND t.cat_code = d.cat_code" + NL +
+                    "SET t.new_code = d.new_code;" + NL +
+                    "SELECT *" + NL +
+                    "FROM t_order_backfill" + NL +
+                    "ORDER BY id;"),
+        new Sample("编码映射与关联",
+                "未匹配转异常", "未匹配转异常表：对不上的行写进异常清单，等人工处理",
+                "写库前把对不上的行挑出来单独留档，别混进正式数据。",
+                "未匹配的行留在宽表里，下游分不清哪些是真数据。",
+                "异常表 未匹配 落库 人工处理 留档",
+                            "INSERT INTO t_exception_order(old_code, name, reason, check_time)" + NL +
+                    "SELECT" + NL +
+                    "  a.old_code," + NL +
+                    "  a.name," + NL +
+                    "  '字典未匹配'," + NL +
+                    "  NOW()" + NL +
+                    "FROM t_order a" + NL +
+                    "LEFT JOIN t_dict b" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.cat_code = b.cat_code" + NL +
+                    "WHERE b.new_code IS NULL;" + NL +
+                    "SELECT" + NL +
+                    "  old_code," + NL +
+                    "  name," + NL +
+                    "  reason" + NL +
+                    "FROM t_exception_order;"),
         new Sample("数据血缘与影响分析",
                 "外键依赖", "外键依赖清单：子表列指向哪张父表",
                 "改表、下线表之前先看谁引用它。",
