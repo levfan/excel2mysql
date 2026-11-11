@@ -8318,3 +8318,27 @@ CENTER 高度被算成 -19830。
 
 - 版本号 5.4.1 → 5.5.0，未出包；真实数据产物只写入新目录 `分层建模产物-首字母\layer_20261111`
 
+
+## 148. 示例库补「按映射整批写入」6 条，格式化器支持 ON DUPLICATE KEY UPDATE（2026-11-12）
+
+### 148.1 改的是什么
+
+| 改动 | 口径 |
+| --- | --- |
+| 新增示例 | 「编码映射与关联」组尾部补 6 条：映射整批写入（JOIN 灌数）、未匹配一并落库（LEFT JOIN + 匹配状态）、重跑不重复（`ON DUPLICATE KEY UPDATE`）、增量补录（`NOT EXISTS`）、回填目标表（多表 `UPDATE JOIN`）、未匹配转异常（写异常表）；示例库 126 → 132 条，仍 13 组 |
+| 格式化器 | `format_sql` / `formatSql` 把 `ON DUPLICATE KEY UPDATE` 当一个从句：UPDATE 不再顶格另起、赋值段逐条缩进、赋值里的 `VALUES(x)` 按函数贴紧写；`DUPLICATE` 进关键字表 |
+| 语料 | 格式化差分语料补「VALUES 写法」与「INSERT … SELECT … ON DUPLICATE」两例；`pack_test` SF4b 钉死 ON DUPLICATE 的期望排布 |
+| 计数落点 | 示例库 docstring、使用说明、`check_sql_samples.py`、`pack_test` F31/F32/F38、Java Swing 自检、`export_sql_golden.py` 注释统一改成 132 |
+
+### 148.2 跑数
+
+- `check_sql_samples.py`（真库，带 `.pt_env`）：合计 132 条、失败 0 条，退出码 0
+- `pack_test.py`（带 `.pt_env`）：通过 1121、失败 0、跳过 5，退出码 0
+- `pack_test38.py`（3.8/Win7 线，带 `.pt_env`）：通过 264、失败 0、跳过 1，退出码 0
+- Java 十步闸门退出码 0：SQL-DIFF 799 项 0 不一致（含 132 条示例正文与新增格式化语料）、META-DIFF 5622 格 0 不一致、MAP-DIFF 0 处、LAYER-DIFF 0 处、Swing 自检 `+ [OK] GUI-SELFTEST`
+- `界面双端对撞`：427 共有键，仅 Java 14 / 值不等 6，仍是已知的第四页（分层建模）缺口，本轮未新增差异
+
+### 148.3 记账
+
+- 版本号沿用未交付的 5.5.1（本轮为示例内容与格式化修正，按 patch 并入），不另起号
+- 本轮未出包；`dist` 里仍是 5.5.0，不含本轮改动
