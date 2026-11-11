@@ -23,7 +23,7 @@ import java.util.Set;
  * 不再拼拼音 dim 名——生成器只认这十个键，拼出来的名字会静默丢掉整张维表。
  *
  * <p>自动识别按「一源一表」落 dom：每张源表指定一张自己的领域目标表
- * <code>dwd_&lt;子领域全拼&gt;_&lt;源表名&gt;</code>。领域/子领域/主题只写进映射做分类，
+ * <code>dwd_&lt;子领域首字母&gt;_&lt;源表名&gt;</code>（基础数据 → jcsj）。领域/子领域/主题只写进映射做分类，
  * 不拿它当物理合并键——几十张异构表按领域 UNION 成一张，列数会越过 MySQL 上限，
  * 业务粒度也混在一起。要合并只能由人在映射里显式写同一个「领域目标表」来声明。
  */
@@ -85,7 +85,9 @@ public final class DomainGuess {
         Cls c = new Cls();
         c.system = nz(in.system);
         String stem = stem(in.fileName);
-        String fields = join(in.fieldComments);
+        // 字段注释之外把字段名也算进来：英文列名（person_no、fuel_qty）是判领域/子领域的真证据，
+        // 只读注释会把一整张纯英文列名的表判成待确认
+        String fields = join(in.fieldComments) + " " + join(in.fieldNames);
         String cn = nz(in.tableCn).isEmpty() ? stem : in.tableCn.trim();
 
         if (Taxonomy.isMeta(cn, in.tableEn)) {

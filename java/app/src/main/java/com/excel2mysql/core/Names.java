@@ -401,7 +401,15 @@ public final class Names {
     }
 
     public String cnToTableName(String text, int limit) {
-        return cnToTableName(text, limit, true);
+        return cnToTableName(text, limit, true, initialsOnly);
+    }
+
+    /**
+     * 指标/子领域段固定取中文首字母（基础数据 -> jcsj），不受「取中文首字母」开关影响。
+     * 只给分层建模的目标表前缀用：领域分类是固定词表，写成全拼会把表名撑得很长。
+     */
+    public String cnToTableNameInitials(String text, int limit) {
+        return cnToTableName(text, limit, true, true);
     }
 
     /**
@@ -409,6 +417,10 @@ public final class Names {
      * 字段名一律传 false：「≥1.0mm」是量值口径，改成 v1mm 会丢信息。
      */
     public String cnToTableName(String text, int limit, boolean versions) {
+        return cnToTableName(text, limit, versions, initialsOnly);
+    }
+
+    private String cnToTableName(String text, int limit, boolean versions, boolean initials) {
         String t = pyStrip(text == null ? "" : String.valueOf(text));
         if (t.isEmpty()) {
             return "";
@@ -417,7 +429,7 @@ public final class Names {
         if (syllables.isEmpty()) {
             return "";
         }
-        return applyCase(fitName(syllables, limit, "t_", initialsOnly));
+        return applyCase(fitName(syllables, limit, "t_", initials));
     }
 
     /** 表头 -> 蛇形字段名；空表头与无可识别字符的表头都退化成 col。 */

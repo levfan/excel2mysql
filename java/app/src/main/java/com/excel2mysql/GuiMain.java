@@ -2720,7 +2720,7 @@ public final class GuiMain {
         if (!"DOM01".equals(a.map.domainCode)) {
             problems.add("保障的领域码不是条款固定的 DOM01：" + a.map.domainCode);
         }
-        if (!"dwd_shi_li_shu_ju_ren_yuan_xin_xi".equals(a.map.domainTarget)) {
+        if (!"dwd_slsj_ren_yuan_xin_xi".equals(a.map.domainTarget)) {
             problems.add("一源一表的领域目标表名不对： " + a.map.domainTarget);
         }
         if (!"辅助决策".equals(a.map.theme)) {
@@ -2752,7 +2752,7 @@ public final class GuiMain {
         if (!"DOM04".equals(rf.map.domainCode) || !"后勤资源掌控".equals(rf.map.theme)) {
             problems.add("采购供应的码/主题不对：" + rf.map.domainCode + " / " + rf.map.theme);
         }
-        if (!"dwd_bei_zhuang_bao_zhang_t_bz".equals(rf.map.domainTarget)) {
+        if (!"dwd_bzbz_t_bz".equals(rf.map.domainTarget)) {
             problems.add("先验细化后的目标表没带源表名：" + rf.map.domainTarget);
         }
         // 3) 数不到词就不猜
@@ -2780,8 +2780,8 @@ public final class GuiMain {
                     + g.get(1).map.domainCode);
         }
         if (g.get(0).map.domainTarget.equals(g.get(1).map.domainTarget)
-                || !"dwd_shi_li_shu_ju_t_a".equals(g.get(0).map.domainTarget)
-                || !"dwd_shi_li_shu_ju_t_b".equals(g.get(1).map.domainTarget)) {
+                || !"dwd_slsj_t_a".equals(g.get(0).map.domainTarget)
+                || !"dwd_slsj_t_b".equals(g.get(1).map.domainTarget)) {
             problems.add("自动识别没做到一源一表：" + g.get(0).map.domainTarget + " / "
                     + g.get(1).map.domainTarget);
         }
@@ -2844,9 +2844,9 @@ public final class GuiMain {
         for (com.excel2mysql.core.DomainGuess.Verdict vv : wv) {
             wTargets.add(vv.map.domainTarget);
         }
-        if (wTargets.size() != 3 || !wTargets.contains("dwd_you_liao_bao_zhang_t_you_0")
-                || !wTargets.contains("dwd_you_liao_bao_zhang_t_you_1")
-                || !wTargets.contains("dwd_you_liao_bao_zhang_t_you_2")) {
+        if (wTargets.size() != 3 || !wTargets.contains("dwd_ylbz_t_you_0")
+                || !wTargets.contains("dwd_ylbz_t_you_1")
+                || !wTargets.contains("dwd_ylbz_t_you_2")) {
             problems.add("同子领域的三张源表没做到一源一表：" + wTargets);
         }
         for (com.excel2mysql.core.DomainGuess.Verdict vv : wv) {
