@@ -96,7 +96,7 @@ public final class HelpDoc {
                     "这两个入口的图标上。包没解全时它们会弹窗说清缺哪个文件；还想看到 Java 的原始报错与退出码，" + NL +
                     "用 <code>启动-调试.bat</code>，它故意留着控制台。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-5.5.1.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-5.6.0.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
@@ -1063,6 +1063,52 @@ public final class HelpDoc {
                     "现场改完再执行；本页执行的就是提交的语句，<code>DROP</code> / <code>TRUNCATE</code>" + NL +
                     "不另设确认，删除前先看清结果区里那句</li>" + NL +
                     "</ul>"
+        ),
+        new Section("dameng", "达梦转 MySQL 页",
+                "<h2>达梦转 MySQL 页（第五个页签，Java 图形版）</h2>" + NL +
+                    "<p>这一页连一个达梦（DM8）数据源，把选中的表或整个模式的表读成 MySQL 建表语句，" + NL +
+                    "表注释与字段注释一并带过来。Python 图形版仍是三个页签，这一页只在 Java 图形版有。</p>" + NL +
+                    "<table class=\"t\">" + NL +
+                    "<tr><th>步骤</th><th>操作</th></tr>" + NL +
+                    "<tr><td>1</td><td>填达梦的主机、端口（默认 <code>5236</code>）、用户名、口令与模式名" + NL +
+                    "（目录视图里的 <code>OWNER</code>，通常就是登录用户名，例如 <code>SYSDBA</code>），" + NL +
+                    "点<b>「连达梦并列表」</b>；进度框会逐张报读到第几张，随时可取消</td></tr>" + NL +
+                    "<tr><td>2</td><td>清单列出每张表的表注释、字段数与主键；点<b>「生成 MySQL DDL」</b></td></tr>" + NL +
+                    "<tr><td>3</td><td>选中若干行只生成选中的表，一行都不选则整个模式一起生成；" + NL +
+                    "勾「表名与字段名转小写」把达梦默认的大写名折成小写，勾「先 DROP 已存在表」在每张表前补一句" + NL +
+                    "<code>DROP TABLE IF EXISTS</code></td></tr>" + NL +
+                    "<tr><td>4</td><td><b>「保存到 .sql」</b>落一份 UTF-8 脚本；<b>「写入 MySQL 目标库」</b>把这份脚本" + NL +
+                    "发到 MySQL 执行，用的就是「SQL 执行器」那套逐条执行与事务口径，日志也写在同一页下方</td></tr>" + NL +
+                    "</table>" + NL +
+                    "<p class=\"tip\"><b>达梦驱动要自己放一步</b>：本工具不打包达梦的 JDBC 驱动（第三方许可与包体都不合适）。" + NL +
+                    "第一次用这一页，把达梦安装目录 <code>drivers\\java</code> 下的 <code>DmJdbcDriver18.jar</code>" + NL +
+                    "（或同版本的达梦 JDBC 包）复制到<b>程序同级的 <code>drivers</code> 文件夹</b>里，重开程序再连。" + NL +
+                    "没放驱动时点连接，会在本页日志里写清缺什么、放到哪儿，其余三页照常用；" + NL +
+                    "这一页的翻译逻辑本身不依赖驱动。</p>" + NL +
+                    "<p>MySQL 目标库那一格填的是脚本开头的 <code>USE</code>；留空则不写 <code>USE</code>，" + NL +
+                    "「写入 MySQL 目标库」落在顶部连接栏所选的那本库。两者不是同一本库时，日志会先点出来再执行。</p>" + NL +
+                    "<p>类型与注释按下面这套口径翻：</p>" + NL +
+                    "<ul>" + NL +
+                    "<li>变长字符按达梦声明的字节数 1:1 译成 MySQL 的字符数（达梦按字节、MySQL 按字符，" + NL +
+                    "只会更宽不会装不下）；超出 VARCHAR 上限的落 <code>LONGTEXT</code></li>" + NL +
+                    "<li>达梦的 <code>DATE</code> 带时分秒，译成 <code>DATETIME</code>；<code>TIMESTAMP(n)</code>" + NL +
+                    "保留 n 位小数秒</li>" + NL +
+                    "<li><code>CLOB</code> 落 <code>LONGTEXT</code>、<code>TEXT</code> 落 <code>TEXT</code>、" + NL +
+                    "<code>BLOB</code> 落 <code>LONGBLOB</code>；这类列 MySQL 不允许默认值，达梦那边的默认值会被丢掉</li>" + NL +
+                    "<li><code>NUMBER</code> 没给精度时按 <code>DECIMAL(38,10)</code> 兜住，精度超 65 收到 <code>DECIMAL(65,30)</code>；" + NL +
+                    "整数位不超过 19 且无小数位的 <code>NUMBER</code> 落 <code>BIGINT</code></li>" + NL +
+                    "<li>默认值只搬 MySQL 也认的写法，<code>SYSDATE</code> 译成 <code>CURRENT_TIMESTAMP</code>" + NL +
+                    "且小数秒位数跟着列定义走（<code>DATETIME(6)</code> 配裸的 <code>CURRENT_TIMESTAMP</code>" + NL +
+                    "服务端报 1067）；认不出的丢掉不猜</li>" + NL +
+                    "<li>表名与字段名只放字母、数字、下划线；中文列名或带引号的标识符不进产物，日志逐条点名。" + NL +
+                    "注释里的换行压成空格、单引号翻倍、超过 1024 字符截断</li>" + NL +
+                    "<li>外键、唯一索引、检查约束不搬：这些约束与 MySQL 端已有表结构对不对得上，这一页判断不了，" + NL +
+                    "留给建表之后手工加</li>" + NL +
+                    "</ul>" + NL +
+                    "<p>读结构走达梦的 <code>ALL_TABLES</code>、<code>ALL_TAB_COLUMNS</code>、" + NL +
+                    "<code>ALL_TAB_COMMENTS</code>、<code>ALL_COL_COMMENTS</code>、<code>ALL_CONSTRAINTS</code>" + NL +
+                    "这几本目录视图，对达梦只读不写。表已经在 MySQL 建好、只想把注释刷过去的，" + NL +
+                    "用后面那节「达梦注释搬到 MySQL」的 SQL 或 CSV 两条路，不必整表重建。</p>"
         ),
         new Section("dmcomment", "达梦注释搬到 MySQL",
                 "<h2>达梦的注释搬到 MySQL：两条通道怎么选</h2>" + NL +

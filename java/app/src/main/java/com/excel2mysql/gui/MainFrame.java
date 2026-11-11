@@ -44,7 +44,8 @@ import java.util.Map;
  * 每个会耗时的入口都是"子线程算数据 + 模态进度框 + 主线程落界面"三段，
  * 界面从不自己算——两条路共用 core 里同一个工作函数，测的就是线上跑的那段。
  */
-public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.Host {
+public final class MainFrame extends JFrame
+        implements SqlPage.Host, LayerPage.Host, DmPage.Host {
 
     private static final String NO_FILE_HINT = LogText.NO_FILE_HINT;
     private static final String APPLY_PREFIX_TIP =
@@ -120,6 +121,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
     public static final String RES_CONN = "conn";
     /** 分层建模页的生成任务一位：这一页在跑时另三页照点不误，与 SQL 执行器同口径。 */
     public static final String RES_LAYER = "layer";
+    /** 达梦页的连库与写入任务一位：它既动外部库也动 MySQL 目标库，别的页不该同时改目标库。 */
+    public static final String RES_DM = "dm";
     /** 资源位的人话名字：被挡下的那句要说清楚在等的是哪一样东西。 */
     private static final Map<String, String> RES_LABEL =
             new java.util.LinkedHashMap<String, String>();
@@ -130,6 +133,7 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
         RES_LABEL.put(RES_RUN, "SQL 执行器页的执行结果区（编辑区 SQL 与脚本清单共用）");
         RES_LABEL.put(RES_CONN, "连接区（连库取库列表）");
         RES_LABEL.put(RES_LAYER, "分层建模页的生成任务");
+        RES_LABEL.put(RES_DM, "达梦页的连接与结构写入");
     }
 
     /**
@@ -164,6 +168,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
     private SqlPage sqlPage;
     /** 第四页「分层建模」：只在构造期建一次，Host 回调与自检都走它。 */
     private LayerPage layerPage;
+    /** 第五页「达梦 → MySQL」：达梦那边是本页自己的连接，MySQL 这端复用顶部连接栏。 */
+    private DmPage dmPage;
     private ProgressDialog lastTask;
     /** 最近一次请求的任务标题：原地模式不弹框，标题也要留痕才断言得了"用的是 Python 原话"。 */
     private String lastTaskTitle = "";
@@ -273,6 +279,8 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
         tabs.addTab("SQL 执行器", buildSqlRunPage());
         layerPage = new LayerPage(this);
         tabs.addTab("分层建模", layerPage);
+        dmPage = new DmPage(this);
+        tabs.addTab("达梦 → MySQL", dmPage);
         add(tabs, BorderLayout.CENTER);
         // Ctrl+V 的绑定要放在三页都建完之后：文本控件的改挂是遍历这棵树做的，
         // 早一步遍历只会扑空（那时树里还没有输入框与 SQL 编辑区）
@@ -1789,6 +1797,18 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
     }
 
     /**
+     * 第五页「达梦 → MySQL」的连库读结构与写入任务：日志落在本页，只占 RES_DM 一位。
+     * 达梦那端是本页自己的连接，MySQL 这端复用顶部连接栏所选的库。
+     */
+    @Override
+    public void runDmTask(String title,
+                          java.util.function.Function<ImportParse.Sink, Object> work,
+                          java.util.function.Consumer<Object> onUi) {
+        runTask(title, work, onUi, dmPage == null ? null : dmPage.logPanel(),
+                new String[]{RES_DM});
+    }
+
+    /**
      * 任务台账的回报口：进度先落进台账，台账再刷它自己的框（原地跑那条路没有框，只记账）。
      * log/logError 本身就是线程安全的；日志一律写这个任务自己那一页的面板。
      */
@@ -2764,6 +2784,10 @@ public final class MainFrame extends JFrame implements SqlPage.Host, LayerPage.H
 
     public SqlPage sqlPage() {
         return sqlPage;
+    }
+
+    public com.excel2mysql.gui.DmPage dmPage() {
+        return dmPage;
     }
 
     public com.excel2mysql.gui.LayerPage layerPage() {

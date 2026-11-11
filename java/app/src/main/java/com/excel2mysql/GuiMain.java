@@ -112,6 +112,56 @@ public final class GuiMain {
                 ui_guidance(frame, problems);
                 // 静态文字这一族趁窗口刚建好、正文还没被任何一条用例改过之前判
                 static_texts(frame, problems);
+                // 第五页「达梦 → MySQL」：页签在位、结构→DDL 的口径逐条钉住、
+                // 缺输入与缺驱动那两种结局都要当堂说一句，不许静默
+                if (frame.dmPage() == null) {
+                    problems.add("第五页 dmPage 没挂上");
+                } else {
+                    com.excel2mysql.gui.DmPage dp = frame.dmPage();
+                    if (frame.tabs().getTabCount() != 5
+                            || !"达梦 → MySQL".equals(frame.tabs().getTitleAt(4))) {
+                        problems.add("第五页没排在第 5 位或标题不对：共 "
+                                + frame.tabs().getTabCount() + " 页");
+                    }
+                    if (dp.generateEnabled() || dp.saveEnabled()) {
+                        problems.add("还没读回达梦结构，第五页的生成与保存却可点");
+                    }
+                    dp.connectAndList();
+                    if (!dp.logPanel().text().contains("模式名为空")) {
+                        problems.add("模式名空着时第五页没说话：" + dp.logPanel().text());
+                    }
+                    if (!com.excel2mysql.core.DmReader.driverPresent()) {
+                        dp.schemaFieldForSelftest("SYSDBA");
+                        dp.connectAndList();
+                        if (!dp.logPanel().text().contains("没找到达梦 JDBC 驱动")) {
+                            problems.add("没有达梦驱动时没说清缺什么与放哪儿："
+                                    + dp.logPanel().text());
+                        }
+                    }
+                    dm_ddl_selftest(problems);
+                    dp.setTablesForSelftest(
+                            java.util.Collections.singletonList(dmFixture()));
+                    if (dp.tableRowCount() != 1) {
+                        problems.add("灌进一份结构后第五页清单不是 1 行：" + dp.tableRowCount());
+                    }
+                    if (!dp.generateEnabled()) {
+                        problems.add("已读回结构，第五页「生成 MySQL DDL」却还是灰的");
+                    }
+                    String dmSqlText = dp.generate() == null ? "" : dp.outputText();
+                    if (!dmSqlText.contains("CREATE TABLE `t_oil`")
+                            || !dmSqlText.contains("PRIMARY KEY (`id`)")
+                            || !dmSqlText.contains("COMMENT='油料保障台账'")) {
+                        problems.add("第五页生成的 DDL 不像样：" + dmSqlText);
+                    }
+                    if (!dp.saveEnabled()) {
+                        problems.add("生成完「保存到 .sql」却还是灰的");
+                    }
+                    java.io.File dmSql = java.io.File.createTempFile("selftest-dm-", ".sql");
+                    dmSql.deleteOnExit();
+                    if (!dp.saveTo(dmSql) || dmSql.length() <= 0L) {
+                        problems.add("第五页保存 .sql 没落盘：" + dmSql.getPath());
+                    }
+                }
                 // 第四页：页签存在、三按钮默认灰（未载入映射）、ads 依赖锁
                 if (frame.layerPage() == null) {
                     problems.add("第四页 layerPage 没挂上");
@@ -2995,6 +3045,86 @@ public final class GuiMain {
     }
 
     /** 这一页的控件树里还有没有下拉框：源库改取顶部连接栏后，本页不该再有任何 JComboBox。 */
+    /** 达梦目录视图的一行：给第五页的转换口径当夹具，不连真库也能验。 */
+    private static com.excel2mysql.core.DmMysql.Column dmCol(String name, String type,
+                                                             int len, int prec, int scale,
+                                                             boolean nullable, String def,
+                                                             String comment) {
+        com.excel2mysql.core.DmMysql.Column c = new com.excel2mysql.core.DmMysql.Column();
+        c.name = name;
+        c.type = type;
+        c.length = len;
+        c.precision = prec;
+        c.scale = scale;
+        c.nullable = nullable;
+        c.dbDefault = def;
+        c.comment = comment;
+        return c;
+    }
+
+    /** 一张覆盖面够宽的达梦表：主键、变长、定标数、大对象、时间戳、非法列名各来一样。 */
+    private static com.excel2mysql.core.DmMysql.Table dmFixture() {
+        com.excel2mysql.core.DmMysql.Table t = new com.excel2mysql.core.DmMysql.Table();
+        t.schema = "SYSDBA";
+        t.name = "T_OIL";
+        t.comment = "油料保障台账";
+        t.columns.add(dmCol("ID", "BIGINT", 8, -1, 0, false, "", "主键"));
+        t.columns.add(dmCol("NAME", "VARCHAR", 50, -1, -1, false, "", "油料名称"));
+        t.columns.add(dmCol("PRICE", "DECIMAL", 22, 12, 2, true, "0.00", "单价（元）"));
+        t.columns.add(dmCol("NOTE", "CLOB", 0, -1, -1, true, "'x'", "备注"));
+        t.columns.add(dmCol("CREATED", "TIMESTAMP", 0, -1, 6, true, "SYSDATE", "创建时间"));
+        t.columns.add(dmCol("WEIRD TYPE", "VagueType", 0, -1, -1, true, "", "认不出的列"));
+        t.primaryKeys.add("ID");
+        return t;
+    }
+
+    /**
+     * 转换口径逐条断言（不写死整串 DDL：排版一动就整片红，看不出真坏了哪一条）。
+     */
+    private static void dm_ddl_selftest(List<String> problems) {
+        List<String> warns = new ArrayList<String>();
+        String ddl = com.excel2mysql.core.DmMysql.ddl(dmFixture(), true, warns);
+        String[] want = {
+                "CREATE TABLE `t_oil` (",
+                "  `id` BIGINT NOT NULL COMMENT '主键'",
+                "  `name` VARCHAR(50) NOT NULL COMMENT '油料名称'",
+                "  `price` DECIMAL(12,2) DEFAULT 0.00 COMMENT '单价（元）'",
+                "  `created` DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间'",
+                "  PRIMARY KEY (`id`)",
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+                        + " COMMENT='油料保障台账'",
+        };
+        for (String w : want) {
+            if (!ddl.contains(w)) {
+                problems.add("达梦→MySQL 少了这一段：" + w + "｜实际：" + ddl);
+            }
+        }
+        if (ddl.contains("WEIRD") || ddl.contains("VagueType")) {
+            problems.add("非法列名或没认出的类型被原样搬进了 DDL：" + ddl);
+        }
+        if (!ddl.contains("`note` LONGTEXT DEFAULT NULL COMMENT '备注'")) {
+            problems.add("CLOB 没落 LONGTEXT 或它的默认值没被丢掉：" + ddl);
+        }
+        String joined = String.join(" / ", warns);
+        if (!joined.contains("名不在允许范围") || !joined.contains("MySQL 不给这类列默认值")) {
+            problems.add("两处该点名没点名：" + joined);
+        }
+        List<String> warns2 = new ArrayList<String>();
+        String quote = com.excel2mysql.core.DmMysql.comment("a'b\nc", "T", "f", warns2);
+        if (!"a''b c".equals(quote) || !warns2.isEmpty()) {
+            problems.add("注释里的引号与换行没处理：" + quote);
+        }
+        List<String> warns3 = new ArrayList<String>();
+        if (com.excel2mysql.core.DmMysql.name("表名中文", true) != null) {
+            problems.add("中文标识符没被拦下");
+        }
+        com.excel2mysql.core.DmMysql.Output out = com.excel2mysql.core.DmMysql.script(
+                java.util.Collections.singletonList(dmFixture()), "ods", true, true);
+        if (!out.sql.startsWith("USE `ods`;") || !out.sql.contains("DROP TABLE IF EXISTS `t_oil`;")) {
+            problems.add("USE 头或 DROP 头没写出来：" + out.sql);
+        }
+    }
+
     private static boolean hasCombo(java.awt.Container root) {
         for (java.awt.Component c : root.getComponents()) {
             if (c instanceof javax.swing.JComboBox) {
@@ -3062,7 +3192,7 @@ public final class GuiMain {
      */
     private static final String[] STATIC_TEXTS = {
             "中英表头建模，回写库", "解析建表语句，回写库", "执行脚本与临时语句",
-            "读 ods 建模 obj/dom/ads",
+            "读 ods 建模 obj/dom/ads", "连达梦读表结构，生成 MySQL 建表语句",
             "主机：", "端口：", "用户名：", "密码：", "目标库：",
             "命名规则：", "命名规则：", "表名前缀：", "表名前缀：",
             "SQL 文本", "执行结果", "还没有执行结果"};
@@ -3473,7 +3603,7 @@ public final class GuiMain {
         frame.selectTab(0);
         frame.validate();
         List<String> titles = frame.tabTitles();
-        if (titles.size() != 4 || !"SQL 执行器".equals(titles.get(2))) {
+        if (titles.size() != 5 || !"SQL 执行器".equals(titles.get(2))) {
             problems.add("第三个页签不对：" + titles);
         }
         // 第四页签的名字也钉住：layerPage 挂没挂由上面那块管，这条管的是页签标题文案本身。
@@ -6600,8 +6730,8 @@ public final class GuiMain {
         }
         com.excel2mysql.gui.HelpDialog hd = new com.excel2mysql.gui.HelpDialog(null);
         try {
-            if (hd.tocCount() != 17) {
-                problems.add("说明目录应有 17 章（与 help_doc.py 同步，改了要重导 HelpDoc.java），"
+            if (hd.tocCount() != 18) {
+                problems.add("说明目录应有 18 章（与 help_doc.py 同步，改了要重导 HelpDoc.java），"
                         + "实际 " + hd.tocCount());
             }
             if (hd.bodyLength() < 2000) {
