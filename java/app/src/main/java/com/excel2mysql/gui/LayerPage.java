@@ -75,6 +75,8 @@ public final class LayerPage extends JPanel {
     private final DropArea fileDrop = new DropArea(this::guessFromFiles, this::chooseGuessFiles,
             DropArea.LAYER_HINT, null);
     private final JButton readSrcBtn = new JButton("读源库结构");
+    /** 读回源结构后按条款 184/183/188 自动铺一份映射；不点它时读结构也会自动跑一遍（内置模板态）。 */
+    private final JButton autoMapBtn = new JButton("按源库结构自动映射");
     private final JButton objBtn = new JButton("生成对象层 obj");
     private final JButton domBtn = new JButton("生成领域层 dom");
     private final JButton adsBtn = new JButton("生成主题层 ads");
@@ -86,6 +88,8 @@ public final class LayerPage extends JPanel {
 
     private MappingFile mapping;
     private List<LayerGen.SourceTable> sourceTables = new ArrayList<LayerGen.SourceTable>();
+    /** 界面上这份映射还是随包内置模板吗？是的话读回源结构后自动铺一遍，不用人再点一颗。 */
+    private boolean builtinMapping = true;
     private boolean objGenerated;
     private boolean domGenerated;
     /**
@@ -144,6 +148,13 @@ public final class LayerPage extends JPanel {
                 + "填源表清单并绑定映射行的绑定状态；obj/dom 生成依赖这一步。</html>");
         readSrcBtn.addActionListener(e -> readSourceStructure());
         row.add(readSrcBtn);
+        Buttons.secondary(autoMapBtn);
+        autoMapBtn.setToolTipText("<html>用已读回的源库结构按条款 184（7 领域 33 子领域）、<br>"
+                + "条款 183（十类对象维度）、条款 188（三个主题）铺一份映射。<br>"
+                + "自动识别一源一表；领域/子领域只做分类，不按它合并。<br>"
+                + "会覆盖当前映射；判不准的行标「待确认」。</html>");
+        autoMapBtn.addActionListener(e -> autoMapFromSource());
+        row.add(autoMapBtn);
         row.add(mappingLabel);
         row.add(new JLabel("目标库 obj/dom/ads"));
         row.add(objDb); row.add(domDb); row.add(adsDb);
@@ -183,7 +194,24 @@ public final class LayerPage extends JPanel {
             host.warn("这一页正有任务在跑，等它结束再识别领域。");
             return;
         }
-        final List<String> picked = new ArrayList<String>(paths);
+        // Excel 打开着的文件会留一个 ~$ 锁文件：解析它只会失败，还会把「解析失败」算进结果
+        final List<String> picked = new ArrayList<String>();
+        int locked = 0;
+        for (String p : paths) {
+            if (new File(p).getName().startsWith("~$")) {
+                locked++;
+            } else {
+                picked.add(p);
+            }
+        }
+        if (locked > 0) {
+            logPanel.log("- [INFO] LAYER | 跳过 " + locked + " 个 Excel 锁文件（~$ 开头，不是真表格）");
+        }
+        if (picked.isEmpty()) {
+            logPanel.log("! [WARN] LAYER | 拖进来的全是 Excel 锁文件（~$ 开头），没有可识别的表格");
+            host.inform("拖进来的都是 Excel 打开时留下的锁文件（~$ 开头），没有可识别的表格。");
+            return;
+        }
         host.runLayerTask("按文件识别领域", new Function<ImportParse.Sink, Object>() {
             @Override public Object apply(ImportParse.Sink sink) {
                 try {
@@ -221,55 +249,161 @@ public final class LayerPage extends JPanel {
                     host.inform("这些文件里没解出可识别的表，映射没有改动。");
                     return;
                 }
-                List<MappingFile.TableMap> rows = new ArrayList<MappingFile.TableMap>();
-                int pending = 0;
-                for (DomainGuess.Verdict v : vs) {
-                    rows.add(v.map);
-                    logPanel.log((v.guessed ? "+ [OK] LAYER | " : "! [WARN] LAYER | ")
-                            + DomainGuess.describe(v));
-                    if (!v.guessed) {
-                        pending++;
-                    }
-                }
-                mapping = MappingFile.ofTables(rows);
-                // 与「载入映射文件」同一口径：换一份映射就清掉上一场的字段例外
-                fieldExceptions.clear();
-                mappingLabel.setText("按文件识别（" + rows.size() + " 表"
-                        + (pending == 0 ? "" : "，" + pending + " 张待确认") + "）");
-                fillTable();
-                refreshButtonStates();
-                host.inform("已按 " + picked.size() + " 个入口识别出 " + rows.size() + " 张表的领域，"
-                        + (pending == 0 ? "全部判出。"
-                                : "其中 " + pending + " 张判不出，日志已逐表点名，可在映射文件里补。")
+                int pending = applyVerdicts(vs, "按文件识别");
+                host.inform("已按 " + picked.size() + " 个入口识别出 " + vs.size()
+                        + " 张表的领域（一源一表），"
+                        + (pending == 0 ? "全部判出。" : "其中 " + pending + " 张待确认，日志已逐表点名。")
                         + (oc.failed == 0 ? "" : "另有 " + oc.failed + " 个文件解析失败。"));
             }
         });
     }
 
-    /** 解出来的表 → 判定输入：文件名、包名、表注释与字段注释，全在解析结果里，不再回读磁盘。 */
+    /** 识别结果铺到界面：映射、标签、表格、按钮锁与日志一次做完，两条入口共用。 */
+    private int applyVerdicts(List<DomainGuess.Verdict> vs, String how) {
+        List<MappingFile.TableMap> rows = new ArrayList<MappingFile.TableMap>();
+        java.util.Set<String> targets = new java.util.LinkedHashSet<String>();
+        int pending = 0;
+        for (DomainGuess.Verdict v : vs) {
+            rows.add(v.map);
+            if (v.map.domainTarget != null && !v.map.domainTarget.isEmpty()) {
+                targets.add(v.map.domainTarget);
+            }
+            logPanel.log((v.guessed ? "+ [OK] LAYER | " : "! [WARN] LAYER | ")
+                    + DomainGuess.describe(v));
+            if (v.warning != null && !v.warning.isEmpty()) {
+                logPanel.log("  · " + v.warning);
+            }
+            if (!v.guessed) {
+                pending++;
+            }
+        }
+        mapping = MappingFile.ofTables(rows);
+        builtinMapping = false;
+        // 与「载入映射文件」同一口径：换一份映射就清掉上一场的字段例外
+        fieldExceptions.clear();
+        mappingLabel.setText(how + "（" + rows.size() + " 表，" + targets.size() + " 张领域表"
+                + (pending == 0 ? "" : "，" + pending + " 张待确认") + "）");
+        fillTable();
+        refreshButtonStates();
+        logPanel.log("- [INFO] LAYER | " + how + " | " + DomainGuess.summary(vs));
+        return pending;
+    }
+
+    /** 「按源库结构自动映射」那颗：读回的结构已在手，直接判，不连库。 */
+    private void autoMapFromSource() {
+        if (sourceTables.isEmpty()) {
+            host.warn("还没有源库结构：先点「读源库结构」把源表取回来。");
+            return;
+        }
+        if (layerBusy) {
+            host.warn("这一页正有任务在跑，等它结束再自动映射。");
+            return;
+        }
+        autoMapFromTables(new ArrayList<LayerGen.SourceTable>(sourceTables), "按源库结构识别");
+    }
+
+    /** 在 worker 里判这批判源表，回 EDT 铺界面（与拖文件那条同一套落点）。 */
+    private void autoMapFromTables(final List<LayerGen.SourceTable> st, final String how) {
+        host.runLayerTask(how, new Function<ImportParse.Sink, Object>() {
+            @Override public Object apply(ImportParse.Sink sink) {
+                try {
+                    Names nm = new Names(PinyinLoader.get());
+                    List<DomainGuess.Verdict> vs = DomainGuess.guess(inputsOf(st), nm);
+                    if (sink.cancelled()) {
+                        sink.log("! [WARN] LAYER | 已取消：" + how + " 的结果不覆盖界面上那份映射");
+                        return null;
+                    }
+                    return vs;
+                } catch (Exception ex) {
+                    sink.logError("x [ERROR] LAYER | " + how + " 失败：" + ex.getMessage());
+                    return String.valueOf(ex.getMessage());
+                }
+            }
+        }, new Consumer<Object>() {
+            @SuppressWarnings("unchecked")
+            @Override public void accept(Object res) {
+                if (res == null) {
+                    return;
+                }
+                if (res instanceof String) {
+                    host.informError(how + "失败", String.valueOf(res));
+                    return;
+                }
+                List<DomainGuess.Verdict> vs = (List<DomainGuess.Verdict>) res;
+                if (vs.isEmpty()) {
+                    host.inform("源库里没有可映射的表。");
+                    return;
+                }
+                int pending = applyVerdicts(vs, how);
+                host.inform(how + "：" + DomainGuess.summary(vs)
+                        + (pending == 0 ? "。" : "。待确认的行已标出，可在导出的映射文件里改。"));
+            }
+        });
+    }
+
+    /** 解出来的表 → 判定输入：文件名、系统目录、表注释、字段注释/名与源列，全在解析结果里。 */
     private static List<DomainGuess.Input> inputsOf(ImportParse.Outcome oc) {
         List<DomainGuess.Input> out = new ArrayList<DomainGuess.Input>();
         for (TableBuilder.Result r : oc.tables) {
-            DomainGuess.Input in = new DomainGuess.Input();
             String path = r.table.filepath == null ? "" : r.table.filepath;
+            if (new File(path).getName().startsWith("~$")) {
+                continue;
+            }
+            DomainGuess.Input in = new DomainGuess.Input();
             in.fileName = new File(path).getName();
-            String origin = oc.zipOrigin.get(path);
-            if (origin != null) {
-                int bang = origin.indexOf('!');
-                in.system = bang > 0 ? origin.substring(0, bang) : origin;
-            }
-            in.tableCn = r.table.tableComment == null ? "" : r.table.tableComment;
-            in.tableEn = r.table.tableName == null ? "" : r.table.tableName;
-            in.fieldCount = r.table.columns.size();
-            for (com.excel2mysql.core.Infer.Column c : r.table.columns) {
-                in.fieldComments.add(c.comment == null ? "" : c.comment);
-                if (c.primaryKey && in.pkField.isEmpty()) {
-                    in.pkField = c.field == null ? "" : c.field;
-                }
-            }
+            in.system = systemOf(path, oc.zipOrigin.get(path));
+            fillInput(in, r.table.tableComment, r.table.tableName, r.table.columns);
             out.add(in);
         }
         return out;
+    }
+
+    /** 读源库结构那条路：源表清单就是判定输入，没有目录/包名，靠 ods 物理表名前缀找先验。 */
+    private static List<DomainGuess.Input> inputsOf(List<LayerGen.SourceTable> st) {
+        List<DomainGuess.Input> out = new ArrayList<DomainGuess.Input>();
+        for (LayerGen.SourceTable t : st) {
+            DomainGuess.Input in = new DomainGuess.Input();
+            in.fileName = t.name == null ? "" : t.name;
+            fillInput(in, t.comment, t.name, t.columns);
+            out.add(in);
+        }
+        return out;
+    }
+
+    private static void fillInput(DomainGuess.Input in, String tableCn, String tableEn,
+                                  List<com.excel2mysql.core.Infer.Column> cols) {
+        in.tableCn = tableCn == null ? "" : tableCn;
+        in.tableEn = tableEn == null ? "" : tableEn;
+        in.fieldCount = cols == null ? 0 : cols.size();
+        if (cols == null) {
+            return;
+        }
+        for (com.excel2mysql.core.Infer.Column c : cols) {
+            in.fieldComments.add(c.comment == null ? "" : c.comment);
+            in.fieldNames.add(c.field == null ? "" : c.field);
+            if (c.primaryKey && in.pkField.isEmpty()) {
+                in.pkField = c.field == null ? "" : c.field;
+            }
+        }
+    }
+
+    /**
+     * 系统列取「这张表属于哪个业务系统」：ZIP 里取包内的一级目录，散装文件取它的父目录名。
+     * 目录先验比表名可靠——同一个系统导出的几百张表，表名里各说各的对象，目录只有一个。
+     */
+    private static String systemOf(String path, String origin) {
+        if (origin != null) {
+            int bang = origin.indexOf('!');
+            String inner = bang >= 0 ? origin.substring(bang + 1) : "";
+            String norm = inner.replace('\\', '/');
+            int slash = norm.indexOf('/');
+            if (slash > 0) {
+                return norm.substring(0, slash);
+            }
+            return bang > 0 ? origin.substring(0, bang) : "";
+        }
+        File parent = new File(path).getParentFile();
+        return parent == null ? "" : parent.getName();
     }
 
     private JPanel buildBottom() {
@@ -303,6 +437,7 @@ public final class LayerPage extends JPanel {
     public boolean loadBuiltinTemplate() {
         try {
             mapping = MappingFile.parseTableCsv(readTemplateText(), "内置映射模板");
+            builtinMapping = true;
             fieldExceptions.clear();
             mappingLabel.setText("内置映射模板（" + mapping.tables().size() + " 表）");
             fillTable();
@@ -354,6 +489,7 @@ public final class LayerPage extends JPanel {
     public boolean loadMapping(String path) {
         try {
             mapping = MappingFile.loadTableCsv(path);
+            builtinMapping = false;
             // 换一份映射就把上一份的例外清掉：例外只按 dstTable.dstField 归档，
             // 不清的话新映射里同名的目标字段会白接手上一场会话改过的规则
             fieldExceptions.clear();
@@ -397,6 +533,7 @@ public final class LayerPage extends JPanel {
         adsBtn.setEnabled(ready && objGenerated && domGenerated && !layerBusy);
         loadBtn.setEnabled(!layerBusy);
         readSrcBtn.setEnabled(!layerBusy);
+        autoMapBtn.setEnabled(!sourceTables.isEmpty() && !layerBusy);
         if (ready && !objGenerated && !domGenerated) {
             // 文案与引擎实发一致：ads 的 FROM 只有 dom 明细（genAds 逐主题一条 COUNT(*) FROM dom.<目标表>），
             // obj／dim 的 JOIN 口径按条款 188 留给业务方核，没产出来就不能在悬浮里声称汇总了它。
@@ -629,6 +766,19 @@ public final class LayerPage extends JPanel {
                 List<LayerGen.SourceTable> st = (List<LayerGen.SourceTable>) arr[0];
                 setSourceTables(st);
                 logPanel.log("- [INFO] LAYER | 读源库 " + db + " | 用户表 " + st.size() + " 张");
+                if (builtinMapping && !st.isEmpty()) {
+                    // 用户点「读源库结构」时界面上还是随包示例：顺手把整批源表按条款体系铺成映射，
+                    // 免得每次都要再点一颗；已经载入过真映射的，不在这里偷偷覆盖
+                    logPanel.log("- [INFO] LAYER | 仍是内置模板，按读到的 " + st.size()
+                            + " 张源表自动映射");
+                    host.inform("已读取源库结构：库 " + db + " 共 " + st.size()
+                            + " 张用户表，正在按条款体系自动映射（一源一表）。");
+                    autoMapFromTables(new ArrayList<LayerGen.SourceTable>(st), "按源库结构识别");
+                    return;
+                }
+                if (!builtinMapping) {
+                    logPanel.log("- [INFO] LAYER | 当前是载入的映射，未自动覆盖；要按条款体系重铺可点「按源库结构自动映射」");
+                }
                 host.inform("已读取源库结构：库 " + db + " 共 " + st.size() + " 张用户表");
             }
         });
@@ -825,6 +975,8 @@ public final class LayerPage extends JPanel {
     public String mappingLabelText() { return mappingLabel.getText(); }
     /** 「读源库结构」那颗：同上。 */
     public JButton readSourceButton() { return readSrcBtn; }
+    /** 「按源库结构自动映射」那颗：自检按用户入口点它。 */
+    public JButton autoMapButton() { return autoMapBtn; }
     /** 对象层库名那一格：自检要往里灌一个不合规的库名，验生成被拦下而不是落一份坏产物（#7）。 */
     public JTextField objDbField() { return objDb; }
 }

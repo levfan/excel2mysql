@@ -42,6 +42,29 @@ public final class LayerGen {
         public List<String> unbound = new ArrayList<String>();
     }
 
+    /**
+     * 显式合并的护栏：映射里多行写同一个领域目标表才算合并，来源数或列数超过这两档就拒绝。
+     * 条款 184 的领域/子领域是分类，不是物理合并键；几十张异构表 UNION 成一张宽表
+     * 既过不了 MySQL 上限，也把业务粒度混在一起。
+     */
+    public static final int MAX_MERGE_SOURCES = 10;
+    public static final int MAX_MERGE_COLUMNS = 500;
+
+    /** 本地 InnoDB 16K 页的行上限体检口径。 */
+    private static final int DOM_PAGE_SIZE = 16384;
+
+    /** 一个显式同目标的合并计划：映射行、去重源表、目标列与拒绝原因。 */
+    private static final class DomGroup {
+        final String target;
+        final List<MappingFile.TableMap> rows = new ArrayList<MappingFile.TableMap>();
+        final List<SourceTable> sources = new ArrayList<SourceTable>();
+        final List<Infer.Column> cols = new ArrayList<Infer.Column>();
+        boolean multi;
+        boolean entityIdFromSource;
+        String refuse = "";
+        DomGroup(String target) { this.target = target; }
+    }
+
     /** 表 5-3：obj/dom 通用治理字段。 */
     public static final String[] GOV_OBJ_DOM = {
             "entity_id", "src_entity_id", "std_code", "src_code", "tags", "data_level",
@@ -95,53 +118,32 @@ public final class LayerGen {
         return map.get(t.tableEn);
     }
 
-    // ---- dom：按领域目标表整编，同名直映＋治理字段 ----
+    // ---- dom：一源一表；只有映射里显式写同一个领域目标表才合并 ----
     private static LayerOutput genDom(MappingFile m, List<SourceTable> src, GenOptions o) {
         LayerOutput out = new LayerOutput();
         out.layer = Layer.DOM;
         Map<String, SourceTable> map = byName(src);
-        Map<String, List<MappingFile.TableMap>> groups = new LinkedHashMap<String, List<MappingFile.TableMap>>();
-        for (MappingFile.TableMap t : m.tables()) {
-            if (t.domainTarget == null || t.domainTarget.isEmpty()) { continue; }
-            SourceTable s = bind(t, map);
-            if (s == null) { out.unbound.add(t.tableEn); continue; }
-            List<MappingFile.TableMap> g = groups.get(t.domainTarget);
-            if (g == null) { g = new ArrayList<MappingFile.TableMap>(); groups.put(t.domainTarget, g); }
-            g.add(t);
-        }
         StringBuilder ddl = new StringBuilder("USE `" + o.domDb + "`;\n\n");
         StringBuilder dml = new StringBuilder("USE `" + o.domDb + "`;\n\n");
-        for (Map.Entry<String, List<MappingFile.TableMap>> e : groups.entrySet()) {
-            String target = e.getKey();
-            // 条款 184 的整编实况就是多源归一（层间映射初稿 312 源表 → 26 领域目标表，23 个多源）。
-            // 合并表要装下所有源的列，缺列的源那一支只能插 NULL，所以：源侧 NOT NULL 一律不许携带、
-            // 各源主键一律不许并成复合主键，主键只归治理字段 entity_id（每行 UUID() 生成，天然唯一）。
-            // 单源目标（1:1 路）保持原样：源主键照旧携带，不在这条路上做任何改变。
-            boolean multi = isMultiSource(e.getValue(), map);
-            List<Infer.Column> cols = new ArrayList<Infer.Column>();
-            Set<String> seen = new LinkedHashSet<String>();
-            for (MappingFile.TableMap t : e.getValue()) {
-                SourceTable s = bind(t, map);
-                for (Infer.Column c : s.columns) {
-                    if (seen.add(c.field)) { cols.add(multi ? copyMerged(c) : copyCol(c, c.primaryKey)); }
-                }
+        for (DomGroup g : planDom(m, src, out)) {
+            if (!g.refuse.isEmpty()) {
+                out.warnings.add("领域目标表 " + g.target + " 拒绝生成：" + g.refuse);
+                continue;
             }
-            // entity_id 若来自源列（与治理字段撞名），addGovernance 会跳过补治、markEntityIdPk 会把这一
-            // 源列当主键，而各支 INSERT 又用 UUID() 覆盖它——源值被静默吞掉。撞名不常见，但不能不响。
-            boolean entityIdFromSource = multi && seen.contains("entity_id");
-            addGovernance(cols, GOV_OBJ_DOM);
-            if (multi) { markEntityIdPk(cols); }
-            if (entityIdFromSource) {
-                out.warnings.add("多源合并表 " + target + " 有源列名为 entity_id、与治理字段撞名："
+            // 显式合并才走多源路：缺列的源那一支只能插 NULL，所以源侧 NOT NULL 不携带、
+            // 各源主键不并成复合主键，主键只归治理字段 entity_id（每行 UUID() 生成）。
+            // 单源目标（一源一表）保持原样：源主键照旧携带，不做任何改变。
+            if (g.entityIdFromSource) {
+                out.warnings.add("多源合并表 " + g.target + " 有源列名为 entity_id、与治理字段撞名："
                         + "主键 entity_id 将由 UUID() 生成并覆盖源值（待核，186 溯源）");
             }
-            ddl.append(Ddl.buildDdl(target, target, cols, true)).append(";\n\n");
-            for (MappingFile.TableMap t : e.getValue()) {
+            ddl.append(Ddl.buildDdl(g.target, g.target, g.cols, true)).append(";\n\n");
+            for (MappingFile.TableMap t : g.rows) {
                 SourceTable s = bind(t, map);
                 // dom 不产生成主键之外的键值：uuidPk 只在多源时钉 entity_id，src_entity_id 归 obj（条款 186）
-                ColExpr x = new ColExpr(s, multi ? "entity_id" : null, null, o);
-                dml.append(domInsert(target, cols, x)).append("\n\n");
-                addFieldMaps(out, s, target, cols, x);
+                ColExpr x = new ColExpr(s, g.multi ? "entity_id" : null, null, o);
+                dml.append(domInsert(g.target, g.cols, x)).append("\n\n");
+                addFieldMaps(out, s, g.target, g.cols, x);
             }
             out.tableCount++;
         }
@@ -150,14 +152,78 @@ public final class LayerGen {
         return out;
     }
 
-    /** 该目标组是否由两张以上不同源表归并而来（同一源表重复登记不算多源）。 */
-    private static boolean isMultiSource(List<MappingFile.TableMap> group, Map<String, SourceTable> map) {
-        Set<String> names = new LinkedHashSet<String>();
-        for (MappingFile.TableMap t : group) {
+    /** 把映射行按「领域目标表」归并，并逐组量合并护栏；不做任何落盘或改类型。 */
+    private static List<DomGroup> planDom(MappingFile m, List<SourceTable> src, LayerOutput out) {
+        Map<String, SourceTable> map = byName(src);
+        Map<String, DomGroup> groups = new LinkedHashMap<String, DomGroup>();
+        for (MappingFile.TableMap t : m.tables()) {
+            if (t.domainTarget == null || t.domainTarget.isEmpty()) { continue; }
             SourceTable s = bind(t, map);
-            if (s != null) { names.add(s.name); }
+            if (s == null) { out.unbound.add(t.tableEn); continue; }
+            DomGroup g = groups.get(t.domainTarget);
+            if (g == null) { g = new DomGroup(t.domainTarget); groups.put(t.domainTarget, g); }
+            g.rows.add(t);
+            if (!g.sources.contains(s)) { g.sources.add(s); }
         }
-        return names.size() > 1;
+        List<DomGroup> outGroups = new ArrayList<DomGroup>(groups.values());
+        for (DomGroup g : outGroups) {
+            g.multi = g.sources.size() > 1;
+            Set<String> seen = new LinkedHashSet<String>();
+            for (SourceTable s : g.sources) {
+                for (Infer.Column c : s.columns) {
+                    if (seen.add(c.field)) {
+                        g.cols.add(g.multi ? copyMerged(c) : copyCol(c, c.primaryKey));
+                    }
+                }
+            }
+            g.entityIdFromSource = g.multi && seen.contains("entity_id");
+            addGovernance(g.cols, GOV_OBJ_DOM);
+            if (g.multi) { markEntityIdPk(g.cols); }
+            g.refuse = refuseReason(g);
+        }
+        return outGroups;
+    }
+
+    /** 合并护栏：来源数、总列数与行字节三条线，任何一条越线都拒绝这一组。 */
+    private static String refuseReason(DomGroup g) {
+        String names = sourceNames(g.sources);
+        if (g.multi && g.sources.size() > MAX_MERGE_SOURCES) {
+            return "由 " + g.sources.size() + " 张源表显式合并，超过 " + MAX_MERGE_SOURCES
+                    + " 张上限；请拆成多个领域目标表。源表：" + names;
+        }
+        if (g.cols.size() > MAX_MERGE_COLUMNS) {
+            return "合并后 " + g.cols.size() + " 列，超过 " + MAX_MERGE_COLUMNS
+                    + " 列上限；请拆成多个领域目标表。源表：" + names;
+        }
+        RowFit.Plan p = RowFit.rowPlan(g.cols, DOM_PAGE_SIZE);
+        if (!p.ok) {
+            return "合并后 " + p.columns + " 列，行上限体检不通过（server " + p.server + " / "
+                    + RowFit.SERVER_ROW_LIMIT + "，行内 " + p.local + " / " + p.localLimit
+                    + "）；请拆成多个领域目标表。源表：" + names;
+        }
+        return "";
+    }
+
+    /** 拒绝时点名源表：最多列 10 张，再多只报总数，免得一行日志刷出几百个表名。 */
+    private static String sourceNames(List<SourceTable> sources) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < sources.size() && i < 10; i++) {
+            if (i > 0) { sb.append("、"); }
+            sb.append(sources.get(i).name);
+        }
+        if (sources.size() > 10) {
+            sb.append(" 等 ").append(sources.size()).append(" 张");
+        }
+        return sb.toString();
+    }
+
+    /** dom 层真正会生成的表：ads 只许引用这些目标，别给被护栏拒掉的表产 INSERT。 */
+    private static Set<String> generatableDomTargets(MappingFile m, List<SourceTable> src) {
+        Set<String> out = new LinkedHashSet<String>();
+        for (DomGroup g : planDom(m, src, new LayerOutput())) {
+            if (g.refuse.isEmpty()) { out.add(g.target); }
+        }
+        return out;
     }
 
     /**
@@ -250,46 +316,72 @@ public final class LayerGen {
                 + " FROM (SELECT DISTINCT " + join(inner, ", ") + " FROM " + x.from() + ") AS `e_" + s.name + "`";
     }
 
-    // ---- ads：按主题归属在 dom 上产模板聚合（条款 188 口径待业务方核，故不产 obj JOIN，FROM 只有 dom）----
+    // ---- ads：按条款 188 的三个主题在 dom 上产模板聚合（口径待业务方核，故不产 obj JOIN）----
     private static LayerOutput genAds(MappingFile m, List<SourceTable> src, GenOptions o) {
         LayerOutput out = new LayerOutput();
         out.layer = Layer.ADS;
-        Map<String, List<MappingFile.TableMap>> groups = new LinkedHashMap<String, List<MappingFile.TableMap>>();
+        // 主题 →（领域目标表 → 行数）。一张主题表装多个领域的汇总，每个领域一条 INSERT：
+        // 旧写法只取组里第一张表当 FROM，同主题其余领域的表根本没进汇总。
+        Map<String, Map<String, Integer>> groups =
+                new LinkedHashMap<String, Map<String, Integer>>();
+        Set<String> valid = generatableDomTargets(m, src);
+        Set<String> skipped = new LinkedHashSet<String>();
         for (MappingFile.TableMap t : m.tables()) {
             if (t.theme == null || t.theme.isEmpty()) { continue; }
-            List<MappingFile.TableMap> g = groups.get(t.theme);
-            if (g == null) { g = new ArrayList<MappingFile.TableMap>(); groups.put(t.theme, g); }
-            g.add(t);
+            if (t.domainTarget == null || t.domainTarget.isEmpty()) { continue; }
+            if (!valid.contains(t.domainTarget)) {
+                if (skipped.add(t.domainTarget)) {
+                    out.warnings.add("ads 跳过领域目标表 " + t.domainTarget
+                            + "：dom 层未生成（合并护栏拒绝或源表未绑定）");
+                }
+                continue;
+            }
+            Map<String, Integer> byDom = groups.get(t.theme);
+            if (byDom == null) {
+                byDom = new LinkedHashMap<String, Integer>();
+                groups.put(t.theme, byDom);
+            }
+            Integer n = byDom.get(t.domainTarget);
+            byDom.put(t.domainTarget, Integer.valueOf(n == null ? 1 : n.intValue() + 1));
         }
         StringBuilder ddl = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
         StringBuilder dml = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
-        for (Map.Entry<String, List<MappingFile.TableMap>> e : groups.entrySet()) {
+        for (Map.Entry<String, Map<String, Integer>> e : groups.entrySet()) {
             String theme = e.getKey();
-            String target = "ads_" + theme;
+            String target = Taxonomy.themeTable(theme);
             List<Infer.Column> cols = new ArrayList<Infer.Column>();
             cols.addAll(governanceCols(GOV_ADS));
             ddl.append(Ddl.buildDdl(target, "主题 " + theme + "（待核）", cols, true)).append(";\n\n");
-            String domTable = e.getValue().get(0).domainTarget;
-            dml.append("-- 主题 ").append(theme).append(" 聚合模板，指标口径待业务方核改（条款 188）\n")
-               .append("INSERT INTO `").append(target).append("` (`stat_date`, `dim_key_json`, `idx_code`, `src_row_cnt`, `excluded_row_cnt`, `etl_batch_id`, `quality_flag`) ")
-               .append("SELECT CURDATE() AS `stat_date`, '{}' AS `dim_key_json`, ")
-               .append("'").append(theme).append("' AS `idx_code`, COUNT(*) AS `src_row_cnt`, ")
-               .append("0 AS `excluded_row_cnt`, '").append(o.batchId).append("' AS `etl_batch_id`, '待核' AS `quality_flag` ")
-               .append("FROM ").append(qualify(o.domDb, domTable == null ? "dwd_unknown" : domTable)).append(" ")
-               .append("GROUP BY CURDATE();\n\n");
-            for (Infer.Column c : cols) {
-                MappingFile.FieldMap f = new MappingFile.FieldMap();
-                f.srcTable = domTable == null ? "" : domTable; f.srcField = "";
-                f.srcComment = "模板聚合"; f.dstTable = target; f.dstField = c.field;
-                f.dstComment = c.comment; f.dataElemName = ""; f.dataElemId = "待赋码";
-                f.transformRule = "模板聚合（待核）"; f.governance = true; f.status = "待核";
-                out.fieldMapping.add(f);
+            if (e.getValue().isEmpty()) {
+                out.warnings.add("主题 " + theme + " 没有领域目标表，未产聚合语句");
+                out.tableCount++;
+                continue;
+            }
+            for (String domTable : e.getValue().keySet()) {
+                String dimJson = "{\"dom\":\"" + domTable + "\"}";
+                dml.append("-- 主题 ").append(theme).append(" / 领域目标表 ").append(domTable)
+                   .append(" 聚合模板，指标口径待业务方核改（条款 188）\n")
+                   .append("INSERT INTO `").append(target).append("` (`stat_date`, `dim_key_json`, `idx_code`, `idx_value`, `src_row_cnt`, `excluded_row_cnt`, `etl_batch_id`, `quality_flag`) ")
+                   .append("SELECT CURDATE() AS `stat_date`, '").append(dimJson).append("' AS `dim_key_json`, ")
+                   .append("'").append(theme).append("' AS `idx_code`, COUNT(*) AS `idx_value`, ")
+                   .append("COUNT(*) AS `src_row_cnt`, ")
+                   .append("0 AS `excluded_row_cnt`, '").append(o.batchId).append("' AS `etl_batch_id`, '待核' AS `quality_flag` ")
+                   .append("FROM ").append(qualify(o.domDb, domTable)).append(" ")
+                   .append("GROUP BY CURDATE();\n\n");
+                for (Infer.Column c : cols) {
+                    MappingFile.FieldMap f = new MappingFile.FieldMap();
+                    f.srcTable = domTable; f.srcField = "";
+                    f.srcComment = "模板聚合"; f.dstTable = target; f.dstField = c.field;
+                    f.dstComment = c.comment; f.dataElemName = ""; f.dataElemId = "待赋码";
+                    f.transformRule = "模板聚合（待核）"; f.governance = true; f.status = "待核";
+                    out.fieldMapping.add(f);
+                }
             }
             out.tableCount++;
         }
         out.ddlSql = ddl.toString();
         out.transformSql = dml.toString();
-        out.warnings.add("ads 指标口径为模板，须业务方逐条核改（条款 188 注）");
+        out.warnings.add("ads 指标口径为模板，idx_value 先按源行数 COUNT(*) 填，须业务方逐条核改（条款 188 注）");
         return out;
     }
 

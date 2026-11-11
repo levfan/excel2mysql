@@ -2692,11 +2692,11 @@ public final class GuiMain {
      * 而不是"有没有报错"：拦不下时产物照样落得整整齐齐。
      */
     /**
-     * 第四页免配模板那条路：按文件名与表内元数据判每张表属于哪个领域。
+     * 第四页免配模板那条路：按系统目录/ods 前缀先验 + 表名细化 + 条款 183 维度判每张表的归属。
      *
-     * <p>判得准不准是业务口径，名词表可以一直加；这三件事不许退化——数不到名词就不猜
-     * （逐表点名，绝不塞进某个领域凑数）、同一名词在多张表上共用一个领域码与一张领域目标表
-     * （分组才是这条路的产物）、依据要写出来（哪个词在哪个来源被数到几次）。
+     * <p>判得准不准是业务口径；这几件事不许退化——先验命中的领域码按条款固定（不按首次出现编号）、
+     * 子领域只在先验领域内细化、对象维度只认十类官方键（拼音 dim 名会被生成器静默丢掉）、
+     * 数不到词就不猜（逐表点名标待确认）、自动识别一源一表（领域/子领域只做分类，不合并）。
      */
     private static void layer_domain_guess(MainFrame frame, String dir, List<String> problems) {
         com.excel2mysql.gui.LayerPage lp = frame.layerPage();
@@ -2706,43 +2706,54 @@ public final class GuiMain {
         }
         com.excel2mysql.core.Names nm =
                 new com.excel2mysql.core.Names(com.excel2mysql.core.PinyinLoader.get());
-        // 1) 表注释命中：领域、领域码、领域目标表、主题、依据、对象维度各钉一处
+        // 1) 没有系统先验时按领域词判：人员 → 保障/实力数据，码与目标表按条款固定
         java.util.List<com.excel2mysql.core.DomainGuess.Input> one =
                 new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
         one.add(guessIn("人员信息表（人事处）.xlsx", "", "人员信息表", "ren_yuan_xin_xi",
                 3, "xing_ming", new String[]{"姓名", "所属机构", "入职日期"}));
         com.excel2mysql.core.DomainGuess.Verdict a = DomainGuess.guess(one, nm).get(0);
-        if (!a.guessed || !"人员".equals(a.domain)) {
-            problems.add("表注释里的「人员」没被判成领域：" + DomainGuess.describe(a));
+        if (!a.guessed || !"保障".equals(a.domain) || !"实力数据".equals(a.map.domainSub)) {
+            problems.add("表注释里的「人员」没被判成保障/实力数据：" + DomainGuess.describe(a));
         }
         if (!"DOM01".equals(a.map.domainCode)) {
-            problems.add("第一个领域没拿到 DOM01：" + a.map.domainCode);
+            problems.add("保障的领域码不是条款固定的 DOM01：" + a.map.domainCode);
         }
-        if (a.map.domainTarget == null || !a.map.domainTarget.startsWith("dwd_")
-                || a.map.domainTarget.length() <= 4) {
-            problems.add("领域目标表不是 dwd_ 开头的全拼：" + a.map.domainTarget);
+        if (!"dwd_shi_li_shu_ju_ren_yuan_xin_xi".equals(a.map.domainTarget)) {
+            problems.add("一源一表的领域目标表名不对： " + a.map.domainTarget);
         }
-        if (!"人员主题".equals(a.map.theme)) {
-            problems.add("主题归属没跟着领域走：" + a.map.theme);
+        if (!"辅助决策".equals(a.map.theme)) {
+            problems.add("主题没跟领域/子领域走：" + a.map.theme);
         }
-        if (!a.basis.contains("按表注释命中「人员」")) {
-            problems.add("依据没写明命中来自表注释：" + a.basis);
+        if (!a.basis.contains("领域词") || !a.basis.contains("人员")) {
+            problems.add("依据没写明数了哪个词：" + a.basis);
         }
-        if (a.map.objDims == null || !a.map.objDims.contains("dim_")) {
-            problems.add("字段注释里的「机构」没汇成涉及对象维度：" + a.map.objDims);
+        if (a.map.objDims == null || !a.map.objDims.contains("dim_person")
+                || !a.map.objDims.contains("dim_org")) {
+            problems.add("字段注释里的姓名/机构没汇成官方维度：" + a.map.objDims);
         }
         if (!"自动识别".equals(a.map.status)) {
             problems.add("判出来的行状态不是自动识别：" + a.map.status);
         }
-        // 2) 同分取表注释里更靠前的那个：设备与人员都命中，谁先出现算谁
-        java.util.List<com.excel2mysql.core.DomainGuess.Input> tie =
+        // 2) 系统先验定领域、表名只在领域内细化子领域：军油工程里的被装表 → 采购供应/被装保障
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> refine =
                 new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
-        tie.add(guessIn("台账.xlsx", "", "设备人员台账", "tai_zhang", 1, "", new String[]{}));
-        com.excel2mysql.core.DomainGuess.Verdict t = DomainGuess.guess(tie, nm).get(0);
-        if (!"设备".equals(t.domain)) {
-            problems.add("同分没按表注释里更靠前的名词判：" + t.domain);
+        refine.add(guessIn("被装发放台账.xlsx", "军油工程", "被装发放台账", "t_bz", 2, "",
+                new String[]{"被装名称", "发放数量"}));
+        com.excel2mysql.core.DomainGuess.Verdict rf = DomainGuess.guess(refine, nm).get(0);
+        if (!"采购供应".equals(rf.domain) || !"被装保障".equals(rf.map.domainSub)) {
+            problems.add("系统先验+表名细化没落到采购供应/被装保障：" + DomainGuess.describe(rf)
+                    + " | " + rf.basis);
         }
-        // 3) 数不到名词就不猜
+        if (!rf.basis.contains("先验") || !rf.basis.contains("细化")) {
+            problems.add("先验与细化两段依据没写全：" + rf.basis);
+        }
+        if (!"DOM04".equals(rf.map.domainCode) || !"后勤资源掌控".equals(rf.map.theme)) {
+            problems.add("采购供应的码/主题不对：" + rf.map.domainCode + " / " + rf.map.theme);
+        }
+        if (!"dwd_bei_zhuang_bao_zhang_t_bz".equals(rf.map.domainTarget)) {
+            problems.add("先验细化后的目标表没带源表名：" + rf.map.domainTarget);
+        }
+        // 3) 数不到词就不猜
         java.util.List<com.excel2mysql.core.DomainGuess.Input> none =
                 new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
         none.add(guessIn("临时导出.xlsx", "", "临时表", "lin_shi", 2, "", new String[]{"甲", "乙"}));
@@ -2754,7 +2765,7 @@ public final class GuiMain {
         if (!DomainGuess.describe(n).contains("判不出领域")) {
             problems.add("判不出的那句日志没点名：" + DomainGuess.describe(n));
         }
-        // 4) 分组：两张人员表共用领域码与目标表，采购另起一档
+        // 4) 一源一表：两张人员表共用领域码，但目标表各带自己的源表名；采购另起一档
         java.util.List<com.excel2mysql.core.DomainGuess.Input> group =
                 new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
         group.add(guessIn("人员信息表.xlsx", "", "人员信息表", "t_a", 1, "", new String[]{}));
@@ -2762,28 +2773,86 @@ public final class GuiMain {
         group.add(guessIn("采购台账.xlsx", "", "", "t_c", 1, "", new String[]{}));
         java.util.List<com.excel2mysql.core.DomainGuess.Verdict> g =
                 DomainGuess.guess(group, nm);
-        if (!g.get(0).map.domainCode.equals(g.get(1).map.domainCode)
-                || !g.get(0).map.domainTarget.equals(g.get(1).map.domainTarget)) {
-            problems.add("同领域的两张表没分到同一组：" + g.get(0).map.domainCode + " / "
+        if (!g.get(0).map.domainCode.equals(g.get(1).map.domainCode)) {
+            problems.add("同子领域的两张表没共用领域码：" + g.get(0).map.domainCode + " / "
                     + g.get(1).map.domainCode);
         }
-        if (!"DOM02".equals(g.get(2).map.domainCode) || !"采购".equals(g.get(2).domain)) {
+        if (g.get(0).map.domainTarget.equals(g.get(1).map.domainTarget)
+                || !"dwd_shi_li_shu_ju_t_a".equals(g.get(0).map.domainTarget)
+                || !"dwd_shi_li_shu_ju_t_b".equals(g.get(1).map.domainTarget)) {
+            problems.add("自动识别没做到一源一表：" + g.get(0).map.domainTarget + " / "
+                    + g.get(1).map.domainTarget);
+        }
+        if (!"DOM04".equals(g.get(2).map.domainCode) || !"采购供应".equals(g.get(2).domain)) {
             problems.add("按文件名命中失败或领域码排错：" + g.get(2).domain + " "
                     + g.get(2).map.domainCode);
         }
-        if (!g.get(2).basis.contains("按文件名命中「采购」")) {
+        if (!g.get(2).basis.contains("采购")) {
             problems.add("文件名那条依据没写出来：" + g.get(2).basis);
         }
-        // 5) 压缩包名当系统：一个包通常就是同一个业务系统导出来的。
-        // 文件名里故意不带名词——文件名比包名更靠近这张表，带了就轮到文件名的依据
+        // 5) 系统目录当先验：财务系统的无名词明细也归财务，不进待确认
         java.util.List<com.excel2mysql.core.DomainGuess.Input> sys =
                 new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
         sys.add(guessIn("明细.xlsx", "财务系统", "", "ming_xi", 1, "", new String[]{}));
         com.excel2mysql.core.DomainGuess.Verdict s = DomainGuess.guess(sys, nm).get(0);
-        if (!"财务系统".equals(s.map.system) || !s.basis.contains("按压缩包名命中")) {
-            problems.add("包名没进系统列或依据没写来源：" + s.map.system + " | " + s.basis);
+        if (!"财务系统".equals(s.map.system) || !"财务".equals(s.domain)
+                || !s.basis.contains("系统目录「财务系统」先验")) {
+            problems.add("系统目录没进系统列或没当先验：" + s.map.system + " | " + s.domain
+                    + " | " + s.basis);
         }
-        // 6) 走用户真入口：拖进第四页那块虚线区
+        // 6) ods 物理表名前缀当先验：读源库结构时没有目录，只能靠前缀
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> pre =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        pre.add(guessIn("ods_jygcxt_t_you.xlsx", "", "油料收支表", "ods_jygcxt_t_you", 1, "",
+                new String[]{}));
+        com.excel2mysql.core.DomainGuess.Verdict pv = DomainGuess.guess(pre, nm).get(0);
+        if (!"采购供应".equals(pv.domain) || !"油料保障".equals(pv.map.domainSub)
+                || !"军油工程".equals(pv.map.system) || !pv.basis.contains("表名前缀「ods_jygcxt」")) {
+            problems.add("ods 前缀先验没生效：" + DomainGuess.describe(pv) + " | " + pv.basis);
+        }
+        // 7) 管道/系统表归综合/信息化；十类维度只出官方键
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> meta =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        meta.add(guessIn("系统用户表.xlsx", "", "系统用户表", "sys_user", 2, "",
+                new String[]{"用户编码", "角色名称"}));
+        com.excel2mysql.core.DomainGuess.Verdict mv = DomainGuess.guess(meta, nm).get(0);
+        if (!"综合".equals(mv.domain) || !"信息化".equals(mv.map.domainSub)) {
+            problems.add("系统用户表没归综合/信息化：" + DomainGuess.describe(mv));
+        }
+        for (com.excel2mysql.core.DomainGuess.Verdict vv : new com.excel2mysql.core.DomainGuess.Verdict[]{
+                a, rf, g.get(0), g.get(2), s, pv}) {
+            if (vv.map.objDims == null || vv.map.objDims.isEmpty()) {
+                continue;
+            }
+            for (String dim : vv.map.objDims.split("[;；,，]")) {
+                if (!com.excel2mysql.core.Taxonomy.isDim(dim.trim())) {
+                    problems.add("映射里出现了非十类维度：" + dim + "（生成器会静默丢掉）");
+                }
+            }
+        }
+        // 8) 一源一表：三张各 50 列的同子领域表产三张目标表，互不合并
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> wide =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        for (int t = 0; t < 3; t++) {
+            wide.add(guessIn("油料表" + t + ".xlsx", "军油工程", "油料表" + t, "t_you_" + t,
+                    50, "", new String[]{}));
+        }
+        java.util.List<com.excel2mysql.core.DomainGuess.Verdict> wv = DomainGuess.guess(wide, nm);
+        java.util.Set<String> wTargets = new java.util.LinkedHashSet<String>();
+        for (com.excel2mysql.core.DomainGuess.Verdict vv : wv) {
+            wTargets.add(vv.map.domainTarget);
+        }
+        if (wTargets.size() != 3 || !wTargets.contains("dwd_you_liao_bao_zhang_t_you_0")
+                || !wTargets.contains("dwd_you_liao_bao_zhang_t_you_1")
+                || !wTargets.contains("dwd_you_liao_bao_zhang_t_you_2")) {
+            problems.add("同子领域的三张源表没做到一源一表：" + wTargets);
+        }
+        for (com.excel2mysql.core.DomainGuess.Verdict vv : wv) {
+            if (!vv.basis.contains("一源一表")) {
+                problems.add("目标表依据没写一源一表：" + vv.basis);
+            }
+        }
+        // 9) 走用户真入口：拖进第四页那块虚线区
         if (!lp.layerDropArea().acceptsDrops() || !lp.layerDropArea().hasClickAction()) {
             problems.add("第四页的拖拽区没接拖或没接点击选择");
         }
@@ -2824,7 +2893,7 @@ public final class GuiMain {
         boolean hitPerson = false;
         boolean hitPending = false;
         for (com.excel2mysql.core.MappingFile.TableMap m : lp.mapping().tables()) {
-            if ("人员".equals(m.domain) && m.domainTarget != null
+            if ("保障".equals(m.domain) && m.domainTarget != null
                     && m.domainTarget.startsWith("dwd_")) {
                 hitPerson = true;
             }
@@ -2833,8 +2902,8 @@ public final class GuiMain {
             }
         }
         String log = lp.logPanel().text();
-        if (!hitPerson || !log.contains("→ 领域「人员」")) {
-            problems.add("夹具里的「人员信息表」没被判成人员领域，日志也没点名："
+        if (!hitPerson || !log.contains("→ 领域「保障」")) {
+            problems.add("夹具里的「人员信息表」没被判成保障领域，日志也没点名："
                     + tailOf(log).replace((char) 10, ' '));
         }
         if (!hitPending || !log.contains("判不出领域")) {

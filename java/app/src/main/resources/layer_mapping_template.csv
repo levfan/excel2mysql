@@ -1,3 +1,3 @@
 ﻿系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注,ods物理表名
-示例系统,人员,人员信息表（示例）,demo_person,8,person_id,人员管理,HR01,人员基础信息,dwd_person_hr,dim_person,人员主题,按对象维度归类,模板示例,单对象维度示例,
-示例系统,采购,采购订单表（示例）,demo_purchase_order,9,order_id,采购供应,SC01,采购执行,dwd_proc_purchase,dim_org;dim_material,采购主题,按主题归类,模板示例,多对象维度示例,
+示例系统,实力数据,人员信息表（示例）,demo_person,8,person_id,保障,DOM01,实力数据,dwd_shi_li_shu_ju_demo_person,dim_person;dim_org,辅助决策,系统目录先验+表名细化,模板示例,单对象维度示例,
+示例系统,油料保障,油料收发存表（示例）,demo_oil,9,oil_id,采购供应,DOM04,油料保障,dwd_you_liao_bao_zhang_demo_oil,dim_org;dim_material,后勤资源掌控,系统目录先验+表名细化,模板示例,多对象维度示例,

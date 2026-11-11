@@ -67,6 +67,52 @@ public final class LayerGenDiffer {
         if (!ads.transformSql.contains("GROUP BY") || !ads.transformSql.contains("COUNT(*)")) {
             bad++; shown.add("ads 缺模板聚合 GROUP BY/COUNT(*)");
         }
+        // 同一主题装了多个领域目标表时，一个目标一条 INSERT：旧写法只取组里第一张表，
+        // 其余领域的表根本没进汇总；idx_value 与 dim_key_json 也要落，不然指标表只有行数没有值。
+        if (countOccurrences(ads.transformSql, "INSERT INTO `ads_rc`") != 2) {
+            bad++; shown.add("ads 同主题两个领域目标表应各一条 INSERT，实际 "
+                    + countOccurrences(ads.transformSql, "INSERT INTO `ads_rc`"));
+        }
+        if (!ads.transformSql.contains("COUNT(*) AS `idx_value`")) {
+            bad++; shown.add("ads 的 idx_value 不是按行数模板填的");
+        }
+        if (!ads.transformSql.contains("{\"dom\":\"dwd_proc_oil\"}")
+                || !ads.transformSql.contains("{\"dom\":\"dwd_comp_tech\"}")) {
+            bad++; shown.add("ads 的 dim_key_json 没带领域目标表");
+        }
+        if (ads.transformSql.contains("dwd_unknown")) {
+            bad++; shown.add("ads FROM 兜底成了 dwd_unknown");
+        }
+
+        // ---- 合并护栏：领域/子领域是分类不是物理合并键，映射显式同目标也必须有上限 ----
+        // 11 张源表写同一个目标表：超来源数上限，整组拒绝，不产 DDL/DML
+        MappingFile gm = guardMapping(11, 1);
+        List<LayerGen.SourceTable> gs = guardSource(11, 1);
+        LayerGen.LayerOutput gdom = LayerGen.genLayer(LayerGen.Layer.DOM, gm, gs, o);
+        if (gdom.tableCount != 0 || gdom.ddlSql.contains("CREATE TABLE `dwd_guard_wide`")) {
+            bad++; shown.add("超过 " + LayerGen.MAX_MERGE_SOURCES + " 源上限的显式合并仍产出了 dom 表");
+        }
+        if (!hasWarning(gdom, "dwd_guard_wide", "超过 " + LayerGen.MAX_MERGE_SOURCES + " 张上限")) {
+            bad++; shown.add("超来源数的合并没在警告里点名目标表与上限：" + gdom.warnings);
+        }
+        // ads 不许引用被护栏拒掉的 dom 目标
+        LayerGen.LayerOutput gads = LayerGen.genLayer(LayerGen.Layer.ADS, gm, gs, o);
+        if (gads.transformSql.contains("dwd_guard_wide")) {
+            bad++; shown.add("ads 仍引用被护栏拒掉的领域目标表 dwd_guard_wide");
+        }
+        if (!hasWarning(gads, "ads 跳过领域目标表 dwd_guard_wide")) {
+            bad++; shown.add("ads 没在警告里说明跳过了被拒的 dom 目标：" + gads.warnings);
+        }
+        // 单源但列数超上限：同样拒绝，不靠降类型/拆段兜
+        MappingFile cm = guardMapping(1, 600);
+        List<LayerGen.SourceTable> cs = guardSource(1, 600);
+        LayerGen.LayerOutput cdom = LayerGen.genLayer(LayerGen.Layer.DOM, cm, cs, o);
+        if (cdom.tableCount != 0 || cdom.ddlSql.contains("CREATE TABLE `dwd_guard_wide`")) {
+            bad++; shown.add("超过 " + LayerGen.MAX_MERGE_COLUMNS + " 列上限的单表仍产出了 dom 表");
+        }
+        if (!hasWarning(cdom, "dwd_guard_wide", "超过 " + LayerGen.MAX_MERGE_COLUMNS + " 列上限")) {
+            bad++; shown.add("超列数的合并没在警告里点名目标表与上限：" + cdom.warnings);
+        }
 
         // 建表语句必须以分号终止：否则整层拼接后 splitStatements 粘连、交付 .sql 在 mysql 客户端跑不动
         if (!dom.ddlSql.contains("COMMENT='dwd_proc_oil';") || !dom.ddlSql.contains("COMMENT='dwd_comp_tech';")) {
@@ -265,6 +311,47 @@ public final class LayerGenDiffer {
             if (fields.contains(f.dstField)) { hit.add(f.dstField); }
         }
         return hit.size();
+    }
+
+    /** 护栏夹具：rows 行同写 dwd_guard_wide，每行字段数 fields（只写进映射，不参与列数判断）。 */
+    private static MappingFile guardMapping(int rows, int fields) throws IOException {
+        String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
+                + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < rows; i++) {
+            body.append("保障,基础数据,守卫表").append(i).append(",s").append(i)
+                    .append(',').append(fields).append(",f0,保障,DOM01,基础数据,dwd_guard_wide,")
+                    .append("dim_org,综合分析,护栏,自动识别,\n");
+        }
+        File f = File.createTempFile("layerdiff-guard-", ".csv");
+        f.deleteOnExit();
+        Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
+        try { w.write('\ufeff'); w.write(header); w.write(body.toString()); } finally { w.close(); }
+        return MappingFile.loadTableCsv(f.getPath());
+    }
+
+    /** 护栏夹具的源结构：tables 张表，每张 fields 个 VARCHAR(255) 列。 */
+    private static List<LayerGen.SourceTable> guardSource(int tables, int fields) {
+        List<LayerGen.SourceTable> out = new ArrayList<LayerGen.SourceTable>();
+        for (int i = 0; i < tables; i++) {
+            List<Infer.Column> cs = new ArrayList<Infer.Column>();
+            for (int f = 0; f < fields; f++) {
+                cs.add(mcol("f" + f, f == 0, false));
+            }
+            out.add(new LayerGen.SourceTable("s" + i, "守卫表" + i, cs));
+        }
+        return out;
+    }
+
+    private static boolean hasWarning(LayerGen.LayerOutput out, String... parts) {
+        for (String w : out.warnings) {
+            boolean all = true;
+            for (String p : parts) {
+                if (!w.contains(p)) { all = false; break; }
+            }
+            if (all) { return true; }
+        }
+        return false;
     }
 
     private static MappingFile multiMapping() throws IOException {

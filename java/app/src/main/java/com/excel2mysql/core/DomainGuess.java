@@ -1,227 +1,251 @@
 package com.excel2mysql.core;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 /**
- * 从文件名与表内元数据判每张表属于哪个领域——第四页免配映射模板的那条路。
+ * 给一批源表判 obj/dom/ads 的归属——第四页免配映射模板、以及读源库结构后自动映射的那条路。
  *
- * <p>判据只有一条：数业务名词。表注释、文件名、压缩包名、字段注释里各数一遍，权重按
- * "这串字离这张表有多近"排：表注释 3、文件名 2、包名 1、字段注释 1。字段注释权重最低
- * 不是因为它不重要，而是它说的是这张表牵涉哪些对象（机构、设备、时间），
- * 拿它当领域会把"人员设备台账"判成设备。
+ * <p>判法分三步，越靠前越硬：
+ * <ol>
+ *   <li>系统先验：源文件所在的一级目录（或 ods 物理表名前缀）先定领域与子领域；
+ *       目录名带年份版本号也照样命中（<code>运输投送系统2.0</code>）。</li>
+ *   <li>表名细化：先验领域内再按表注释、文件名数子领域词，把「仓库业务系统」里的被装表
+ *       从默认的物资保障细化到被装保障；领域本身不因表名来回翻，避免同一系统的表
+ *       被拆到互不相关的领域。</li>
+ *   <li>没有先验时才按条款 184 的领域词计数判领域；一个领域词都数不到就标待确认，
+ *       由人补映射文件，不塞进某个领域凑数。</li>
+ * </ol>
  *
- * <p>数不到名词就不猜：那张表标成待确认，日志逐表点名，绝不塞进某个领域凑数。
- * 同一名词在多张表上重复出现时共用一个领域码与一张领域目标表——分组是这条路的产物，
- * 不是每张表各起一个领域。
+ * <p>对象维度只认条款 183 的十类（{@link LayerGen#DIM_PK} 那套键），从字段注释与字段名里取；
+ * 不再拼拼音 dim 名——生成器只认这十个键，拼出来的名字会静默丢掉整张维表。
  *
- * <p>名词表是通用业务名词，不绑某个客户的项目；判不准的那几张留给「载入映射文件」人工改。
+ * <p>自动识别按「一源一表」落 dom：每张源表指定一张自己的领域目标表
+ * <code>dwd_&lt;子领域全拼&gt;_&lt;源表名&gt;</code>。领域/子领域/主题只写进映射做分类，
+ * 不拿它当物理合并键——几十张异构表按领域 UNION 成一张，列数会越过 MySQL 上限，
+ * 业务粒度也混在一起。要合并只能由人在映射里显式写同一个「领域目标表」来声明。
  */
 public final class DomainGuess {
 
-    /** 一个待判的表：文件名与表内元数据，全部离线可得，不连库。 */
+    /** 一个待判的表：文件名、系统/目录、表内元数据与源列，全部离线可得，不连库。 */
     public static final class Input {
         public String fileName = "";
-        /** 来自 ZIP 时写包名；散装文件为空。 */
+        /** 源文件所在的一级目录名；散装文件为空。写进映射的「系统」列，也用来找先验。 */
         public String system = "";
         public String tableCn = "";
         public String tableEn = "";
         public int fieldCount;
         public String pkField = "";
         public List<String> fieldComments = new ArrayList<String>();
+        public List<String> fieldNames = new ArrayList<String>();
     }
 
-    /** 一张表的判定结果：映射行 + 判没判出来 + 依据那句话。 */
+    /** 一张表的判定结果：映射行 + 判没判出来 + 依据 + 需要汇总提醒的那句话。 */
     public static final class Verdict {
         public final MappingFile.TableMap map = new MappingFile.TableMap();
         public boolean guessed;
         public String basis = "";
         public String domain = "";
+        public String warning = "";
     }
 
-    /** 业务名词表。顺序不参与优先级，只用于同分时给出确定的先后。 */
-    private static final String[] NOUNS = {
-            "人员", "员工", "职工", "用户", "账号", "角色", "权限", "部门", "机构", "组织",
-            "岗位", "客户", "供应商", "合同", "订单", "采购", "招标", "库存", "出入库", "物料",
-            "设备", "资产", "项目", "工程", "任务", "审批", "流程", "财务", "费用", "发票",
-            "报销", "工资", "考勤", "排班", "水库", "河道", "河段", "站点", "监测", "雨量",
-            "水位", "流量", "告警", "日志", "字典", "配置", "报表", "统计", "教学", "学生",
-            "教师", "课程", "成绩", "病历", "患者", "药品", "诊断", "车辆", "能耗", "安全",
-    };
-
-    /** 表注释 / 文件名 / 包名 / 字段注释 各自的权重。 */
-    private static final int W_COMMENT = 3;
-    private static final int W_FILE = 2;
-    private static final int W_SYSTEM = 1;
-    private static final int W_FIELD = 1;
-    /** 涉及对象维度最多记三个：再多这张 dim 清单就没法一眼看完。 */
     private static final int MAX_DIMS = 3;
 
     private DomainGuess() {
     }
 
-    /** 一批表 → 一批映射行；领域码与领域目标表按首次出现的顺序稳定分配。 */
+    /** 一批表 → 一批映射行；目标表一源一张，随源表走。 */
     public static List<Verdict> guess(List<Input> inputs, Names names) {
-        Map<String, String> codeByDomain = new LinkedHashMap<String, String>();
-        Map<String, String> targetByDomain = new LinkedHashMap<String, String>();
+        List<Cls> cls = new ArrayList<Cls>();
         List<Verdict> out = new ArrayList<Verdict>();
         for (Input in : inputs) {
-            out.add(one(in, names, codeByDomain, targetByDomain));
+            Cls c = classify(in);
+            cls.add(c);
+            out.add(row(in, c));
         }
+        assignTargets(inputs, out, cls, names);
         return out;
     }
 
-    private static Verdict one(Input in, Names names, Map<String, String> codeByDomain,
-                               Map<String, String> targetByDomain) {
-        Verdict v = new Verdict();
+    /** 判定中间态：领域、子领域、依据与状态。 */
+    private static final class Cls {
+        String domain = "";
+        String sub = "";
+        String system = "";
+        String basis = "";
+        String status = "待确认";
+        String warning = "";
+        List<String> dims = new ArrayList<String>();
+        boolean guessed;
+    }
+
+    private static Cls classify(Input in) {
+        Cls c = new Cls();
+        c.system = nz(in.system);
         String stem = stem(in.fileName);
-        String flatFields = join(in.fieldComments);
-        int bestScore = 0;
-        String best = null;
-        int bestAt = Integer.MAX_VALUE;
-        for (String noun : NOUNS) {
-            int score = W_COMMENT * hits(in.tableCn, noun)[0]
-                    + W_FILE * hits(stem, noun)[0]
-                    + W_SYSTEM * hits(in.system, noun)[0]
-                    + W_FIELD * hits(flatFields, noun)[0];
-            if (score <= 0) {
-                continue;
+        String fields = join(in.fieldComments);
+        String cn = nz(in.tableCn).isEmpty() ? stem : in.tableCn.trim();
+
+        if (Taxonomy.isMeta(cn, in.tableEn)) {
+            c.domain = "综合";
+            c.sub = "信息化";
+            c.guessed = true;
+            c.status = "自动识别";
+            c.basis = "系统表（字典/日志/账号一类）归综合/信息化";
+            return c;
+        }
+
+        Taxonomy.Prior p = Taxonomy.prior(in.system, in.tableEn);
+        if (p != null) {
+            c.system = p.system;
+            c.domain = p.domain;
+            c.sub = p.sub;
+            c.guessed = true;
+            c.status = "自动识别";
+            c.basis = p.via + "先验归领域「" + p.domain + "」/「" + p.sub + "」";
+            String best = null;
+            int bestScore = 0;
+            Taxonomy.Domain d = Taxonomy.domain(p.domain);
+            if (d != null) {
+                for (String sub : d.subs) {
+                    // 先验已经说了系统，细化只看这张表自己的名字与字段，免得系统名又把默认档数回来
+                    int s = Taxonomy.scoreSub(sub, cn, stem, "", fields);
+                    if (s > bestScore) {
+                        bestScore = s;
+                        best = sub;
+                    }
+                }
             }
-            // 同分先取在表注释里出现更早的那个；表注释里没有就看文件名，再看名词表顺序
-            int at = position(in.tableCn, stem, noun);
-            if (score > bestScore || (score == bestScore && at < bestAt)) {
-                bestScore = score;
-                best = noun;
-                bestAt = at;
+            if (best != null && !best.equals(p.sub)) {
+                String hit = Taxonomy.subHit(best, cn, stem, "", fields);
+                c.sub = best;
+                c.basis += "；表名/字段命中「" + hit + "」细化到「" + best + "」";
+            }
+            c.dims = Taxonomy.dims(in.fieldComments, in.fieldNames, MAX_DIMS);
+            if (c.dims.isEmpty()) {
+                c.warning = in.tableEn + " 未见十类对象维度关键词，obj 层不产这张表";
+            }
+            return c;
+        }
+
+        String bestDomain = null;
+        int bestScore = 0;
+        for (Taxonomy.Domain d : Taxonomy.DOMAINS) {
+            int s = Taxonomy.scoreDomain(d.name, cn, stem, in.system, fields);
+            if (s > bestScore) {
+                bestScore = s;
+                bestDomain = d.name;
             }
         }
-        v.map.system = nz(in.system);
-        v.map.tableCn = in.tableCn == null || in.tableCn.trim().isEmpty() ? stem : in.tableCn.trim();
+        if (bestDomain == null) {
+            c.domain = "";
+            c.sub = "";
+            c.guessed = false;
+            c.status = "待确认";
+            c.basis = "文件名、表注释与字段注释里都没有可识别的业务名词";
+            c.warning = in.tableEn + " 判不出领域（" + c.basis + "）";
+            return c;
+        }
+        c.domain = bestDomain;
+        c.guessed = true;
+        c.status = "自动识别";
+        String bestSub = null;
+        int bestSubScore = 0;
+        Taxonomy.Domain d = Taxonomy.domain(bestDomain);
+        for (String sub : d.subs) {
+            int s = Taxonomy.scoreSub(sub, cn, stem, in.system, fields);
+            if (s > bestSubScore) {
+                bestSubScore = s;
+                bestSub = sub;
+            }
+        }
+        if (bestSub == null) {
+            bestSub = d.subs[0];
+            c.status = "待确认";
+            c.warning = in.tableEn + " 领域判到「" + bestDomain + "」，但子领域无词可依，暂按「"
+                    + bestSub + "」，请核对";
+        }
+        c.sub = bestSub;
+        String hit = Taxonomy.subHit(bestSub, cn, stem, in.system, fields);
+        c.basis = "按表注释/文件名/字段注释数条款 184 领域词（" + bestScore
+                + " 分）归「" + bestDomain + "」"
+                + (hit == null ? "" : "，子领域命中「" + hit + "」");
+        c.dims = Taxonomy.dims(in.fieldComments, in.fieldNames, MAX_DIMS);
+        if (c.dims.isEmpty()) {
+            c.warning = in.tableEn + " 未见十类对象维度关键词，obj 层不产这张表";
+        }
+        return c;
+    }
+
+    private static Verdict row(Input in, Cls c) {
+        Verdict v = new Verdict();
+        v.guessed = c.guessed;
+        v.domain = c.domain;
+        v.basis = c.basis;
+        v.warning = c.warning;
+        v.map.system = nz(c.system);
+        v.map.tableCn = nz(in.tableCn).isEmpty() ? stem(in.fileName) : in.tableCn.trim();
         v.map.tableEn = nz(in.tableEn);
         v.map.fieldCount = String.valueOf(in.fieldCount);
         v.map.pkField = nz(in.pkField);
-        v.map.note = "文件名 " + (in.fileName == null || in.fileName.isEmpty() ? "（无）" : in.fileName);
         v.map.odsPhysical = nz(in.tableEn);
-        if (best == null) {
-            v.guessed = false;
-            v.basis = "文件名、表注释与字段注释里都没有可识别的业务名词";
+        v.map.note = "文件名 " + (in.fileName == null || in.fileName.isEmpty() ? "（无）" : in.fileName);
+        v.map.status = c.status;
+        v.map.basis = c.basis;
+        if (!c.guessed) {
             v.map.domain = "";
             v.map.domainCode = "";
             v.map.domainSub = "";
             v.map.domainTarget = "";
             v.map.objDims = "";
             v.map.theme = "";
-            v.map.basis = v.basis;
-            v.map.status = "待确认";
             return v;
         }
-        String code = codeByDomain.get(best);
-        if (code == null) {
-            code = String.format("DOM%02d", Integer.valueOf(codeByDomain.size() + 1));
-            codeByDomain.put(best, code);
-        }
-        String target = targetByDomain.get(best);
-        if (target == null) {
-            target = "dwd_" + names.cnToTableName(best, Names.TABLE_MAX_LEN);
-            targetByDomain.put(best, target);
-        }
-        v.guessed = true;
-        v.domain = best;
-        v.basis = evidence(in, stem, flatFields, best);
-        v.map.domain = best;
-        v.map.domainCode = code;
-        v.map.domainSub = v.map.tableCn;
-        v.map.domainTarget = target;
-        v.map.objDims = dims(flatFields, best, names);
-        v.map.theme = best + "主题";
-        v.map.basis = v.basis;
-        v.map.status = "自动识别";
+        Taxonomy.Domain d = Taxonomy.domain(c.domain);
+        v.map.domain = c.domain;
+        v.map.domainCode = d == null ? "" : d.code;
+        v.map.domainSub = c.sub;
+        v.map.objDims = joinNonEmpty(c.dims, ";");
+        v.map.theme = Taxonomy.themeOf(c.domain, c.sub);
         return v;
     }
 
-    /** 涉及对象维度：字段注释里除领域本身之外最常被提到的几个名词。 */
-    private static String dims(String flatFields, String domain, Names names) {
-        List<String> picked = new ArrayList<String>();
-        List<Integer> scores = new ArrayList<Integer>();
-        List<Integer> order = new ArrayList<Integer>();
-        for (String noun : NOUNS) {
-            if (noun.equals(domain)) {
+    /**
+     * 一源一表：目标表随源表走，不按（领域，子领域）合并。
+     * 领域/子领域只决定表名前缀；同名源表（不同目录）撞名时追加 _2、_3。
+     */
+    private static void assignTargets(List<Input> inputs, List<Verdict> outs, List<Cls> cls,
+                                      Names names) {
+        Set<String> used = new LinkedHashSet<String>();
+        for (int i = 0; i < outs.size(); i++) {
+            if (!cls.get(i).guessed) {
                 continue;
             }
-            int[] h = hits(flatFields, noun);
-            if (h[0] <= 0) {
-                continue;
+            Verdict v = outs.get(i);
+            String source = nz(inputs.get(i).tableEn);
+            if (source.isEmpty()) {
+                source = "t" + (i + 1);
             }
-            int at = picked.size();
-            for (int i = 0; i < picked.size(); i++) {
-                if (h[0] > scores.get(i).intValue()
-                        || (h[0] == scores.get(i).intValue() && h[1] < order.get(i).intValue())) {
-                    at = i;
-                    break;
-                }
-            }
-            picked.add(at, noun);
-            scores.add(at, Integer.valueOf(h[0]));
-            order.add(at, Integer.valueOf(h[1]));
-        }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < picked.size() && i < MAX_DIMS; i++) {
-            if (sb.length() > 0) {
-                sb.append(';');
-            }
-            sb.append("dim_").append(names.cnToTableName(picked.get(i), Names.TABLE_MAX_LEN));
-        }
-        return sb.toString();
-    }
-
-    /** 依据那句话：谁在哪个来源里被数到几次，写出来才核得动。 */
-    private static String evidence(Input in, String stem, String flatFields, String noun) {
-        List<String> parts = new ArrayList<String>();
-        addHit(parts, "表注释", in.tableCn, noun);
-        addHit(parts, "文件名", stem, noun);
-        addHit(parts, "压缩包名", in.system, noun);
-        addHit(parts, "字段注释", flatFields, noun);
-        return parts.isEmpty() ? "按「" + noun + "」归类" : String.join("；", parts);
-    }
-
-    private static void addHit(List<String> parts, String where, String text, String noun) {
-        int[] h = hits(text, noun);
-        if (h[0] > 0) {
-            parts.add("按" + where + "命中「" + noun + "」×" + h[0]);
+            String target = unique(Taxonomy.targetOf(cls.get(i).sub, source, names), used);
+            v.map.domainTarget = target;
+            v.basis += "；自动识别一源一表，落 " + target;
+            v.map.basis = v.basis;
         }
     }
 
-    /** 出现次数与首次出现的位置（没出现返回 {0, -1}）。 */
-    private static int[] hits(String text, String noun) {
-        if (text == null || text.isEmpty()) {
-            return new int[]{0, -1};
-        }
-        int n = 0;
-        int first = -1;
-        int i = text.indexOf(noun);
-        while (i >= 0) {
+    /** 目标表撞名时追加序号；追加后仍守住表名长度上限。 */
+    private static String unique(String base, Set<String> used) {
+        String t = base;
+        int n = 2;
+        while (!used.add(t)) {
+            String suffix = "_" + n;
+            int room = Names.TABLE_MAX_LEN - suffix.length();
+            t = (base.length() > room ? base.substring(0, room) : base) + suffix;
             n++;
-            if (first < 0) {
-                first = i;
-            }
-            i = text.indexOf(noun, i + noun.length());
         }
-        return new int[]{n, first};
-    }
-
-    /** 同分时的先后：表注释里更靠前的算赢；表注释里没有就看文件名；都没有就排到最后。 */
-    private static int position(String tableCn, String stem, String noun) {
-        int[] a = hits(tableCn, noun);
-        if (a[1] >= 0) {
-            return a[1];
-        }
-        int[] b = hits(stem, noun);
-        if (b[1] >= 0) {
-            return 1000 + b[1];
-        }
-        return 2000;
+        return t;
     }
 
     /** 日志里那一句：判出来与判不出两种说法，都带上依据。 */
@@ -229,8 +253,42 @@ public final class DomainGuess {
         if (!v.guessed) {
             return v.map.tableEn + " 判不出领域：" + v.basis;
         }
-        return v.map.tableEn + " → 领域「" + v.domain + "」（" + v.map.domainCode
-                + "，" + v.map.domainTarget + "）| " + v.basis;
+        return v.map.tableEn + " → 领域「" + v.domain + "」/「" + v.map.domainSub + "」（"
+                + v.map.domainCode + "，" + v.map.domainTarget + "）| " + v.basis;
+    }
+
+    /** 一条能贴进日志/弹窗的汇总：判出多少、几个领域、几张待确认。 */
+    public static String summary(List<Verdict> vs) {
+        int guessed = 0;
+        int pending = 0;
+        int noDim = 0;
+        Set<String> groups = new LinkedHashSet<String>();
+        Set<String> targets = new LinkedHashSet<String>();
+        Set<String> domains = new LinkedHashSet<String>();
+        for (Verdict v : vs) {
+            if (v.guessed) {
+                guessed++;
+                domains.add(v.domain);
+                groups.add(v.domain + "/" + v.map.domainSub);
+                if (v.map.domainTarget != null && !v.map.domainTarget.isEmpty()) {
+                    targets.add(v.map.domainTarget);
+                }
+            } else {
+                pending++;
+            }
+            if (v.warning != null && v.warning.contains("未见十类对象维度")) {
+                noDim++;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("共 ").append(vs.size()).append(" 张：判出 ").append(guessed)
+          .append(" 张（").append(domains.size()).append(" 个领域、").append(groups.size())
+          .append(" 个领域子类；一源一表，共 ").append(targets.size()).append(" 张领域表），待确认 ")
+          .append(pending).append(" 张");
+        if (noDim > 0) {
+            sb.append("；").append(noDim).append(" 张未见十类对象维度（obj 不产）");
+        }
+        return sb.toString();
     }
 
     private static String stem(String fileName) {
@@ -243,6 +301,20 @@ public final class DomainGuess {
         StringBuilder sb = new StringBuilder();
         for (String s : values) {
             sb.append(s == null ? "" : s);
+        }
+        return sb.toString();
+    }
+
+    private static String joinNonEmpty(List<String> values, String sep) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : values) {
+            if (s == null || s.isEmpty()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(sep);
+            }
+            sb.append(s);
         }
         return sb.toString();
     }
