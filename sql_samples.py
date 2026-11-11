@@ -34,7 +34,7 @@ SAMPLES = [
            "新环境第一次建 ods 库，或补一个业务域的库。",
            "字符集与排序规则漏写时，事后要为中文乱码回头改表。",
            "建库 字符集 utf8mb4 排序规则 CREATE DATABASE",
-           "CREATE DATABASE IF NOT EXISTS ods_data DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"),
+           "CREATE DATABASE IF NOT EXISTS ods_data DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"),
     Sample("建库与选库", "切库",
            "切换当前会话使用的库",
            "同一连接要在几个库之间来回切，或跑脚本前先落到目标库。",

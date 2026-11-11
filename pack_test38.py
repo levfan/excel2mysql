@@ -355,9 +355,9 @@ check("V7 整数列→INT", cmt["数量"] == "INT", cmt["数量"])
 check("V8 主键选中的是编号列", t["primary_key"] == "ding_dan_bian_hao", t.get("primary_key"))
 check("V9 数据行数不随栈变化", len(t["df"]) == 3, len(t["df"]))
 ddl = build_ddl(t["table_name"], t["table_comment"], t["columns"])
-check("V10 DDL 文本逐字符稳定（utf8mb4_general_ci / InnoDB）",
+check("V10 DDL 文本逐字符稳定（utf8mb4_0900_ai_ci / InnoDB）",
       ddl.startswith("CREATE TABLE `ods_t_order` (")
-      and "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci" in ddl
+      and "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci" in ddl
       and "PRIMARY KEY (`ding_dan_bian_hao`)" in ddl, ddl.replace("\n", "\\n")[:120])
 check("V11 主键列被写成 NOT NULL",
       "`ding_dan_bian_hao` VARCHAR(32) NOT NULL" in ddl)

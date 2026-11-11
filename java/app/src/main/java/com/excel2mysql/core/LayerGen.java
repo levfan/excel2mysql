@@ -817,7 +817,7 @@ public final class LayerGen {
         // 建库也纳入单条失败隔离：权限/磁盘错记进 errors、收摊返回，不再抛出掀整轮（与下面循环同口径）。
         java.sql.Statement st = db.connection().createStatement();
         try {
-            st.execute("CREATE DATABASE IF NOT EXISTS `" + targetDb + "` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_general_ci");
+            st.execute("CREATE DATABASE IF NOT EXISTS `" + targetDb + "` DEFAULT CHARSET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
             db.connection().commit();
         } catch (java.sql.SQLException e) {
             wr.errors.add("建库失败[" + targetDb + "]：" + e.getMessage());

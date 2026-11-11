@@ -56,7 +56,7 @@ public final class Ddl {
         }
         String ddl = "CREATE TABLE `" + tableName + "` (\n" + lines + "\n) "
                 + "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 "
-                + "COLLATE=utf8mb4_general_ci COMMENT='" + esc(tableComment == null
+                + "COLLATE=utf8mb4_0900_ai_ci COMMENT='" + esc(tableComment == null
                                                             ? "" : tableComment) + "'";
         return dropIfExists ? "DROP TABLE IF EXISTS `" + tableName + "`;\n" + ddl : ddl;
     }

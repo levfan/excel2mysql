@@ -29,7 +29,7 @@ def build_ddl(table_name: str, table_comment: str, columns: list,
         lines.append("  PRIMARY KEY (" + ", ".join(f"`{f}`" for f in pk_fields) + ")")
     ddl = "CREATE TABLE `" + table_name + "` (\n" + ",\n".join(lines) + "\n) " \
           f"ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 " \
-          f"COLLATE=utf8mb4_general_ci COMMENT='{_esc(table_comment)}'"
+          f"COLLATE=utf8mb4_0900_ai_ci COMMENT='{_esc(table_comment)}'"
     if drop_if_exists:
         return f"DROP TABLE IF EXISTS `{table_name}`;\n" + ddl
     return ddl

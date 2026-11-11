@@ -972,7 +972,7 @@ check("D5 结构定义 nullable=False 的列 NOT NULL",
 check("D6 其余列 DEFAULT NULL", "`remark` TEXT DEFAULT NULL" in ddl_nodrop)
 check("D7 InnoDB + utf8mb4 + 排序规则",
       "ENGINE=InnoDB" in ddl_nodrop and "CHARSET=utf8mb4" in ddl_nodrop
-      and "COLLATE=utf8mb4_general_ci" in ddl_nodrop)
+      and "COLLATE=utf8mb4_0900_ai_ci" in ddl_nodrop)
 comp = build_ddl("t", "c", [{"field": "a", "comment": "A", "type": "INT", "primary_key": True},
                             {"field": "b", "comment": "B", "type": "INT", "primary_key": True}])
 check("D8 组合主键生成单条 PRIMARY KEY(a, b)", "PRIMARY KEY (`a`, `b`)" in comp)

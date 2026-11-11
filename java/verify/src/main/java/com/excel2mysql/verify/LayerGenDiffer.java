@@ -30,7 +30,7 @@ public final class LayerGenDiffer {
         LayerGen.LayerOutput dom = LayerGen.genLayer(LayerGen.Layer.DOM, m, src, o);
         if (dom.tableCount != 2) { bad++; shown.add("dom 表数 期望 2 实际 " + dom.tableCount); }
         if (!dom.ddlSql.contains("USE `dom`;") || !dom.ddlSql.contains("CREATE TABLE `dwd_proc_oil`")
-                || !dom.ddlSql.contains("ENGINE=InnoDB") || !dom.ddlSql.contains("utf8mb4_general_ci")) {
+                || !dom.ddlSql.contains("ENGINE=InnoDB") || !dom.ddlSql.contains("utf8mb4_0900_ai_ci")) {
             bad++; shown.add("dom DDL 口径不符");
         }
         for (String g : LayerGen.GOV_OBJ_DOM) {
