@@ -314,7 +314,7 @@ def sql_cases():
                "extract": extract_create_tables(text),
                "split": split_sql_statements(text)}
     # 格式化：期望值一律由 Python 侧真函数产出，Java 的 SqlScript.formatSql 必须
-    # 逐字节相同。语料取三处——脚本夹具、132 条示例正文、以及几条专门踩规则的输入
+    # 逐字节相同。语料取三处——脚本夹具、144 条示例正文、以及几条专门踩规则的输入
     # （类型括号、表选项等号、条件链、注释与引号里的分号）。
     # 幂等与"切分不变"这两条性质在 Python 用例集里钉（pack_test 的 Q 组），
     # 这里只钉"两栈输出相同"——相同 + Python 侧正确，就传递出 Java 侧正确。

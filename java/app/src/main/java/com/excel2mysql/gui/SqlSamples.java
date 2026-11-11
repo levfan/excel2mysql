@@ -35,7 +35,7 @@ public final class SqlSamples {
         }
     }
 
-    /** 共 132 条，顺序即对话框里目录的顺序。 */
+    /** 共 144 条，顺序即对话框里目录的顺序。 */
     public static final Sample[] ALL = new Sample[] {
         new Sample("建库与选库",
                 "建库", "建库（字符集与排序规则一次写全，避免事后改表）",
@@ -156,6 +156,90 @@ public final class SqlSamples {
                 "手滑删错表；IF EXISTS 也避免脚本因为表不在而中断。",
                 "删表 DROP TABLE IF EXISTS 回收",
                             "DROP TABLE IF EXISTS ods_t_order_bak;"),
+        new Sample("建表与改表",
+                "行宽声明合计", "一行的变长列声明宽度合计：撞 Server 层 65535 之前的体检",
+                "宽表建不出来或导入报 Row size too large 时，先量变长列声明宽度之和。",
+                "VARCHAR 按声明长度乘字符集字节数计入，几十列就能顶满 65535，报错只说行太宽不说哪几列。",
+                "行宽 65535 声明宽度 VARCHAR 字节 体检",
+                            "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  COUNT(*) AS 列数," + NL +
+                    "  SUM(CASE WHEN CHARACTER_OCTET_LENGTH IS NULL THEN 0 WHEN DATA_TYPE LIKE '%text' OR DATA_TYPE LIKE '%blob' THEN 12 ELSE CHARACTER_OCTET_LENGTH + 2 END) AS 变长列声明字节" + NL +
+                    "FROM information_schema.COLUMNS" + NL +
+                    "WHERE TABLE_SCHEMA = DATABASE()" + NL +
+                    "GROUP BY TABLE_NAME" + NL +
+                    "ORDER BY 变长列声明字节 DESC;"),
+        new Sample("建表与改表",
+                "宽列改TEXT候选", "挑最宽的变长列：改 TEXT 或拆走的候选，按累计字节排下来",
+                "行宽超了要瘦身，先知道改哪几列最省。",
+                "不看单列字节就动手，改完十几列仍差几千字节，白折腾一轮。",
+                "行宽瘦身 TEXT 累计字节 候选 列排序",
+                            "SELECT" + NL +
+                    "  COLUMN_NAME AS 列名," + NL +
+                    "  COLUMN_TYPE AS 类型," + NL +
+                    "  CHARACTER_OCTET_LENGTH AS 最大字节," + NL +
+                    "  SUM(CHARACTER_OCTET_LENGTH) OVER(ORDER BY CHARACTER_OCTET_LENGTH DESC) AS 累计字节" + NL +
+                    "FROM information_schema.COLUMNS" + NL +
+                    "WHERE TABLE_SCHEMA = DATABASE()" + NL +
+                    "  AND TABLE_NAME = 't_order'" + NL +
+                    "  AND CHARACTER_OCTET_LENGTH IS NOT NULL" + NL +
+                    "ORDER BY 最大字节 DESC;"),
+        new Sample("建表与改表",
+                "看行格式", "看表与实例的行格式、页大小：8126 那道线由这两项决定",
+                "同一份 DDL 换个库就建不出来，先核行格式与页大小。",
+                "COMPACT 下每个长 VARCHAR 在页内留 768 字节前缀，半页额度很快就满。",
+                "行格式 ROW_FORMAT innodb_page_size 8126 半页",
+                            "SHOW TABLE STATUS LIKE 't_order';" + NL +
+                    "SELECT" + NL +
+                    "  @@innodb_default_row_format AS 默认行格式," + NL +
+                    "  @@innodb_page_size AS 页大小;"),
+        new Sample("建表与改表",
+                "行格式改DYNAMIC", "把行格式改回 DYNAMIC：长列整列走行外，页内只留指针",
+                "宽表在 COMPACT 下报行太宽，改成 DYNAMIC 就能建。",
+                "行格式不一致会让同一份 DDL 在有的库建得出来、有的建不出来。",
+                "ROW_FORMAT DYNAMIC 8126 行外存储 宽表",
+                            "ALTER TABLE t_order ROW_FORMAT = DYNAMIC;" + NL +
+                    "SELECT ROW_FORMAT AS 行格式" + NL +
+                    "FROM information_schema.TABLES" + NL +
+                    "WHERE TABLE_SCHEMA = DATABASE()" + NL +
+                    "  AND TABLE_NAME = 't_order';"),
+        new Sample("建表与改表",
+                "换字符集钉行格式", "换字符集时把行格式一起写明，别让 CONVERT TO 顺带改掉",
+                "整表 CONVERT TO utf8mb4 的同时显式带上 ROW_FORMAT=DYNAMIC。",
+                "只写字符集时行格式跟着实例默认走，从 DYNAMIC 变成 COMPACT，重建当场撞行宽上限。",
+                "CONVERT TO 字符集 行格式 ROW_FORMAT 重建",
+                            "ALTER TABLE t_order CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci, ROW_FORMAT = DYNAMIC;" + NL +
+                    "SELECT" + NL +
+                    "  TABLE_COLLATION AS 排序规则," + NL +
+                    "  ROW_FORMAT AS 行格式" + NL +
+                    "FROM information_schema.TABLES" + NL +
+                    "WHERE TABLE_SCHEMA = DATABASE()" + NL +
+                    "  AND TABLE_NAME = 't_order';"),
+        new Sample("建表与改表",
+                "垂直拆出长列表", "垂直拆表：把最宽的几列挪到副表，主表只留主键与常用列",
+                "改 TEXT 也压不下时，把长列拆到副表按主键一对一。",
+                "列都堆在一张表里，行宽与列数两道上限一起撞，取数还整行读。",
+                "垂直拆分 副表 长列 行上限 拆表",
+                            "CREATE TABLE t_order_ext (" + NL +
+                    "  id BIGINT NOT NULL," + NL +
+                    "  name VARCHAR(64)," + NL +
+                    "  parent_name VARCHAR(64)," + NL +
+                    "  PRIMARY KEY (id)" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT = DYNAMIC;" + NL +
+                    "INSERT INTO t_order_ext(id, name, parent_name)" + NL +
+                    "SELECT" + NL +
+                    "  id," + NL +
+                    "  name," + NL +
+                    "  parent_name" + NL +
+                    "FROM t_order;" + NL +
+                    "ALTER TABLE t_order DROP COLUMN name, DROP COLUMN parent_name;" + NL +
+                    "SELECT" + NL +
+                    "  TABLE_NAME AS 表名," + NL +
+                    "  COUNT(*) AS 列数" + NL +
+                    "FROM information_schema.COLUMNS" + NL +
+                    "WHERE TABLE_SCHEMA = DATABASE()" + NL +
+                    "  AND TABLE_NAME IN ('t_order', 't_order_ext')" + NL +
+                    "GROUP BY TABLE_NAME;"),
         new Sample("元数据与治理体检",
                 "盘家底", "本库里每张表的行数与占用空间（治理前先盘家底）",
                 "治理开工第一天，先看清本库有哪些表、各占多大。",
@@ -1494,6 +1578,106 @@ public final class SqlSamples {
                     "FROM performance_schema.global_status" + NL +
                     "WHERE VARIABLE_NAME IN ('Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads', 'Innodb_rows_read'," + NL +
                     "'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted');"),
+        new Sample("性能与容量治理",
+                "关联键缺索引", "关联列缺索引体检：JOIN 两边谁没索引",
+                "按字典回填跑得很慢，先看关联列有没有索引。",
+                "两边关联列都没索引就是行数相乘的逐行比对，五万行配一千一百行即五千五百万次。",
+                "缺索引 JOIN 关联键 STATISTICS 性能",
+                            "SELECT" + NL +
+                    "  DISTINCT c.TABLE_NAME AS 表名," + NL +
+                    "  c.COLUMN_NAME AS 列名," + NL +
+                    "  c.COLUMN_TYPE AS 类型" + NL +
+                    "FROM information_schema.COLUMNS c" + NL +
+                    "LEFT JOIN information_schema.STATISTICS s" + NL +
+                    "  ON s.TABLE_SCHEMA = c.TABLE_SCHEMA" + NL +
+                    "  AND s.TABLE_NAME = c.TABLE_NAME" + NL +
+                    "  AND s.COLUMN_NAME = c.COLUMN_NAME" + NL +
+                    "WHERE c.TABLE_SCHEMA = DATABASE()" + NL +
+                    "  AND c.TABLE_NAME IN ('t_order', 't_dict')" + NL +
+                    "  AND c.COLUMN_NAME IN ('name', 'cat_code')" + NL +
+                    "  AND s.COLUMN_NAME IS NULL;"),
+        new Sample("性能与容量治理",
+                "关联列建索引", "给字典表的关联列建索引：回填前先做这一步",
+                "批量回填或关联查询前，把字典表的名称列建上索引。",
+                "索引没建就跑多表 UPDATE，一条语句几十分钟，还全程占着两张表的锁。",
+                "CREATE INDEX 关联列 字典表 提速 回填",
+                            "CREATE INDEX idx_dict_name" + NL +
+                    "  ON t_dict(name);" + NL +
+                    "SELECT" + NL +
+                    "  INDEX_NAME AS 索引," + NL +
+                    "  COLUMN_NAME AS 列," + NL +
+                    "  NON_UNIQUE AS 可重复" + NL +
+                    "FROM information_schema.STATISTICS" + NL +
+                    "WHERE TABLE_SCHEMA = DATABASE()" + NL +
+                    "  AND TABLE_NAME = 't_dict'" + NL +
+                    "ORDER BY 索引;"),
+        new Sample("性能与容量治理",
+                "更新前量规模", "更新前量规模：会命中多少行、其中多少行值真会变",
+                "多表 UPDATE 之前先数一遍影响行数与真变化的行数。",
+                "不量规模直接改，改完不知道对不对，也无从判断该不该分批。",
+                "影响行数 COUNT 更新前 CASE WHEN 规模",
+                            "SELECT" + NL +
+                    "  COUNT(*) AS 命中行数," + NL +
+                    "  SUM(CASE WHEN a.old_code <> b.new_code THEN 1 ELSE 0 END) AS 值会变" + NL +
+                    "FROM t_order a" + NL +
+                    "JOIN t_dict b" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.cat_code = b.cat_code;"),
+        new Sample("性能与容量治理",
+                "只改真变的行", "只改值真变了的行：用 NULL 安全等于把已一致的排除在写之外",
+                "回填作业天天重跑，加一个不等条件避免整表重写。",
+                "不加这个条件每天把全部行重写一遍，回滚段与同步流量跟着涨，下游分不清哪些是真变更。",
+                "NULL 安全等于 <=> 幂等 少写 重跑",
+                            "UPDATE t_order_backfill t" + NL +
+                    "JOIN t_dict d" + NL +
+                    "  ON TRIM(t.name) = TRIM(d.name)" + NL +
+                    "  AND t.cat_code = d.cat_code" + NL +
+                    "SET t.new_code = d.new_code" + NL +
+                    "WHERE NOT (t.new_code <=> d.new_code);" + NL +
+                    "SELECT" + NL +
+                    "  COUNT(*) AS 总行数," + NL +
+                    "  SUM(new_code IS NULL) AS 仍是空" + NL +
+                    "FROM t_order_backfill;"),
+        new Sample("性能与容量治理",
+                "按主键分批改", "按主键区间分批更新：多表 UPDATE 不认 LIMIT，只能按区间切",
+                "一次改完锁太久，按主键一段一段往前推。",
+                "照搬单表 UPDATE 的 LIMIT 写法会被判语法错；不切区间则一条语句锁到超时。",
+                "分批 BETWEEN 主键区间 锁 LIMIT 不支持",
+                            "UPDATE t_order_backfill t" + NL +
+                    "JOIN t_dict d" + NL +
+                    "  ON TRIM(t.name) = TRIM(d.name)" + NL +
+                    "  AND t.cat_code = d.cat_code" + NL +
+                    "SET t.new_code = d.new_code" + NL +
+                    "WHERE t.id BETWEEN 1" + NL +
+                    "  AND 2;" + NL +
+                    "SELECT" + NL +
+                    "  id," + NL +
+                    "  new_code" + NL +
+                    "FROM t_order_backfill" + NL +
+                    "ORDER BY id;"),
+        new Sample("性能与容量治理",
+                "临时表中转回填", "临时表中转回填：先把主键与新码算好，再按主键更新",
+                "表很宽、关联条件又绕时，把匹配结果先落进临时表再回填。",
+                "直接在宽表上做关联更新，每行都要重算一遍关联，宽行还得整行读写。",
+                "临时表 中转 两段式 主键回填 宽表",
+                            "CREATE TEMPORARY TABLE tmp_backfill_map AS" + NL +
+                    "SELECT" + NL +
+                    "  a.id," + NL +
+                    "  b.new_code" + NL +
+                    "FROM t_order a" + NL +
+                    "JOIN t_dict b" + NL +
+                    "  ON TRIM(a.name) = TRIM(b.name)" + NL +
+                    "  AND a.cat_code = b.cat_code;" + NL +
+                    "UPDATE t_order_backfill t" + NL +
+                    "JOIN tmp_backfill_map m" + NL +
+                    "  ON t.id = m.id" + NL +
+                    "SET t.new_code = m.new_code;" + NL +
+                    "DROP TEMPORARY TABLE tmp_backfill_map;" + NL +
+                    "SELECT" + NL +
+                    "  id," + NL +
+                    "  new_code" + NL +
+                    "FROM t_order_backfill" + NL +
+                    "ORDER BY id;"),
         new Sample("查询与执行计划",
                 "按业务键查重", "按业务主键查重（先看清有几批重复）",
                 "先看清有几批重复，再决定怎么合。",

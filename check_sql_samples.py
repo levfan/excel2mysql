@@ -1,9 +1,12 @@
-"""逐条把 SQL 执行器的 132 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
+"""逐条把 SQL 执行器的 144 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
 
 每条之前重建一次临时环境。有几条天然依赖前一条的产物（加列之后才能改列名、
 建了索引才能删索引、建了映射落地表才能按它统计），这类依赖在 PREREQ 里显式声明并先跑一遍，
 而不是把环境注水成"什么都有"——注水会让"加列"那条永远撞 Duplicate column，
 反倒看不出问题。切句用产品里那个 split_sql_statements，顺带把切分也验了。
+
+前置与夹具都按 (分组, 短标题) 声明，不按序号：序号在示例中间插一条就整批错位，
+错位之后前置照跑、本条照过，量到的却不是它真正依赖的那一步——这种红是看不出来的。
 
 夹具里只放"这套示例默认站在那张业务表上"的底座：t_order 与它那几个映射对照用的伴生表
 （t_dict / t_synonym / t_exception_order / t_map_order_code_clean）。这四张表在示例里
@@ -22,15 +25,30 @@ from sql_samples import SAMPLES  # noqa: E402
 HOST, PORT, USER, DB = "127.0.0.1", 3306, "root", "e2m_sqlscratch"
 AUX = "ods_data"
 
-# 序号（从 1 开始）→ 需要先执行的序号
-PREREQ = {10: [8], 13: [11], 30: [8], 47: [6], 79: [6], 82: [6],
-          121: [8], 123: [7], 130: [6], 131: [6]}
+# (本条的分组, 短标题) → 需要先执行的示例
+PREREQ = {
+    ("建表与改表", "改列名"): [("建表与改表", "加列")],
+    ("建表与改表", "删索引"): [("建表与改表", "加普通索引")],
+    ("数据质量检查", "空值与空串混用"): [("建表与改表", "加列")],
+    ("数据质量检查", "匹配率"): [("建表与改表", "治理落地表")],
+    ("编码映射与关联", "前缀规则校验"): [("建表与改表", "治理落地表")],
+    ("编码映射与关联", "映射去重落地"): [("建表与改表", "治理落地表")],
+    ("数据修正", "空串改NULL"): [("建表与改表", "加列")],
+    ("数据修正", "清全表"): [("建表与改表", "建快照表")],
+    ("数据修正", "增量比对"): [("建表与改表", "治理落地表")],
+    ("数据修正", "对账报告"): [("建表与改表", "治理落地表")],
+    ("性能与容量治理", "只改真变的行"): [("编码映射与关联", "回填目标表")],
+    ("性能与容量治理", "按主键分批改"): [("编码映射与关联", "回填目标表")],
+    ("性能与容量治理", "临时表中转回填"): [("编码映射与关联", "回填目标表")],
+}
 
-# 序号 → 本条之前要先跑的语句。回写那三条要求业务表已经有回写列，真实流程里这一步
-# 就是"先加一列"（加列那条示例教的是同一个动作）；把它放在这里而不是预置进夹具，
-# 是因为预置会让生成宽表那条的 SELECT a.*, b.new_code 撞 Duplicate column。
+# 回写那三条要求业务表已经有回写列，真实流程里这一步就是"先加一列"（加列那条示例
+# 教的是同一个动作）；把它放在这里而不是预置进夹具，是因为预置会让生成宽表那条的
+# SELECT a.*, b.new_code 撞 Duplicate column。
 ADD_WRITE_BACK = ["ALTER TABLE t_order ADD COLUMN new_code VARCHAR(64) COMMENT '回写的新编码'"]
-SETUP = {i: ADD_WRITE_BACK for i in (126, 127, 129)}
+SETUP = {("数据修正", "只填空位回写"): ADD_WRITE_BACK,
+         ("数据修正", "回写冲突检测"): ADD_WRITE_BACK,
+         ("数据修正", "事务内回写"): ADD_WRITE_BACK}
 
 
 def conn(db=None):
@@ -111,23 +129,40 @@ def cleanup():
 
 
 def main():
-    if len(SAMPLES) != 132:
-        print("条数不是 132：%d" % len(SAMPLES))
+    if len(SAMPLES) != 144:
+        print("条数不是 144：%d" % len(SAMPLES))
         return 1
+    at = {}
+    for i, sample in enumerate(SAMPLES, 1):
+        key = (sample.group, sample.title)
+        if key in at:
+            print("分组 + 短标题撞了：第 %d 条与第 %d 条都是 %s" % (at[key], i, key))
+            return 1
+        at[key] = i
+    for src in PREREQ.values():
+        for dep in src:
+            if dep not in at:
+                print("前置指向一条不存在的示例：%s" % (dep,))
+                return 1
+    for key in list(PREREQ) + list(SETUP):
+        if key not in at:
+            print("前置声明的主键在示例库里找不到：%s" % (key,))
+            return 1
     fails = []
     for i, sample in enumerate(SAMPLES, 1):
+        key = (sample.group, sample.title)
         reset()
         c = conn(DB)
         cur = c.cursor()
         err = None
         rows = 0
-        for pre in PREREQ.get(i, []):
-            perr, _p = run_one(cur, SAMPLES[pre - 1].sql)
+        for dep in PREREQ.get(key, []):
+            perr, _p = run_one(cur, SAMPLES[at[dep] - 1].sql)
             if perr:
-                err = "前置第 %d 条就没跑通：%s" % (pre, perr)
+                err = "前置「%s」就没跑通：%s" % (dep[1], perr)
                 break
         if err is None:
-            for st in SETUP.get(i, []):
+            for st in SETUP.get(key, []):
                 serr, _s = run_one(cur, st)
                 if serr:
                     err = "夹具前置语句没跑通（%s）：%s" % (st.split("(")[0][:40], serr)
@@ -140,8 +175,8 @@ def main():
             print("  BAD %2d [%s] %s -> %s" % (i, sample.group, sample.desc, err))
         else:
             note = "，返回 %d 行" % rows if rows else ""
-            pre = "（前置 %s）" % "/".join(str(x) for x in PREREQ[i]) if i in PREREQ else ""
-            if i in SETUP:
+            pre = "（前置 %s）" % "/".join(x[1] for x in PREREQ[key]) if key in PREREQ else ""
+            if key in SETUP:
                 pre = pre + "（已补回写列）" if pre else "（已补回写列）"
             print("  ok  %2d [%s] %s%s%s" % (i, sample.group, sample.desc, pre, note))
     cleanup()
