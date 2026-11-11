@@ -77,6 +77,41 @@ public final class LayerGen {
             "calc_model_id", "caliber_ver", "src_row_cnt", "excluded_row_cnt", "etl_batch_id",
             "quality_flag"
     };
+    /** 治理字段的交付注释：每个字段说清它承载什么，别在交付表里只留一句「治理字段」。 */
+    private static final Map<String, String> GOV_COMMENT = new LinkedHashMap<String, String>();
+    private static final Set<String> GOV_NAMES = new LinkedHashSet<String>();
+    static {
+        GOV_COMMENT.put("entity_id", "实体唯一标识，每行由 UUID() 生成");
+        GOV_COMMENT.put("src_entity_id", "源表主键值（源表无主键时取首列），用于回溯源记录");
+        GOV_COMMENT.put("std_code", "标准代码，源表名加源主键（无主键时取首列）合成，待赋正式码");
+        GOV_COMMENT.put("src_code", "源系统业务编码，取源表主键（无主键时取首列）");
+        GOV_COMMENT.put("tags", "来源标签，记录本行来自哪张源表");
+        GOV_COMMENT.put("data_level", "数据密级");
+        GOV_COMMENT.put("mask_policy", "脱敏策略");
+        GOV_COMMENT.put("quality_flag", "质量标识");
+        GOV_COMMENT.put("quality_msg", "质量说明");
+        GOV_COMMENT.put("de_map_id", "数据元映射标识，目标表名");
+        GOV_COMMENT.put("src_batch_id", "源批次号");
+        GOV_COMMENT.put("merge_rule_id", "归集规则，一源一表或多源 UNION");
+        GOV_COMMENT.put("update_time", "数据写入时间");
+        GOV_COMMENT.put("valid_flag", "有效标志，1 有效");
+        GOV_COMMENT.put("stat_date", "统计日期");
+        GOV_COMMENT.put("stat_grain", "统计粒度");
+        GOV_COMMENT.put("dim_key_json", "维度键，JSON 记录领域目标表");
+        GOV_COMMENT.put("idx_code", "指标编码，取源字段名");
+        GOV_COMMENT.put("idx_value", "指标值，按字段口径聚合");
+        GOV_COMMENT.put("idx_unit", "指标单位");
+        GOV_COMMENT.put("calc_model_id", "计算模型标识");
+        GOV_COMMENT.put("caliber_ver", "统计口径版本");
+        GOV_COMMENT.put("src_row_cnt", "源记录数");
+        GOV_COMMENT.put("excluded_row_cnt", "剔除记录数");
+        GOV_COMMENT.put("etl_batch_id", "ETL 批次号");
+        GOV_NAMES.addAll(GOV_COMMENT.keySet());
+    }
+
+    /** ads 每张领域表最多落的指标数：几百个数值列全摊成 INSERT 会让交付 SQL 无法阅读。 */
+    public static final int MAX_ADS_MEASURES = 20;
+
     /** 表 5-1：十类维度建议主键。 */
     public static final Map<String, String> DIM_PK = new LinkedHashMap<String, String>();
     static {
@@ -140,8 +175,9 @@ public final class LayerGen {
             ddl.append(Ddl.buildDdl(g.target, g.target, g.cols, true)).append(";\n\n");
             for (MappingFile.TableMap t : g.rows) {
                 SourceTable s = bind(t, map);
-                // dom 不产生成主键之外的键值：uuidPk 只在多源时钉 entity_id，src_entity_id 归 obj（条款 186）
-                ColExpr x = new ColExpr(s, g.multi ? "entity_id" : null, null, o);
+                // dom 只由治理字段生成键：entity_id 由 UUID() 出，src_entity_id/src_code/std_code 回指源主键（条款 186）
+                ColExpr x = new ColExpr(s, g.multi ? "entity_id" : null, firstPk(s), o,
+                        g.target, g.multi);
                 dml.append(domInsert(g.target, g.cols, x)).append("\n\n");
                 addFieldMaps(out, s, g.target, g.cols, x);
             }
@@ -166,20 +202,36 @@ public final class LayerGen {
             if (!g.sources.contains(s)) { g.sources.add(s); }
         }
         List<DomGroup> outGroups = new ArrayList<DomGroup>(groups.values());
+        int dropped = 0;
+        List<String> droppedSample = new ArrayList<String>();
         for (DomGroup g : outGroups) {
             g.multi = g.sources.size() > 1;
             Set<String> seen = new LinkedHashSet<String>();
             for (SourceTable s : g.sources) {
                 for (Infer.Column c : s.columns) {
-                    if (seen.add(c.field)) {
-                        g.cols.add(g.multi ? copyMerged(c) : copyCol(c, c.primaryKey));
+                    if (!seen.add(c.field)) {
+                        continue;
                     }
+                    // 治理字段名归生成器；判不出类别、或一看就是系统审计列的不进层——
+                    // 硬塞进去只会把真正的业务列挤出 500 列上限，注释还只能写「治理字段」
+                    if (isGovField(c.field) || !FieldClass.keep(c)) {
+                        dropped++;
+                        if (droppedSample.size() < 6) {
+                            droppedSample.add(s.name + "." + c.field);
+                        }
+                        continue;
+                    }
+                    g.cols.add(g.multi ? copyMerged(c) : copyCol(c, c.primaryKey));
                 }
             }
             g.entityIdFromSource = g.multi && seen.contains("entity_id");
             addGovernance(g.cols, GOV_OBJ_DOM);
             if (g.multi) { markEntityIdPk(g.cols); }
             g.refuse = refuseReason(g);
+        }
+        if (dropped > 0) {
+            out.warnings.add("dom 跳过 " + dropped + " 个未归类或系统字段（示例："
+                    + join(droppedSample, "、") + "）");
         }
         return outGroups;
     }
@@ -215,15 +267,6 @@ public final class LayerGen {
             sb.append(" 等 ").append(sources.size()).append(" 张");
         }
         return sb.toString();
-    }
-
-    /** dom 层真正会生成的表：ads 只许引用这些目标，别给被护栏拒掉的表产 INSERT。 */
-    private static Set<String> generatableDomTargets(MappingFile m, List<SourceTable> src) {
-        Set<String> out = new LinkedHashSet<String>();
-        for (DomGroup g : planDom(m, src, new LayerOutput())) {
-            if (g.refuse.isEmpty()) { out.add(g.target); }
-        }
-        return out;
     }
 
     /**
@@ -268,6 +311,8 @@ public final class LayerGen {
         }
         StringBuilder ddl = new StringBuilder("USE `" + o.objDb + "`;\n\n");
         StringBuilder dml = new StringBuilder("USE `" + o.objDb + "`;\n\n");
+        int dropped = 0;
+        List<String> droppedSample = new ArrayList<String>();
         for (Map.Entry<String, List<SourceTable>> e : dimSources.entrySet()) {
             String dim = e.getKey();
             String pk = DIM_PK.get(dim);
@@ -280,21 +325,33 @@ public final class LayerGen {
             seen.add(pk);
             for (SourceTable s : e.getValue()) {
                 for (Infer.Column c : s.columns) {
-                    if (!c.primaryKey && seen.add(c.field)) {
-                        cols.add(multi ? copyMerged(c) : copyCol(c, false));
+                    if (c.primaryKey || !seen.add(c.field)) {
+                        continue;
                     }
+                    if (isGovField(c.field) || !FieldClass.keep(c)) {
+                        dropped++;
+                        if (droppedSample.size() < 6) {
+                            droppedSample.add(s.name + "." + c.field);
+                        }
+                        continue;
+                    }
+                    cols.add(multi ? copyMerged(c) : copyCol(c, false));
                 }
             }
             addGovernance(cols, GOV_OBJ_DOM);
             ddl.append(Ddl.buildDdl(dim, dim, cols, true)).append(";\n\n");
             List<String> branches = new ArrayList<String>();
             for (SourceTable s : e.getValue()) {
-                ColExpr x = new ColExpr(s, pk, firstPk(s), o);
+                ColExpr x = new ColExpr(s, pk, firstPk(s), o, dim, multi);
                 branches.add(objSelect(s, cols, x));
                 addFieldMaps(out, s, dim, cols, x);
             }
             dml.append("INSERT INTO `").append(dim).append("` ").append(join(branches, "\nUNION ALL\n")).append(";\n\n");
             out.tableCount++;
+        }
+        if (dropped > 0) {
+            out.warnings.add("obj 跳过 " + dropped + " 个未归类或系统字段（示例："
+                    + join(droppedSample, "、") + "）");
         }
         out.ddlSql = ddl.toString();
         out.transformSql = dml.toString();
@@ -316,20 +373,24 @@ public final class LayerGen {
                 + " FROM (SELECT DISTINCT " + join(inner, ", ") + " FROM " + x.from() + ") AS `e_" + s.name + "`";
     }
 
-    // ---- ads：按条款 188 的三个主题在 dom 上产模板聚合（口径待业务方核，故不产 obj JOIN）----
+    // ---- ads：按条款 188 的三个主题，在 dom 数值列上产指标聚合（口径待业务方核，故不产 obj JOIN）----
     private static LayerOutput genAds(MappingFile m, List<SourceTable> src, GenOptions o) {
         LayerOutput out = new LayerOutput();
         out.layer = Layer.ADS;
+        // dom 层实际会生成的列清单：ads 的指标就从这些列里挑，被护栏拒掉的表不产 INSERT
+        Map<String, List<Infer.Column>> domCols = new LinkedHashMap<String, List<Infer.Column>>();
+        for (DomGroup g : planDom(m, src, new LayerOutput())) {
+            if (g.refuse.isEmpty()) { domCols.put(g.target, g.cols); }
+        }
         // 主题 →（领域目标表 → 行数）。一张主题表装多个领域的汇总，每个领域一条 INSERT：
         // 旧写法只取组里第一张表当 FROM，同主题其余领域的表根本没进汇总。
         Map<String, Map<String, Integer>> groups =
                 new LinkedHashMap<String, Map<String, Integer>>();
-        Set<String> valid = generatableDomTargets(m, src);
         Set<String> skipped = new LinkedHashSet<String>();
         for (MappingFile.TableMap t : m.tables()) {
             if (t.theme == null || t.theme.isEmpty()) { continue; }
             if (t.domainTarget == null || t.domainTarget.isEmpty()) { continue; }
-            if (!valid.contains(t.domainTarget)) {
+            if (!domCols.containsKey(t.domainTarget)) {
                 if (skipped.add(t.domainTarget)) {
                     out.warnings.add("ads 跳过领域目标表 " + t.domainTarget
                             + "：dom 层未生成（合并护栏拒绝或源表未绑定）");
@@ -346,6 +407,7 @@ public final class LayerGen {
         }
         StringBuilder ddl = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
         StringBuilder dml = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
+        int capped = 0;
         for (Map.Entry<String, Map<String, Integer>> e : groups.entrySet()) {
             String theme = e.getKey();
             String target = Taxonomy.themeTable(theme);
@@ -358,31 +420,119 @@ public final class LayerGen {
                 continue;
             }
             for (String domTable : e.getValue().keySet()) {
-                String dimJson = "{\"dom\":\"" + domTable + "\"}";
-                dml.append("-- 主题 ").append(theme).append(" / 领域目标表 ").append(domTable)
-                   .append(" 聚合模板，指标口径待业务方核改（条款 188）\n")
-                   .append("INSERT INTO `").append(target).append("` (`stat_date`, `dim_key_json`, `idx_code`, `idx_value`, `src_row_cnt`, `excluded_row_cnt`, `etl_batch_id`, `quality_flag`) ")
-                   .append("SELECT CURDATE() AS `stat_date`, '").append(dimJson).append("' AS `dim_key_json`, ")
-                   .append("'").append(theme).append("' AS `idx_code`, COUNT(*) AS `idx_value`, ")
-                   .append("COUNT(*) AS `src_row_cnt`, ")
-                   .append("0 AS `excluded_row_cnt`, '").append(o.batchId).append("' AS `etl_batch_id`, '待核' AS `quality_flag` ")
-                   .append("FROM ").append(qualify(o.domDb, domTable)).append(" ")
-                   .append("GROUP BY CURDATE();\n\n");
-                for (Infer.Column c : cols) {
-                    MappingFile.FieldMap f = new MappingFile.FieldMap();
-                    f.srcTable = domTable; f.srcField = "";
-                    f.srcComment = "模板聚合"; f.dstTable = target; f.dstField = c.field;
-                    f.dstComment = c.comment; f.dataElemName = ""; f.dataElemId = "待赋码";
-                    f.transformRule = "模板聚合（待核）"; f.governance = true; f.status = "待核";
-                    out.fieldMapping.add(f);
+                List<Infer.Column> scols = domCols.get(domTable);
+                List<Measure> measures = measuresOf(scols);
+                if (measures.size() > MAX_ADS_MEASURES) {
+                    capped += measures.size() - MAX_ADS_MEASURES;
+                    measures = measures.subList(0, MAX_ADS_MEASURES);
+                }
+                if (measures.isEmpty()) {
+                    // 没有可求和/求均值的数值列：保住「源行数」这个唯一说得清的口径
+                    dml.append(adsInsert(theme, target, domTable, null, o));
+                    adsMaps(out, target, domTable, null, o);
+                    continue;
+                }
+                for (Measure mm : measures) {
+                    dml.append(adsInsert(theme, target, domTable, mm, o));
+                    adsMaps(out, target, domTable, mm, o);
                 }
             }
             out.tableCount++;
         }
         out.ddlSql = ddl.toString();
         out.transformSql = dml.toString();
-        out.warnings.add("ads 指标口径为模板，idx_value 先按源行数 COUNT(*) 填，须业务方逐条核改（条款 188 注）");
+        if (capped > 0) {
+            out.warnings.add("ads 有 " + capped + " 个指标超过每表 " + MAX_ADS_MEASURES
+                    + " 个上限未产聚合，可用映射里的显式指标清单补");
+        }
+        out.warnings.add("ads 指标取 dom 数值列按 SUM/AVG/MAX/MIN 聚合（单位为源注释推断），"
+                + "无可用数值列时才退成 COUNT(*)，口径须业务方逐条核改（条款 188 注）");
         return out;
+    }
+
+    /** ads 的一条指标：字段、中文说明、单位与聚合方式。 */
+    private static final class Measure {
+        final String field;
+        final String label;
+        final String unit;
+        final String agg;
+        Measure(String field, String label, String unit, String agg) {
+            this.field = field; this.label = label;
+            this.unit = unit == null ? "" : unit; this.agg = agg;
+        }
+    }
+
+    /** 从 dom 表的列里挑指标：数值列且被判成指标度量；治理字段与编码不当指标。 */
+    private static List<Measure> measuresOf(List<Infer.Column> cols) {
+        List<Measure> out = new ArrayList<Measure>();
+        if (cols == null) { return out; }
+        for (Infer.Column c : cols) {
+            if (c.primaryKey || isGovField(c.field)) { continue; }
+            FieldClass.Result r = FieldClass.of(c);
+            if (!r.measure || r.agg.isEmpty()) { continue; }
+            out.add(new Measure(c.field, r.label, r.unit, r.agg));
+        }
+        return out;
+    }
+
+    /** 一条 ads 聚合：模板行数口径或真实指标口径，只 FROM dom 的一张领域目标表。 */
+    private static String adsInsert(String theme, String target, String domTable, Measure m,
+                                    GenOptions o) {
+        String json = "{\"dom\":\"" + domTable + "\"}";
+        String idxCode = m == null ? theme : m.field;
+        String value = m == null ? "COUNT(*)" : m.agg + "(`" + m.field + "`)";
+        String unit = m == null ? "" : m.unit;
+        String model = m == null ? "rowcount" : m.agg.toLowerCase() + "_" + m.field;
+        String what = m == null ? "按源行数（模板）" : m.label + (m.unit.isEmpty() ? "" : "，" + m.unit);
+        StringBuilder sb = new StringBuilder();
+        sb.append("-- 主题 ").append(theme).append(" / 领域目标表 ").append(domTable)
+          .append(" / 指标 ").append(idxCode).append("（").append(what).append("），口径待业务方核改（条款 188）\n")
+          .append("INSERT INTO `").append(target).append("` (`stat_date`, `stat_grain`, `dim_key_json`, `idx_code`, `idx_value`, `idx_unit`, `calc_model_id`, `caliber_ver`, `src_row_cnt`, `excluded_row_cnt`, `etl_batch_id`, `quality_flag`) ")
+          .append("SELECT CURDATE() AS `stat_date`, '日' AS `stat_grain`, '").append(json).append("' AS `dim_key_json`, ")
+          .append("'").append(idxCode).append("' AS `idx_code`, ")
+          .append(value).append(" AS `idx_value`, ")
+          .append("'").append(unit).append("' AS `idx_unit`, ")
+          .append("'").append(target).append(".").append(model).append("' AS `calc_model_id`, ")
+          .append("'v1-待核' AS `caliber_ver`, ")
+          .append("COUNT(*) AS `src_row_cnt`, ")
+          .append("0 AS `excluded_row_cnt`, '").append(o.batchId).append("' AS `etl_batch_id`, '待核' AS `quality_flag` ")
+          .append("FROM ").append(qualify(o.domDb, domTable)).append(" ")
+          .append("GROUP BY CURDATE();\n\n");
+        return sb.toString();
+    }
+
+    /** ads 的字段映射行：转换规则写实发表达式，别让 CSV 与 SQL 各说一套。 */
+    private static void adsMaps(LayerOutput out, String target, String domTable, Measure m,
+                                GenOptions o) {
+        String json = "{\"dom\":\"" + domTable + "\"}";
+        String value = m == null ? "COUNT(*)" : m.agg + "(`" + m.field + "`)";
+        for (String c : GOV_ADS) {
+            MappingFile.FieldMap f = new MappingFile.FieldMap();
+            f.srcTable = domTable; f.srcField = m == null ? "" : m.field;
+            f.srcComment = m == null ? "源行数模板" : "指标 " + m.field + "（" + m.label + "）";
+            f.dstTable = target; f.dstField = c; f.dstComment = GOV_COMMENT.get(c);
+            f.dataElemName = ""; f.dataElemId = "待赋码"; f.governance = true; f.status = "待核";
+            f.transformRule = adsRule(c, target, m, json, value, o);
+            out.fieldMapping.add(f);
+        }
+    }
+
+    private static String adsRule(String field, String target, Measure m, String json, String value,
+                                  GenOptions o) {
+        if ("stat_date".equals(field)) { return "CURDATE()"; }
+        if ("stat_grain".equals(field)) { return "'日'"; }
+        if ("dim_key_json".equals(field)) { return "'" + json + "'"; }
+        if ("idx_code".equals(field)) { return "'" + (m == null ? "" : m.field) + "'"; }
+        if ("idx_value".equals(field)) { return value; }
+        if ("idx_unit".equals(field)) { return "'" + (m == null ? "" : m.unit) + "'"; }
+        if ("calc_model_id".equals(field)) {
+            return "'" + target + "." + (m == null ? "rowcount" : m.agg.toLowerCase() + "_" + m.field) + "'";
+        }
+        if ("caliber_ver".equals(field)) { return "'v1-待核'"; }
+        if ("src_row_cnt".equals(field)) { return "COUNT(*)"; }
+        if ("excluded_row_cnt".equals(field)) { return "0"; }
+        if ("etl_batch_id".equals(field)) { return "'" + o.batchId + "'"; }
+        return "'待核'";
     }
 
     // ---- 共用 helpers ----
@@ -396,6 +546,9 @@ public final class LayerGen {
     private static Infer.Column copyCol(Infer.Column c, boolean pk) {
         Infer.Column n = c.copied();
         n.primaryKey = pk;
+        if (n.comment == null || n.comment.trim().isEmpty()) {
+            n.comment = FieldClass.commentOf(c);
+        }
         return n;
     }
 
@@ -404,6 +557,9 @@ public final class LayerGen {
         Infer.Column n = c.copied();
         n.primaryKey = false;
         n.nullable = Boolean.TRUE;
+        if (n.comment == null || n.comment.trim().isEmpty()) {
+            n.comment = FieldClass.commentOf(c);
+        }
         return n;
     }
 
@@ -419,8 +575,12 @@ public final class LayerGen {
         private final String srcPk;
         private final GenOptions o;
         private final String srcFrom;
+        private final String srcTable;
+        private final String target;
+        private final boolean multi;
 
-        ColExpr(SourceTable s, String uuidPk, String srcPk, GenOptions o) {
+        ColExpr(SourceTable s, String uuidPk, String srcPk, GenOptions o,
+                String target, boolean multi) {
             this.srcFields = new LinkedHashSet<String>();
             for (Infer.Column c : s.columns) { srcFields.add(c.field); }
             this.uuidPk = uuidPk;
@@ -428,13 +588,16 @@ public final class LayerGen {
             this.srcPk = srcPk != null && srcFields.contains(srcPk) ? srcPk : null;
             this.o = o;
             this.srcFrom = qualify(o.sourceDb, s.name);
+            this.srcTable = s.name;
+            this.target = target;
+            this.multi = multi;
         }
 
         String from() { return srcFrom; }
 
         /** 该目标列是否直接取同名源列——只有这类列进派生表的 DISTINCT 投影。 */
         boolean refsSource(String field) {
-            if (field.equals(uuidPk)) { return false; }
+            if (field.equals(uuidPk) || isGovField(field)) { return false; }
             if ("src_entity_id".equals(field) && srcPk != null) { return false; }
             return srcFields.contains(field);
         }
@@ -442,8 +605,8 @@ public final class LayerGen {
         String selectExpr(String field) {
             if (field.equals(uuidPk)) { return "UUID() AS `" + field + "`"; }
             if ("src_entity_id".equals(field) && srcPk != null) { return "`" + srcPk + "` AS `src_entity_id`"; }
-            if (srcFields.contains(field)) { return "`" + field + "`"; }
-            return govExpr(field, o);
+            if (!isGovField(field) && srcFields.contains(field)) { return "`" + field + "`"; }
+            return govExpr(field, o, target, srcTable, srcPk, multi);
         }
 
         /** 参与 DISTINCT 的列：业务列＋作 src_entity_id 的源主键；生成键一个都不进（进了就永不去重）。 */
@@ -457,15 +620,28 @@ public final class LayerGen {
         }
     }
 
+    private static boolean isGovField(String field) {
+        return field != null && GOV_NAMES.contains(field);
+    }
+
     private static List<Infer.Column> governanceCols(String[] names) {
         List<Infer.Column> out = new ArrayList<Infer.Column>();
         for (String n : names) {
-            String type = "update_time".equals(n) ? "DATETIME"
-                    : "src_row_cnt".equals(n) || "excluded_row_cnt".equals(n) ? "BIGINT"
-                    : "stat_date".equals(n) ? "DATE" : "VARCHAR(255)";
-            out.add(col(n, type, "治理字段（表 5-3/6-4）", false));
+            String comment = GOV_COMMENT.get(n);
+            out.add(col(n, govType(n), comment == null ? n : comment, false));
         }
         return out;
+    }
+
+    /** 治理字段类型：指标值要能装下 SUM/AVG 的小数，别把聚合结果塞进 VARCHAR 当字符串存。 */
+    private static String govType(String n) {
+        if ("update_time".equals(n)) { return "DATETIME"; }
+        if ("stat_date".equals(n)) { return "DATE"; }
+        if ("src_row_cnt".equals(n) || "excluded_row_cnt".equals(n)) { return "BIGINT"; }
+        if ("idx_value".equals(n)) { return "DECIMAL(38,6)"; }
+        if ("stat_grain".equals(n)) { return "VARCHAR(16)"; }
+        if ("valid_flag".equals(n)) { return "VARCHAR(16)"; }
+        return "VARCHAR(255)";
     }
 
     /** 补治理字段，但源表已有同名列（如 update_time）时跳过，避免 CREATE TABLE 重名列。 */
@@ -477,10 +653,32 @@ public final class LayerGen {
         }
     }
 
-    private static String govExpr(String field, GenOptions o) {
+    /**
+     * 治理字段的取值表达式。能回指源行的就回指（源主键、来源表名），
+     * 定不出业务值的给一个说得过去的常量并在注释里写明口径，不留一整列 NULL：
+     * 交付方拿到 NULL 不知道是「没采到」还是「不适用」。
+     */
+    private static String govExpr(String field, GenOptions o, String target, String srcTable,
+                                  String srcPk, boolean multi) {
         if ("entity_id".equals(field)) { return "UUID() AS `entity_id`"; }
+        if ("src_entity_id".equals(field) || "src_code".equals(field)) {
+            return srcPk == null ? "NULL AS `" + field + "`" : "`" + srcPk + "` AS `" + field + "`";
+        }
+        if ("std_code".equals(field)) {
+            return srcPk == null ? "NULL AS `std_code`"
+                    : "CONCAT('" + srcTable + "_', `" + srcPk + "`) AS `std_code`";
+        }
+        if ("tags".equals(field)) { return "'来源:" + srcTable + "' AS `tags`"; }
+        if ("data_level".equals(field)) { return "'内部' AS `data_level`"; }
+        if ("mask_policy".equals(field)) { return "'无' AS `mask_policy`"; }
+        if ("quality_flag".equals(field)) { return "'正常' AS `quality_flag`"; }
+        if ("quality_msg".equals(field)) { return "'源表结构直映' AS `quality_msg`"; }
+        if ("de_map_id".equals(field)) { return "'" + target + "' AS `de_map_id`"; }
         if ("src_batch_id".equals(field) || "etl_batch_id".equals(field)) {
             return "'" + o.batchId + "' AS `" + field + "`";
+        }
+        if ("merge_rule_id".equals(field)) {
+            return (multi ? "'同领域多源UNION'" : "'一源一表'") + " AS `merge_rule_id`";
         }
         if ("update_time".equals(field)) { return "NOW() AS `update_time`"; }
         if ("valid_flag".equals(field)) { return "'1' AS `valid_flag`"; }

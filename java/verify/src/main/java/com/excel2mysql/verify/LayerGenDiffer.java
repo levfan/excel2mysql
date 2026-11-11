@@ -225,6 +225,61 @@ public final class LayerGenDiffer {
             bad++; shown.add("ads 模板出现了 obj JOIN，与段注释口径需同步改写");
         }
 
+        // ---- 指标与注释：数值列进 ads 当指标、系统/未归类列不进层、治理字段注释与取值要能读 ----
+        MappingFile mm2 = measureMapping();
+        List<LayerGen.SourceTable> ms2 = measureSource();
+        LayerGen.LayerOutput mdom2 = LayerGen.genLayer(LayerGen.Layer.DOM, mm2, ms2, o);
+        LayerGen.LayerOutput mobj2 = LayerGen.genLayer(LayerGen.Layer.OBJ, mm2, ms2, o);
+        LayerGen.LayerOutput mads2 = LayerGen.genLayer(LayerGen.Layer.ADS, mm2, ms2, o);
+        if (mdom2.tableCount != 1 || mdom2.ddlSql.contains("`create_time`")) {
+            bad++; shown.add("dom 未按系统字段剔除 create_time（表数 " + mdom2.tableCount + "）");
+        }
+        if (mdom2.ddlSql.contains("`xq_ab`")) {
+            bad++; shown.add("dom 仍收下无注释且无可识别语义的 xq_ab");
+        }
+        if (mobj2.ddlSql.contains("`xq_ab`") || mobj2.ddlSql.contains("`create_time`")) {
+            bad++; shown.add("obj 未剔除系统/未归类列");
+        }
+        if (!mdom2.ddlSql.contains("`amount`") || !mdom2.ddlSql.contains("`rate`")) {
+            bad++; shown.add("dom 把金额/比率这类指标列也丢了");
+        }
+        // 治理字段：注释不再是一句「治理字段」，能回指源行的就回指，定不出业务值的给可核常量
+        for (LayerGen.LayerOutput lo : new LayerGen.LayerOutput[]{mdom2, mobj2}) {
+            if (lo.ddlSql.contains("治理字段（表 5-3/6-4）")) {
+                bad++; shown.add(lo.layer + " 治理字段注释仍是占位句");
+            }
+            if (!lo.ddlSql.contains("实体唯一标识")) {
+                bad++; shown.add(lo.layer + " 缺 entity_id 的可读注释");
+            }
+        }
+        if (!mdom2.transformSql.contains("`id` AS `src_entity_id`")
+                || !mdom2.transformSql.contains("CONCAT('t_m_', `id`) AS `std_code`")) {
+            bad++; shown.add("dom 的 src_entity_id/std_code 没回指源主键："
+                    + firstLines(mdom2.transformSql, 3));
+        }
+        // ads：有数值指标就按 SUM/AVG 出，单位从注释括号取；不再一律按行数 COUNT(*)
+        if (!mads2.transformSql.contains("SUM(`amount`) AS `idx_value`")) {
+            bad++; shown.add("ads 没把 amount 当可求和指标：" + firstLines(mads2.transformSql, 3));
+        }
+        if (!mads2.transformSql.contains("AVG(`rate`) AS `idx_value`")) {
+            bad++; shown.add("ads 没把比率列 rate 按 AVG 聚合");
+        }
+        if (!mads2.transformSql.contains("'元' AS `idx_unit`")
+                || !mads2.transformSql.contains("'%' AS `idx_unit`")) {
+            bad++; shown.add("ads 指标单位没从注释里取出来");
+        }
+        if (countOccurrences(mads2.transformSql, "INSERT INTO `ads_analysis`") != 2) {
+            bad++; shown.add("ads 两个指标应各一条 INSERT，实际 "
+                    + countOccurrences(mads2.transformSql, "INSERT INTO `ads_analysis`"));
+        }
+        if (countOccurrences(mads2.transformSql, "COUNT(*) AS `idx_value`") != 0) {
+            bad++; shown.add("ads 已有真实指标却仍按行数填 idx_value");
+        }
+        if (!mads2.ddlSql.contains("`idx_value` DECIMAL(38,6)")
+                || mads2.ddlSql.contains("治理字段（表 5-3/6-4）")) {
+            bad++; shown.add("ads 指标值列类型或治理字段注释没跟上");
+        }
+
         System.out.println("- [INFO] LAYER-DIFF | 不一致 " + bad + " 处");
         for (String s : shown) { System.out.println("     " + s); }
         if (bad > 0) { System.out.println("x [ERROR] LAYER-DIFF | 三层生成与口径不符"); System.exit(1); }
@@ -388,6 +443,51 @@ public final class LayerGenDiffer {
         c.field = field; c.type = "VARCHAR(255)"; c.comment = field; c.maxLen = 255;
         c.primaryKey = pk; c.nullable = notNull ? Boolean.FALSE : Boolean.TRUE;
         return c;
+    }
+
+    private static MappingFile measureMapping() throws IOException {
+        String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
+                + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
+        String body = "采购供应,油料,油料账,t_m,5,id,采购供应,proc,油料保障,dwd_meas,dim_material,综合分析,关键词,待核,\n";
+        File f = File.createTempFile("layerdiff-measure-", ".csv");
+        f.deleteOnExit();
+        Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
+        try { w.write('﻿'); w.write(header); w.write(body); } finally { w.close(); }
+        return MappingFile.loadTableCsv(f.getPath());
+    }
+
+    /** 指标/剔除夹具：金额（元）、比率、系统审计列、无注释的乱码列各一。 */
+    private static List<LayerGen.SourceTable> measureSource() {
+        List<Infer.Column> cs = new ArrayList<Infer.Column>();
+        Infer.Column id = new Infer.Column();
+        id.field = "id"; id.type = "VARCHAR(64)"; id.comment = "主键"; id.maxLen = 64;
+        id.primaryKey = true; id.nullable = Boolean.FALSE;
+        Infer.Column amount = new Infer.Column();
+        amount.field = "amount"; amount.type = "INT"; amount.comment = "出库金额（元）";
+        amount.maxLen = 11; amount.nullable = Boolean.TRUE;
+        Infer.Column rate = new Infer.Column();
+        rate.field = "rate"; rate.type = "DECIMAL(10,4)"; rate.comment = "合格率";
+        rate.maxLen = 12; rate.nullable = Boolean.TRUE;
+        Infer.Column ct = new Infer.Column();
+        ct.field = "create_time"; ct.type = "DATETIME"; ct.comment = "创建时间";
+        ct.maxLen = 19; ct.nullable = Boolean.TRUE;
+        Infer.Column junk = new Infer.Column();
+        junk.field = "xq_ab"; junk.type = "VARCHAR(255)"; junk.comment = "";
+        junk.maxLen = 255; junk.nullable = Boolean.TRUE;
+        cs.add(id); cs.add(amount); cs.add(rate); cs.add(ct); cs.add(junk);
+        List<LayerGen.SourceTable> out = new ArrayList<LayerGen.SourceTable>();
+        out.add(new LayerGen.SourceTable("t_m", "油料账", cs));
+        return out;
+    }
+
+    private static String firstLines(String s, int n) {
+        String[] parts = s.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.length && i < n; i++) {
+            if (sb.length() > 0) { sb.append(" | "); }
+            sb.append(parts[i]);
+        }
+        return sb.toString();
     }
 
     private static MappingFile mapping() throws IOException {
