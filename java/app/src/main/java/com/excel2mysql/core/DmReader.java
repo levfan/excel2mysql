@@ -30,6 +30,8 @@ import java.util.ServiceLoader;
 public final class DmReader implements AutoCloseable {
 
     public static final int DEFAULT_PORT = 5236;
+    /** 握手超时（毫秒）：驱动参数名 connectTimeout，实测支持。 */
+    public static final int DEFAULT_CONNECT_TIMEOUT_MS = 5000;
 
     private static final String SQL_TABLES =
             "SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = ? ORDER BY TABLE_NAME";
@@ -67,6 +69,11 @@ public final class DmReader implements AutoCloseable {
             String extra = params == null ? "" : params.trim();
             if (!extra.isEmpty()) {
                 kv.add(extra.replaceFirst("^[?&]", ""));
+            }
+            // 没自己写 connectTimeout 就补一个：地址是不可达的主机时，驱动会一路等到
+            // TCP 超时（实测黑洞要挂十几秒），这一页的进度框不该把人钉在那儿
+            if (!kv.toString().contains("connectTimeout")) {
+                kv.add("connectTimeout=" + DEFAULT_CONNECT_TIMEOUT_MS);
             }
             for (int i = 0; i < kv.size(); i++) {
                 sb.append(i == 0 ? '?' : '&').append(kv.get(i));
@@ -163,7 +170,8 @@ public final class DmReader implements AutoCloseable {
             // 老驱动包没注册 META-INF/services，接着走显式类名那一条
         }
         if (found.isEmpty()) {
-            for (String cls : new String[] {"dm.jdbc.driver.DMDriver"}) {
+            for (String cls : new String[] {"dm.jdbc.driver.DmDriver",
+                                            "dm.jdbc.driver.DMDriver"}) {
                 try {
                     found.add((Driver) Class.forName(cls, true, loader).newInstance());
                 } catch (Throwable ignored) {
