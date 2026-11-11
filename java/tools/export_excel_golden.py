@@ -16,7 +16,7 @@
    ⇒ Java 侧数值单元格要按"能不能精确表示成整数"分 int/float 两支，
      且整数支必须用 BigInteger，long 装不下 1e20。
 2. **重复表头会被 pandas 改名成 `X.1`、`X.2`**，而 infer_columns 用 `str(列名)` 当注释，
-   于是第二个"重复名"转出来的字段是 `chong_fu_ming_1`（点被当非 \w 换成下划线）。
+   于是第二个"重复名"转出来的字段是 `chong_fu_ming_1`（点被当非 \\w 换成下划线）。
    金标准里 18 个表头对应 17 个字段，少的正是全空列被 dropna(axis=1) 丢掉。
 3. **布尔单元格读成 True/False，最终推断成 INT**（`_looks_int` 对 bool 直接返回 True）。
 4. 空白列（`   `、``、`  \t `）算空值不参与长度统计，但整列都空时仍出 VARCHAR(64) 而不是被丢——
