@@ -3,10 +3,14 @@
 Java 侧由 java/tools/export_sql_samples.py 把这张表导出成 SqlSamples.java，
 和 HelpDoc 同一个套路——两边各写一份必然各说各话。
 
-共 153 条、13 组，其中数据治理主题（元数据体检、质量检查、标准化清洗、
+共 157 条、13 组，其中数据治理主题（元数据体检、质量检查、标准化清洗、
 主数据去重、编码映射、血缘影响、权限安全、生命周期、性能容量）占七成以上。
 「数据标准化与清洗」组尾部另收了一串「模糊匹配 → 替换（整串／白名单／中间片段）
 → 截断」的组合示例，每条都用 WHERE 把改动限定在模糊命中的行上。
+「查询与执行计划」组尾部收四条随机取一行：动态 SQL 算偏移量、ROW_NUMBER 编随机号、
+ORDER BY RAND() 最短写法，以及 TABLESAMPLE——那是 PostgreSQL／SQL Server 的语法，
+MySQL 8.0 上必然报 1064，留这条是按反面例子教人改写，check_sql_samples.py 的
+EXPECT_ERR 会盯着它照样报错（哪天 MySQL 支持了，那里会变红提醒回来重写）。
 分组顺序就是「示例」对话框里目录的第一层，组内顺序是第二层。
 语句都按 MySQL 8.0 写，表名/库名统一用 t_order、ods_ 这类占位，现场改完再执行。
 
@@ -994,6 +998,35 @@ SAMPLES = [
            "OFFSET 越大越慢，翻到后面直接超时。",
            "分页 LIMIT OFFSET 游标 主键排序",
            "SELECT\n  id,\n  order_no,\n  amount\nFROM t_order\nORDER BY id\nLIMIT 200\nOFFSET 0;"),
+    Sample("查询与执行计划", "随机取一行动态",
+           "随机取一行：先算随机偏移量，再拼出 LIMIT 语句执行（偏移量是变量，语句可复用）",
+           "抽检一条记录，或演示时随机抓一条样例数据。",
+           "ORDER BY RAND() 要把整表排一遍，百万行的表抽一条能等到超时。",
+           "随机 抽样 抽一条 PREPARE EXECUTE 动态SQL 偏移量 OFFSET",
+           "SET @row_offset = FLOOR(RAND() * (SELECT COUNT(*) FROM t_order));\n"
+           "SET @stmt_sql = CONCAT('SELECT id, order_no, amount FROM t_order LIMIT 1 OFFSET ', @row_offset);\n"
+           "PREPARE stmt\n"
+           "FROM @stmt_sql;\n"
+           "EXECUTE stmt;\n"
+           "DEALLOCATE PREPARE stmt;"),
+    Sample("查询与执行计划", "随机取一行窗口",
+           "随机取一行：给每行按 RAND() 编一个随机序号，再取 1 号",
+           "要按分组各抽一条，或抽样要跟别的窗口计算写在一起时。",
+           "只靠 LIMIT 1 抽不出每组一条，分组抽样时写不下去。",
+           "随机 抽样 ROW_NUMBER 窗口函数 分组抽样 子查询",
+           "SELECT\n  id,\n  order_no,\n  amount\nFROM (SELECT id, order_no, amount, ROW_NUMBER() OVER(ORDER BY RAND()) AS rn FROM t_order) t\nWHERE rn = 1;"),
+    Sample("查询与执行计划", "随机取一行RAND",
+           "随机取一行：ORDER BY RAND() 加 LIMIT（写得最短，小表够用）",
+           "小表抽样式，或开发环境随机看一条记录。",
+           "大表会先生成整表随机序号的临时表，行数一多就把内存和临时盘吃满。",
+           "随机 抽样 ORDER BY RAND LIMIT 一条 小表 最简",
+           "SELECT\n  id,\n  order_no,\n  amount\nFROM t_order\nORDER BY RAND()\nLIMIT 1;"),
+    Sample("查询与执行计划", "TABLESAMPLE",
+           "TABLESAMPLE 抽样（PostgreSQL／SQL Server 的写法，MySQL 8.0 直接报 1064，别照抄）",
+           "从 PostgreSQL 或 SQL Server 迁过来的脚本里见到 TABLESAMPLE，要在 MySQL 上改写。",
+           "MySQL 没有 TABLESAMPLE，照抄就是语法错误，白排查半天；抽样只能用 RAND() 或按主键区间切。",
+           "TABLESAMPLE 抽样 跨库 不支持 1064 PostgreSQL SQLServer 改写",
+           "SELECT\n  id,\n  order_no,\n  amount\nFROM t_order TABLESAMPLE SYSTEM(1 ROWS);"),
     Sample("数据修正", "空串改NULL",
            "把空串统一成 NULL（口径一致，聚合与判空才有意义）",
            "把历史空串统一改成 NULL。",

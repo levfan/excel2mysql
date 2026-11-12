@@ -1,4 +1,8 @@
-"""逐条把 SQL 执行器的 153 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
+"""逐条把 SQL 执行器的 157 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
+
+只有一条例外：TABLESAMPLE 那条本身就是"MySQL 不支持这个写法"的反面例子，
+在 EXPECT_ERR 里声明成"应当报 1064"，自检要求它照样报错——这样文档里那句话
+每次都被真库复核过，MySQL 哪天加上这个语法，这里立刻变红提醒回来重写示例。
 
 每条之前重建一次临时环境。有几条天然依赖前一条的产物（加列之后才能改列名、
 建了索引才能删索引、建了映射落地表才能按它统计），这类依赖在 PREREQ 里显式声明并先跑一遍，
@@ -49,6 +53,13 @@ ADD_WRITE_BACK = ["ALTER TABLE t_order ADD COLUMN new_code VARCHAR(64) COMMENT '
 SETUP = {("数据修正", "只填空位回写"): ADD_WRITE_BACK,
          ("数据修正", "回写冲突检测"): ADD_WRITE_BACK,
          ("数据修正", "事务内回写"): ADD_WRITE_BACK}
+
+# (分组, 短标题) → (预期错误码, 错误信息里必须出现的片段)。
+# 这里只放"故意教人别抄"的跨库写法：跑通了反倒是坏消息（说明 MySQL 加了这个语法、
+# 示例的措辞该改了），所以下面的主循环对它们的要求与别的条目正好相反。
+EXPECT_ERR = {
+    ("查询与执行计划", "TABLESAMPLE"): (1064, "syntax"),
+}
 
 
 def conn(db=None):
@@ -129,8 +140,8 @@ def cleanup():
 
 
 def main():
-    if len(SAMPLES) != 153:
-        print("条数不是 153：%d" % len(SAMPLES))
+    if len(SAMPLES) != 157:
+        print("条数不是 157：%d" % len(SAMPLES))
         return 1
     at = {}
     for i, sample in enumerate(SAMPLES, 1):
@@ -144,7 +155,7 @@ def main():
             if dep not in at:
                 print("前置指向一条不存在的示例：%s" % (dep,))
                 return 1
-    for key in list(PREREQ) + list(SETUP):
+    for key in list(PREREQ) + list(SETUP) + list(EXPECT_ERR):
         if key not in at:
             print("前置声明的主键在示例库里找不到：%s" % (key,))
             return 1
@@ -170,6 +181,22 @@ def main():
         if err is None:
             err, rows = run_one(cur, sample.sql)
         c.close()
+        expect = EXPECT_ERR.get(key)
+        if expect is not None:
+            code, marker = expect
+            if err is None:
+                fails.append((i, sample.group, sample.desc,
+                              "声明该报 %d 却跑通了，示例措辞要改" % code))
+                print("  BAD %2d [%s] %s -> 声明该报 %d 却跑通"
+                      % (i, sample.group, sample.desc, code))
+            elif str(code) not in err or marker not in err:
+                fails.append((i, sample.group, sample.desc, "报错与预期不符：%s" % err))
+                print("  BAD %2d [%s] %s -> 报错与预期不符：%s"
+                      % (i, sample.group, sample.desc, err))
+            else:
+                print("  ok  %2d [%s] %s（按预期报 %d，MySQL 没这个语法）"
+                      % (i, sample.group, sample.desc, code))
+            continue
         if err:
             fails.append((i, sample.group, sample.desc, err))
             print("  BAD %2d [%s] %s -> %s" % (i, sample.group, sample.desc, err))

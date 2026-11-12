@@ -3929,8 +3929,8 @@ public final class GuiMain {
         }
 
         // 示例目录：条数与分组、短标题、右侧介绍与语句、关键词过滤
-        if (frame.sqlSamplesCount() != 153) {
-            problems.add("SQL 示例不是 153 条：" + frame.sqlSamplesCount());
+        if (frame.sqlSamplesCount() != 157) {
+            problems.add("SQL 示例不是 157 条：" + frame.sqlSamplesCount());
         }
         int titleTooLong = 0;
         for (int i = 0; i < frame.sqlSamplesCount(); i++) {
@@ -3970,7 +3970,7 @@ public final class GuiMain {
                     : previewFont.getFamily() + "/" + previewFont.getSize()
                     + "，期望 " + wantPreviewPx + "px"));
         }
-        if (!"SQL 示例（153 条）".equals(frame.sqlSamplesTitle())) {
+        if (!"SQL 示例（157 条）".equals(frame.sqlSamplesTitle())) {
             problems.add("示例对话框标题不带条数：" + frame.sqlSamplesTitle());
         }
         // 目录那一栏的观感（用户 2026-10-29 报"字号与间距太小、颜色单一"）：
@@ -4025,9 +4025,9 @@ public final class GuiMain {
         if (!frame.sqlSamplesMinimizeThenRestore()) {
             problems.add("示例窗口最小化按不动：切了 ICONIFIED 回读扩展状态没认账");
         }
-        if (frame.sqlSamplesGroupCount() != 13 || frame.sqlSamplesVisibleCount() != 153
-                || !"共 153 条，分 13 组".equals(frame.sqlSamplesHitsText())) {
-            problems.add("示例目录不是「13 组 → 153 条」两层："
+        if (frame.sqlSamplesGroupCount() != 13 || frame.sqlSamplesVisibleCount() != 157
+                || !"共 157 条，分 13 组".equals(frame.sqlSamplesHitsText())) {
+            problems.add("示例目录不是「13 组 → 157 条」两层："
                     + frame.sqlSamplesGroupCount() + " 组 / "
                     + frame.sqlSamplesVisibleCount() + " 条 / " + frame.sqlSamplesHitsText());
         }
@@ -4132,7 +4132,7 @@ public final class GuiMain {
         }
         if (frame.sqlSamplesVisibleCount() != expectHits
                 || !expectGroups.toString().equals(frame.sqlSamplesGroupTitles())
-                || !("命中 " + expectHits + " 条（共 153 条）")
+                || !("命中 " + expectHits + " 条（共 157 条）")
                         .equals(frame.sqlSamplesHitsText())) {
             problems.add("搜「注释」的命中与预期不一致：界面 " + frame.sqlSamplesVisibleCount()
                     + " 条 / " + frame.sqlSamplesGroupTitles() + "，应 " + expectHits
@@ -4147,8 +4147,8 @@ public final class GuiMain {
             problems.add("一条都没命中时没把话说清：" + frame.sqlSamplesHitsText());
         }
         frame.typeSqlSamplesFilter("");
-        if (frame.sqlSamplesVisibleCount() != 153 || frame.sqlSamplesGroupCount() != 13
-                || !"共 153 条，分 13 组".equals(frame.sqlSamplesHitsText())) {
+        if (frame.sqlSamplesVisibleCount() != 157 || frame.sqlSamplesGroupCount() != 13
+                || !"共 157 条，分 13 组".equals(frame.sqlSamplesHitsText())) {
             problems.add("清空搜索框没回到全量：" + frame.sqlSamplesHitsText());
         }
         frame.clickSqlSamplesCopy();

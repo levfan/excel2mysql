@@ -2300,11 +2300,11 @@ _groups = []
 for _s in app_main.SQL_SAMPLES:
     if not _groups or _groups[-1] != _s.group:
         _groups.append(_s.group)
-check("F31 示例库 153 条、13 个分组，七个字段都非空且短标题够短",
-      len(app_main.SQL_SAMPLES) == 153 and len(_groups) == 13
+check("F31 示例库 157 条、13 个分组，七个字段都非空且短标题够短",
+      len(app_main.SQL_SAMPLES) == 157 and len(_groups) == 13
       and all(s.group and s.title and s.desc and s.scenario and s.problem
               and s.keywords and s.sql for s in app_main.SQL_SAMPLES)
-      and len({(s.group, s.title) for s in app_main.SQL_SAMPLES}) == 153
+      and len({(s.group, s.title) for s in app_main.SQL_SAMPLES}) == 157
       and max(len(s.title) for s in app_main.SQL_SAMPLES) <= 12
       and all(s.title != s.desc for s in app_main.SQL_SAMPLES),
       (len(app_main.SQL_SAMPLES), max(len(s.title) for s in app_main.SQL_SAMPLES)))
@@ -2327,11 +2327,11 @@ def _visible_leaves(dlg):
 
 
 _dlg = app_main.SqlSamplesDialog(w.sql_run_input)
-check("F32 示例对话框标题带条数，目录第一层是 13 个分组、第二层 153 条",
-      _dlg.windowTitle() == "SQL 示例（153 条）"
+check("F32 示例对话框标题带条数，目录第一层是 13 个分组、第二层 157 条",
+      _dlg.windowTitle() == "SQL 示例（157 条）"
       and _dlg.tree.topLevelItemCount() == 13
-      and len(_visible_leaves(_dlg)) == 153
-      and _dlg.lbl_hits.text() == "共 153 条，分 13 组",
+      and len(_visible_leaves(_dlg)) == 157
+      and _dlg.lbl_hits.text() == "共 157 条，分 13 组",
       (_dlg.windowTitle(), _dlg.tree.topLevelItemCount(), _dlg.lbl_hits.text()))
 check("F33 叶子只写短标题（长的那句挪到右侧介绍），打开即选中第一条",
       _dlg.tree.topLevelItem(0).text(0) == "建库与选库"
@@ -2598,7 +2598,7 @@ check("F38b 搜索框按关键词过滤，命中的条目与 matches 判的完�
        [leaf.data(0, app_main.Qt.UserRole) for leaf in _visible_leaves(_dlg)]
        == [i for i, s in enumerate(app_main.SQL_SAMPLES)
            if app_main.sample_matches(s, "注释")])[2]
-      and _dlg.lbl_hits.text() == "命中 %d 条（共 153 条）"
+      and _dlg.lbl_hits.text() == "命中 %d 条（共 157 条）"
           % sum(1 for s in app_main.SQL_SAMPLES if app_main.sample_matches(s, "注释")),
       (_dlg.lbl_hits.text(), len(_visible_leaves(_dlg))))
 check("F38c 过滤后整组没命中就不摆出来，有命中的组自动展开",
@@ -2621,13 +2621,13 @@ _dlg.search.setText("绝不存在的关键词")
 _app.processEvents()
 check("F38f 一条都没命中也要说清下一步，不许留一片空白目录",
       _visible_leaves(_dlg) == []
-      and _dlg.lbl_hits.text() == "没有命中：换个关键词，或清空搜索框回到全部 153 条",
+      and _dlg.lbl_hits.text() == "没有命中：换个关键词，或清空搜索框回到全部 157 条",
       _dlg.lbl_hits.text())
 _dlg.search.setText("")
 _app.processEvents()
-check("F38g 清空搜索框回到全量 153 条、13 组",
-      len(_visible_leaves(_dlg)) == 153 and _dlg.tree.topLevelItemCount() == 13
-      and _dlg.lbl_hits.text() == "共 153 条，分 13 组", _dlg.lbl_hits.text())
+check("F38g 清空搜索框回到全量 157 条、13 组",
+      len(_visible_leaves(_dlg)) == 157 and _dlg.tree.topLevelItemCount() == 13
+      and _dlg.lbl_hits.text() == "共 157 条，分 13 组", _dlg.lbl_hits.text())
 # 独立顶层窗口才有原生最小化/最大化：挂在主窗口底下的对话框在 Windows 上只有那颗关闭叉，
 # 主窗口最小化时它还留在屏上挡路。判据取窗口标志，因为按钮本身是系统画的。
 _dlg_flags = int(_dlg.windowFlags())

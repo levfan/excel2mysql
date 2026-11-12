@@ -35,7 +35,7 @@ public final class SqlSamples {
         }
     }
 
-    /** 共 153 条，顺序即对话框里目录的顺序。 */
+    /** 共 157 条，顺序即对话框里目录的顺序。 */
     public static final Sample[] ALL = new Sample[] {
         new Sample("建库与选库",
                 "建库", "建库（字符集与排序规则一次写全，避免事后改表）",
@@ -1806,6 +1806,50 @@ public final class SqlSamples {
                     "ORDER BY id" + NL +
                     "LIMIT 200" + NL +
                     "OFFSET 0;"),
+        new Sample("查询与执行计划",
+                "随机取一行动态", "随机取一行：先算随机偏移量，再拼出 LIMIT 语句执行（偏移量是变量，语句可复用）",
+                "抽检一条记录，或演示时随机抓一条样例数据。",
+                "ORDER BY RAND() 要把整表排一遍，百万行的表抽一条能等到超时。",
+                "随机 抽样 抽一条 PREPARE EXECUTE 动态SQL 偏移量 OFFSET",
+                            "SET @row_offset = FLOOR(RAND() * (SELECT COUNT(*) FROM t_order));" + NL +
+                    "SET @stmt_sql = CONCAT('SELECT id, order_no, amount FROM t_order LIMIT 1 OFFSET ', @row_offset);" + NL +
+                    "PREPARE stmt" + NL +
+                    "FROM @stmt_sql;" + NL +
+                    "EXECUTE stmt;" + NL +
+                    "DEALLOCATE PREPARE stmt;"),
+        new Sample("查询与执行计划",
+                "随机取一行窗口", "随机取一行：给每行按 RAND() 编一个随机序号，再取 1 号",
+                "要按分组各抽一条，或抽样要跟别的窗口计算写在一起时。",
+                "只靠 LIMIT 1 抽不出每组一条，分组抽样时写不下去。",
+                "随机 抽样 ROW_NUMBER 窗口函数 分组抽样 子查询",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount" + NL +
+                    "FROM (SELECT id, order_no, amount, ROW_NUMBER() OVER(ORDER BY RAND()) AS rn FROM t_order) t" + NL +
+                    "WHERE rn = 1;"),
+        new Sample("查询与执行计划",
+                "随机取一行RAND", "随机取一行：ORDER BY RAND() 加 LIMIT（写得最短，小表够用）",
+                "小表抽样式，或开发环境随机看一条记录。",
+                "大表会先生成整表随机序号的临时表，行数一多就把内存和临时盘吃满。",
+                "随机 抽样 ORDER BY RAND LIMIT 一条 小表 最简",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount" + NL +
+                    "FROM t_order" + NL +
+                    "ORDER BY RAND()" + NL +
+                    "LIMIT 1;"),
+        new Sample("查询与执行计划",
+                "TABLESAMPLE", "TABLESAMPLE 抽样（PostgreSQL／SQL Server 的写法，MySQL 8.0 直接报 1064，别照抄）",
+                "从 PostgreSQL 或 SQL Server 迁过来的脚本里见到 TABLESAMPLE，要在 MySQL 上改写。",
+                "MySQL 没有 TABLESAMPLE，照抄就是语法错误，白排查半天；抽样只能用 RAND() 或按主键区间切。",
+                "TABLESAMPLE 抽样 跨库 不支持 1064 PostgreSQL SQLServer 改写",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no," + NL +
+                    "  amount" + NL +
+                    "FROM t_order TABLESAMPLE SYSTEM(1 ROWS);"),
         new Sample("数据修正",
                 "空串改NULL", "把空串统一成 NULL（口径一致，聚合与判空才有意义）",
                 "把历史空串统一改成 NULL。",
