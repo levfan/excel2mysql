@@ -76,6 +76,103 @@ public final class FieldClass {
         }
     }
 
+    /**
+     * 表级上下文：源表名 + 表注释。
+     *
+     * <p>为什么需要它：现场大量表的列注释只写「值」「数量」「num」，有的干脆一个字不写，
+     * 但表名叫 {@code dwd_oil_stock}、注释写「油料库存表（吨）」——表本身已经把这一列
+     * 在记什么讲清楚了。只看列会把这批整批丢掉，ads 最后只剩行数口径。
+     *
+     * <p>反过来，字典表、参数表、日志表里的 {@code value} 是码值或排序，不是指标，
+     * 这类表由 {@link #meta} 挡住，不参与「按表主体认指标」。
+     */
+    public static final class Ctx {
+        public final String name;
+        public final String comment;
+        /** 检索串：表注释 + 表名（下划线/连字符换空格），表名部分转小写。 */
+        private final String text;
+        /** 元数据类表（字典/参数/日志…）：码值当指标是错的，这类表不给表级证据。 */
+        private final boolean meta;
+
+        private Ctx(String name, String comment) {
+            this.name = name == null ? "" : name;
+            this.comment = comment == null ? "" : Names.pyStrip(comment);
+            String n = this.name.toLowerCase(Locale.ROOT).replace('_', ' ').replace('-', ' ');
+            this.text = (this.comment + " " + n).trim();
+            this.meta = hitsAny(this.text, CTX_META_CN) || CTX_META_EN.matcher(n).find();
+        }
+
+        public static final Ctx EMPTY = new Ctx("", "");
+
+        /** 建上下文；表名与注释都为空时返回 {@link #EMPTY}，判定与以前完全一致。 */
+        public static Ctx of(String tableName, String tableComment) {
+            boolean noName = tableName == null || tableName.trim().isEmpty();
+            boolean noComment = tableComment == null || tableComment.trim().isEmpty();
+            return noName && noComment ? EMPTY : new Ctx(tableName, tableComment);
+        }
+
+        /** 这张表在记哪个量（库存量、经费额、编制数…）；认不出空串，此时不拿表当证据。 */
+        public String measureSubject() {
+            if (meta) {
+                return "";
+            }
+            for (int i = 0; i < CTX_LABEL.length; i++) {
+                if (text.contains(CTX_LABEL[i][0])) {
+                    return CTX_LABEL[i][1];
+                }
+            }
+            // 中文一句没写、只有英文表名（dwd_oil_stock / t_budget）时按词根对一张小表
+            String[] tokens = name.toLowerCase(Locale.ROOT).split("[^a-z0-9]+");
+            for (int i = 0; i < CTX_LABEL_EN.length; i++) {
+                for (String tk : tokens) {
+                    if (tk.equals(CTX_LABEL_EN[i][0])) {
+                        return CTX_LABEL_EN[i][1];
+                    }
+                }
+            }
+            return CTX_MEASURE_EN.matcher(name.toLowerCase(Locale.ROOT)).find() ? "指标度量" : "";
+        }
+
+        /** 存量类按期末值 MAX，率/比按 AVG，其余交回列自己的口径。 */
+        public String aggHint() {
+            if (hitsAny(text, CTX_STOCK_CN)) {
+                return "MAX";
+            }
+            if (text.contains("占比") || text.contains("比例") || text.endsWith("率")) {
+                return "AVG";
+            }
+            return "SUM";
+        }
+
+        /** 列上没写单位时：先看表注释里的单位，再看表主体给个常用单位。 */
+        public String unitHint() {
+            String u = unitOf(comment, "");
+            if (!u.isEmpty()) {
+                return u;
+            }
+            if (hitsAny(text, CTX_MONEY_CN)) {
+                return "元";
+            }
+            if (hitsAny(text, CTX_PERSON_CN)) {
+                return "人";
+            }
+            String subject = measureSubject();
+            if (hitsAny(subject, CTX_MONEY_SUBJECT)) {
+                return "元";
+            }
+            if ("人数".equals(subject)) {
+                return "人";
+            }
+            return subject.contains("面积") ? "平方米" : "";
+        }
+
+        /** 取证短句里引用的表名/表注释，太长截断，别把日志刷成一行表说明。 */
+        public String shortText() {
+            String s = comment.isEmpty() ? name : comment;
+            return s.length() > 20 ? s.substring(0, 20) : s;
+        }
+    }
+
     /** 审计/系统字段：库里都有、但不承载业务，进层只会挤掉真正的业务列。 */
     private static final String[] SYS_CN = {
             "创建时间", "创建日期", "创建人", "创建者", "创建用户", "创建机构", "创建部门",
@@ -189,6 +286,75 @@ public final class FieldClass {
     /** 文本型数值列的长度上限：再长就不是「数量存成了文本」，而是备注里带了数字。 */
     private static final long CAST_MAX_LEN = 128L;
 
+    /** 表名/表注释里表示「整表在记一类量」的词：命中后，表里那些泛称数值列才按指标收。 */
+    private static final String[] CTX_MEASURE_CN = {
+            "库存", "存量", "储备", "结存", "余额", "金额", "经费", "费用", "预算", "成本",
+            "收入", "支出", "收支", "产量", "销量", "用量", "消耗", "编制", "定员", "在编",
+            "人数", "产能", "里程", "油耗", "面积", "容量", "吨位", "床位", "评分", "成绩",
+            "占比", "比例",
+    };
+    private static final Pattern CTX_MEASURE_EN = Pattern.compile(
+            "(?:^|_)(?:stock|inventory|balance|amount|amt|budget|cost|fee|price|expense|income|"
+          + "qty|quantity|num|count|cnt|consumption|mileage|area|capacity|score|weight|volume|"
+          + "salary|payroll|staff|person|people|oil|fuel)(?:_|$)");
+    /** 表主体 → 指标中文名：{@code value} 这种空泛列名，交付里要写成「库存量」而不是「指标度量」。 */
+    private static final String[][] CTX_LABEL = {
+            {"库存", "库存量"}, {"储备", "储备量"}, {"结存", "结存量"}, {"余额", "余额"},
+            {"存量", "存量"}, {"经费", "经费额"}, {"预算", "预算额"}, {"费用", "费用额"},
+            {"成本", "成本额"}, {"金额", "金额"}, {"收入", "收入"}, {"支出", "支出"},
+            {"产量", "产量"}, {"销量", "销量"}, {"用量", "用量"}, {"消耗", "消耗量"},
+            {"编制", "编制数"}, {"定员", "定员数"}, {"在编", "在编数"}, {"人数", "人数"},
+            {"产能", "产能"}, {"里程", "里程"}, {"油耗", "油耗"}, {"面积", "面积"},
+            {"容量", "容量"}, {"吨位", "吨位"}, {"床位", "床位数"}, {"评分", "评分"},
+            {"成绩", "成绩"}, {"占比", "占比"}, {"比例", "比例"},
+    };
+    /**
+     * 存量类：每期一张快照，SUM 会把历史期累加，按期末值取 MAX。
+     * 「储备」不算在内——储备台账多是流水，按期间累加才是常用口径，宁可按 SUM 交给人核。
+     */
+    private static final String[] CTX_STOCK_CN = {"库存", "存量", "结存", "余额"};
+    /** 英文表名的对照表：现场不少表注释是空的，只剩 {@code dwd_oil_stock} 这种名字可依。 */
+    private static final String[][] CTX_LABEL_EN = {
+            {"stock", "库存量"}, {"inventory", "库存量"}, {"balance", "余额"},
+            {"budget", "预算额"}, {"cost", "成本额"}, {"expense", "支出"}, {"income", "收入"},
+            {"amount", "金额"}, {"amt", "金额"}, {"fee", "费用额"}, {"price", "价格"},
+            {"salary", "工资额"}, {"payroll", "工资额"}, {"consumption", "消耗量"},
+            {"mileage", "里程"}, {"area", "面积"}, {"capacity", "容量"}, {"score", "评分"},
+            {"weight", "重量"}, {"volume", "体积"}, {"person", "人数"}, {"people", "人数"},
+            {"staff", "人数"}, {"oil", "油料量"}, {"fuel", "油料量"},
+    };
+    private static final String[] CTX_MONEY_CN = {
+            "金额", "经费", "费用", "预算", "成本", "收入", "支出", "工资", "价格", "单价",
+    };
+    private static final String[] CTX_PERSON_CN = {"人数", "人员", "编制", "定员", "在编", "职工"};
+    /** 按表主体给单位的白名单：`余额` 不算在内（余额可以是吨、也可以是元，不猜）。 */
+    private static final String[] CTX_MONEY_SUBJECT = {
+            "金额", "经费额", "预算额", "费用额", "成本额", "工资额", "价格", "收入", "支出",
+    };
+    /** 元数据类表：码表里的 value / num 是码值或排序，当指标是错的。 */
+    private static final String[] CTX_META_CN = {
+            "字典", "码表", "参数", "配置", "日志", "审计", "模板", "权限", "菜单", "角色",
+            "元数据", "表结构", "数据源", "操作记录", "版本记录",
+    };
+    private static final Pattern CTX_META_EN = Pattern.compile(
+            "(?:^|_)(?:dict|dictionary|codebook|config|parameter|param|log|logs|audit|sys|"
+          + "system|role|menu|template|permission|meta|metadata|schema|version|user|users)(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
+    /** 泛称列名：叫 value/num/qty 的列本身没说是什么，只能靠表来定。 */
+    private static final Pattern CTX_GENERIC_EN = Pattern.compile(
+            "(?:^|_)(?:value|val|num|number|qty|quantity|amt|amount|total|sum|count|cnt|"
+          + "data|figure|value\\d+|num\\d+)(?:_|$)");
+    private static final String[] CTX_GENERIC_CN = {"数值", "数据", "值"};
+
+    /**
+     * 我们自己补的兜底注释后缀（「据列名判定」「据表主体判定」）。
+     *
+     * <p>dom 建表时会给无注释的列补一句，ads 和字段映射再把 dom 列读回来判一次——
+     * 那句补出来的注释必须当成「没有注释」，否则第二轮从「注释」这条路走，表级证据
+     * （单位、存量取 MAX）就全丢了，同一个列在 dom 与 ads 里口径不一致。
+     */
+    private static final Pattern DERIVED_COMMENT = Pattern.compile("（据(?:表主体|列名)判定）$");
+
     private static final String[] UNITS = {
             "万元", "亿元", "元", "吨", "千克", "公斤", "克", "毫克", "升", "毫升",
             "立方米", "平方米", "米", "千米", "公里", "亩", "公顷", "个", "件", "套",
@@ -201,9 +367,24 @@ public final class FieldClass {
     private FieldClass() {
     }
 
-    /** 按注释、字段名与类型判一列；同一列多次调用结果一致，不依赖上下文。 */
+    /** 只看列自身（注释、字段名、类型）判一列；同一列多次调用结果一致。 */
     public static Result of(Infer.Column c) {
-        String comment = c == null || c.comment == null ? "" : Names.pyStrip(c.comment);
+        return of(c, null);
+    }
+
+    /**
+     * 带表级上下文判一列：列自身证据不足时，再用表名／表注释兜一道。
+     *
+     * <p>现场「值」「数量」「num」这类列名配上「油料库存表（吨）」这种表注释，是能把指标
+     * 捞回来的；只传 {@code null} 时行为与本方法出现之前逐字一致（obj/dom 的老路径不受影响）。
+     */
+    public static Result of(Infer.Column c, Ctx ctx) {
+        Ctx t = ctx == null ? Ctx.EMPTY : ctx;
+        return labelFromTable(classify(c, t), c, t);
+    }
+
+    private static Result classify(Infer.Column c, Ctx tc) {
+        String comment = realComment(c == null ? null : c.comment);
         String field = c == null || c.field == null ? "" : c.field;
         String type = c == null || c.type == null ? "" : c.type;
         boolean pk = c != null && c.primaryKey;
@@ -312,6 +493,35 @@ public final class FieldClass {
                     aggOf(comment, field, ""),
                     "数值列且注释带量值语义（" + unitTag(core, unit, fl) + "）");
         }
+        // 表级证据（最后一道）：表注释或表名本身在讲一类量（油料库存表、经费预算表、人员编制表），
+        // 而这一列要么没注释、要么就叫 value/num/数量这种泛称——那它记的就是表主体那个量。
+        // 放在状态/名称/备注之后：带「是否」「名称」「备注」的列已经各自归位，不会被表带着走。
+        if (!tc.meta) {
+            String subject = tc.measureSubject();
+            if (!subject.isEmpty()) {
+                String ut = type == null ? "" : type.toUpperCase(Locale.ROOT);
+                // 无注释的 TINYINT/BIT 多半是编码或标志位，宁可不收：这条规则是补漏，不是滥收
+                boolean blankNum = comment.isEmpty() && numeric(type) && !booleanLike(type)
+                        && !ut.startsWith("TINYINT") && !ut.startsWith("BIT");
+                boolean generic = (CTX_GENERIC_EN.matcher(fl).find()
+                        || hitsAny(comment, CTX_GENERIC_CN))
+                        && (numeric(type) && !booleanLike(type) || castable(type, c));
+                if (blankNum || generic) {
+                    String unit = unitOf(comment, "");
+                    if (unit.isEmpty()) {
+                        unit = tc.unitHint();
+                    }
+                    String agg = aggOf(comment, field, "");
+                    if ("SUM".equals(agg)) {
+                        agg = tc.aggHint();
+                    }
+                    return new Result(MEASURE, withDim(subject, dim), true, true, dim, unit, agg,
+                            "表注释/表名「" + tc.shortText() + "」说明整表在记" + subject
+                                    + "，列「" + field + "」本身没有更细口径，按表主体判为指标",
+                            !numeric(type));
+                }
+            }
+        }
         if (!dim.isEmpty() && !"dim_code_info".equals(dim) && !"dim_code_it".equals(dim)) {
             return byDim(dim, "命中对象维度词");
         }
@@ -323,9 +533,46 @@ public final class FieldClass {
                 "无注释且字段名无可识别语义");
     }
 
+    /**
+     * 指标度量这类空泛标签，列上又没注释时，用表主体补成看得懂的名字（库存量、经费额）。
+     * 只在列自己一句话都没写时才补：列注释优先，表只能兜底。
+     */
+    private static Result labelFromTable(Result r, Infer.Column c, Ctx t) {
+        if (r == null || !r.measure || t == null || t.meta) {
+            return r;
+        }
+        String src = realComment(c == null ? null : c.comment);
+        if (!src.isEmpty()) {
+            return r;
+        }
+        String subject = t.measureSubject();
+        if (subject.isEmpty()) {
+            return r;
+        }
+        // 单位与口径：只有列名本身就是 value/num/qty 这种泛称时才让表说了算——
+        // 经费表里叫 days 的列不该被写成「元」，也不该因为表在记经费就改成 MAX。
+        String fl = c == null || c.field == null ? "" : c.field.toLowerCase(Locale.ROOT);
+        boolean generic = CTX_GENERIC_EN.matcher(fl).find();
+        // 改名也只给泛称列：days/hours/km 自己有明确含义，套上表主体反而错（经费表里的工期成了「经费额」）
+        String label = generic && r.label.startsWith("指标度量") && !"指标度量".equals(subject)
+                ? r.label.replace("指标度量", subject) : r.label;
+        String unit = r.unit.isEmpty() && generic ? t.unitHint() : r.unit;
+        String agg = "SUM".equals(r.agg) && generic ? t.aggHint() : r.agg;
+        if (label.equals(r.label) && unit.equals(r.unit) && agg.equals(r.agg)) {
+            return r;
+        }
+        return new Result(r.code, label, r.business, r.measure, r.dim, unit, agg, r.basis,
+                r.castNumeric);
+    }
+
     /** 生成器只留系统字段以外的列；无据可依的未归类列也跳过。 */
     public static boolean keep(Infer.Column c) {
-        return c != null && (c.primaryKey || of(c).business);
+        return keep(c, null);
+    }
+
+    /** 带表级上下文的取舍：表的注释/名称能把「无注释的数值列」捞回业务列，不该在 dom 就被丢掉。 */
+    public static boolean keep(Infer.Column c, Ctx ctx) {
+        return c != null && (c.primaryKey || of(c, ctx).business);
     }
 
     /**
@@ -336,12 +583,41 @@ public final class FieldClass {
      * dom 里还在、ads 里整列消失，指标白丢。改成「据列名判定」，不再与系统词表撞车。
      */
     public static String commentOf(Infer.Column c) {
+        return commentOf(c, null);
+    }
+
+    /**
+     * 带表级上下文的兜底注释：表能说清就写「库存量（据表主体判定）」，别停在「指标度量」。
+     *
+     * <p>措辞里不许出现「表名」「表注释」「字段名」——那三个词都在 {@link #SYS_CN} 里，
+     * 补出来的注释下一轮读回来会被判成系统字段，列在 dom 还在、到 ads 整列消失
+     * （上一轮「按字段名推断」已经踩过一次，这里换成「据表主体判定」）。
+     */
+    public static String commentOf(Infer.Column c, Ctx ctx) {
         String src = c == null || c.comment == null ? "" : Names.pyStrip(c.comment);
         if (!src.isEmpty()) {
             return src;
         }
-        Result r = of(c);
+        Result r = of(c, ctx);
+        if (ctx != null && !ctx.meta && !ctx.measureSubject().isEmpty()
+                && r.measure && !r.label.startsWith("指标度量")) {
+            return r.label + "（据表主体判定）";
+        }
         return r.label + "（据列名判定）";
+    }
+
+    /**
+     * 判断语义时用的注释：整句都是我们补的兜底注释（「库存量（据表主体判定）」）就当成没注释。
+     *
+     * <p>不这么做的话，第二轮读回来会把这句补出来的话当证据：{@code value} 的注释变成「库存量」，
+     * 单位「吨」没了、口径也不再走表级规则——dom 与 ads 对同一列说两套。
+     */
+    private static String realComment(String comment) {
+        String s = comment == null ? "" : Names.pyStrip(comment);
+        if (s.isEmpty()) {
+            return "";
+        }
+        return DERIVED_COMMENT.matcher(s).find() ? "" : s;
     }
 
     private static boolean isSystem(String comment, String field) {

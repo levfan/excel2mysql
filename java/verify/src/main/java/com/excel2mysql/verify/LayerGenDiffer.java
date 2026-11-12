@@ -362,6 +362,56 @@ public final class LayerGenDiffer {
             }
         }
 
+        // ---- 表级证据（2026-11-13）：表注释／表名与字段名一起看，不再只认列注释 ----
+        // 现场最常见的漏收是「列名叫 value/num/qty 且列注释为空」——列本身什么都没说，
+        // 唯一能判的依据就是表：油料库存表（吨）、经费预算执行表、数据字典表。
+        MappingFile ctxm = ctxMapping();
+        List<LayerGen.SourceTable> ctxsrc = ctxSource();
+        LayerGen.LayerOutput ctxdom = LayerGen.genLayer(LayerGen.Layer.DOM, ctxm, ctxsrc, o);
+        LayerGen.LayerOutput ctxads = LayerGen.genLayer(LayerGen.Layer.ADS, ctxm, ctxsrc, o);
+        StringBuilder cmiss = new StringBuilder();
+        for (String f : new String[]{"value", "num", "qty", "budget_num"}) {
+            if (!ctxdom.ddlSql.contains("`" + f + "`")) {
+                cmiss.append(f).append("(dom 就丢了) ");
+            } else if (!ctxads.transformSql.contains("`" + f + "`")) {
+                cmiss.append(f).append("(没进 ads) ");
+            }
+        }
+        if (cmiss.length() > 0) {
+            bad++; shown.add("表注释/表名没被当证据：" + cmiss);
+        }
+        // 库存表里的无量纲列按期末值取 MAX（每期一张快照），注释里的「吨」要落到 idx_unit
+        if (!ctxads.transformSql.contains("MAX(`value`) AS `idx_value`")) {
+            bad++; shown.add("库存表里无注释的 value 没按存量取 MAX：" + firstLines(ctxads.transformSql, 4));
+        }
+        if (!ctxads.transformSql.contains("MAX(CAST(NULLIF(REPLACE(REPLACE(TRIM(`qty`)")) {
+            bad++; shown.add("库存表里的文本数值列 qty 没按存量 MAX + CAST 聚合");
+        }
+        if (!ctxads.transformSql.contains("'吨' AS `idx_unit`")) {
+            bad++; shown.add("表注释里的单位（吨）没带到指标上");
+        }
+        // 经费表：无量纲列按金额给「元」，口径仍是求和
+        if (!ctxads.transformSql.contains("SUM(`budget_num`) AS `idx_value`")
+                || !ctxads.transformSql.contains("'元' AS `idx_unit`")) {
+            bad++; shown.add("经费表里的 budget_num 没按金额（SUM/元）出指标");
+        }
+        // 一张表三个指标，不多不少（zt 是编码、is_on 是开关、create_time 是审计列，都不该进来）
+        if (countOccurrences(ctxads.transformSql, "{\"dom\":\"dwd_stock_ctx\"}") != 3) {
+            bad++; shown.add("库存表的指标数不对 期望 3 实际 "
+                    + countOccurrences(ctxads.transformSql, "{\"dom\":\"dwd_stock_ctx\"}"));
+        }
+        // 反例：字典表里的 value 是码值，不许因为「表里有 value」就当指标
+        for (String f : new String[]{"dict_value", "zt", "is_on"}) {
+            if (ctxads.transformSql.contains("`" + f + "`")) {
+                bad++; shown.add("表级证据误收：" + f);
+            }
+        }
+        // 兜底注释的措辞不许撞 SYS_CN（表名／表注释／字段名）：撞了下一层读回来就判成系统字段，
+        // 列在 dom 还在、到 ads 整列消失——上一轮「按字段名推断」已经踩过一次。
+        if (!ctxdom.ddlSql.contains("库存量（据表主体判定）")) {
+            bad++; shown.add("按表主体判出来的列没写清来源：" + firstLines(ctxdom.ddlSql, 6));
+        }
+
         // 老映射初稿（构建/gen_layer_mapping.py 产的那份）沿用条款 188 三框架名，
         // 还带分号多值串。以前整批归进「后勤综合主题」，六个主题塌成一张表；现在按领域重算。
         String legacy = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
@@ -641,6 +691,52 @@ public final class LayerGenDiffer {
         cs.add(col("remark", "VARCHAR(255)", "备注", 255L));
         List<LayerGen.SourceTable> out = new ArrayList<LayerGen.SourceTable>();
         out.add(new LayerGen.SourceTable("t_hit", "油料储备", cs));
+        return out;
+    }
+
+    /** 表级证据夹具的映射：三张源表各一张领域目标表，主题写官方名，省得主题归一化干扰断言。 */
+    private static MappingFile ctxMapping() throws IOException {
+        String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
+                + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
+        String body =
+                "采购供应,油料,油料库存台账,t_stock_ledger,7,id,采购供应,proc,油料保障,"
+                + "dwd_stock_ctx,dim_material,后勤保障主题,关键词,待核,\n"
+                + "数据资源,字典,数据字典项,t_dict_item,3,id,数据资源,data,代码数据,"
+                + "dwd_dict_ctx,dim_code_info,后勤保障主题,关键词,待核,\n"
+                + "财务,经费,经费预算执行,t_budget_exec,3,id,财务,fund,经费保障,"
+                + "dwd_budget_ctx,dim_fund_account,后勤保障主题,关键词,待核,\n";
+        File f = File.createTempFile("layerdiff-ctx-", ".csv");
+        f.deleteOnExit();
+        Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
+        try { w.write('﻿'); w.write(header); w.write(body); } finally { w.close(); }
+        return MappingFile.loadTableCsv(f.getPath());
+    }
+
+    /**
+     * 表级证据夹具：库存表里三列全无注释（value/num/qty），另有编码列 zt、开关列 is_on、审计列；
+     * 字典表里叫 dict_value 的一列是码值；经费表里 budget_num 无量纲。
+     */
+    private static List<LayerGen.SourceTable> ctxSource() {
+        List<Infer.Column> stock = new ArrayList<Infer.Column>();
+        stock.add(col("id", "VARCHAR(64)", "主键", 64L));
+        stock.add(col("value", "DECIMAL(18,2)", "", 18L));
+        stock.add(col("num", "INT", "", 11L));
+        stock.add(col("qty", "VARCHAR(16)", "", 16L));
+        stock.add(col("zt", "TINYINT", "", 4L));
+        stock.add(col("is_on", "TINYINT(1)", "是否启用", 1L));
+        stock.add(col("create_time", "DATETIME", "", 8L));
+        List<Infer.Column> dict = new ArrayList<Infer.Column>();
+        dict.add(col("id", "VARCHAR(64)", "主键", 64L));
+        dict.add(col("dict_value", "DECIMAL(18,2)", "", 18L));
+        dict.add(col("dict_code", "VARCHAR(32)", "编码", 32L));
+        List<Infer.Column> budget = new ArrayList<Infer.Column>();
+        budget.add(col("id", "VARCHAR(64)", "主键", 64L));
+        budget.add(col("budget_num", "INT", "", 11L));
+        budget.add(col("days", "INT", "", 11L));
+        List<LayerGen.SourceTable> out = new ArrayList<LayerGen.SourceTable>();
+        out.add(new LayerGen.SourceTable("t_stock_ledger", "油料库存表（吨）", stock));
+        out.add(new LayerGen.SourceTable("t_dict_item", "数据字典表", dict));
+        out.add(new LayerGen.SourceTable("t_budget_exec", "经费预算执行表", budget));
         return out;
     }
 

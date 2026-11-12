@@ -65,6 +65,8 @@ public final class LayerGen {
         String origin;
         boolean multi;
         boolean entityIdFromSource;
+        /** 表级上下文（目标表名 + 源表注释）：dom 列在 ads 里要重新判指标，这条上下文得跟着走。 */
+        FieldClass.Ctx ctx = FieldClass.Ctx.EMPTY;
         /** 非空表示这一组装不进 MySQL，必须拆表（不再是拒绝生成的理由）。 */
         String overLimit = "";
         DomGroup(String target) { this.target = target; this.origin = target; }
@@ -219,6 +221,9 @@ public final class LayerGen {
         List<String> droppedSample = new ArrayList<String>();
         for (DomGroup g : rough) {
             g.multi = g.sources.size() > 1;
+            // 目标表名 + 源表注释一起当表级证据：源表注释最贴近业务（「油料库存表（吨）」），
+            // 目标名里也常带英文词根（dwd_oil_stock），两个都留给 FieldClass 去认。
+            g.ctx = FieldClass.Ctx.of(g.target, sourceComments(g.sources));
             Set<String> seen = new LinkedHashSet<String>();
             for (SourceTable s : g.sources) {
                 for (Infer.Column c : s.columns) {
@@ -227,14 +232,14 @@ public final class LayerGen {
                     }
                     // 治理字段名归生成器；判不出类别、或一看就是系统审计列的不进层——
                     // 硬塞进去只会把真正的业务列挤出 500 列上限，注释还只能写「治理字段」
-                    if (isGovField(c.field) || !FieldClass.keep(c)) {
+                    if (isGovField(c.field) || !FieldClass.keep(c, g.ctx)) {
                         dropped++;
                         if (droppedSample.size() < 6) {
                             droppedSample.add(s.name + "." + c.field);
                         }
                         continue;
                     }
-                    g.cols.add(g.multi ? copyMerged(c) : copyCol(c, c.primaryKey));
+                    g.cols.add(g.multi ? copyMerged(c, g.ctx) : copyCol(c, c.primaryKey, g.ctx));
                 }
             }
             g.entityIdFromSource = g.multi && seen.contains("entity_id");
@@ -285,15 +290,17 @@ public final class LayerGen {
         for (Map.Entry<SourceTable, List<MappingFile.TableMap>> e : bySource.entrySet()) {
             List<Infer.Column> business = new ArrayList<Infer.Column>();
             Set<String> seen = new LinkedHashSet<String>();
+            FieldClass.Ctx sc = FieldClass.Ctx.of(g.target, e.getKey().comment);
             for (Infer.Column c : e.getKey().columns) {
                 if (!seen.add(c.field)) { continue; }
-                if (isGovField(c.field) || !FieldClass.keep(c)) { continue; }
-                business.add(copyCol(c, c.primaryKey));
+                if (isGovField(c.field) || !FieldClass.keep(c, sc)) { continue; }
+                business.add(copyCol(c, c.primaryKey, sc));
             }
             List<List<Infer.Column>> chunks = packColumns(base, business);
             for (List<Infer.Column> chunk : chunks) {
                 DomGroup p = new DomGroup(uniqueName(g.target, used));
                 p.origin = g.target;
+                p.ctx = FieldClass.Ctx.of(p.target, e.getKey().comment);
                 p.rows.addAll(e.getValue());
                 p.sources.add(e.getKey());
                 p.cols.addAll(chunk);
@@ -309,6 +316,7 @@ public final class LayerGen {
         if (parts.isEmpty() && !g.rows.isEmpty()) {
             DomGroup p = new DomGroup(uniqueName(g.target, used));
             p.origin = g.target;
+            p.ctx = FieldClass.Ctx.of(p.target, sourceComments(g.sources));
             p.cols.addAll(finishChunk(base, new ArrayList<Infer.Column>()));
             parts.add(p);
         }
@@ -344,6 +352,23 @@ public final class LayerGen {
         }
         if (sources.size() > 10) {
             sb.append(" 等 ").append(sources.size()).append(" 张");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 合并表里把几张源表的注释拼成一条表级证据：一源一表时就是那张表的注释；
+     * 多源时最多取 3 张的注释（再多就成了噪音，关键词反而被稀释）。
+     */
+    private static String sourceComments(List<SourceTable> sources) {
+        StringBuilder sb = new StringBuilder();
+        int used = 0;
+        for (SourceTable s : sources) {
+            if (s.comment == null || s.comment.trim().isEmpty()) { continue; }
+            if (used >= 3) { break; }
+            if (sb.length() > 0) { sb.append("；"); }
+            sb.append(s.comment.trim());
+            used++;
         }
         return sb.toString();
     }
@@ -405,8 +430,9 @@ public final class LayerGen {
         List<String> droppedSample = new ArrayList<String>();
         for (List<SourceTable> ss : dimSources.values()) {
             for (SourceTable s : ss) {
+                FieldClass.Ctx sc = FieldClass.Ctx.of(s.name, s.comment);
                 for (Infer.Column c : s.columns) {
-                    if (isGovField(c.field) || !FieldClass.keep(c)) {
+                    if (isGovField(c.field) || !FieldClass.keep(c, sc)) {
                         String key = s.name + "." + c.field;
                         if (droppedSet.add(key) && droppedSample.size() < 6) {
                             droppedSample.add(key);
@@ -535,9 +561,10 @@ public final class LayerGen {
     /** 一张源表能进维表的业务列：源主键不并进维表，系统/未归类列跳过。 */
     private static List<Infer.Column> businessColsOf(SourceTable s, boolean multi) {
         List<Infer.Column> out = new ArrayList<Infer.Column>();
+        FieldClass.Ctx sc = FieldClass.Ctx.of(s.name, s.comment);
         for (Infer.Column c : s.columns) {
-            if (c.primaryKey || isGovField(c.field) || !FieldClass.keep(c)) { continue; }
-            out.add(multi ? copyMerged(c) : copyCol(c, false));
+            if (c.primaryKey || isGovField(c.field) || !FieldClass.keep(c, sc)) { continue; }
+            out.add(multi ? copyMerged(c, sc) : copyCol(c, false, sc));
         }
         return out;
     }
@@ -573,9 +600,13 @@ public final class LayerGen {
         // dom 实际会生成的表（含合并超限时自动拆出来的那些）。origin → 实际表名的展开表
         // 让 ads 在 dom 拆表之后仍能把每一张拆出来的领域表都汇总上，不再漏表、也不再跳过"被拒"的表。
         Map<String, List<Infer.Column>> domCols = new LinkedHashMap<String, List<Infer.Column>>();
+        // dom 列的注释在生成时可能被兜底成「库存量（据表注释判定）」，但判指标仍要带上表级上下文：
+        // 列名 value/num 这种，只有表能说清它在记什么。
+        Map<String, FieldClass.Ctx> domCtx = new LinkedHashMap<String, FieldClass.Ctx>();
         Map<String, List<String>> actualByOrigin = new LinkedHashMap<String, List<String>>();
         for (DomGroup g : planDom(m, src, new LayerOutput())) {
             domCols.put(g.target, g.cols);
+            domCtx.put(g.target, g.ctx);
             List<String> actual = actualByOrigin.get(g.origin);
             if (actual == null) {
                 actual = new ArrayList<String>();
@@ -638,7 +669,7 @@ public final class LayerGen {
             }
             for (String domTable : e.getValue().keySet()) {
                 List<Infer.Column> scols = domCols.get(domTable);
-                List<Measure> measures = measuresOf(scols);
+                List<Measure> measures = measuresOf(scols, domCtx.get(domTable));
                 rankMeasures(measures);
                 for (Measure mm : measures) {
                     if (mm.cast) { castMeasures++; }
@@ -718,11 +749,19 @@ public final class LayerGen {
      * 语义最弱的那些（tinyint 小计数、无量纲的杂项数值），而不是按列序随便砍。
      */
     private static List<Measure> measuresOf(List<Infer.Column> cols) {
+        return measuresOf(cols, null);
+    }
+
+    /**
+     * 带表级上下文的挑指标：列名只有 value/num 时，表注释「油料库存表（吨）」就是决定性证据。
+     * dom 的列在生成时已经按同一套上下文判过一遍，这里保持一致，不会出现「dom 里有、ads 里不认」。
+     */
+    private static List<Measure> measuresOf(List<Infer.Column> cols, FieldClass.Ctx ctx) {
         List<Measure> out = new ArrayList<Measure>();
         if (cols == null) { return out; }
         for (Infer.Column c : cols) {
             if (c.primaryKey || isGovField(c.field)) { continue; }
-            FieldClass.Result r = FieldClass.of(c);
+            FieldClass.Result r = FieldClass.of(c, ctx);
             if (!r.measure || r.agg.isEmpty()) { continue; }
             String expr = r.castNumeric ? castExpr(c.field) : "`" + c.field + "`";
             out.add(new Measure(c.field, r.label, r.unit, r.agg, expr, r.castNumeric));
@@ -933,21 +972,29 @@ public final class LayerGen {
     }
 
     private static Infer.Column copyCol(Infer.Column c, boolean pk) {
+        return copyCol(c, pk, null);
+    }
+
+    private static Infer.Column copyCol(Infer.Column c, boolean pk, FieldClass.Ctx ctx) {
         Infer.Column n = c.copied();
         n.primaryKey = pk;
         if (n.comment == null || n.comment.trim().isEmpty()) {
-            n.comment = FieldClass.commentOf(c);
+            n.comment = FieldClass.commentOf(c, ctx);
         }
         return n;
     }
 
     /** 多源合并列：既不携带源主键、也不携带源侧 NOT NULL——缺列那一支要插 NULL，带着约束整表炸 1048。 */
     private static Infer.Column copyMerged(Infer.Column c) {
+        return copyMerged(c, null);
+    }
+
+    private static Infer.Column copyMerged(Infer.Column c, FieldClass.Ctx ctx) {
         Infer.Column n = c.copied();
         n.primaryKey = false;
         n.nullable = Boolean.TRUE;
         if (n.comment == null || n.comment.trim().isEmpty()) {
-            n.comment = FieldClass.commentOf(c);
+            n.comment = FieldClass.commentOf(c, ctx);
         }
         return n;
     }

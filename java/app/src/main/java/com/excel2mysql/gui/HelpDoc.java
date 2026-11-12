@@ -946,6 +946,12 @@ public final class HelpDoc {
                     "带单位的列（载重（吨）），以及 <code>qty</code>、<code>amount</code>、<code>price</code> 这类英文字段名；" + NL +
                     "数量金额存成 <code>VARCHAR</code> 的列也收，聚合时先" + NL +
                     "<code>CAST(NULLIF(REPLACE(…),'') AS DECIMAL(38,6))</code> 再求和，值里混进非数字会按 0 计并在日志点名。" + NL +
+                    "<b>列注释为空、列名又是 <code>value</code>／<code>num</code>／<code>qty</code> 这种泛称时，表本身也算证据</b>：" + NL +
+                    "表注释或表名在讲一类量（「油料库存表（吨）」「经费预算执行表」<code>dwd_budget_exec</code>），" + NL +
+                    "这列就按表主体判成库存量／经费额，单位从表注释取（吨、元），口径也跟表走" + NL +
+                    "（<b>库存／存量／结存／余额按期末值取 <code>MAX</code></b>，率／比按 <code>AVG</code>）；" + NL +
+                    "字典表、码表、参数表、日志表里叫 <code>value</code> 的列是码值，不按指标收，" + NL +
+                    "无注释的 <code>TINYINT</code>／<code>BIT</code> 也一律不当指标（多半是编码或标志位）。" + NL +
                     "联系电话、开关、序号、年份这类不按指标处理。一张领域表最多落 20 个指标，" + NL +
                     "超限时<b>先按金额/数量、再比率/评分、最后其它</b>的顺序保留，丢掉的表名与列名写进日志，" + NL +
                     "没有可用指标列时才退回按源行数 <code>COUNT(*)</code> 填 <code>idx_value</code>。指标口径仍待业务方逐条核改</li>" + NL +
