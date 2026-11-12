@@ -412,6 +412,27 @@ public final class LayerGenDiffer {
             bad++; shown.add("按表主体判出来的列没写清来源：" + firstLines(ctxdom.ddlSql, 6));
         }
 
+        // ---- 行上限降级（2026-11-13）：宽维表照「建表」页那套 RowFit 体检降级，治理字段与主键不动 ----
+        // 现场 dim_facility_8 报 1118 Row size too large，就是几百个宽 VARCHAR 叠在一张维表里。
+        LayerGen.LayerOutput wobj = LayerGen.genLayer(LayerGen.Layer.OBJ, wideObjMapping(),
+                wideObjSource(), o);
+        boolean saidFit = false;
+        for (String w : wobj.warnings) {
+            if (w.contains("行上限降级")) { saidFit = true; }
+        }
+        if (!saidFit) {
+            bad++; shown.add("宽维表降级了列却没在日志里点名");
+        }
+        if (wobj.ddlSql.contains("`entity_id` TEXT") || wobj.ddlSql.contains("`facility_id` TEXT")) {
+            bad++; shown.add("治理字段 / 维度主键被退成了 TEXT（结构列不该动类型）");
+        }
+        if (countOccurrences(wobj.ddlSql, "CREATE TABLE `dim_facility") < 2) {
+            bad++; shown.add("宽维表没拆表：240 个宽 VARCHAR 装不进一张表，应按行上限拆开");
+        }
+        if (!wobj.ddlSql.contains("` TEXT")) {
+            bad++; shown.add("宽维表一列都没退 TEXT：降级没生效，DDL 撞 1118");
+        }
+
         // 老映射初稿（构建/gen_layer_mapping.py 产的那份）沿用条款 188 三框架名，
         // 还带分号多值串。以前整批归进「后勤综合主题」，六个主题塌成一张表；现在按领域重算。
         String legacy = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
@@ -737,6 +758,36 @@ public final class LayerGenDiffer {
         out.add(new LayerGen.SourceTable("t_stock_ledger", "油料库存表（吨）", stock));
         out.add(new LayerGen.SourceTable("t_dict_item", "数据字典表", dict));
         out.add(new LayerGen.SourceTable("t_budget_exec", "经费预算执行表", budget));
+        return out;
+    }
+
+    /** 宽维表夹具的映射：三张源表整编进同一个对象维度 dim_facility。 */
+    private static MappingFile wideObjMapping() throws IOException {
+        String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
+                + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
+        StringBuilder body = new StringBuilder();
+        for (int i = 1; i <= 3; i++) {
+            body.append("设施建设,工程,设施台账").append(i).append(",t_wide_").append(i)
+                .append(",81,id,设施建设领域,facil,工程建设,,dim_facility,rc,关键词,待核,\n");
+        }
+        File f = File.createTempFile("layerdiff-wide-", ".csv");
+        f.deleteOnExit();
+        Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
+        try { w.write('﻿'); w.write(header); w.write(body.toString()); } finally { w.close(); }
+        return MappingFile.loadTableCsv(f.getPath());
+    }
+
+    /** 宽维表夹具：3×80 个 VARCHAR(255)，240 列叠一张表直接撞穿 server 上限与 InnoDB 半页。 */
+    private static List<LayerGen.SourceTable> wideObjSource() {
+        List<LayerGen.SourceTable> out = new ArrayList<LayerGen.SourceTable>();
+        for (int i = 1; i <= 3; i++) {
+            List<Infer.Column> cs = new ArrayList<Infer.Column>();
+            cs.add(col("id", "VARCHAR(64)", "主键", 64L));
+            for (int j = 1; j <= 80; j++) {
+                cs.add(col("s" + i + "_f" + j, "VARCHAR(255)", "设施属性" + j, 255L));
+            }
+            out.add(new LayerGen.SourceTable("t_wide_" + i, "设施台账" + i, cs));
+        }
         return out;
     }
 

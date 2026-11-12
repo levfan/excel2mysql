@@ -60,12 +60,26 @@ public final class LayerDbRegression {
             // 无主键、且有两行完全相同：只喂维度，用来真撞「派生表 DISTINCT 去重、生成键在外层」
             exec(db, "CREATE TABLE `" + SRC + "`.`t_oil_use` (`use_id` VARCHAR(64), `material_name` VARCHAR(255), `qty` INT) ENGINE=InnoDB");
             exec(db, "INSERT INTO `" + SRC + "`.`t_oil_use` VALUES ('u1','油料甲',10),('u1','油料甲',10),('u2','油料乙',5)");
+            // 宽维表夹具：6 张源表各 40 个 VARCHAR(255)，整编进同一个对象维度（现场 dim_facility_8 的形状）。
+            // 240 个 1022 字节的列直接把 server 上限 65535 撞穿，不降级就只能 1118 Row size too large
+            for (int i = 1; i <= 6; i++) {
+                StringBuilder wide = new StringBuilder("CREATE TABLE `" + SRC + "`.`t_fac_" + i
+                        + "` (`id` VARCHAR(64) NOT NULL");
+                for (int j = 1; j <= 40; j++) {
+                    // 带中文注释：无注释的 s1_f1 会被判成未归类直接丢掉，那就撞不到行宽了
+                    wide.append(", `s").append(i).append("_f").append(j)
+                        .append("` VARCHAR(255) COMMENT '设施属性").append(j).append("'");
+                }
+                wide.append(", PRIMARY KEY (`id`)) ENGINE=InnoDB");
+                exec(db, wide.toString());
+            }
 
             List<LayerGen.SourceTable> src = LayerGen.readSource(db, SRC);
-            if (src.size() != 3) {
-                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 3 表 实际 " + src.size());
-            } else if (src.get(0).columns.size() != 2) {
-                bad++; System.out.println("x [ERROR] READ-SOURCE | t_oil 期望 2 列 实际 " + src.get(0).columns.size());
+            if (src.size() != 9) {
+                bad++; System.out.println("x [ERROR] READ-SOURCE | 源结构读取 期望 9 表 实际 " + src.size());
+            } else if (findTable(src, "t_oil").columns.size() != 2) {
+                bad++; System.out.println("x [ERROR] READ-SOURCE | t_oil 期望 2 列 实际 "
+                        + findTable(src, "t_oil").columns.size());
             }
 
             MappingFile m = mapping();
@@ -78,6 +92,15 @@ public final class LayerDbRegression {
                 if (!created.contains(targetDb)) { created.add(targetDb); } // 先登记：execute 若中途抛，探针库也在清理账上
                 LayerGen.WriteResult wr = LayerGen.execute(out, targetDb, db, ImportParse.LOG_ONLY);
                 if (!wr.errors.isEmpty()) { bad++; System.out.println("x [ERROR] EXEC | " + layer + " " + wr.errors); }
+                if (layer == LayerGen.Layer.OBJ) {
+                    boolean said = false;
+                    for (String w : out.warnings) {
+                        if (w.contains("行上限降级")) { said = true; }
+                    }
+                    if (!said) {
+                        bad++; System.out.println("x [ERROR] WIDE | obj 降级了列却没在 warnings 里点名：" + out.warnings);
+                    }
+                }
                 if (layer == LayerGen.Layer.DOM && (wr.tablesCreated != 1 || wr.rowsAffected != 5)) {
                     bad++; System.out.println("x [ERROR] WRITE-RESULT | dom 期望 建表1/影响5 实际 "
                             + wr.tablesCreated + "/" + wr.rowsAffected);
@@ -106,6 +129,19 @@ public final class LayerDbRegression {
             if (dedup != 1) {
                 bad++; System.out.println("x [ERROR] DEDUP | obj 派生表去重 期望 src_entity_id='u1' 1 行 实际 " + dedup
                         + "（UUID() 混进 DISTINCT 就永不去重）");
+            }
+            // 宽维表：240 个 VARCHAR(255) 的维度必须落成能建出来的表——不降级就是 1118，
+            // 而且必须真是 ROW_FORMAT=Dynamic（老 DDL 不写这一句，服务器默认 COMPACT/COMPRESSED 时全额入行）
+            long facTables = scalarLong(db, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '"
+                    + OBJ + "' AND TABLE_NAME LIKE 'dim_facility%'");
+            if (facTables < 2) {
+                bad++; System.out.println("x [ERROR] WIDE | 宽维度没拆表，期望 ≥2 张 实际 " + facTables);
+            }
+            long notDynamic = scalarLong(db, "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '"
+                    + OBJ + "' AND TABLE_NAME LIKE 'dim_facility%' AND ROW_FORMAT <> 'Dynamic'");
+            if (notDynamic != 0) {
+                bad++; System.out.println("x [ERROR] WIDE | " + notDynamic
+                        + " 张宽维表不是 ROW_FORMAT=Dynamic（服务器默认行格式会把宽 VARCHAR 全额算进行内）");
             }
             // entity_id 必须是 UUID 且非空、src_entity_id 保留来源
             String entityId = scalar(db, "SELECT `entity_id` FROM `" + OBJ + "`.`dim_material` LIMIT 1");
@@ -156,11 +192,29 @@ public final class LayerDbRegression {
         // 前两行同归 dwd_proc_oil（多源合并）；t_oil_use 不设领域目标表，只喂维度（撞去重用）
         String body = "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n"
                 + "采购供应,油料,油料出入库流水,t_oil_log,3,log_id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n"
-                + "采购供应,油料,油料消耗,t_oil_use,3,,采购供应,proc,油料保障,,dim_material,rc,关键词,待核,\n";
+                + "采购供应,油料,油料消耗,t_oil_use,3,,采购供应,proc,油料保障,,dim_material,rc,关键词,待核,\n"
+                + wideRows();
         File f = File.createTempFile("layerdb-", ".csv"); f.deleteOnExit();
         Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
         try { w.write('﻿'); w.write(header); w.write(body); } finally { w.close(); }
         return MappingFile.loadTableCsv(f.getPath());
+    }
+
+    /** 6 张宽源表映射到同一个对象维度 dim_facility，领域目标表留空（只喂 obj）。 */
+    private static String wideRows() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= 6; i++) {
+            sb.append("设施建设,工程,设施台账").append(i).append(",t_fac_").append(i)
+              .append(",41,id,设施建设领域,facil,工程建设,,dim_facility,rc,关键词,待核,\n");
+        }
+        return sb.toString();
+    }
+
+    private static LayerGen.SourceTable findTable(List<LayerGen.SourceTable> src, String name) {
+        for (LayerGen.SourceTable s : src) {
+            if (s.name.equals(name)) { return s; }
+        }
+        return new LayerGen.SourceTable(name, "", new ArrayList<Infer.Column>());
     }
 
     private static void exec(DbClient db, String sql) throws Exception {

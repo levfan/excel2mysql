@@ -40,6 +40,11 @@ public final class LayerGen {
         public int tableCount;
         public List<String> warnings = new ArrayList<String>();
         public List<String> unbound = new ArrayList<String>();
+        /** 行上限体检的降级统计：退成 TEXT 的列数、只降长度的列数、示例，以及过不了线的说法。 */
+        public int fitTexts;
+        public int fitTiers;
+        public final List<String> fitSamples = new ArrayList<String>();
+        public String fitRefuse = "";
     }
 
     /**
@@ -195,6 +200,7 @@ public final class LayerGen {
             }
             out.tableCount++;
         }
+        addFitWarning(out, "dom");
         out.ddlSql = ddl.toString();
         out.transformSql = dml.toString();
         return out;
@@ -296,7 +302,7 @@ public final class LayerGen {
                 if (isGovField(c.field) || !FieldClass.keep(c, sc)) { continue; }
                 business.add(copyCol(c, c.primaryKey, sc));
             }
-            List<List<Infer.Column>> chunks = packColumns(base, business);
+            List<List<Infer.Column>> chunks = packColumns(base, business, out);
             for (List<Infer.Column> chunk : chunks) {
                 DomGroup p = new DomGroup(uniqueName(g.target, used));
                 p.origin = g.target;
@@ -317,7 +323,7 @@ public final class LayerGen {
             DomGroup p = new DomGroup(uniqueName(g.target, used));
             p.origin = g.target;
             p.ctx = FieldClass.Ctx.of(p.target, sourceComments(g.sources));
-            p.cols.addAll(finishChunk(base, new ArrayList<Infer.Column>()));
+            p.cols.addAll(finishChunk(base, new ArrayList<Infer.Column>(), out));
             parts.add(p);
         }
         return parts;
@@ -482,6 +488,7 @@ public final class LayerGen {
             out.warnings.add("obj 跳过 " + droppedSet.size() + " 个未归类或系统字段（示例："
                     + join(droppedSample, "、") + "）；这些字段不参与分类");
         }
+        addFitWarning(out, "obj");
         out.ddlSql = ddl.toString();
         out.transformSql = dml.toString();
         return out;
@@ -528,9 +535,9 @@ public final class LayerGen {
             List<List<Infer.Column>> chunks;
             if (chunkFits(base, p.cols)) {
                 chunks = new ArrayList<List<Infer.Column>>();
-                chunks.add(finishChunk(base, p.cols));
+                chunks.add(finishChunk(base, p.cols, out));
             } else {
-                chunks = packColumns(base, p.cols);
+                chunks = packColumns(base, p.cols, out);
                 out.warnings.add("对象维度 " + dim + "（" + Taxonomy.dimCn(dim) + "）由 "
                         + p.sources.size() + " 张源表组装会成 " + (base.size() + p.cols.size())
                         + " 列超大宽表，不符合 MySQL 建表规范，已拆成 " + chunks.size()
@@ -869,20 +876,21 @@ public final class LayerGen {
      * 且降级到 TEXT 后必须能过 RowFit 体检；装不下就再开一张表。
      */
     private static List<List<Infer.Column>> packColumns(List<Infer.Column> base,
-                                                        List<Infer.Column> business) {
-        List<List<Infer.Column>> out = new ArrayList<List<Infer.Column>>();
+                                                        List<Infer.Column> business,
+                                                        LayerOutput out) {
+        List<List<Infer.Column>> chunks = new ArrayList<List<Infer.Column>>();
         List<Infer.Column> cur = new ArrayList<Infer.Column>();
         for (Infer.Column c : business) {
             List<Infer.Column> trial = new ArrayList<Infer.Column>(cur);
             trial.add(c.copied());
             if (!cur.isEmpty() && !chunkFits(base, trial)) {
-                out.add(finishChunk(base, cur));
+                chunks.add(finishChunk(base, cur, out));
                 cur = new ArrayList<Infer.Column>();
             }
             cur.add(c.copied());
         }
-        if (!cur.isEmpty() || out.isEmpty()) { out.add(finishChunk(base, cur)); }
-        return out;
+        if (!cur.isEmpty() || chunks.isEmpty()) { chunks.add(finishChunk(base, cur, out)); }
+        return chunks;
     }
 
     /** 这一块装不装得下：先按「能降的都降成 TEXT」算最乐观的一版字节账。 */
@@ -894,14 +902,66 @@ public final class LayerGen {
         return RowFit.rowPlan(trial, DOM_PAGE_SIZE).ok;
     }
 
-    /** 落定一块：列对象取副本，避免同维度多张表互相改到对方的列类型。 */
+    /**
+     * 落定一块：列对象取副本，避免同维度多张表互相改到对方的列类型。
+     *
+     * <p>落表前跑 tab1 那套 {@link RowFit#fit}：先逐根把最长的 VARCHAR 退成 TEXT，退不动了
+     * 再往下降一档长度，直到两条硬上限（server 65535 / InnoDB 半页）都过；主键不动。
+     * 这里传 {@code onlyInferred=false}——层建模的列全是工具按源表结构给的，整表都可以降，
+     * 而 tab1 那条线要保住人工写的类型，才只动推断出来的列。
+     */
     private static List<Infer.Column> finishChunk(List<Infer.Column> base,
-                                                   List<Infer.Column> business) {
+                                                   List<Infer.Column> business,
+                                                   LayerOutput out) {
         List<Infer.Column> cols = new ArrayList<Infer.Column>();
-        for (Infer.Column c : base) { cols.add(c.copied()); }
+        Set<String> keepType = new LinkedHashSet<String>();
+        for (Infer.Column c : base) {
+            cols.add(c.copied());
+            keepType.add(c.field);
+        }
         for (Infer.Column c : business) { cols.add(c.copied()); }
-        degradeToFit(cols);
+        noteFit(out, RowFit.fit(cols, DOM_PAGE_SIZE, false, keepType));
         return cols;
+    }
+
+    /** 把一次行上限体检的降级结果记下来：交付时要能说清哪几列为什么改了类型。 */
+    private static void noteFit(LayerOutput out, RowFit.Fit f) {
+        if (out == null || f == null) {
+            return;
+        }
+        for (String[] m : f.conversions) {
+            if ("text".equals(m[0])) {
+                out.fitTexts++;
+            } else {
+                out.fitTiers++;
+            }
+            if (out.fitSamples.size() < 6) {
+                out.fitSamples.add(m[1] + " " + m[2] + "→" + m[3]);
+            }
+        }
+        if (f.refuse != null && out.fitRefuse.isEmpty()) {
+            out.fitRefuse = f.refuse.reason;
+        }
+    }
+
+    /** 体检结果写进 warnings：降了哪些列、为什么降，以及连降级都过不了线的表。 */
+    private static void addFitWarning(LayerOutput out, String layerCn) {
+        int n = out.fitTexts + out.fitTiers;
+        if (n == 0 && out.fitRefuse.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (n > 0) {
+            sb.append(layerCn).append(" 有 ").append(n).append(" 列按 MySQL 行上限降级建表（退成 TEXT ")
+              .append(out.fitTexts).append(" 列、只降长度 ").append(out.fitTiers).append(" 列；示例：")
+              .append(join(out.fitSamples, "、"))
+              .append("）。降过长度的列，源值超长时插入会截断，按需在映射里调小源列长度");
+        }
+        if (!out.fitRefuse.isEmpty()) {
+            if (sb.length() > 0) { sb.append("；"); }
+            sb.append("有表连降级都过不了线：").append(out.fitRefuse);
+        }
+        out.warnings.add(sb.toString());
     }
 
     private static Infer.Column degradableCopy(Infer.Column c) {
@@ -910,26 +970,6 @@ public final class LayerGen {
             n.type = "TEXT";
         }
         return n;
-    }
-
-    /**
-     * Row size too large 的落表解法：逐根把最长的 VARCHAR 退成 TEXT（或整列走行外 LOB），
-     * 直到两条上限都过；主键/索引列不动，免得建不出索引。退完仍不过线时由 packColumns 继续拆表。
-     */
-    private static void degradeToFit(List<Infer.Column> cols) {
-        for (int guard = 0; guard < 4096 && !RowFit.rowPlan(cols, DOM_PAGE_SIZE).ok; guard++) {
-            int best = -1;
-            long bestBytes = -1L;
-            for (int i = 0; i < cols.size(); i++) {
-                Infer.Column c = cols.get(i);
-                if (c.primaryKey || c.type == null
-                        || !c.type.toUpperCase().startsWith("VARCHAR")) { continue; }
-                long b = RowFit.colBytes(c.type)[1];
-                if (b > bestBytes) { bestBytes = b; best = i; }
-            }
-            if (best < 0) { break; }
-            cols.get(best).type = "TEXT";
-        }
     }
 
     /** 拆出来的表名：第一张沿用原名，后续 _2/_3，守表名长度上限且不撞已用名。 */

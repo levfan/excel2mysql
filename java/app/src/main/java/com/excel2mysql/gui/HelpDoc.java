@@ -926,7 +926,12 @@ public final class HelpDoc {
                     "未见十类对象维度关键词的表不参与分类也不产数据，日志逐表点名；" + NL +
                     "未归类或系统字段<b>不进层、也不参与分类</b>（分类前先按字段语义剔除）；" + NL +
                     "同维度合并会形成超大宽表时按列数与行上限自动拆成 <code>dim_&lt;对象键&gt;_2/_3</code>，" + NL +
-                    "每张都过 MySQL 建表规范；Row size too large 先把最长 VARCHAR 退成 TEXT／LOB，仍装不下再拆表</li>" + NL +
+                    "每张都过 MySQL 建表规范；行上限体检与「建表」页同一套（<code>RowFit</code>：按 server 65535" + NL +
+                    "与 InnoDB 半页两条线判，先逐根把最长的 VARCHAR 退成 <code>TEXT</code>／<code>LOB</code>，" + NL +
+                    "退不动了再降一档长度），降了哪几列、从什么改成什么<b>逐条写进日志</b>；" + NL +
+                    "<b>治理字段与维度主键不动</b>——它们是结构不是业务属性，退成 TEXT 会让标识符失去索引与等值匹配的意义；" + NL +
+                    "降到底仍装不下才拆表。三层 DDL 一律带 <code>ROW_FORMAT=DYNAMIC</code>，" + NL +
+                    "不吃服务器默认行格式（COMPACT／COMPRESSED 会把宽 VARCHAR 全额算进行内，直接撞 1118）</li>" + NL +
                     "<li>dom 层按上面的一源一表（或映射里显式合并的目标表）出 DDL 与 INSERT；" + NL +
                     "创建时间、更新人、租户、版本号这类系统审计列，以及既无注释、字段名也看不出业务含义的列" + NL +
                     "<b>不进层</b>——硬留在表里只会挤占 500 列上限，日志会汇总说跳过了多少个、举例是哪几列</li>" + NL +

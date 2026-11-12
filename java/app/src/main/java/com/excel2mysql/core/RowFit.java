@@ -153,12 +153,13 @@ public final class RowFit {
      * 知道没救。极限值取「这一列能到的最小占用」：能降的列 server 取 TEXT 的引用字节、
      * 行内取整列走行外的字节；结构定义与主键列不许动，按现值算。
      */
-    private static boolean canEverFit(List<Infer.Column> cols, Plan plan) {
+    private static boolean canEverFit(List<Infer.Column> cols, Plan plan, boolean onlyInferred,
+                                      java.util.Set<String> keepType) {
         long server = 0;
         long local = 0;
         for (Infer.Column c : cols) {
             long[] pair = colBytes(c.type);
-            if (c.nullable != null || c.primaryKey || varcharN(c.type) == null) {
+            if (locked(c, onlyInferred, keepType) || varcharN(c.type) == null) {
                 server += pair[0];
                 local += pair[1];
                 continue;
@@ -171,11 +172,41 @@ public final class RowFit {
     }
 
     /**
+     * 这一列能不能动。主键永远不动；{@code onlyInferred} 为真时，只有工具推断出来的列
+     * （{@code nullable == null}）能动——人工写的类型是使用者的承诺。
+     * 层建模那条线（tab4）的列全是工具按源表结构给的，可以整表降级，传 false。
+     */
+    private static boolean locked(Infer.Column c, boolean onlyInferred, java.util.Set<String> keepType) {
+        return c.primaryKey || (onlyInferred && c.nullable != null)
+                || (keepType != null && keepType.contains(c.field));
+    }
+
+    /**
      * 体检并就地降级：先把最长的列逐根退成 TEXT，退完还不过再把最长那一档往下降一档。
      * 只动工具推断出来的列——结构定义里人工写的类型是使用者给的承诺，不改它，
      * 那条路走不通时给的是拦下，由调用方在建表之前停住。
      */
     public static Fit fit(List<Infer.Column> cols, int pageSize) {
+        return fit(cols, pageSize, true, null);
+    }
+
+    /**
+     * 同上，但可以放开「只动工具推断的列」这条限制：层建模生成的列（obj/dom）本来就是工具
+     * 按源表结构给的，整张表都能按行上限降级，否则那些列 nullable 都是非空、一列也降不了。
+     */
+    public static Fit fit(List<Infer.Column> cols, int pageSize, boolean onlyInferred) {
+        return fit(cols, pageSize, onlyInferred, null);
+    }
+
+    /**
+     * 再放开一档：{@code keepType} 里的列名保持原类型不动。
+     *
+     * <p>层建模的治理字段（entity_id、src_code、std_code…）与维度主键每张表都带，它们是结构而不是
+     * 业务属性——退成 TEXT 会让人以为「这个标识符可以随便存」，索引与等值匹配也一起失去意义。
+     * 所以宁可让业务列多退几列 TEXT。
+     */
+    public static Fit fit(List<Infer.Column> cols, int pageSize, boolean onlyInferred,
+                          java.util.Set<String> keepType) {
         Fit f = new Fit();
         f.plan = rowPlan(cols, pageSize);
         if (f.plan.columns > INNODB_MAX_COLUMNS) {
@@ -184,8 +215,8 @@ public final class RowFit {
             return f;
         }
         int guard = 0;
-        while (!f.plan.ok && guard++ < 8192 && canEverFit(cols, f.plan)) {
-            String[] moved = degradeOnce(cols, f.plan);
+        while (!f.plan.ok && guard++ < 8192 && canEverFit(cols, f.plan, onlyInferred, keepType)) {
+            String[] moved = degradeOnce(cols, f.plan, onlyInferred, keepType);
             if (moved == null) {
                 break;
             }
@@ -235,7 +266,8 @@ public final class RowFit {
         return Math.max(violServer ? saveServer : 0, violLocal ? saveLocal : 0);
     }
 
-    private static String[] degradeOnce(List<Infer.Column> cols, Plan plan) {
+    private static String[] degradeOnce(List<Infer.Column> cols, Plan plan, boolean onlyInferred,
+                                        java.util.Set<String> keepType) {
         boolean violServer = plan.server > SERVER_ROW_LIMIT;
         boolean violLocal = plan.local > plan.localLimit;
         int best = -1;
@@ -243,7 +275,7 @@ public final class RowFit {
         for (int i = 0; i < cols.size(); i++) {
             Infer.Column c = cols.get(i);
             // 主键列两条路都不动：TEXT 当不了主键（建表 1170），降长度会截断键值
-            if (c.nullable != null || c.primaryKey || varcharN(c.type) == null) {
+            if (locked(c, onlyInferred, keepType) || varcharN(c.type) == null) {
                 continue;
             }
             long[] pair = colBytes(c.type);
@@ -266,7 +298,7 @@ public final class RowFit {
         String bestTo = null;
         for (int i = 0; i < cols.size(); i++) {
             Infer.Column c = cols.get(i);
-            if (c.nullable != null || c.primaryKey) {
+            if (locked(c, onlyInferred, keepType)) {
                 continue;
             }
             Integer n = varcharN(c.type);
