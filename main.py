@@ -6348,7 +6348,7 @@ DDL_KEYWORDS = frozenset(("CREATE", "TABLE", "PRIMARY", "KEY", "NOT", "NULL", "D
 DDL_TYPES = frozenset(("VARCHAR", "CHAR", "DECIMAL", "NUMERIC", "INT", "INTEGER", "BIGINT",
                        "TINYINT", "SMALLINT", "MEDIUMINT", "FLOAT", "DOUBLE", "DATE",
                        "DATETIME", "TIMESTAMP", "TIME", "YEAR", "TEXT", "TINYTEXT",
-                       "MEDIUMTEXT", "LONGTEXT", "BLOB", "JSON", "BIT",
+                       "MEDIUMTEXT", "LONGTEXT", "BLOB", "JSON", "BIT", "BOOL", "BOOLEAN",
                        "UNSIGNED", "BINARY"))
 DDL_TOKEN_RE = re.compile(r"`[^`]*`|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*")
 

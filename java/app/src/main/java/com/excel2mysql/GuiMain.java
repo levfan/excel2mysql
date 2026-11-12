@@ -2201,7 +2201,7 @@ public final class GuiMain {
             com.excel2mysql.core.TableOps.Table tc = lastTable(frame);
             String[] wantTypes = {"DATE", "DATETIME", "DECIMAL(16,2)", "INT", "TEXT",
                     "INT", "DECIMAL(18,6)", "DECIMAL(10,2)", "DECIMAL(18,8)",
-                    "DECIMAL(18,4)", "TINYINT(1)", "INT", "INT"};
+                    "DECIMAL(18,4)", "BOOLEAN", "INT", "INT"};
             if (tc == null || tc.columns.size() != wantTypes.length) {
                 problems.add("空模板字段数不对：" + (tc == null ? "(无表)" : tc.columns.size()));
             } else {
@@ -3156,6 +3156,7 @@ public final class GuiMain {
         t.columns.add(dmCol("NAME", "VARCHAR", 50, -1, -1, false, "", "油料名称"));
         t.columns.add(dmCol("PRICE", "DECIMAL", 22, 12, 2, true, "0.00", "单价（元）"));
         t.columns.add(dmCol("NOTE", "CLOB", 0, -1, -1, true, "'x'", "备注"));
+        t.columns.add(dmCol("ENABLED", "BIT", 1, -1, -1, true, "", "是否启用"));
         t.columns.add(dmCol("CREATED", "TIMESTAMP", 0, -1, 6, true, "SYSDATE", "创建时间"));
         t.columns.add(dmCol("WEIRD TYPE", "VagueType", 0, -1, -1, true, "", "认不出的列"));
         t.primaryKeys.add("ID");
@@ -3173,6 +3174,7 @@ public final class GuiMain {
                 "  `id` BIGINT NOT NULL COMMENT '主键'",
                 "  `name` VARCHAR(50) NOT NULL COMMENT '油料名称'",
                 "  `price` DECIMAL(12,2) DEFAULT 0.00 COMMENT '单价（元）'",
+                "  `enabled` BOOLEAN DEFAULT NULL COMMENT '是否启用'",
                 "  `created` DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间'",
                 "  PRIMARY KEY (`id`)",
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"

@@ -457,8 +457,10 @@ public final class Infer {
         if (containsAny(c, NAME_DATE_CN) || NAME_DATE_EN.matcher(fl).find()) {
             return note(c, "DATE", "日期");
         }
+        // 布尔发 BOOLEAN 而不是 TINYINT(1)：后者带整数显示宽度，MySQL 8.0.17 起执行会报
+        // "Integer display width is deprecated"；BOOLEAN 就是 tinyint(1) 的别名，语义不变
         if (nameHit(c, fl, NAME_BOOL_CN, NAME_BOOL_EN)) {
-            return note(c, "TINYINT(1)", "布尔");
+            return note(c, "BOOLEAN", "布尔");
         }
         if (nameHit(c, fl, NAME_RATIO_CN, NAME_RATIO_EN)) {
             return note(c, "DECIMAL(18,6)", "比率/系数");

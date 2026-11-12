@@ -428,7 +428,7 @@ _kinds = infer_columns(pd.DataFrame({
 check("B22f 空列中文词表扩展：年龄/系数/评分/经纬度/计量/序号/年份/布尔/长文本各归各位",
       [c["type"] for c in _kinds]
       == ["INT", "INT", "DECIMAL(18,6)", "DECIMAL(18,6)", "DECIMAL(10,2)",
-          "DECIMAL(18,8)", "DECIMAL(18,4)", "INT", "INT", "INT", "TINYINT(1)",
+          "DECIMAL(18,8)", "DECIMAL(18,4)", "INT", "INT", "INT", "BOOLEAN",
           "TEXT"],
       [c["type"] for c in _kinds])
 check("B22g 新分类留痕点名具体口径",
@@ -437,6 +437,12 @@ check("B22g 新分类留痕点名具体口径",
       and "经纬度/坐标" in _kinds[5]["type_note"] and "计量" in _kinds[6]["type_note"]
       and "布尔" in _kinds[10]["type_note"] and "长文本" in _kinds[11]["type_note"],
       [c.get("type_note") for c in _kinds])
+# 布尔列发 BOOLEAN 而不是 TINYINT(1)：后者带整数显示宽度，MySQL 8.0.17 起执行这条
+# 建表语句会报 "Integer display width is deprecated"（真库那一下在 G 组）
+_bool_ddl = build_ddl("t_bool", "布尔探针", _kinds)
+check("B22g2 布尔列生成 DDL 不带整数显示宽度",
+      "`shi_fou_you_xiao` BOOLEAN DEFAULT NULL" in _bool_ddl
+      and "INT(" not in _bool_ddl, _bool_ddl.splitlines()[1:13])
 _priority = infer_columns(pd.DataFrame({
     "频率": [], "功率": [], "速率": [], "容积率": [], "毛利率": [], "订单金额": []}))
 check("B22h 词表优先级：频率/功率/速率走计量，容积率/毛利率走比率，订单金额仍归金额",
@@ -450,7 +456,7 @@ _en2 = infer_columns(pd.DataFrame({k: [] for k in (
 check("B22i 英文词表扩展且成词匹配：age/rate/score/longitude/length/is_/sort/year/remark 命中，update/status 不误中",
       [c["type"] for c in _en2]
       == ["INT", "DECIMAL(18,6)", "DECIMAL(10,2)", "DECIMAL(18,8)",
-          "DECIMAL(18,4)", "TINYINT(1)", "INT", "INT",
+          "DECIMAL(18,4)", "BOOLEAN", "INT", "INT",
           "VARCHAR(64)", "VARCHAR(64)", "TEXT", "VARCHAR(64)"],
       [(c["comment"], c["type"]) for c in _en2])
 _valued = infer_columns(pd.DataFrame({"年龄": ["1", "2"], "系数": ["1.25", "2.5"]}))
@@ -497,7 +503,7 @@ check("B22s 第二轮扩充的词各归各位（工程监测、金融、法律�
           "DECIMAL(18,4)", "DECIMAL(18,4)",
           "DECIMAL(16,2)", "DECIMAL(16,2)", "DECIMAL(16,2)", "DECIMAL(16,2)",
           "DECIMAL(16,2)", "VARCHAR(255)",
-          "INT", "INT", "TINYINT(1)", "DECIMAL(18,6)", "DECIMAL(10,2)", "INT", "INT",
+          "INT", "INT", "BOOLEAN", "DECIMAL(18,6)", "DECIMAL(10,2)", "INT", "INT",
           "VARCHAR(512)", "TEXT", "TEXT", "VARCHAR(255)", "VARCHAR(255)",
           "VARCHAR(255)"],
       [(c["comment"], c["type"]) for c in _round2])
@@ -9023,6 +9029,24 @@ else:
         check("G6b 小数位不足时服务端静默四舍五入(3.125→3.13)；类型推断按实测给 3 位不踩这个坑",
               rounded == 3.13 and wide["金额"].endswith(",3)"), (rounded, wide["金额"]))
         create_table(conn, f"DROP TABLE IF EXISTS `{tname}_sc`")
+        # G6b2 布尔列的真库那一下：TINYINT(1) 会报 1681 废弃告警，BOOLEAN 零告警且
+        # 落库仍是 tinyint(1)（别名），所以"改了类型反而丢语义"这条担心有据可查
+        _bool_cols = infer_columns(pd.DataFrame({"是否有效": []}))
+        _tbool = tname + "_bool"
+        try:
+            create_table(conn, f"DROP TABLE IF EXISTS `{_tbool}`")
+            with conn.cursor() as c:
+                c.execute(build_ddl(_tbool, "布尔探针表", _bool_cols, False))
+                c.execute("SHOW WARNINGS")
+                _bw = c.fetchall()
+                c.execute(f"SHOW CREATE TABLE `{_tbool}`")
+                _bddl = c.fetchone()[1]
+            check("G6b2 布尔列 DDL 真库执行零告警，列仍是 tinyint(1)",
+                  _bool_cols[0]["type"] == "BOOLEAN" and not _bw
+                  and "`shi_fou_you_xiao` tinyint(1)" in _bddl,
+                  (_bool_cols[0]["type"], _bw, _bddl))
+        finally:
+            create_table(conn, f"DROP TABLE IF EXISTS `{_tbool}`")
         # G6c 1264 回归：旧推断把 2.2e9 判成 INT、把 14 位整数 + 18 位小数压成
         # DECIMAL(30,18)，建表都成功，第一条超界数据才报 "Out of range value"，
         # 现场看到的就是"有时候"导入失败

@@ -63,7 +63,8 @@ public final class RichText {
             "VARCHAR", "CHAR", "DECIMAL", "NUMERIC", "INT", "INTEGER", "BIGINT",
             "TINYINT", "SMALLINT", "MEDIUMINT", "FLOAT", "DOUBLE", "DATE",
             "DATETIME", "TIMESTAMP", "TIME", "YEAR", "TEXT", "TINYTEXT",
-            "MEDIUMTEXT", "LONGTEXT", "BLOB", "JSON", "BIT", "UNSIGNED", "BINARY"));
+            "MEDIUMTEXT", "LONGTEXT", "BLOB", "JSON", "BIT", "BOOL", "BOOLEAN",
+            "UNSIGNED", "BINARY"));
     /** 反引号名与单引号串排在裸词前面，注释里出现的 NULL 之类不会被误当成关键字。 */
     private static final Pattern DDL_TOKEN = Pattern.compile(
             "`[^`]*`|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_]*");

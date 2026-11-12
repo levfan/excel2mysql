@@ -516,7 +516,9 @@ public final class HelpDoc {
                     "<tr><td>日期</td><td>日期 / 有效期 / 到期日</td><td><code>DATE</code></td></tr>" + NL +
                     "<tr><td>日期时间</td><td>时间 / 日期时间</td><td><code>DATETIME</code></td></tr>" + NL +
                     "<tr><td>时刻</td><td>打卡时刻 / 发车时点</td><td><code>TIME</code></td></tr>" + NL +
-                    "<tr><td>布尔</td><td>是否 / 有无 / 开关 / 标志 / 可否 / 能否</td><td><code>TINYINT(1)</code></td></tr>" + NL +
+                    "<tr><td>布尔</td><td>是否 / 有无 / 开关 / 标志 / 可否 / 能否</td>" + NL +
+                    "<td><code>BOOLEAN</code>（存成 MySQL 的 <code>TINYINT(1)</code> 语义；不写带显示宽度的" + NL +
+                    "<code>TINYINT(1)</code>，那条在 MySQL 8.0.17 起执行要报整数显示宽度废弃告警）</td></tr>" + NL +
                     "<tr><td>比率</td><td>率 / 比例 / 百分比 / 占比 / 系数 / 倍数 / 权重 / 概率 / 配比</td>" + NL +
                     "<td><code>DECIMAL(18,6)</code></td></tr>" + NL +
                     "<tr><td>评分</td><td>得分 / 评分 / 分数 / 成绩 / 满意度 / 星级 / 扣分 / 考核分 / 理论分 /" + NL +

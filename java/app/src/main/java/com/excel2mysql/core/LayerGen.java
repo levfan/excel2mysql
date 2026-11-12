@@ -796,7 +796,8 @@ public final class LayerGen {
             case java.sql.Types.DATE: return "DATE";
             case java.sql.Types.TIMESTAMP: return "DATETIME";
             case java.sql.Types.TIME: return "TIME";
-            case java.sql.Types.BIT: case java.sql.Types.BOOLEAN: return "TINYINT(1)";
+            // 带显示宽度的 TINYINT(1) 在 MySQL 8.0.17+ 执行会报废弃告警；BOOLEAN 是它的别名
+            case java.sql.Types.BIT: case java.sql.Types.BOOLEAN: return "BOOLEAN";
             case java.sql.Types.LONGVARCHAR: case java.sql.Types.CLOB: return "TEXT";
             default: return "VARCHAR(" + (size > 0 && size <= 16383 ? size : 255) + ")";
         }

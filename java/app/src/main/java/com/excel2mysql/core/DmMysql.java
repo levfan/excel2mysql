@@ -204,8 +204,10 @@ public final class DmMysql {
         if (t.startsWith("NCHAR") || t.startsWith("CHAR")) {
             return len <= CHAR_MAX ? "CHAR(" + Math.max(len, 1) + ")" : varchar(len, who, c, warns);
         }
+        // BOOLEAN 是 tinyint(1) 的别名；直接写 TINYINT(1) 在 MySQL 8.0.17+ 执行会报
+        // "Integer display width is deprecated"
         if (t.equals("BIT") || t.equals("BOOL") || t.equals("BOOLEAN")) {
-            return "TINYINT(1)";
+            return "BOOLEAN";
         }
         if (t.equals("TINYINT")) {
             return "TINYINT";

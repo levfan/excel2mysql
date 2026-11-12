@@ -1247,7 +1247,7 @@ check("W42 空模板中文词表扩展：年龄/系数/评分/经纬度/计量/�
       and "`nian_ling` INT" in out and "`xi_shu` DECIMAL(18,6)" in out
       and "`ping_fen` DECIMAL(10,2)" in out and "`jing_du` DECIMAL(18,8)" in out
       and "`chang_du` DECIMAL(18,4)" in out
-      and "`shi_fou_you_xiao` TINYINT(1)" in out
+      and "`shi_fou_you_xiao` BOOLEAN" in out
       and "`xu_hao` INT" in out and "`nian_fen` INT" in out
       and "含比率/系数语义" in out, out.strip()[-480:])
 

@@ -442,8 +442,10 @@ def _name_based_type(comment: str, field: str):
         return _note(c, "TIME", "时刻")
     if any(k in c for k in _NAME_DATE_CN) or _NAME_DATE_EN.search(fl):
         return _note(c, "DATE", "日期")
+    # 布尔发 BOOLEAN 而不是 TINYINT(1)：后者带整数显示宽度，MySQL 8.0.17 起执行会报
+    # "Integer display width is deprecated"；BOOLEAN 就是 tinyint(1) 的别名，语义不变
     if _name_hit(c, fl, _NAME_BOOL_CN, _NAME_BOOL_EN):
-        return _note(c, "TINYINT(1)", "布尔")
+        return _note(c, "BOOLEAN", "布尔")
     if _name_hit(c, fl, _NAME_RATIO_CN, _NAME_RATIO_EN):
         return _note(c, "DECIMAL(18,6)", "比率/系数")
     if _name_hit(c, fl, _NAME_SCORE_CN, _NAME_SCORE_EN):
