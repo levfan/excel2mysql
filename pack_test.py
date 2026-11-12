@@ -5107,6 +5107,10 @@ check("O27 「保存修改后ddl脚本」在子线程写盘并弹框",
       d5 is not None and "保存" in d5.title and os.path.isfile(
           os.path.join(os.path.dirname(sql_a), "t_a_prefix.sql").replace("t_a_prefix", "a_prefix")),
       [p for p in os.listdir(os.path.dirname(sql_a))])
+# 写盘、弹框、复位 modified 是同一条回调里的三步，可回调落到主线程上会晚一拍：
+# 打包闸门里机器被压满时，框已经在屏上了，modified 却还是 True，后面连着四条一起红。
+# 等到它复位再断言（与 O24 同一个理由）。
+_wait_until(lambda: ow2.sql_files[-1]["modified"] is False, 8)
 check("O28 保存后 modified 复位", ow2.sql_files[-1]["modified"] is False)
 
 _FakeProgress.made.clear()
