@@ -8442,3 +8442,12 @@ CENTER 高度被算成 -19830。
 - `pack_test.py` 1121 / 0 / 5、`pack_test38.py` 264 / 0 / 1、Java 十步 `+ [OK] BUILD`，退出码全 0
 - `界面双端对撞`：Python 427 键、Java 451 键，不一致 30 处（仅 Java 24 / 值不等 6）——比 151 多出的 2 处是本页新按钮「清空过滤」的 on/tip，仍是同一类已知缺口
 - 顺手修掉两处非法转义：`help_doc.py` 与 `java/tools/export_excel_golden.py` 的说明文字里单反斜杠（Python 3.12 起报 SyntaxWarning、新版会判 SyntaxError）；修完全库 .py 在 `-W error::SyntaxWarning` 下逐个 compile 通过。中途一次批量"见单反斜杠就加倍"的扫改把 `export_excel_golden.py` 里的 `b"\n"`、`r"\?..."`、`u"  \t "` 一起改了（那是真代码），已整体回退后只精准改文案那一处
+
+### 152.4 出包与一处返修
+
+- 冻结态自检（跑在包里、`drivers` 有驱动那条分支）抓到 152 一处真错：脏结构判据写成「已记住模式名才标脏」，
+  模式名为空时永不标脏，两条断言当场红。判据改为「手上有结构 + 参数被改」，
+  摘要也不再画空括号（`9d3951e`）。本地 `构建验证.bat` 那一跑没暴露它——那条分支下驱动不在，走的是另一支
+- 自检同时补一句：灌结构前先把模式名填上，有驱动 / 没驱动两条分支走同一条路，别再各判各的
+- 最终包从干净提交出：`dist\excel2mysql-java-5.6.0-win64\`，205 个文件，随包提交号 `9d3951e`（未提交改动 false），
+  `drivers\` 内含 `DmJdbcDriver8-8.1.5.45.jar` 与 `README.txt`；zip 106.5 MB，md5 `ce9e0179e4b9873f1ef2a54382ccf58e`
