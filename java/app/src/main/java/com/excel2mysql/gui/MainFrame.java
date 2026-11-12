@@ -158,6 +158,7 @@ public final class MainFrame extends JFrame
     private StaticText impIntro;
     /** 连接区收起后的那一条状态栏（只报当前库），与「设置数据源信息」按钮一起常驻顶部。 */
     private HintLabel connState;
+    private JButton btnReloadCfg;
     private JButton btnConnEdit;
     private JButton btnConnCollapse;
     private JPanel connForm;
@@ -404,11 +405,19 @@ public final class MainFrame extends JFrame
         btnConnEdit = new JButton("设置数据源信息");
         btnConnEdit.setToolTipText("展开填写主机 / 端口 / 用户名 / 密码，并测试连接与选择数据库");
         btnConnEdit.addActionListener(e -> setConnExpanded(true));
+        btnReloadCfg = new JButton("刷新配置文件");
+        btnReloadCfg.setToolTipText("换了程序同级的 conn.ini 或 E2M_* 环境变量后点这里："
+                + "重读配置并按新连接信息重连");
+        btnReloadCfg.addActionListener(e -> reloadConnConfig());
+        JPanel statusButtons = new JPanel(new java.awt.FlowLayout(
+                java.awt.FlowLayout.RIGHT, UiScale.px(6), 0));
+        statusButtons.add(btnReloadCfg);
+        statusButtons.add(btnConnEdit);
         JPanel statusBar = new JPanel(new BorderLayout(UiScale.px(6), 0));
         statusBar.setBorder(BorderFactory.createEmptyBorder(
                 0, UiScale.px(6), 0, UiScale.px(6)));
         statusBar.add(connState, BorderLayout.CENTER);
-        statusBar.add(btnConnEdit, BorderLayout.EAST);
+        statusBar.add(statusButtons, BorderLayout.EAST);
         outer.add(statusBar, BorderLayout.NORTH);
 
         JPanel bar = new JPanel(new BorderLayout());
@@ -1381,6 +1390,26 @@ public final class MainFrame extends JFrame
         // 没点库时即便连上也得让人手选，省不下那一步。
         autoConnectEligible = c.explicit
                 && c.database != null && !c.database.trim().isEmpty();
+        applyConnConfig(c, false);
+    }
+
+    /**
+     * 把一份连接配置写进表单并留一句来源；启动预填与「刷新配置文件」共用。
+     *
+     * <p>手动刷新时连一份可读的配置都没有，就把手上的连接信息留着不动——
+     * 退回内置默认值会悄悄抹掉用户刚填的那台机器。返回是否真写进去了。
+     */
+    private boolean applyConnConfig(Config c, boolean manual) {
+        if (manual && (c.errorFile != null || !c.explicit)) {
+            if (c.errorFile != null) {
+                log("[跳过] 刷新配置文件：找到 " + c.errorFile + " 但读不了，"
+                        + "当前连接信息保持不变：" + c.errorReason);
+            } else {
+                log("[跳过] 刷新配置文件：程序同级与当前目录都没有 conn.ini，"
+                        + "当前连接信息保持不变");
+            }
+            return false;
+        }
         hostField.setText(c.host);
         portField.setValue(c.port);
         userField.setText(c.user);
@@ -1396,16 +1425,38 @@ public final class MainFrame extends JFrame
             log("[连接信息] 没找到 conn.ini，按内置默认值 " + shown
                     + "；要预填就在程序同级放一份（写法见《使用说明》）");
         } else {
-            log("[已加载] 连接信息预填 " + shown + " | 来源：" + c.source + " | 密码" + pwd);
+            log("[" + (manual ? "刷新" : "已加载") + "] 连接信息"
+                    + (manual ? "已更新" : "预填") + " " + shown + " | 来源：" + c.source
+                    + " | 密码" + pwd);
             if (cfgDb.isEmpty()) {
                 // 随包那份模板就是这一态：只说"(未填库)"，用户会以为已经连上、
                 // 回头盯着灰掉的目标库纳闷
-                log("[提示] 配置里没写目标库，启动不自动连接；"
-                        + "点右侧「设置数据源信息」展开，再点「连接并加载库」就能选库");
+                log("[提示] 配置里没写目标库，"
+                        + (manual ? "未自动重连" : "启动不自动连接")
+                        + "；点右侧「设置数据源信息」展开，再点「连接并加载库」就能选库");
             }
         }
         // 预填是程序自己往四个框里写字，不算"用户改过连接信息"
         connDirty = false;
+        return true;
+    }
+
+    /**
+     * 「刷新配置文件」：工具开着的时候换了 conn.ini（或 E2M_* 环境变量），
+     * 点一下重读并按新配置重连，不用重开程序。
+     *
+     * <p>读法与启动那段同一份 {@link Config#discover}；重连走「连接并加载库」
+     * 那条长任务，进度框、失败弹窗、失败清场都是同一口径。
+     */
+    public void reloadConnConfig() {
+        Config c = Config.discover(connCandidates == null
+                ? Config.defaultConfigPaths() : connCandidates);
+        if (!applyConnConfig(c, true)) {
+            return;
+        }
+        if (!cfgDb.isEmpty()) {
+            startConnLoad();
+        }
     }
 
     /** 自检读这条：有没有一份明确的连接配置（决定窗口显示后要不要自动连）。 */

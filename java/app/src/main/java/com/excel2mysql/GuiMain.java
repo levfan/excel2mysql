@@ -9354,6 +9354,38 @@ public final class GuiMain {
                 problems.add("目标库不在服务器上时没有解释，用户会回头去改配置文件："
                         + tail(f1.logPanel().text()));
             }
+            // 现场那一幕：工具开着，用户把程序同级那份 conn.ini 换成了新内容，
+            // 再点「刷新配置文件」——要重读同一路径、按新配置重连，不用重开程序
+            writeText(good.getPath(), "[mysql]\nhost = 10.0.0.9\nport = 3308\nuser = ops2\n"
+                    + "password = pw-new\ndatabase = delta\n");
+            final int[] reloadCalls = {0};
+            MainFrame.fetchOverride = () -> {
+                reloadCalls[0]++;
+                return Arrays.asList("delta", "epsilon");
+            };
+            String reloadMark = f1.logPanel().text();
+            f1.reloadConnConfig();
+            String reloadLog = f1.logPanel().text();
+            com.excel2mysql.core.Config rc = f1.currentConfig();
+            if (!"10.0.0.9".equals(rc.host) || rc.port != 3308 || !"ops2".equals(rc.user)
+                    || !"pw-new".equals(rc.password) || !"delta".equals(rc.database)) {
+                problems.add("刷新配置文件没把新 conn.ini 写进表单：" + rc);
+            }
+            if (reloadCalls[0] != 1 || !"delta".equals(f1.selectedDatabase())) {
+                problems.add("刷新配置文件读取数=" + reloadCalls[0] + "，选中库="
+                        + f1.selectedDatabase());
+            }
+            if (!reloadLog.contains("[刷新] 连接信息已更新 ops2@10.0.0.9:3308/delta")
+                    || !reloadLog.contains("[已加载] 目标库按 conn.ini 选中：delta")) {
+                problems.add("刷新配置文件没留一句来源或没按新配置选库："
+                        + tail(reloadLog.substring(reloadMark.length())));
+            }
+            if (reloadLog.contains("pw-new")) {
+                problems.add("刷新后的口令被写进日志正文了");
+            }
+            // 还原成后面几条用例要的那份
+            writeText(good.getPath(), "[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
+                    + "password = pw-file\ndatabase = alpha\n");
             f1.dispose();
 
             MainFrame.connCandidates = java.util.Collections.singletonList(bad.getPath());
@@ -9379,6 +9411,22 @@ public final class GuiMain {
                     || !f2.logPanel().text().equals(before)) {
                 problems.add("没有明确配置（文件读不了）时仍然去连了库："
                         + tail(f2.logPanel().text()));
+            }
+            // 刷新时没有一份能读的配置：手上填的那台机器不许被悄悄抹回内置默认值，
+            // 也不许顺手去连一次
+            f2.hostField().setText("10.5.5.5");
+            final int[] badReloadCalls = {0};
+            MainFrame.fetchOverride = () -> {
+                badReloadCalls[0]++;
+                return Arrays.asList("alpha");
+            };
+            f2.reloadConnConfig();
+            String badReloadLog = f2.logPanel().text();
+            if (!"10.5.5.5".equals(f2.currentConfig().host) || badReloadCalls[0] != 0
+                    || !badReloadLog.contains("[跳过] 刷新配置文件")) {
+                problems.add("刷新配置文件没有可读配置时抹掉了手上的连接信息/仍去连了："
+                        + f2.currentConfig().host + " 读取数=" + badReloadCalls[0]
+                        + " | " + tail(badReloadLog));
             }
             f2.dispose();
 
@@ -9410,6 +9458,22 @@ public final class GuiMain {
             }
             if (!MainFrame.DB_HINT_UNLOADED.equals(f2b.dbRowHint())) {
                 problems.add("清单没加载时目标库那一行没给就地提示：" + f2b.dbRowHint());
+            }
+            // 刷成一份没点目标库的配置：只刷新表单，不自动重连（与启动那条判据一致）
+            final int[] blankReloadCalls = {0};
+            MainFrame.fetchOverride = () -> {
+                blankReloadCalls[0]++;
+                return Arrays.asList("alpha");
+            };
+            String blankReloadMark = f2b.logPanel().text();
+            f2b.reloadConnConfig();
+            String blankReloadLog = f2b.logPanel().text()
+                    .substring(blankReloadMark.length());
+            if (blankReloadCalls[0] != 0
+                    || !blankReloadLog.contains("[刷新] 连接信息已更新 ops@10.0.0.8:3307/(未填库)")
+                    || !blankReloadLog.contains("[提示] 配置里没写目标库，未自动重连")) {
+                problems.add("刷新成没点目标库的配置后仍去连了，或没把下一步说出口："
+                        + tail(blankReloadLog));
             }
             f2b.dispose();
 

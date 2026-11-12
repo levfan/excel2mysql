@@ -5330,7 +5330,7 @@ from PySide6.QtWidgets import QPushButton
 _labels = ["批量应用前缀", "替换首个前缀", "生成表结构预览", "预览 DDL",
            "统计数据总行数",
            "开始导入", "清空待上传文件", "保存修改后ddl脚本", "执行修改后ddl脚本到当前库",
-           "连接并加载库", "生成标准excel文件", "生成简易excel文件",
+           "连接并加载库", "刷新配置文件", "生成标准excel文件", "生成简易excel文件",
            "示例 (?)", "格式化 SQL", "清空编辑区", "清空结果区", "设置数据源信息", "收起",
            "清空待执行脚本", "批量执行脚本文件"]
 _btns = {b.text() for b in pw2.findChildren(QPushButton)}
@@ -5746,6 +5746,62 @@ check("Q53m 配置里的目标库不在服务器上时说清楚并让人手选�
       (mw.cb_db.currentText(),
        [l for l in mw.log.toPlainText().splitlines() if "跳过" in l][:1]))
 mw.close()
+
+# ---- 工具开着的时候换了 conn.ini：点「刷新配置文件」重读并按新配置重连 ----
+_rdir = os.path.join(_tmpdir, "conn刷新")
+os.makedirs(_rdir, exist_ok=True)
+with io.open(os.path.join(_rdir, "conn.ini"), "w", encoding="utf-8") as _rf:
+    _rf.write("[mysql]\nhost = 10.0.0.8\nport = 3307\nuser = ops\n"
+              "password = pw-file\ndatabase = alpha\n")
+app_main.program_dir = lambda: _rdir
+rw = app_main.MainWindow()
+with io.open(os.path.join(_rdir, "conn.ini"), "w", encoding="utf-8") as _rf:
+    _rf.write("[mysql]\nhost = 10.0.0.9\nport = 3308\nuser = ops2\n"
+              "password = pw-new\ndatabase = beta\n")
+_rw_before = len(_CONNS)
+rw.on_reload_conn_config()
+_rwlog = rw.log.toPlainText()
+check("Q53p 换掉 conn.ini 后点「刷新配置文件」：重读同一路径并按新配置重连选库",
+      rw.ed_host.text() == "10.0.0.9" and rw.ed_port.value() == 3308
+      and rw.ed_user.text() == "ops2" and rw.ed_pass.text() == "pw-new"
+      and rw._cfg_db == "beta" and rw.cb_db.currentText() == "beta"
+      and "[刷新] 连接信息已更新 ops2@10.0.0.9:3308/beta" in _rwlog
+      and "[已加载] 目标库按 conn.ini 选中：beta" in _rwlog
+      and len(_CONNS) == _rw_before + 1 and not rw._conn_dirty,
+      (rw.ed_host.text(), rw.cb_db.currentText(), len(_CONNS) - _rw_before,
+       [l for l in _rwlog.splitlines() if "刷新" in l][:1]))
+check("Q53p2 刷新后的口令不回显也不写进日志正文",
+      "pw-new" not in _rwlog and rw.ed_pass.echoMode() != 0,
+      [l for l in _rwlog.splitlines() if "密码" in l][:1])
+rw.close()
+
+# 刷新时一份能读的配置都没有：手上的连接信息留着不动，也不发连接请求
+app_main.program_dir = lambda: _edir
+rw2 = app_main.MainWindow()
+rw2.ed_host.setText("10.7.7.7")
+_rw2_before = len(_CONNS)
+rw2.on_reload_conn_config()
+_rw2log = rw2.log.toPlainText()
+check("Q53q 刷新时没有可读配置：连接信息保持不变，也不去连",
+      rw2.ed_host.text() == "10.7.7.7" and len(_CONNS) == _rw2_before
+      and "[跳过] 刷新配置文件" in _rw2log,
+      (rw2.ed_host.text(), len(_CONNS) - _rw2_before,
+       [l for l in _rw2log.splitlines() if "刷新配置文件" in l][:1]))
+rw2.close()
+
+# 新配置没写目标库：只刷新表单，不自动重连（与启动那条判据一致）
+app_main.program_dir = lambda: _tdir
+rw3 = app_main.MainWindow()
+_rw3_before = len(_CONNS)
+rw3.on_reload_conn_config()
+_rw3log = rw3.log.toPlainText()
+check("Q53r 新配置没写目标库：刷新表单但不自动重连，并说清下一步点哪颗",
+      rw3.ed_host.text() == "10.0.0.8" and len(_CONNS) == _rw3_before
+      and "[刷新] 连接信息已更新 ops@10.0.0.8:3307/(未填库)" in _rw3log
+      and "[提示] 配置里没写目标库，未自动重连" in _rw3log,
+      (rw3.ed_host.text(), len(_CONNS) - _rw3_before,
+       [l for l in _rw3log.splitlines() if "刷新" in l][:1]))
+rw3.close()
 
 app_main.program_dir = _pdir0
 for _w in (cw, cw2, cw3, cw4, aw, af, nc, tw, lw, mw):

@@ -2395,10 +2395,15 @@ class MainWindow(QWidget):
         bar_lay.setContentsMargins(6, 0, 0, 0)
         self.lbl_conn_state = QLabel()
         self.lbl_conn_state.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.btn_reload_cfg = QPushButton("刷新配置文件")
+        self.btn_reload_cfg.setToolTip(
+            "换了程序同级的 conn.ini 或 E2M_* 环境变量后点这里：重读配置并按新连接信息重连")
+        self.btn_reload_cfg.clicked.connect(self.on_reload_conn_config)
         self.btn_conn_edit = QPushButton("设置数据源信息")
         self.btn_conn_edit.setToolTip("展开填写主机 / 端口 / 用户名 / 密码，并测试连接与选择数据库")
         self.btn_conn_edit.clicked.connect(lambda: self.set_conn_expanded(True))
         bar_lay.addWidget(self.lbl_conn_state, 1)
+        bar_lay.addWidget(self.btn_reload_cfg)
         bar_lay.addWidget(self.btn_conn_edit)
         conn_lay.addWidget(self.conn_bar)
 
@@ -4566,6 +4571,17 @@ class MainWindow(QWidget):
             "database": self.cb_db.currentData() or self.cb_db.currentText().strip(),
         }
 
+    def _read_conn_config(self):
+        """读一份连接配置：自动发现 conn.ini，再让 E2M_* 盖过它。
+
+        启动预填与「刷新配置文件」共用这一份读法，两处口径不会分叉。
+        """
+        cfg, src, path, err = conn_config.discover(program_dir())
+        cfg, from_env = conn_config.apply_env(cfg)
+        if from_env:
+            src += "、环境变量 " + "/".join(from_env)
+        return cfg, src, path, err, from_env
+
     def _load_default_conn(self):
         """启动时先读程序同级的 conn.ini 预填连接信息：现场配一次，不用每次手填。
 
@@ -4573,15 +4589,30 @@ class MainWindow(QWidget):
         环境变量 E2M_* 再盖过文件。找不到文件不算错，照旧手填，但必须说一句——
         静默用内置默认值会让人以为自己的配置已经生效。
         """
-        cfg, src, path, err = conn_config.discover(program_dir())
-        cfg, from_env = conn_config.apply_env(cfg)
+        cfg, src, path, err, from_env = self._read_conn_config()
         # 只有配置点名了目标库才自动连：随包 conn.ini 是空模板（database 留空），
         # 照着它去连本机 3306 只会让新装用户一开界面就看到一条失败；没点库时
         # 即便连上也得让人手选，省不下那一步。
         self._conn_auto = (bool(from_env) or (path is not None and err is None)) \
             and bool(cfg.get("database"))
-        if from_env:
-            src += "、环境变量 " + "/".join(from_env)
+        self._apply_conn_cfg(cfg, src, path, err, from_env)
+
+    def _apply_conn_cfg(self, cfg, src, path, err, from_env, manual=False):
+        """把一份配置写进表单并留一句来源；启动预填与「刷新配置文件」共用。
+
+        返回是否真写进去了：手动刷新时连一份可读的配置都没有，就把手上的连接信息
+        留着不动——退回内置默认值会悄悄抹掉用户刚填的那台机器。
+        """
+        if manual and (err is not None or (path is None and not from_env)):
+            if err is not None:
+                append_log(self.log,
+                           "[跳过] 刷新配置文件：找到 %s 但读不了，当前连接信息保持不变：%s"
+                           % (path, err))
+            else:
+                append_log(self.log,
+                           "[跳过] 刷新配置文件：程序同级与当前目录都没有 conn.ini，"
+                           "当前连接信息保持不变")
+            return False
         port = cfg["port"]
         try:
             port = int(port)
@@ -4609,16 +4640,30 @@ class MainWindow(QWidget):
                        "要预填就在程序同级放一份（写法见《使用说明》）" % shown)
         else:
             append_log(self.log,
-                       "[已加载] 连接信息预填 %s | 来源：%s | 密码%s"
-                       % (shown, src, "已读入（不回显）" if cfg["password"] else "未配置"))
+                       "[%s] 连接信息%s %s | 来源：%s | 密码%s"
+                       % ("刷新" if manual else "已加载",
+                          "已更新" if manual else "预填",
+                          shown, src,
+                          "已读入（不回显）" if cfg["password"] else "未配置"))
             if not self._cfg_db:
                 # 随包那份模板就是这一态：只说"(未填库)"，用户会以为已经连上、
                 # 回头盯着灰掉的目标库纳闷
                 append_log(self.log,
-                           "[提示] 配置里没写目标库，启动不自动连接；"
-                           "点右侧「设置数据源信息」展开，再点「连接并加载库」就能选库")
+                           "[提示] 配置里没写目标库，%s；"
+                           "点右侧「设置数据源信息」展开，再点「连接并加载库」就能选库"
+                           % ("未自动重连" if manual else "启动不自动连接"))
         # 预填是程序自己往四个框里写字，不算"用户改过连接信息"
         self._conn_dirty = False
+        return True
+
+    def on_reload_conn_config(self):
+        """工具已经开着时换了 conn.ini：重读一遍并按新配置重连，不用重开程序。"""
+        cfg, src, path, err, from_env = self._read_conn_config()
+        if not self._apply_conn_cfg(cfg, src, path, err, from_env, manual=True):
+            return
+        if self._cfg_db:
+            # 与「连接并加载库」走同一条长任务：进度框、失败弹窗、失败清场都是同一口径
+            self.on_load_databases()
 
     def showEvent(self, e):
         """首屏画完再自动连接：连接慢（对端不在线要等到超时）也不能卡住开窗。"""
