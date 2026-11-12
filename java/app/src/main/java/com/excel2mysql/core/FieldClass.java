@@ -45,9 +45,20 @@ public final class FieldClass {
         public final String unit;
         public final String agg;
         public final String basis;
+        /**
+         * 指标列源类型是文本（数量/金额存成了 VARCHAR）：聚合要先把值 CAST 成 DECIMAL。
+         * 这类列在 ads 里出 {@code SUM(CAST(NULLIF(REPLACE(…)) AS DECIMAL(38,6)))}，
+         * 不能直接 SUM(`c`)，否则 MySQL 按字符串求和只会得到 0。
+         */
+        public final boolean castNumeric;
 
         Result(String code, String label, boolean business, boolean measure, String dim,
                String unit, String agg, String basis) {
+            this(code, label, business, measure, dim, unit, agg, basis, false);
+        }
+
+        Result(String code, String label, boolean business, boolean measure, String dim,
+               String unit, String agg, String basis, boolean castNumeric) {
             this.code = code;
             this.label = label;
             this.business = business;
@@ -56,6 +67,7 @@ public final class FieldClass {
             this.unit = unit == null ? "" : unit;
             this.agg = agg == null ? "" : agg;
             this.basis = basis == null ? "" : basis;
+            this.castNumeric = castNumeric;
         }
 
         /** 业务字段的中文类别说明；治理字段不经过这里。 */
@@ -146,7 +158,36 @@ public final class FieldClass {
             "功率", "能耗", "年龄", "工龄", "军龄", "得分", "评分", "分数", "比例", "占比",
             "百分比", "比率", "系数", "概率", "频率", "时长", "周期", "工期", "耗时",
             "限量", "限额", "定额", "标准值",
+            // 现场语料里高频、但上面那批词根接不住的量值：存量、保有量、编制数、产值、折旧…
+            "折旧", "摊销", "保有", "编制", "在编", "实有", "消耗", "用量", "耗量", "周转",
+            "载重", "吨位", "床位", "席位", "油耗", "产油", "产气", "补给", "拨付", "补贴",
+            "罚金", "押金", "净值", "原值", "现值", "产值", "税额", "保费", "运费", "租费",
     };
+
+    /**
+     * 中文量值后缀：注释以这些字收尾（去掉括号里的单位之后），数值列就当指标。
+     * 收得比 {@link #MEASURE_CN} 宽一档，是因为「储备量」「在编数」「差额」「运价」这类
+     * 复合词列不完，而「量/数/额/值/费/价/金」七个字本身已经把语义说清了；
+     * 「率/比」走 AVG（见 {@link #aggOf}）。文本列不适用——那是另一条强证据规则。
+     */
+    private static final String[] MEASURE_SUFFIX_CN = {
+            "量", "数", "额", "值", "费", "价", "金", "率", "比",
+    };
+
+    /**
+     * 英文字段名的量值词根：「qty / amount / weight / price / rate / days」这类没有中文注释也能认。
+     * 只认整词（前后是下划线或首尾），免得把 {@code amount_type} 之外的 {@code amendment} 当成金额。
+     */
+    private static final Pattern MEASURE_EN = Pattern.compile(
+            "(?:^|_)(?:qty|quantity|amt|amount|num|count|cnt|total|sum|weight|vol|volume|"
+          + "price|cost|fee|score|rate|ratio|percent|pct|avg|average|days?|hours?|minutes?|"
+          + "seconds?|km|mileage|distance|dist|capacity|area|height|width|length|temp|"
+          + "temperature|humidity|pressure|power|energy|speed|age|balance|stock|inventory)"
+          + "(?:_|$)",
+            Pattern.CASE_INSENSITIVE);
+
+    /** 文本型数值列的长度上限：再长就不是「数量存成了文本」，而是备注里带了数字。 */
+    private static final long CAST_MAX_LEN = 128L;
 
     private static final String[] UNITS = {
             "万元", "亿元", "元", "吨", "千克", "公斤", "克", "毫克", "升", "毫升",
@@ -203,16 +244,21 @@ public final class FieldClass {
             return new Result(GEO, "地理区域", true, false, "dim_geo", "", "",
                     "字段名或注释带经纬度/坐标语义");
         }
-        if (note.contains("金额") || note.contains("合计/汇总") || note.contains("比率/系数")
-                || note.contains("评分") || note.contains("计量") || note.contains("产量/运量")
-                || note.contains("大计数") || note.contains("数量") || note.contains("年龄/年限")
-                || note.contains("时长/周期")) {
-            boolean numeric = numeric(type);
-            return new Result(numeric ? MEASURE : ATTRIBUTE,
-                    withDim(numeric ? "指标度量" : "业务属性", dim), true, numeric, dim,
-                    numeric ? unitOf(comment, note) : "",
-                    numeric ? aggOf(comment, field, note) : "",
-                    numeric ? noteLabel(note) : noteLabel(note) + "，但源列不是数值型，不做指标");
+        if (strongMeasure(note)) {
+            boolean num = numeric(type);
+            if (num) {
+                return new Result(MEASURE, withDim("指标度量", dim), true, true, dim,
+                        unitOf(comment, note), aggOf(comment, field, note), noteLabel(note));
+            }
+            // 现场大量「数量/金额存成 VARCHAR」：语义已经明确到不能再明确，聚合前 CAST 一次即可，
+            // 丢掉整列反而让 ads 只剩行数口径。长度上限挡住「备注里带数字」的长文本。
+            if (castable(type, c)) {
+                return new Result(MEASURE, withDim("指标度量", dim), true, true, dim,
+                        unitOf(comment, note), aggOf(comment, field, note),
+                        noteLabel(note) + "，源列是文本但存的是数值，聚合前 CAST 成 DECIMAL", true);
+            }
+            return new Result(ATTRIBUTE, withDim("业务属性", dim), true, false, dim, "", "",
+                    noteLabel(note) + "，但源列不是数值型，不做指标");
         }
         if (note.contains("链接/路径")) {
             return new Result(ATTRIBUTE, withDim("业务属性", dim), true, false, dim, "", "",
@@ -221,6 +267,20 @@ public final class FieldClass {
         if (note.contains("长文本")) {
             return new Result(DESC, withDim("描述备注", dim), true, false, dim, "", "",
                     "字段名或注释带备注/说明语义");
+        }
+        // 数值列的第一道兜底：注释以「量/数/额/值/费/价/金/率/比」收尾（储备量、在编数、差额、
+        // 运价、折旧费…），或注释里写了单位（载重（吨）、单位：km），或英文字段名就是
+        // qty/amount/price 这类，都按指标收。必须排在状态/名称之前：「机构编制数」会先被
+        // 「机构」当成对象维度、「库存状态」会先被当成标志位，那样指标就白丢了。
+        if (numeric(type) && !booleanLike(type)) {
+            String core = stripUnit(comment);
+            String unit = unitOf(comment, "");
+            if (endsWithAny(core, MEASURE_SUFFIX_CN) || !unit.isEmpty()
+                    || MEASURE_EN.matcher(fl).find()) {
+                return new Result(MEASURE, withDim("指标度量", dim), true, true, dim, unit,
+                        aggOf(comment, field, ""),
+                        "数值列且注释/字段名带量值语义（" + unitTag(core, unit, fl) + "）");
+            }
         }
 
         if (hitWords(comment, fl, STATUS_CN, STATUS_EN)) {
@@ -243,12 +303,17 @@ public final class FieldClass {
             return new Result(DESC, withDim("描述备注", dim), true, false, dim, "", "",
                     "字段名或注释带备注/说明语义");
         }
+        // 数值列的第二道兜底：命中量值词表（库存、面积、限额…）但注释里还混着状态/名称词时，
+        // 前面几类已经拦下了；到这里说明确实是量值。
+        if (numeric(type) && !booleanLike(type) && hitsAny(comment, MEASURE_CN)) {
+            String core = stripUnit(comment);
+            String unit = unitOf(comment, "");
+            return new Result(MEASURE, withDim("指标度量", dim), true, true, dim, unit,
+                    aggOf(comment, field, ""),
+                    "数值列且注释带量值语义（" + unitTag(core, unit, fl) + "）");
+        }
         if (!dim.isEmpty() && !"dim_code_info".equals(dim) && !"dim_code_it".equals(dim)) {
             return byDim(dim, "命中对象维度词");
-        }
-        if (numeric(type) && hitsAny(comment, MEASURE_CN)) {
-            return new Result(MEASURE, "指标度量", true, true, dim, unitOf(comment, ""),
-                    aggOf(comment, field, ""), "数值列且注释带数量/金额/计量语义");
         }
         if (!comment.isEmpty()) {
             return new Result(ATTRIBUTE, withDim("业务属性", dim), true, false, dim, "", "",
@@ -263,14 +328,20 @@ public final class FieldClass {
         return c != null && (c.primaryKey || of(c).business);
     }
 
-    /** 空注释的业务列补一句可读说明，别让交付表里出现空 COMMENT。 */
+    /**
+     * 空注释的业务列补一句可读说明，别让交付表里出现空 COMMENT。
+     *
+     * <p>这里刻意不用「按字段名推断」：{@link #SYS_CN} 认「字段名」这个词（那是元数据表里
+     * 真有一列叫字段名），补出来的注释一旦带上它，下一层再把列读回来就会被判成系统字段——
+     * dom 里还在、ads 里整列消失，指标白丢。改成「据列名判定」，不再与系统词表撞车。
+     */
     public static String commentOf(Infer.Column c) {
         String src = c == null || c.comment == null ? "" : Names.pyStrip(c.comment);
         if (!src.isEmpty()) {
             return src;
         }
         Result r = of(c);
-        return r.label + "（按字段名推断）";
+        return r.label + "（据列名判定）";
     }
 
     private static boolean isSystem(String comment, String field) {
@@ -339,20 +410,98 @@ public final class FieldClass {
                 || u.startsWith("REAL") || u.startsWith("BIT") || u.startsWith("BOOLEAN");
     }
 
+    /** 开关量（BOOLEAN / TINYINT(1)）：求和没有意义，不参与指标的兜底规则。 */
+    private static boolean booleanLike(String type) {
+        String u = type == null ? "" : type.toUpperCase(Locale.ROOT).replace(" ", "");
+        return u.startsWith("BOOLEAN") || u.startsWith("BIT") || u.equals("TINYINT(1)");
+    }
+
+    /** 文本/字符型且长度在 {@link #CAST_MAX_LEN} 以内：可能是「数值存成了文本」。 */
+    private static boolean castable(String type, Infer.Column c) {
+        String u = type == null ? "" : type.toUpperCase(Locale.ROOT);
+        boolean texty = u.startsWith("VARCHAR") || u.startsWith("CHAR") || u.startsWith("TEXT")
+                || u.startsWith("LONGTEXT") || u.startsWith("MEDIUMTEXT") || u.startsWith("TINYTEXT");
+        if (!texty) {
+            return false;
+        }
+        long len = c == null ? 0L : c.maxLen;
+        return len <= 0L || len <= CAST_MAX_LEN;
+    }
+
+    private static boolean strongMeasure(String note) {
+        return note.contains("金额") || note.contains("合计/汇总") || note.contains("比率/系数")
+                || note.contains("评分") || note.contains("计量") || note.contains("产量/运量")
+                || note.contains("大计数") || note.contains("数量") || note.contains("年龄/年限")
+                || note.contains("时长/周期");
+    }
+
+    /** 去掉注释里的括号单位与「单位：xx」后缀，只留干词给后缀判断用。 */
+    private static String stripUnit(String comment) {
+        String s = comment == null ? "" : comment;
+        s = UNIT_PAREN.matcher(s).replaceAll("");
+        s = UNIT_DECL.matcher(s).replaceAll("");
+        return Names.pyStrip(s).trim();
+    }
+
+    private static boolean endsWithAny(String text, String[] tails) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+        String t = text.trim();
+        for (String tail : tails) {
+            if (t.endsWith(tail)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 兜底判据的取证短句：写清是后缀、单位还是英文字段名命中的，交付时能复核。 */
+    private static String unitTag(String core, String unit, String field) {
+        StringBuilder sb = new StringBuilder();
+        if (!unit.isEmpty()) {
+            sb.append("单位 ").append(unit);
+        }
+        if (endsWithAny(core, MEASURE_SUFFIX_CN)) {
+            if (sb.length() > 0) { sb.append("、"); }
+            sb.append("「").append(core.length() > 12 ? core.substring(core.length() - 12) : core)
+                    .append("」量值后缀");
+        }
+        if (MEASURE_EN.matcher(field == null ? "" : field).find()) {
+            if (sb.length() > 0) { sb.append("、"); }
+            sb.append("英文字段名量值词根");
+        }
+        return sb.length() == 0 ? "量值语义" : sb.toString();
+    }
+
+    /**
+     * 聚合口径：先认出「区间两端（最大/最小）」，再把「存量类」按期末值取 MAX，
+     * 均值类（率/比/单价/温度/湿度/压力/速度）按 AVG，其余一律 SUM。
+     * 存量类改 MAX 是因为余额、库存每期都是一次快照，SUM 会把历史期累加，口径明显不成立。
+     */
     private static String aggOf(String comment, String field, String note) {
         String text = (comment == null ? "" : comment) + " " + (field == null ? "" : field);
         String lower = text.toLowerCase(Locale.ROOT);
+        String core = stripUnit(comment).trim();
         if (text.contains("最大") || text.contains("最高") || text.contains("峰值")
-                || lower.contains("max")) {
+                || text.contains("上限") || text.contains("额定") || lower.contains("max")) {
             return "MAX";
         }
-        if (text.contains("最小") || text.contains("最低") || lower.contains("min")) {
+        if (text.contains("最小") || text.contains("最低") || text.contains("下限")
+                || lower.contains("min")) {
             return "MIN";
+        }
+        if (text.contains("库存") || text.contains("余额") || text.contains("结存")
+                || text.contains("结余") || text.contains("存量") || text.contains("现值")
+                || lower.contains("balance") || lower.contains("stock")) {
+            return "MAX";
         }
         if (text.contains("比例") || text.contains("占比") || text.contains("百分比")
                 || text.contains("比重") || text.contains("系数") || text.contains("概率")
                 || text.contains("平均") || text.contains("均价") || text.contains("单价")
-                || text.contains("比率") || text.endsWith("率")
+                || text.contains("比率") || text.contains("温度") || text.contains("湿度")
+                || text.contains("压力") || text.contains("速度") || text.contains("密度")
+                || core.endsWith("率") || core.endsWith("比")
                 || lower.contains("rate") || lower.contains("ratio") || lower.contains("percent")
                 || lower.contains("pct") || lower.contains("avg") || lower.contains("average")
                 || lower.contains("price")) {

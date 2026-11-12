@@ -623,6 +623,8 @@ public final class LayerGen {
         StringBuilder ddl = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
         StringBuilder dml = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
         int capped = 0;
+        int castMeasures = 0;
+        List<String> cappedSample = new ArrayList<String>();
         for (Map.Entry<String, Map<String, Integer>> e : groups.entrySet()) {
             String theme = e.getKey();
             String target = Taxonomy.themeTable(theme);
@@ -637,9 +639,20 @@ public final class LayerGen {
             for (String domTable : e.getValue().keySet()) {
                 List<Infer.Column> scols = domCols.get(domTable);
                 List<Measure> measures = measuresOf(scols);
+                rankMeasures(measures);
+                for (Measure mm : measures) {
+                    if (mm.cast) { castMeasures++; }
+                }
                 if (measures.size() > MAX_ADS_MEASURES) {
-                    capped += measures.size() - MAX_ADS_MEASURES;
+                    int cut = measures.size() - MAX_ADS_MEASURES;
+                    capped += cut;
+                    List<String> dropped = new ArrayList<String>();
+                    for (Measure mm : measures.subList(MAX_ADS_MEASURES, measures.size())) {
+                        if (dropped.size() < 6) { dropped.add(mm.field); }
+                    }
                     measures = measures.subList(0, MAX_ADS_MEASURES);
+                    cappedSample.add(domTable + "：丢了 " + cut + " 个（示例 " + join(dropped, "、")
+                            + "）");
                 }
                 if (measures.isEmpty()) {
                     // 没有可求和/求均值的数值列：保住「源行数」这个唯一说得清的口径
@@ -658,26 +671,52 @@ public final class LayerGen {
         out.transformSql = dml.toString();
         if (capped > 0) {
             out.warnings.add("ads 有 " + capped + " 个指标超过每表 " + MAX_ADS_MEASURES
-                    + " 个上限未产聚合，可用映射里的显式指标清单补");
+                    + " 个上限未产聚合（已按金额/数量优先排序后截断）：" + join(cappedSample, "；")
+                    + "；可用映射里的显式指标清单补");
         }
-        out.warnings.add("ads 指标取 dom 数值列按 SUM/AVG/MAX/MIN 聚合（单位为源注释推断），"
-                + "无可用数值列时才退成 COUNT(*)，口径须业务方逐条核改（条款 188 注）");
+        if (castMeasures > 0) {
+            out.warnings.add("ads 有 " + castMeasures + " 个指标列的源类型是文本，"
+                    + "已按 CAST(NULLIF(REPLACE(…),'') AS DECIMAL(38,6)) 聚合；"
+                    + "值里混入非数字（如「3吨」「待定」）会按 0 计，口径待核");
+        }
+        out.warnings.add("ads 指标取 dom 数值列按 SUM/AVG/MAX/MIN 聚合（比率为 AVG、库存余额取"
+                + "期末 MAX，单位为源注释推断），无可用数值列时才退成 COUNT(*)，口径须业务方逐条核改"
+                + "（条款 188 注）");
         return out;
     }
 
-    /** ads 的一条指标：字段、中文说明、单位与聚合方式。 */
+    /**
+     * ads 的一条指标：字段、中文说明、单位、聚合方式与取值表达式。
+     *
+     * <p>为什么带 {@code expr}：数值列直接 {@code SUM(`c`)}，但「数量/金额存成 VARCHAR」
+     * 的列（现场很常见）必须先把值 CAST 成 DECIMAL，否则 MySQL 按字符串求和恒为 0。
+     * 表达式与场映射 CSV 的「转换规则」同源，两处不许各写一套。
+     */
     private static final class Measure {
         final String field;
         final String label;
         final String unit;
         final String agg;
-        Measure(String field, String label, String unit, String agg) {
+        final String expr;
+        final boolean cast;
+        Measure(String field, String label, String unit, String agg, String expr, boolean cast) {
             this.field = field; this.label = label;
             this.unit = unit == null ? "" : unit; this.agg = agg;
+            this.expr = expr; this.cast = cast;
         }
     }
 
-    /** 从 dom 表的列里挑指标：数值列且被判成指标度量；治理字段与编码不当指标。 */
+    /** 文本数值列的聚合取值：去千分位逗号与两端空白，空串按 NULL 计，再 CAST 成 DECIMAL。 */
+    private static String castExpr(String field) {
+        return "CAST(NULLIF(REPLACE(REPLACE(TRIM(`" + field + "`), ',', ''), '，', ''), '')"
+                + " AS DECIMAL(38,6))";
+    }
+
+    /**
+     * 从 dom 表的列里挑指标：被判成指标度量的列（数值列，或文本但语义明确到能 CAST 的列）。
+     * 返回结果按「先金额/数量、再比率/评分、最后其它」排一遍——超上限截断时先丢的是
+     * 语义最弱的那些（tinyint 小计数、无量纲的杂项数值），而不是按列序随便砍。
+     */
     private static List<Measure> measuresOf(List<Infer.Column> cols) {
         List<Measure> out = new ArrayList<Measure>();
         if (cols == null) { return out; }
@@ -685,9 +724,38 @@ public final class LayerGen {
             if (c.primaryKey || isGovField(c.field)) { continue; }
             FieldClass.Result r = FieldClass.of(c);
             if (!r.measure || r.agg.isEmpty()) { continue; }
-            out.add(new Measure(c.field, r.label, r.unit, r.agg));
+            String expr = r.castNumeric ? castExpr(c.field) : "`" + c.field + "`";
+            out.add(new Measure(c.field, r.label, r.unit, r.agg, expr, r.castNumeric));
         }
         return out;
+    }
+
+    /** 指标排序权重：金额/费用类 0、数量类 1、比率/评分类 2、其余 3（数值越小越先保）。 */
+    private static int measureRank(Measure m) {
+        String t = m.label + " " + m.unit + " " + m.field.toLowerCase(java.util.Locale.ROOT);
+        if (t.contains("金额") || t.contains("费用") || t.contains("成本") || t.contains("收入")
+                || t.contains("支出") || t.contains("价格") || t.contains("价")
+                || t.contains("万元") || t.contains("元")) {
+            return 0;
+        }
+        if (t.contains("数量") || t.contains("人数") || t.contains("次数") || t.contains("总量")
+                || t.contains("合计") || t.contains("吨") || t.contains("个") || t.contains("件")) {
+            return 1;
+        }
+        if ("AVG".equals(m.agg) || t.contains("率") || t.contains("比") || t.contains("评分")) {
+            return 2;
+        }
+        return 3;
+    }
+
+    /** 稳定排序：同权重保持列序，截断结果可复现。 */
+    private static void rankMeasures(List<Measure> measures) {
+        java.util.Collections.sort(measures, new java.util.Comparator<Measure>() {
+            @Override public int compare(Measure a, Measure b) {
+                int d = measureRank(a) - measureRank(b);
+                return d != 0 ? d : a.field.compareTo(b.field);
+            }
+        });
     }
 
     /** 一条 ads 聚合：模板行数口径或真实指标口径，只 FROM dom 的一张领域目标表。 */
@@ -695,7 +763,7 @@ public final class LayerGen {
                                     GenOptions o) {
         String json = "{\"dom\":\"" + domTable + "\"}";
         String idxCode = m == null ? theme : m.field;
-        String value = m == null ? "COUNT(*)" : m.agg + "(`" + m.field + "`)";
+        String value = m == null ? "COUNT(*)" : m.agg + "(" + m.expr + ")";
         String unit = m == null ? "" : m.unit;
         String model = m == null ? "rowcount" : m.agg.toLowerCase() + "_" + m.field;
         String what = m == null ? "按源行数（模板）" : m.label + (m.unit.isEmpty() ? "" : "，" + m.unit);
@@ -724,7 +792,7 @@ public final class LayerGen {
     private static void adsMaps(LayerOutput out, String target, String domTable, Measure m,
                                 GenOptions o) {
         String json = "{\"dom\":\"" + domTable + "\"}";
-        String value = m == null ? "COUNT(*)" : m.agg + "(`" + m.field + "`)";
+        String value = m == null ? "COUNT(*)" : m.agg + "(" + m.expr + ")";
         for (String c : GOV_ADS) {
             MappingFile.FieldMap f = new MappingFile.FieldMap();
             f.srcTable = domTable; f.srcField = m == null ? "" : m.field;

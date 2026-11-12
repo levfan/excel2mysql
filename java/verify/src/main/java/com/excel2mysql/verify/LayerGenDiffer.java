@@ -316,6 +316,52 @@ public final class LayerGenDiffer {
             bad++; shown.add("ads 指标值列类型或治理字段注释没跟上");
         }
 
+        // ---- 指标命中扩面（2026-11-13）：量值后缀／单位／英文字段名／文本存数值都要能认 ----
+        // 现场语料最常见的四类漏网：储备量（复合词）、载重（吨）（只有单位）、
+        // qty/amount（只有英文字段名）、数量存成 VARCHAR（类型不是数值）。
+        MappingFile hm = hitMapping();
+        List<LayerGen.SourceTable> hs = hitSource();
+        LayerGen.LayerOutput hdom = LayerGen.genLayer(LayerGen.Layer.DOM, hm, hs, o);
+        LayerGen.LayerOutput hads = LayerGen.genLayer(LayerGen.Layer.ADS, hm, hs, o);
+        String[] mustHit = {"stock_qty", "authorized_num", "load_w", "qty", "cnt",
+                "diff_amt", "price_text", "balance"};
+        StringBuilder miss = new StringBuilder();
+        for (String f : mustHit) {
+            if (!hdom.ddlSql.contains("`" + f + "`")) {
+                miss.append(f).append("(dom 就丢了) ");
+            } else if (!hads.transformSql.contains("`" + f + "`")) {
+                miss.append(f).append("(没进 ads) ");
+            }
+        }
+        if (miss.length() > 0) {
+            bad++; shown.add("指标命中不足：" + miss);
+        }
+        // 文本存数值必须 CAST：直接 SUM(`qty`) 在 MySQL 里是字符串求和，恒为 0
+        if (!hads.transformSql.contains("SUM(CAST(NULLIF(REPLACE(REPLACE(TRIM(`qty`)")) {
+            bad++; shown.add("文本数值列 qty 没走 CAST 聚合：" + firstLines(hads.transformSql, 4));
+        }
+        if (!hads.transformSql.contains("AVG(CAST(NULLIF(REPLACE(REPLACE(TRIM(`price_text`)")) {
+            bad++; shown.add("文本单价 price_text 没走 CAST + AVG");
+        }
+        // 存量类取期末值：余额每期一张快照，SUM 会把历史期累加
+        if (!hads.transformSql.contains("MAX(`balance`) AS `idx_value`")) {
+            bad++; shown.add("余额列 balance 没按期末值取 MAX");
+        }
+        if (!hads.transformSql.contains("'吨' AS `idx_unit`")) {
+            bad++; shown.add("载重（吨）的单位没取出来");
+        }
+        String hitAds = com.excel2mysql.core.Taxonomy.themeTable("后勤保障主题");
+        if (countOccurrences(hads.transformSql, "INSERT INTO `" + hitAds + "`") != mustHit.length) {
+            bad++; shown.add("扩面夹具的指标数不对 期望 " + mustHit.length + " 实际 "
+                    + countOccurrences(hads.transformSql, "INSERT INTO `" + hitAds + "`"));
+        }
+        // 反向：联系电话／是否启用／序号／年份不许被当成指标（误收比漏收更难解释）
+        for (String f : new String[]{"phone", "is_on", "seq_no", "year_no"}) {
+            if (hads.transformSql.contains("`" + f + "`")) {
+                bad++; shown.add("非指标列被误收进 ads：" + f);
+            }
+        }
+
         // 老映射初稿（构建/gen_layer_mapping.py 产的那份）沿用条款 188 三框架名，
         // 还带分号多值串。以前整批归进「后勤综合主题」，六个主题塌成一张表；现在按领域重算。
         String legacy = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
@@ -560,7 +606,53 @@ public final class LayerGenDiffer {
         return out;
     }
 
+    /** 指标扩面夹具的映射：一张领域目标表，主题写官方名，省得主题归一化干扰断言。 */
+    private static MappingFile hitMapping() throws IOException {
+        String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
+                + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
+        String body = "采购供应,油料,油料储备,t_hit,14,id,采购供应,proc,油料保障,dwd_hit,"
+                + "dim_material,后勤保障主题,关键词,待核,\n";
+        File f = File.createTempFile("layerdiff-hit-", ".csv");
+        f.deleteOnExit();
+        Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
+        try { w.write('﻿'); w.write(header); w.write(body); } finally { w.close(); }
+        return MappingFile.loadTableCsv(f.getPath());
+    }
+
+    /**
+     * 指标扩面夹具：八列该命中（复合词后缀、只有单位、只有英文字段名、文本存数值、余额取期末），
+     * 四列不该命中（电话、开关、序号、裸 year）。
+     */
+    private static List<LayerGen.SourceTable> hitSource() {
+        List<Infer.Column> cs = new ArrayList<Infer.Column>();
+        cs.add(col("id", "VARCHAR(64)", "主键", 64L));
+        cs.add(col("stock_qty", "INT", "储备量", 11L));
+        cs.add(col("authorized_num", "INT", "编制数", 11L));
+        cs.add(col("load_w", "DECIMAL(10,2)", "载重（吨）", 12L));
+        cs.add(col("qty", "VARCHAR(16)", "", 16L));
+        cs.add(col("cnt", "INT", "", 11L));
+        cs.add(col("diff_amt", "DECIMAL(18,2)", "差额", 18L));
+        cs.add(col("price_text", "VARCHAR(32)", "单价（元）", 32L));
+        cs.add(col("balance", "DECIMAL(18,2)", "账户余额（元）", 18L));
+        cs.add(col("phone", "VARCHAR(32)", "联系电话", 32L));
+        cs.add(col("is_on", "TINYINT(1)", "是否启用", 1L));
+        cs.add(col("seq_no", "INT", "序号", 11L));
+        cs.add(col("year_no", "INT", "", 11L));
+        cs.add(col("remark", "VARCHAR(255)", "备注", 255L));
+        List<LayerGen.SourceTable> out = new ArrayList<LayerGen.SourceTable>();
+        out.add(new LayerGen.SourceTable("t_hit", "油料储备", cs));
+        return out;
+    }
+
+    private static Infer.Column col(String field, String type, String comment, long len) {
+        Infer.Column c = new Infer.Column();
+        c.field = field; c.type = type; c.comment = comment; c.maxLen = len;
+        c.primaryKey = "id".equals(field); c.nullable = Boolean.TRUE;
+        return c;
+    }
+
     private static String firstLines(String s, int n) {
+
         String[] parts = s.split("\n");
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < parts.length && i < n; i++) {
