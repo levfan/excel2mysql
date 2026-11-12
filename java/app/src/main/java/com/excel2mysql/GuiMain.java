@@ -2427,6 +2427,34 @@ public final class GuiMain {
             if (notes.isEmpty() || !notes.get(0).contains("找不到")) {
                 problems.add("查找范围敲了不存在的路径却没提示：" + notes);
             }
+            // 6) 点「此电脑」「网络」「库」这类 shell 虚拟节点：必须能进，且不能弹「找不到」
+            //    这些在模型里是 Win32ShellFolder2，toString 是显示名、getPath 是 ::{CLSID}，
+            //    磁盘上没有同名目录——早先一律拍成字符串解析，点一下就报「找不到这个目录」。
+            Object virtual = null;
+            for (Object item : chooser.lookInItems()) {
+                if (item instanceof File && ((File) item).getPath().startsWith("::")) {
+                    virtual = item;
+                    break;
+                }
+            }
+            if (virtual == null) {
+                System.out.println("- [INFO] GUI-SELFTEST | 「查找范围」里没有 shell 虚拟节点，"
+                        + "点「此电脑」这一判本轮未覆盖");
+            } else {
+                notes.clear();
+                chooser.setCurrentDirectory(tmp);
+                chooser.pickLookIn(virtual);
+                File now = chooser.getCurrentDirectory();
+                String want = ((File) virtual).getPath();
+                if (now == null || !want.equals(now.getPath())) {
+                    problems.add("点「" + virtual + "」没进去，停在：" + now);
+                }
+                if (!notes.isEmpty()) {
+                    problems.add("点「" + virtual + "」不该有提示，实际：" + notes);
+                }
+                System.out.println("- [INFO] GUI-SELFTEST | 点「" + virtual
+                        + "」已进入（shell 虚拟节点按 File 直跳，没走字符串解析）");
+            }
         } catch (Exception e) {
             problems.add("查找范围自检抛异常：" + e);
         } finally {

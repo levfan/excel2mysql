@@ -22,6 +22,14 @@ import javax.swing.JToolBar;
  * ActionListener、开可编辑，敲目录回车就进去，敲文件回车就进它的父目录并把这个文件
  * 加进已选清单，下拉里选的目录照旧能跳。找不到这一格（换 JDK 或换外观）就保持原样，
  * 只在日志里说一句，不把选择器弄坏。
+ *
+ * <p>三、接过这一格之后，导航与手敲必须分开走。左侧「此电脑」「网络」「库」这些是
+ * shell 虚拟节点，模型里放的是 {@code Win32ShellFolder2}（File 的子类）：{@code toString()}
+ * 是显示名「此电脑」，{@code getPath()} 却是 CLSID {@code ::{20D04FE0-...}}，磁盘上没有
+ * 叫「此电脑」的目录。原先把选中项一律拍成字符串再 {@code new File} 去解析，点「此电脑」
+ * 就必然落空并弹「找不到这个目录」。现在导航（选中项与当前目录不同）直接把 File 对象
+ * 交给 {@code setCurrentDirectory}，只有当前目录没变、编辑器里是新文本时才算手敲，
+ * 才走字符串解析与「找不到」提示。
  */
 public final class FolderAwareChooser extends JFileChooser {
 
@@ -42,6 +50,8 @@ public final class FolderAwareChooser extends JFileChooser {
 
     private JComboBox lookIn;
     private boolean wired;
+    /** 防重入：navigateTo 里回写选中项可能再触发一次动作。 */
+    private boolean inLookIn;
 
     /** 自检用：把提示接到一个收集器上；传 null 恢复成真的弹提示框。 */
     public static void setNoteSink(Note sink) {
@@ -93,20 +103,118 @@ public final class FolderAwareChooser extends JFileChooser {
         lookIn.addActionListener(new java.awt.event.ActionListener() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
-                applyLookIn(typedText());
+                onLookInAction();
             }
         });
     }
 
+    /**
+     * 「查找范围」的动作分两路，判据是"选中项有没有跟着动"。
+     *
+     * <p>导航（下拉选目录、点左侧「此电脑」「网络」「库」）时选中项与当前目录不同，
+     * 直接拿 File 对象交给 {@code setCurrentDirectory}——虚拟节点也一样能展开，
+     * 因为 {@code Win32ShellFolder2} 的 {@code isDirectory()} 是真的 true。这一路
+     * 无论跳没跳成都不落回字符串解析，免得对着一个能打开的节点弹「找不到」。
+     *
+     * <p>手敲路径回车时选中项没动（仍是原目录），编辑器里是新文本，照旧走解析：
+     * 敲对了就进，敲错了仍然要有一句可见提示。
+     */
+    private void onLookInAction() {
+        if (inLookIn) {
+            return;
+        }
+        inLookIn = true;
+        try {
+            File nav = navigatedFile();
+            if (nav != null && !sameDir(nav, getCurrentDirectory())) {
+                if (!navigateTo(nav)) {
+                    restoreLookIn();
+                }
+                return;
+            }
+            applyLookIn(typedText());
+        } finally {
+            inLookIn = false;
+        }
+    }
+
+    /**
+     * 这次动作是不是在导航：选中项或编辑器里挂着 File 对象就算导航。
+     *
+     * <p>两处都要看。下拉选中时 {@code getSelectedItem()} 是 File；可点「此电脑」这类
+     * 不在下拉模型里的节点时，{@code DirectoryComboBoxModel.setSelectedItem} 匹配不到项会
+     * 让 {@code getSelectedItem()} 返回 null，只有编辑器里挂着那个 File 对象。只看前一处
+     * 就会漏到字符串解析，重新弹「找不到这个目录」。
+     *
+     * <p>手敲路径回车时两处都是字符串，返回 null，照旧走解析。
+     */
+    private File navigatedFile() {
+        Object[] candidates = new Object[] {
+            lookIn == null ? null : lookIn.getSelectedItem(),
+            rawEditorItem(),
+        };
+        for (Object o : candidates) {
+            if (o instanceof File) {
+                return (File) o;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 拿 File 对象直接跳，全程不做字符串化，虚拟节点与普通目录走同一条路。
+     * 跳不动返回 false，由调用方决定是静默落回还是继续按文本试。
+     */
+    private boolean navigateTo(File dir) {
+        try {
+            if (dir == null || !dir.isDirectory()) {
+                return false;
+            }
+            setCurrentDirectory(dir);
+            rescanCurrentDirectory();
+            if (lookIn != null) {
+                lookIn.setSelectedItem(dir);
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 两处是否同一目录；虚拟节点拿不到 canonical，退回比 getPath。 */
+    private static boolean sameDir(File a, File b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        if (a.equals(b)) {
+            return true;
+        }
+        String pa = a.getPath();
+        String pb = b.getPath();
+        if (pa != null && pa.equalsIgnoreCase(pb)) {
+            return true;
+        }
+        try {
+            return a.getCanonicalFile().equals(b.getCanonicalFile());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 编辑器里那个东西的原始对象：下拉选中时是 File，手敲时是 String。 */
+    private Object rawEditorItem() {
+        return lookIn == null || lookIn.getEditor() == null
+                ? null : lookIn.getEditor().getItem();
+    }
+
     /** 那一格里此刻的文本：下拉选中的目录与敲进去的路径都从这一条出来。 */
     private String typedText() {
-        Object editor = lookIn == null || lookIn.getEditor() == null
-                ? null : lookIn.getEditor().getItem();
-        if (editor == null) {
-            Object item = lookIn == null ? null : lookIn.getSelectedItem();
-            return item == null ? "" : String.valueOf(item);
+        Object item = rawEditorItem();
+        if (item == null) {
+            Object selected = lookIn == null ? null : lookIn.getSelectedItem();
+            return selected == null ? "" : String.valueOf(selected);
         }
-        return String.valueOf(editor);
+        return String.valueOf(item);
     }
 
     /**
@@ -122,6 +230,17 @@ public final class FolderAwareChooser extends JFileChooser {
         }
         File target = resolve(text);
         if (target == null) {
+            // 虚拟节点（此电脑/网络/库）的 toString 是显示名，磁盘上没这个路径，
+            // resolve 必然落空；但它就在下拉候选里，按显示名找回来直接跳。
+            File alias = matchLookInItem(text);
+            if (alias != null && alias.isDirectory()) {
+                setCurrentDirectory(alias);
+                rescanCurrentDirectory();
+                if (lookIn != null) {
+                    lookIn.setSelectedItem(alias);
+                }
+                return alias.getAbsolutePath();
+            }
             noteSink.show(this, "找不到这个目录或文件：" + text
                     + "\n「查找范围」里可以敲目录或文件的完整路径，按回车跳转。");
             restoreLookIn();
@@ -153,6 +272,30 @@ public final class FolderAwareChooser extends JFileChooser {
         if (lookIn != null) {
             lookIn.setSelectedItem(getCurrentDirectory());
         }
+    }
+
+    /**
+     * 在下拉候选里按显示名或路径找一项。
+     *
+     * <p>给 shell 虚拟节点留的兜底：`此电脑` 的 {@code getPath()} 是 CLSID、{@code toString()}
+     * 是显示名，两者都当不了磁盘路径，但它们确实在下拉模型里，且 {@code isDirectory()} 为 true。
+     * 手敲文本永远碰不到这里（模型里没有同名项），所以不会把"打错路径"误判成"能打开"。
+     */
+    private File matchLookInItem(String text) {
+        if (lookIn == null || lookIn.getModel() == null || text.isEmpty()) {
+            return null;
+        }
+        javax.swing.ComboBoxModel model = lookIn.getModel();
+        for (int i = 0; i < model.getSize(); i++) {
+            Object o = model.getElementAt(i);
+            if (o instanceof File) {
+                File f = (File) o;
+                if (text.equals(f.toString()) || text.equals(f.getPath())) {
+                    return f;
+                }
+            }
+        }
+        return null;
     }
 
     /** 相对路径按当前目录解析；不存在一律返回 null，不拿半截路径去跳。 */
@@ -226,6 +369,30 @@ public final class FolderAwareChooser extends JFileChooser {
             lookIn.getEditor().setItem(text);
         }
         applyLookIn(text);
+    }
+
+    /** 自检用：这一格下拉里此刻的候选目录，含「此电脑」这类 shell 虚拟节点。 */
+    public Object[] lookInItems() {
+        if (lookIn == null || lookIn.getModel() == null) {
+            return new Object[0];
+        }
+        javax.swing.ComboBoxModel model = lookIn.getModel();
+        Object[] out = new Object[model.getSize()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = model.getElementAt(i);
+        }
+        return out;
+    }
+
+    /**
+     * 自检用：把选中项换成给定对象再跑一次动作，等同于点它。
+     * 点「此电脑」「网络」「库」走的就是这条路——不能弹「找不到」。
+     */
+    public void pickLookIn(Object item) {
+        if (lookIn != null) {
+            lookIn.setSelectedItem(item);
+        }
+        onLookInAction();
     }
 
     /** 工具条上那个下拉就是它；找不到返回 null，调用方自己保持原样。 */
