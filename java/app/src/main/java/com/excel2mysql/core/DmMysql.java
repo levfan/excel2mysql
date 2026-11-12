@@ -12,7 +12,7 @@ import java.util.Set;
  * <p>输入是达梦 ALL_TAB_COLUMNS / ALL_TAB_COMMENTS / ALL_COL_COMMENTS / ALL_CONSTRAINTS
  * 那几本目录视图原样给出的行（{@link DmReader} 负责读），输出与工具自己生成的 DDL 同形：
  * 反引号名、一行一列、表尾 {@code ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
- * COLLATE=utf8mb4_0900_ai_ci COMMENT='…'}。
+ * COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='…'}。
  *
  * <p>两处刻意不对称：达梦的字符长度按字节计、MySQL 按字符计，所以长度 1:1 平移只会更宽
  * 不会装不下；达梦的 DATE 带时分秒，翻成 MySQL 的 DATE 会静默丢掉时间，所以落 DATETIME。
@@ -158,7 +158,7 @@ public final class DmMysql {
         }
         ddl.append("CREATE TABLE `").append(table).append("` (\n").append(body).append("\n) ")
                 .append("ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ")
-                .append("COLLATE=utf8mb4_0900_ai_ci COMMENT='")
+                .append("COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='")
                 .append(comment(t.comment, who, "", warns)).append("'");
         return ddl.toString();
     }

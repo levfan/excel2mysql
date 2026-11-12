@@ -3178,7 +3178,7 @@ public final class GuiMain {
                 "  `created` DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间'",
                 "  PRIMARY KEY (`id`)",
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
-                        + " COMMENT='油料保障台账'",
+                        + " ROW_FORMAT=DYNAMIC COMMENT='油料保障台账'",
         };
         for (String w : want) {
             if (!ddl.contains(w)) {

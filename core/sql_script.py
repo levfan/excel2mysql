@@ -741,8 +741,8 @@ SQL_FORMAT_TYPES = frozenset((
 SQL_FORMAT_UPPER = SQL_FORMAT_KEYWORDS | SQL_FORMAT_TYPES
 # 表选项那几位的等号贴紧写（`ENGINE=InnoDB`），与 SHOW CREATE TABLE 同形；
 # 比较运算的等号照旧留空格（`WHERE a = 1`）
-SQL_FORMAT_TIGHT_EQ = frozenset(("ENGINE", "CHARSET", "COLLATE", "COMMENT",
-                                 "AUTO_INCREMENT", "KEY_BLOCK_SIZE"))
+SQL_FORMAT_TIGHT_EQ = frozenset(("ENGINE", "CHARSET", "COLLATE", "ROW_FORMAT",
+                                 "COMMENT", "AUTO_INCREMENT", "KEY_BLOCK_SIZE"))
 
 # 这些词后面紧跟的左括号是函数/类型的括号，要贴紧写；其余（关键字与表名）留一格
 SQL_FORMAT_FUNCS = frozenset((

@@ -1243,7 +1243,7 @@ public final class HelpDoc {
                     "  tn VARCHAR(128) NOT NULL, cn VARCHAR(128) NOT NULL," + NL +
                     "  cm TEXT NOT NULL, UNIQUE KEY uk_dmcm (tn, cn)" + NL +
                     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci" + NL +
-                    "  COMMENT='DM注释中转，用完删除';</pre>" + NL +
+                    "  ROW_FORMAT=DYNAMIC COMMENT='DM注释中转，用完删除';</pre>" + NL +
                     "<p>A-④ 执行 <code>dm_insert.sql</code>（整份贴进「SQL 执行器」批量执行），然后核对行数：" + NL +
                     "<b>表行必须等于 A-① 的表注释 <code>cnt</code>，列行必须等于列注释 <code>cnt</code></b>，" + NL +
                     "对不上就停在这里查，别往下走。</p>" + NL +
@@ -1349,7 +1349,7 @@ public final class HelpDoc {
                     "  tn VARCHAR(128) NOT NULL, cn VARCHAR(128) NOT NULL," + NL +
                     "  cm TEXT NOT NULL, UNIQUE KEY uk_dmcm (tn, cn)" + NL +
                     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci" + NL +
-                    "  COMMENT='DM注释中转，用完删除';</pre>" + NL +
+                    "  ROW_FORMAT=DYNAMIC COMMENT='DM注释中转，用完删除';</pre>" + NL +
                     "<p>B-④ 灌入 CSV 并核对行数。<code>ESCAPED BY</code> 那一项要和导出时的文本限定符配套，" + NL +
                     "DBeaver 默认导出是双引号包字段、内部不做反斜杠转义，所以这里写" + NL +
                     "<code>ESCAPED BY ''</code>；如果它对注释里的引号做了 <code>\"\"</code> 式转义，" + NL +

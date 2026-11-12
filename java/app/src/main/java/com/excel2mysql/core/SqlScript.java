@@ -2210,7 +2210,8 @@ public final class SqlScript {
 
     private static final Set<String> FMT_UPPER = new HashSet<String>(FMT_KEYWORDS);
     private static final Set<String> FMT_TIGHT_EQ = wordSet(
-            "ENGINE", "CHARSET", "COLLATE", "COMMENT", "AUTO_INCREMENT", "KEY_BLOCK_SIZE");
+            "ENGINE", "CHARSET", "COLLATE", "ROW_FORMAT", "COMMENT", "AUTO_INCREMENT",
+            "KEY_BLOCK_SIZE");
 
     /** 深度 0 上这些词一起句就另起一行。 */
     private static final Set<String> FMT_BREAK = wordSet(

@@ -198,7 +198,7 @@ public final class SqlSamples {
                 "宽表在 COMPACT 下报行太宽，改成 DYNAMIC 就能建。",
                 "行格式不一致会让同一份 DDL 在有的库建得出来、有的建不出来。",
                 "ROW_FORMAT DYNAMIC 8126 行外存储 宽表",
-                            "ALTER TABLE t_order ROW_FORMAT = DYNAMIC;" + NL +
+                            "ALTER TABLE t_order ROW_FORMAT=DYNAMIC;" + NL +
                     "SELECT ROW_FORMAT AS 行格式" + NL +
                     "FROM information_schema.TABLES" + NL +
                     "WHERE TABLE_SCHEMA = DATABASE()" + NL +
@@ -208,7 +208,7 @@ public final class SqlSamples {
                 "整表 CONVERT TO utf8mb4 的同时显式带上 ROW_FORMAT=DYNAMIC。",
                 "只写字符集时行格式跟着实例默认走，从 DYNAMIC 变成 COMPACT，重建当场撞行宽上限。",
                 "CONVERT TO 字符集 行格式 ROW_FORMAT 重建",
-                            "ALTER TABLE t_order CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci, ROW_FORMAT = DYNAMIC;" + NL +
+                            "ALTER TABLE t_order CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci, ROW_FORMAT=DYNAMIC;" + NL +
                     "SELECT" + NL +
                     "  TABLE_COLLATION AS 排序规则," + NL +
                     "  ROW_FORMAT AS 行格式" + NL +
@@ -225,7 +225,7 @@ public final class SqlSamples {
                     "  name VARCHAR(64)," + NL +
                     "  parent_name VARCHAR(64)," + NL +
                     "  PRIMARY KEY (id)" + NL +
-                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT = DYNAMIC;" + NL +
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;" + NL +
                     "INSERT INTO t_order_ext(id, name, parent_name)" + NL +
                     "SELECT" + NL +
                     "  id," + NL +
