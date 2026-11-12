@@ -150,7 +150,7 @@ public final class LayerPage extends JPanel {
         row.add(readSrcBtn);
         Buttons.secondary(autoMapBtn);
         autoMapBtn.setToolTipText("<html>用已读回的源库结构按条款 184（7 领域 33 子领域）、<br>"
-                + "条款 183（十类对象维度）、条款 188（三个主题）铺一份映射。<br>"
+                + "条款 183（十类对象维度）、业务方确认的六个主题铺一份映射。<br>"
                 + "自动识别一源一表；领域/子领域只做分类，不按它合并。<br>"
                 + "会覆盖当前映射；判不准的行标「待确认」。</html>");
         autoMapBtn.addActionListener(e -> autoMapFromSource());

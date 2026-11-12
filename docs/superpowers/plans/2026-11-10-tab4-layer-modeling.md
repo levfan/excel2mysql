@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-10-tab4-layer-modeling-design.md`
 
+> **口径修订（2026-11-12）**：本计划里「ads＝三主线主题」「`src_batch_id` 用占位符 `@src_batch_id`」「合并超限即拒绝生成」三条已按业务方确认的新口径作废。现行规则：ads 固定六主题且六表都建；`src_batch_id` 取源表主键 `id`、ads 由 dom 同名列 `MAX(...)` 回填；合并超限自动拆成每个领域目标表；obj 按十类维度建表并用 `UNION ALL` 组装、未归类/系统字段不参与分类。完整修订条目见 Spec 文首附注，实现以 `LayerGen.java` / `Taxonomy.java` 为准。
+
 ## Global Constraints
 
 逐条 copied verbatim from the spec / 项目铁律，每个任务 implicitly 包含：

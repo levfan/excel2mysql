@@ -21,6 +21,8 @@ import java.util.Set;
  *
  * <p>对象维度只认条款 183 的十类（{@link LayerGen#DIM_PK} 那套键），从字段注释与字段名里取；
  * 不再拼拼音 dim 名——生成器只认这十个键，拼出来的名字会静默丢掉整张维表。
+ * 系统审计列与无据可依的未归类列先被剔除，既不参与领域打分也不参与维度归类：
+ * 拿「用户」「创建人」这类管道词去数领域词，会把一张字典表判成人员/保障。
  *
  * <p>自动识别按「一源一表」落 dom：每张源表指定一张自己的领域目标表
  * <code>dwd_&lt;子领域首字母&gt;_&lt;源表名&gt;</code>（基础数据 → jcsj）。领域/子领域/主题只写进映射做分类，
@@ -51,7 +53,8 @@ public final class DomainGuess {
         public String warning = "";
     }
 
-    private static final int MAX_DIMS = 3;
+    /** 十类对象维度全都要认出来，按类别建表；不再只取前 3 个高频维度。 */
+    private static final int MAX_DIMS = Taxonomy.DIMS.length;
 
     private DomainGuess() {
     }
@@ -81,13 +84,47 @@ public final class DomainGuess {
         boolean guessed;
     }
 
+    /** 分类用的字段清单：剔掉系统审计列与无据可依的未归类列之后的注释/字段名。 */
+    private static final class Fields {
+        final List<String> comments = new ArrayList<String>();
+        final List<String> names = new ArrayList<String>();
+        final StringBuilder joined = new StringBuilder();
+    }
+
+    /**
+     * 未归类或系统字段不参与分类（2026-11-12 需求）：先按字段级语义把这两类剔掉，
+     * 剩下的注释与字段名才进入领域打分、子领域细化和十类维度归类。
+     * fieldNames 与 fieldComments 长度不等时按较长的一边走，缺的一侧当空串。
+     */
+    private static Fields classifiable(Input in) {
+        Fields f = new Fields();
+        int n = Math.max(in.fieldComments.size(), in.fieldNames.size());
+        for (int i = 0; i < n; i++) {
+            String cn = i < in.fieldComments.size() ? nz(in.fieldComments.get(i)) : "";
+            String en = i < in.fieldNames.size() ? nz(in.fieldNames.get(i)) : "";
+            Infer.Column probe = new Infer.Column();
+            probe.field = en;
+            probe.comment = cn;
+            probe.type = "VARCHAR(255)";
+            if (!FieldClass.of(probe).business) {
+                continue;
+            }
+            f.comments.add(cn);
+            f.names.add(en);
+            if (!cn.isEmpty()) { f.joined.append(cn).append(' '); }
+            if (!en.isEmpty()) { f.joined.append(en).append(' '); }
+        }
+        return f;
+    }
+
     private static Cls classify(Input in) {
         Cls c = new Cls();
         c.system = nz(in.system);
         String stem = stem(in.fileName);
-        // 字段注释之外把字段名也算进来：英文列名（person_no、fuel_qty）是判领域/子领域的真证据，
-        // 只读注释会把一整张纯英文列名的表判成待确认
-        String fields = join(in.fieldComments) + " " + join(in.fieldNames);
+        // 分类只看「能归类的业务字段」：字段注释之外把字段名也算进来（英文列名 person_no、
+        // fuel_qty 是真证据），但系统审计列与未归类列先剔掉，不让它们把表带偏。
+        Fields cf = classifiable(in);
+        String fields = cf.joined.toString();
         String cn = nz(in.tableCn).isEmpty() ? stem : in.tableCn.trim();
 
         if (Taxonomy.isMeta(cn, in.tableEn)) {
@@ -125,7 +162,7 @@ public final class DomainGuess {
                 c.sub = best;
                 c.basis += "；表名/字段命中「" + hit + "」细化到「" + best + "」";
             }
-            c.dims = Taxonomy.dims(in.fieldComments, in.fieldNames, MAX_DIMS);
+            c.dims = Taxonomy.dims(cf.comments, cf.names, MAX_DIMS);
             if (c.dims.isEmpty()) {
                 c.warning = in.tableEn + " 未见十类对象维度关键词，obj 层不产这张表";
             }

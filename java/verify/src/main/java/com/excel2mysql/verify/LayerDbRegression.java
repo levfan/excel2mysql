@@ -109,9 +109,10 @@ public final class LayerDbRegression {
             // entity_id 必须是 UUID 且非空、src_entity_id 保留来源
             String entityId = scalar(db, "SELECT `entity_id` FROM `" + OBJ + "`.`dim_material` LIMIT 1");
             if (entityId == null || entityId.length() < 32) { bad++; System.out.println("x [ERROR] UUID | obj entity_id 不像 UUID：" + entityId); }
-            // ads 模板聚合须真的执行成功：ads_rc 恰好 1 行（锁 execute 不因 "--" 前缀把注释后的 INSERT 丢掉）
-            long adsRows = count(db, ADS, "ads_rc");
-            if (adsRows != 1) { bad++; System.out.println("x [ERROR] COUNT | ads ads_rc 期望 1 行 实际 " + adsRows); }
+            // ads 模板聚合须真的执行成功：六个主题固定建表，映射里的旧主题名 rc 归入后勤综合主题，
+            // ads_general 恰好 1 行（锁 execute 不因 "--" 前缀把注释后的 INSERT 丢掉）
+            long adsRows = count(db, ADS, "ads_general");
+            if (adsRows != 1) { bad++; System.out.println("x [ERROR] COUNT | ads ads_general 期望 1 行 实际 " + adsRows); }
         } finally {
             for (String d : created) {
                 try { exec(db, "DROP DATABASE IF EXISTS `" + d + "`"); } catch (Exception ignore) { }

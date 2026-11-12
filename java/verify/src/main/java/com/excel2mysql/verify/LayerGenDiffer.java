@@ -3,6 +3,7 @@ package com.excel2mysql.verify;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.LayerGen;
 import com.excel2mysql.core.MappingFile;
+import com.excel2mysql.core.Taxonomy;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -57,6 +58,22 @@ public final class LayerGenDiffer {
             // 单来源时允许无 UNION ALL，但 UUID() 必须在
             if (!obj.transformSql.contains("UUID()")) { bad++; shown.add("obj 缺 entity_id=UUID()"); }
         }
+        // 十类官方维度是固定清单：没命中源表的类也要把空维表建出来，不能只交命中的那一张
+        for (String dim : LayerGen.DIM_PK.keySet()) {
+            if (!obj.ddlSql.contains("CREATE TABLE `" + dim + "`")) {
+                bad++; shown.add("obj 缺十类固定维表 " + dim);
+            }
+        }
+        if (obj.tableCount < LayerGen.DIM_PK.size()) {
+            bad++; shown.add("obj 表数少于十类 期望 >= " + LayerGen.DIM_PK.size()
+                    + " 实际 " + obj.tableCount);
+        }
+        if (!obj.warnings.toString().contains("已建空维表待核")) {
+            bad++; shown.add("obj 未命中的维度没写空维表待核日志");
+        }
+        if (obj.transformSql.contains("INSERT INTO `dim_org`")) {
+            bad++; shown.add("obj 未命中的 dim_org 不该产数据组装语句");
+        }
 
         // ads：模板聚合只 FROM dom（188 口径待核，obj JOIN 未产，注释与 FROM 必须一致）＋表 6-4 字段
         LayerGen.LayerOutput ads = LayerGen.genLayer(LayerGen.Layer.ADS, m, src, o);
@@ -69,9 +86,9 @@ public final class LayerGenDiffer {
         }
         // 同一主题装了多个领域目标表时，一个目标一条 INSERT：旧写法只取组里第一张表，
         // 其余领域的表根本没进汇总；idx_value 与 dim_key_json 也要落，不然指标表只有行数没有值。
-        if (countOccurrences(ads.transformSql, "INSERT INTO `ads_rc`") != 2) {
+        if (countOccurrences(ads.transformSql, "INSERT INTO `ads_general`") != 2) {
             bad++; shown.add("ads 同主题两个领域目标表应各一条 INSERT，实际 "
-                    + countOccurrences(ads.transformSql, "INSERT INTO `ads_rc`"));
+                    + countOccurrences(ads.transformSql, "INSERT INTO `ads_general`"));
         }
         if (!ads.transformSql.contains("COUNT(*) AS `idx_value`")) {
             bad++; shown.add("ads 的 idx_value 不是按行数模板填的");
@@ -83,35 +100,54 @@ public final class LayerGenDiffer {
         if (ads.transformSql.contains("dwd_unknown")) {
             bad++; shown.add("ads FROM 兜底成了 dwd_unknown");
         }
+        // 六个主题固定产出（2026-11-12 需求）：不能再只生成命中的那 3 张主题表
+        if (ads.tableCount != com.excel2mysql.core.Taxonomy.THEMES.length) {
+            bad++; shown.add("ads 主题表数 期望 6 实际 " + ads.tableCount);
+        }
+        for (String t : com.excel2mysql.core.Taxonomy.THEMES) {
+            String table = com.excel2mysql.core.Taxonomy.themeTable(t);
+            if (!ads.ddlSql.contains("CREATE TABLE `" + table + "`")) {
+                bad++; shown.add("ads 缺主题表 " + t + "（" + table + "）");
+            }
+        }
+        // 源批次号＝源表 id：obj/dom 回指主键，ads 从 dom 同名列聚合回填
+        if (!dom.transformSql.contains("`id` AS `src_batch_id`")
+                || !obj.transformSql.contains("`id` AS `src_batch_id`")) {
+            bad++; shown.add("obj/dom 的 src_batch_id 没取源表 id");
+        }
+        if (!ads.transformSql.contains("MAX(`src_batch_id`)")) {
+            bad++; shown.add("ads 的 src_batch_id 没从 dom 聚合回填");
+        }
 
-        // ---- 合并护栏：领域/子领域是分类不是物理合并键，映射显式同目标也必须有上限 ----
-        // 11 张源表写同一个目标表：超来源数上限，整组拒绝，不产 DDL/DML
+        // ---- 合并护栏：超限不再拒绝，改成自动拆成每个领域目标表 ----
+        // 11 张源表写同一个目标表：超来源数上限 → 每张源表一张能建出来的领域目标表
         MappingFile gm = guardMapping(11, 1);
         List<LayerGen.SourceTable> gs = guardSource(11, 1);
         LayerGen.LayerOutput gdom = LayerGen.genLayer(LayerGen.Layer.DOM, gm, gs, o);
-        if (gdom.tableCount != 0 || gdom.ddlSql.contains("CREATE TABLE `dwd_guard_wide`")) {
-            bad++; shown.add("超过 " + LayerGen.MAX_MERGE_SOURCES + " 源上限的显式合并仍产出了 dom 表");
+        if (gdom.tableCount < 11 || !gdom.ddlSql.contains("CREATE TABLE `dwd_guard_wide`")) {
+            bad++; shown.add("超来源数的合并没自动拆成每源一张 dom 表，表数 " + gdom.tableCount);
         }
-        if (!hasWarning(gdom, "dwd_guard_wide", "超过 " + LayerGen.MAX_MERGE_SOURCES + " 张上限")) {
-            bad++; shown.add("超来源数的合并没在警告里点名目标表与上限：" + gdom.warnings);
+        if (!hasWarning(gdom, "dwd_guard_wide", "超过 " + LayerGen.MAX_MERGE_SOURCES + " 张上限")
+                || !hasWarning(gdom, "已自动拆成")) {
+            bad++; shown.add("超来源数的合并没写清上限与自动拆表：" + gdom.warnings);
         }
-        // ads 不许引用被护栏拒掉的 dom 目标
+        // ads 要把拆出来的表都汇总上，不再有「被拒的表」可跳过
         LayerGen.LayerOutput gads = LayerGen.genLayer(LayerGen.Layer.ADS, gm, gs, o);
-        if (gads.transformSql.contains("dwd_guard_wide")) {
-            bad++; shown.add("ads 仍引用被护栏拒掉的领域目标表 dwd_guard_wide");
+        if (!gads.transformSql.contains("dwd_guard_wide")
+                || !gads.transformSql.contains("dwd_guard_wide_2")) {
+            bad++; shown.add("ads 没引用自动拆出来的领域目标表：" + firstLines(gads.transformSql, 3));
         }
-        if (!hasWarning(gads, "ads 跳过领域目标表 dwd_guard_wide")) {
-            bad++; shown.add("ads 没在警告里说明跳过了被拒的 dom 目标：" + gads.warnings);
-        }
-        // 单源但列数超上限：同样拒绝，不靠降类型/拆段兜
+        // 单源但列数超上限：同样自动拆成多张窄表，不靠整组拒绝
         MappingFile cm = guardMapping(1, 600);
         List<LayerGen.SourceTable> cs = guardSource(1, 600);
         LayerGen.LayerOutput cdom = LayerGen.genLayer(LayerGen.Layer.DOM, cm, cs, o);
-        if (cdom.tableCount != 0 || cdom.ddlSql.contains("CREATE TABLE `dwd_guard_wide`")) {
-            bad++; shown.add("超过 " + LayerGen.MAX_MERGE_COLUMNS + " 列上限的单表仍产出了 dom 表");
+        if (cdom.tableCount < 2 || !cdom.ddlSql.contains("CREATE TABLE `dwd_guard_wide`")) {
+            bad++; shown.add("超过 " + LayerGen.MAX_MERGE_COLUMNS + " 列上限的单表没拆成多张，表数 "
+                    + cdom.tableCount);
         }
-        if (!hasWarning(cdom, "dwd_guard_wide", "超过 " + LayerGen.MAX_MERGE_COLUMNS + " 列上限")) {
-            bad++; shown.add("超列数的合并没在警告里点名目标表与上限：" + cdom.warnings);
+        if (!hasWarning(cdom, "dwd_guard_wide", "超过 " + LayerGen.MAX_MERGE_COLUMNS + " 列上限")
+                || !hasWarning(cdom, "已自动拆成")) {
+            bad++; shown.add("超列数的合并没写清上限与自动拆表：" + cdom.warnings);
         }
 
         // 建表语句必须以分号终止：否则整层拼接后 splitStatements 粘连、交付 .sql 在 mysql 客户端跑不动
@@ -268,9 +304,9 @@ public final class LayerGenDiffer {
                 || !mads2.transformSql.contains("'%' AS `idx_unit`")) {
             bad++; shown.add("ads 指标单位没从注释里取出来");
         }
-        if (countOccurrences(mads2.transformSql, "INSERT INTO `ads_analysis`") != 2) {
+        if (countOccurrences(mads2.transformSql, "INSERT INTO `ads_general`") != 2) {
             bad++; shown.add("ads 两个指标应各一条 INSERT，实际 "
-                    + countOccurrences(mads2.transformSql, "INSERT INTO `ads_analysis`"));
+                    + countOccurrences(mads2.transformSql, "INSERT INTO `ads_general`"));
         }
         if (countOccurrences(mads2.transformSql, "COUNT(*) AS `idx_value`") != 0) {
             bad++; shown.add("ads 已有真实指标却仍按行数填 idx_value");
@@ -278,6 +314,46 @@ public final class LayerGenDiffer {
         if (!mads2.ddlSql.contains("`idx_value` DECIMAL(38,6)")
                 || mads2.ddlSql.contains("治理字段（表 5-3/6-4）")) {
             bad++; shown.add("ads 指标值列类型或治理字段注释没跟上");
+        }
+
+        // 老映射初稿（构建/gen_layer_mapping.py 产的那份）沿用条款 188 三框架名，
+        // 还带分号多值串。以前整批归进「后勤综合主题」，六个主题塌成一张表；现在按领域重算。
+        String legacy = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
+                + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n"
+                + "采购供应,油料,油料账,t_oil,2,id,采购供应领域,proc,油料保障,dwd_proc_oil,dim_material,"
+                + "采购供应综合主题(ca),关键词,待核,\n"
+                + "综合,人事,人员表,t_staff,2,id,综合领域,comp,科技管理,dwd_comp_tech,dim_person,"
+                + "物资储备主题(rc);数据资源综合主题(ca),关键词,待核,\n"
+                + "保障,指挥,预案表,t_plan,2,id,保障领域,guard,决策数据,dwd_guard_decision,dim_org,"
+                + "保障实力主题(rc);保障动态综合主题(ca);需求感知主题(ad),关键词,待核,\n"
+                + "设施建设,工程,工程台账,t_fac,2,id,设施建设领域,facil,工程建设,dwd_facil_project,"
+                + "dim_facility,设施资源主题(rc);设施建设综合主题(ca),关键词,待核,\n";
+        MappingFile lm = MappingFile.parseTableCsv(legacy, "legacy-theme-fixture");
+        List<LayerGen.SourceTable> lsrc = new ArrayList<LayerGen.SourceTable>(source());
+        lsrc.add(new LayerGen.SourceTable("t_plan", "预案表", cols("id", "plan_name")));
+        lsrc.add(new LayerGen.SourceTable("t_fac", "工程台账", cols("id", "proj_name")));
+        if (!"后勤保障主题".equals(Taxonomy.normalizeTheme(
+                "采购供应综合主题(ca)", "proc", "采购供应领域", "油料保障"))) {
+            bad++; shown.add("旧主题按领域重算：proc 应得后勤保障主题");
+        }
+        if (!"决策分析主题".equals(Taxonomy.normalizeTheme(
+                "保障实力主题(rc);需求感知主题(ad)", "guard", "保障领域", "决策数据"))) {
+            bad++; shown.add("旧主题按领域重算：guard/决策数据 应得决策分析主题");
+        }
+        if (!"后勤综合主题".equals(Taxonomy.normalizeTheme("后勤综合主题", "", "", ""))) {
+            bad++; shown.add("六个官方主题不该被重算改写");
+        }
+        LayerGen.LayerOutput lads = LayerGen.genLayer(LayerGen.Layer.ADS, lm, lsrc, o);
+        boolean remapped = false;
+        for (String w : lads.warnings) {
+            if (w.contains("已按领域/子领域重算到六个官方主题")) { remapped = true; }
+        }
+        if (!remapped) { bad++; shown.add("ads 没写旧主题重算日志"); }
+        for (String tbl : new String[]{"ads_support", "ads_general", "ads_decision_analysis",
+                "ads_construction_decision"}) {
+            if (!lads.transformSql.contains("INSERT INTO `" + tbl + "`")) {
+                bad++; shown.add("旧主题重算后 " + tbl + " 没产聚合语句（主题又塌成一张了）");
+            }
         }
 
         System.out.println("- [INFO] LAYER-DIFF | 不一致 " + bad + " 处");
@@ -376,7 +452,7 @@ public final class LayerGenDiffer {
         for (int i = 0; i < rows; i++) {
             body.append("保障,基础数据,守卫表").append(i).append(",s").append(i)
                     .append(',').append(fields).append(",f0,保障,DOM01,基础数据,dwd_guard_wide,")
-                    .append("dim_org,综合分析,护栏,自动识别,\n");
+                    .append("dim_org,后勤综合主题,护栏,自动识别,\n");
         }
         File f = File.createTempFile("layerdiff-guard-", ".csv");
         f.deleteOnExit();
@@ -391,7 +467,11 @@ public final class LayerGenDiffer {
         for (int i = 0; i < tables; i++) {
             List<Infer.Column> cs = new ArrayList<Infer.Column>();
             for (int f = 0; f < fields; f++) {
-                cs.add(mcol("f" + f, f == 0, false));
+                Infer.Column c = mcol("f" + f, f == 0, false);
+                // 给非主键列写可识别的中文注释：否则全被判成「未归类」跳过，
+                // 600 列夹具就测不到「列数超上限要按列拆表」这条路径
+                if (f > 0) { c.comment = "业务列" + f; }
+                cs.add(c);
             }
             out.add(new LayerGen.SourceTable("s" + i, "守卫表" + i, cs));
         }
@@ -414,8 +494,8 @@ public final class LayerGenDiffer {
                 + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
         // 两张源表字段互缺（t_oil 无 log_id/amount/note、t_oil_log 无 name），却同归一张领域表、同喂一个维度
         String body =
-                "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_multi_oil,dim_material,rc,关键词,待核,\n"
-                + "采购供应,油料,油料出入库流水,t_oil_log,3,log_id,采购供应,proc,油料保障,dwd_multi_oil,dim_material,rc,关键词,待核,\n";
+                "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_multi_oil,dim_material,后勤综合主题,关键词,待核,\n"
+                + "采购供应,油料,油料出入库流水,t_oil_log,3,log_id,采购供应,proc,油料保障,dwd_multi_oil,dim_material,后勤综合主题,关键词,待核,\n";
         File f = File.createTempFile("layerdiff-multi-", ".csv");
         f.deleteOnExit();
         Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
@@ -448,7 +528,7 @@ public final class LayerGenDiffer {
     private static MappingFile measureMapping() throws IOException {
         String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
                 + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
-        String body = "采购供应,油料,油料账,t_m,5,id,采购供应,proc,油料保障,dwd_meas,dim_material,综合分析,关键词,待核,\n";
+        String body = "采购供应,油料,油料账,t_m,5,id,采购供应,proc,油料保障,dwd_meas,dim_material,后勤综合主题,关键词,待核,\n";
         File f = File.createTempFile("layerdiff-measure-", ".csv");
         f.deleteOnExit();
         Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);
@@ -494,8 +574,8 @@ public final class LayerGenDiffer {
         String header = "系统,子领域,表中文名,表英文名,字段数,主键字段,目标领域,领域码,领域子类,"
                 + "领域目标表,涉及对象维度,主题归属,分类依据,映射状态,备注\n";
         String body =
-                "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,rc,关键词,待核,\n"
-                + "综合,人事,人员表,t_staff,2,id,综合,comp,科技管理,dwd_comp_tech,dim_person,rc,关键词,待核,\n";
+                "采购供应,油料,油料账,t_oil,2,id,采购供应,proc,油料保障,dwd_proc_oil,dim_material,后勤综合主题,关键词,待核,\n"
+                + "综合,人事,人员表,t_staff,2,id,综合,comp,科技管理,dwd_comp_tech,dim_person,后勤综合主题,关键词,待核,\n";
         File f = File.createTempFile("layerdiff-", ".csv");
         f.deleteOnExit();
         Writer w = new OutputStreamWriter(new FileOutputStream(f), StandardCharsets.UTF_8);

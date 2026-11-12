@@ -5,7 +5,8 @@ import java.util.List;
 
 /**
  * 大数据指标条款里的分类体系：条款 184 的领域与子领域、条款 183 的十类对象维度、
- * 条款 188 的三个主题。第四页的自动映射全部从这里取词，不在判定代码里散着写业务名词。
+ * 条款 188 的主题（业务方确认的六个主题，取代原三主题框架，指标口径仍待核）。
+ * 第四页的自动映射全部从这里取词，不在判定代码里散着写业务名词。
  *
  * <p>领域码是按条款顺序钉死的（DOM01 保障 … DOM07 设施建设），不是按首次出现编号：
  * 同一份源表换个顺序拖进来，领域码与目标表名都不许变。
@@ -34,14 +35,95 @@ public final class Taxonomy {
             new Domain("设施建设", "DOM07", new String[]{"规划计划", "工程建设", "住房土地", "工程设施", "住房管理"}),
     };
 
-    /** 条款 188 的三个主题。顺序就是 ads 建表的顺序。 */
-    public static final String[] THEMES = {"后勤资源掌控", "综合分析", "辅助决策"};
+    /**
+     * 业务方确认的六个主题（2026-11-12 需求）。顺序就是 ads 建表的顺序，
+     * 也是「生成主题层应该有 6 个主题」的验收口径：六张主题表固定产出，
+     * 不以某张源表恰好没命中为理由少建。条款 188 原文的「后勤资源掌控／综合分析／辅助决策」
+     * 是资源体系框架，不是这里的建表清单；具体指标口径仍待业务方逐条核。
+     */
+    public static final String[] THEMES = {
+            "决策分析主题", "后勤保障决策主题", "后勤专业主题",
+            "后勤建设管理决策主题", "后勤保障主题", "后勤综合主题",
+    };
+
+    /** 映射里写了六个主题之外的旧名/自定义名时统一归入这一张，并在日志点名待核。 */
+    public static final String DEFAULT_THEME = "后勤综合主题";
 
     /** 条款 183 的十类对象维度，与 {@link LayerGen#DIM_PK} 同一套键。 */
     public static final String[] DIMS = {
             "dim_org", "dim_material", "dim_fund_account", "dim_facility", "dim_person",
             "dim_supply_standard", "dim_policy", "dim_geo", "dim_code_info", "dim_code_it",
     };
+
+    /**
+     * 条款 183 的十类对象中文指标名，顺序与 {@link #DIMS} 一一对应。
+     * obj 层「按这 10 类建对应的表」时写进表注释与日志，让人一眼认得出是哪一类。
+     */
+    public static final String[] DIM_CN = {
+            "组织机构", "物资", "经费科目", "基础设施", "人员",
+            "供应保障标准", "政策法规", "地理环境", "信息分类与代码", "信息技术标准",
+    };
+
+    /** 维度键 → 中文类别名；不是官方键返回空串。 */
+    public static String dimCn(String dim) {
+        for (int i = 0; i < DIMS.length; i++) {
+            if (DIMS[i].equals(dim)) { return DIM_CN[i]; }
+        }
+        return "";
+    }
+
+    /** 是否六个官方主题之一。 */
+    public static boolean isTheme(String theme) {
+        if (theme == null) { return false; }
+        for (String t : THEMES) {
+            if (t.equals(theme.trim())) { return true; }
+        }
+        return false;
+    }
+
+    /**
+     * 老映射文件（构建/gen_layer_mapping.py 产的「层间映射初稿.csv」）用的是英文短码，
+     * 本项目 DOMAINS 用 DOM01..DOM07；两套都认，免得旧文件载入后领域判不出来。
+     */
+    private static final String[][] LEGACY_DOMAIN_CODES = {
+            {"guard", "保障"}, {"comp", "综合"}, {"fin", "财务"}, {"proc", "采购供应"},
+            {"med", "卫生勤务"}, {"trans", "运输投送"}, {"facil", "设施建设"},
+            {"DOM01", "保障"}, {"DOM02", "综合"}, {"DOM03", "财务"}, {"DOM04", "采购供应"},
+            {"DOM05", "卫生勤务"}, {"DOM06", "运输投送"}, {"DOM07", "设施建设"},
+    };
+
+    /** 领域码 → 条款 184 的领域名；认不出返回空串。 */
+    public static String domainByCode(String code) {
+        String c = code == null ? "" : code.trim();
+        for (String[] p : LEGACY_DOMAIN_CODES) {
+            if (p[0].equalsIgnoreCase(c)) { return p[1]; }
+        }
+        return "";
+    }
+
+    /** 是否七大领域之一。 */
+    public static boolean isDomain(String name) {
+        if (name == null) { return false; }
+        for (Domain d : DOMAINS) {
+            if (d.name.equals(name.trim())) { return true; }
+        }
+        return false;
+    }
+
+    /**
+     * 主题归一化：六个官方主题原样用；老映射里的三框架名／带 (rc)(ca)(ad) 后缀／
+     * 分号串多值（如「物资储备主题(rc);数据资源综合主题(ca)」）一律按领域＋子领域重算。
+     *
+     * <p>这里刻意不把旧值整体塞进 DEFAULT_THEME：那会让 312 行映射全落进「后勤综合主题」，
+     * 六个主题塌成一张表，主题分类等于没做。老口径只是历史写法，归口规则仍以 themeOf 为准。
+     */
+    public static String normalizeTheme(String raw, String code, String domain, String sub) {
+        if (isTheme(raw)) { return raw.trim(); }
+        String d = domain == null ? "" : domain.trim();
+        if (d.endsWith("领域")) { d = d.substring(0, d.length() - 2).trim(); }
+        if (!isDomain(d)) { d = domainByCode(code); }
+        return themeOf(d, sub);
+    }
 
     /**
      * 维度词：字段注释与字段名里出现这些词，就把该维度记成这张表的涉及对象。
@@ -72,10 +154,13 @@ public final class Taxonomy {
                     + "出生地 出生日期 政治面貌 军衔 警衔 身份证 护照 手机号 手机号码 电话号码 "
                     + "联系电话 座机 邮箱 电子邮箱 学历 学位 毕业院校 职务 职位 职级 职称 岗位 "
                     + "年龄 工龄 军龄 婚姻状况 健康状况 国籍 照片 头像 身高 体重 "
+                    + "疗养员 疗养对象 伤病员 患者 就诊人 体检人 受检人 服务对象 保障对象 "
+                    + "咨询师 评价人 评估人 调查对象 被调查人 随访人 陪护人 "
                     + "person personnel staff employee officer soldier nurse doctor physician "
                     + "driver contact applicant approver reviewer operator manager member gender "
                     + "sex nationality ethnicity birthday birthdate phone mobile email position "
-                    + "rank occupation education degree avatar photo"},
+                    + "rank occupation education degree avatar photo "
+                    + "convalescent patient counselor evaluator assessor respondent consultee"},
             {"dim_supply_standard", "标准 定额 供应标准 配发 规范 限额 基数 标准值 定额值 "
                     + "配发标准 保障标准 "
                     + "standard quota norm specification"},
@@ -268,32 +353,45 @@ public final class Taxonomy {
         return false;
     }
 
-    /** 条款 188：先按领域分主题，保障的实力量/决策量进辅助决策，其余保障与综合进综合分析。 */
+    /**
+     * 六个主题按（领域，子领域）归口，判法写死在这里，不在生成器里散着 if：
+     * 决策类走决策分析/保障决策/建设管理决策，专业勤务走后勤专业，
+     * 保障实体走后勤保障，综合与财务走后勤综合。归属是初稿，口径待业务方核。
+     */
     public static String themeOf(String domain, String sub) {
-        if ("保障".equals(domain)) {
-            return ("实力数据".equals(sub) || "决策数据".equals(sub)) ? "辅助决策" : "综合分析";
+        String d = domain == null ? "" : domain;
+        String s = sub == null ? "" : sub;
+        if ("设施建设".equals(d)) { return "后勤建设管理决策主题"; }
+        if ("综合".equals(d) || "财务".equals(d)) { return "后勤综合主题"; }
+        if ("卫生勤务".equals(d) || "运输投送".equals(d)) { return "后勤专业主题"; }
+        if ("采购供应".equals(d)) {
+            return "采购保障".equals(s) ? "后勤专业主题" : "后勤保障主题";
         }
-        if ("综合".equals(domain)) {
-            return "综合分析";
+        if ("保障".equals(d)) {
+            if ("决策数据".equals(s)) { return "决策分析主题"; }
+            if ("实力数据".equals(s)) { return "后勤保障主题"; }
+            return "后勤保障决策主题";
         }
-        return "后勤资源掌控";
+        return DEFAULT_THEME;
     }
 
-    /** ads 表名：三个条款主题给固定英文名，自定义主题按字母数字清洗。 */
+    /** ads 表名：六个官方主题给固定英文名；条款 188 的三个框架名留作历史映射兼容。 */
     public static String themeTable(String theme) {
-        if ("后勤资源掌控".equals(theme)) {
-            return "ads_logistics_resource";
-        }
-        if ("综合分析".equals(theme)) {
-            return "ads_analysis";
-        }
-        if ("辅助决策".equals(theme)) {
-            return "ads_decision";
-        }
+        String t = theme == null ? "" : theme.trim();
+        if ("决策分析主题".equals(t)) { return "ads_decision_analysis"; }
+        if ("后勤保障决策主题".equals(t)) { return "ads_support_decision"; }
+        if ("后勤专业主题".equals(t)) { return "ads_specialty"; }
+        if ("后勤建设管理决策主题".equals(t)) { return "ads_construction_decision"; }
+        if ("后勤保障主题".equals(t)) { return "ads_support"; }
+        if ("后勤综合主题".equals(t)) { return "ads_general"; }
+        // 旧映射文件仍可能写条款 188 的三框架名，别让它落进 ads_theme 撞成同一张表
+        if ("后勤资源掌控".equals(t)) { return "ads_logistics_resource"; }
+        if ("综合分析".equals(t)) { return "ads_analysis"; }
+        if ("辅助决策".equals(t)) { return "ads_decision"; }
         StringBuilder sb = new StringBuilder();
-        String t = theme == null ? "" : theme.toLowerCase();
-        for (int i = 0; i < t.length(); i++) {
-            char c = t.charAt(i);
+        String raw = theme == null ? "" : theme.toLowerCase();
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
             if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
                 sb.append(c);
             }

@@ -2849,7 +2849,7 @@ public final class GuiMain {
         if (!"dwd_slsj_ren_yuan_xin_xi".equals(a.map.domainTarget)) {
             problems.add("一源一表的领域目标表名不对： " + a.map.domainTarget);
         }
-        if (!"辅助决策".equals(a.map.theme)) {
+        if (!"后勤保障主题".equals(a.map.theme)) {
             problems.add("主题没跟领域/子领域走：" + a.map.theme);
         }
         if (!a.basis.contains("领域词") || !a.basis.contains("人员")) {
@@ -2875,7 +2875,7 @@ public final class GuiMain {
         if (!rf.basis.contains("先验") || !rf.basis.contains("细化")) {
             problems.add("先验与细化两段依据没写全：" + rf.basis);
         }
-        if (!"DOM04".equals(rf.map.domainCode) || !"后勤资源掌控".equals(rf.map.theme)) {
+        if (!"DOM04".equals(rf.map.domainCode) || !"后勤保障主题".equals(rf.map.theme)) {
             problems.add("采购供应的码/主题不对：" + rf.map.domainCode + " / " + rf.map.theme);
         }
         if (!"dwd_bzbz_t_bz".equals(rf.map.domainTarget)) {
