@@ -151,6 +151,9 @@ public final class GuiMain {
                                             com.excel2mysql.core.DmReader.driverDir().getPath()))) {
                         problems.add("驱动状态那一格没把话说全：" + dp.driverText());
                     }
+                    // 先把模式名填上：有没有随包驱动走的是两条分支，
+                    // 灌结构前不填模式，摘要与保存名就各自少一截，判不出同一件事
+                    dp.schemaFieldForSelftest("SYSDBA");
                     java.util.List<com.excel2mysql.core.DmMysql.Table> three =
                             new java.util.ArrayList<com.excel2mysql.core.DmMysql.Table>();
                     three.add(dmFixture());

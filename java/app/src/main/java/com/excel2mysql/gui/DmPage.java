@@ -150,7 +150,9 @@ public final class DmPage extends JPanel {
     }
 
     private void markStale() {
-        if (!loadedFrom.isEmpty() && !stale) {
+        // 判据是"手上有结构、参数又改了"，不能挂在地基 loadedFrom 上：
+        // 模式名没记住（自检直灌结构）时同样该拦，否则改了参数照拿旧结构生成
+        if (!tables.isEmpty() && !stale) {
             stale = true;
             refreshSummary();
         }
@@ -165,8 +167,10 @@ public final class DmPage extends JPanel {
         if (tables.isEmpty()) {
             sb.append("未连接达梦");
         } else {
-            sb.append("已读回 ").append(tables.size()).append(" 张（模式 ")
-                    .append(loadedFrom).append("）");
+            sb.append("已读回 ").append(tables.size()).append(" 张");
+            if (!loadedFrom.isEmpty()) {
+                sb.append("（模式 ").append(loadedFrom).append("）");
+            }
             if (!serverVersion.isEmpty()) {
                 sb.append("｜").append(serverVersion);
             }
