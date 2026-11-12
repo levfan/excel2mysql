@@ -6,6 +6,7 @@ import com.excel2mysql.core.ImportParse;
 import com.excel2mysql.core.Infer;
 import com.excel2mysql.core.LayerGen;
 import com.excel2mysql.core.MappingFile;
+import com.excel2mysql.core.Taxonomy;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -109,10 +110,29 @@ public final class LayerDbRegression {
             // entity_id 必须是 UUID 且非空、src_entity_id 保留来源
             String entityId = scalar(db, "SELECT `entity_id` FROM `" + OBJ + "`.`dim_material` LIMIT 1");
             if (entityId == null || entityId.length() < 32) { bad++; System.out.println("x [ERROR] UUID | obj entity_id 不像 UUID：" + entityId); }
-            // ads 模板聚合须真的执行成功：六个主题固定建表，映射里的旧主题名 rc 归入后勤综合主题，
-            // ads_general 恰好 1 行（锁 execute 不因 "--" 前缀把注释后的 INSERT 丢掉）
-            long adsRows = count(db, ADS, "ads_general");
-            if (adsRows != 1) { bad++; System.out.println("x [ERROR] COUNT | ads ads_general 期望 1 行 实际 " + adsRows); }
+            // ads 模板聚合须真的执行成功。期望表名现算：旧写法 rc 不再整批塌进「后勤综合主题」，
+            // 而是按领域＋子领域重算——采购供应/油料保障 落「后勤保障主题」→ ads_support。
+            // 口径再调时这条断言跟着走，不会再出现"测试守着旧行为、产品已按新口径跑"的假红。
+            String adsTheme = Taxonomy.normalizeTheme("rc", "proc", "采购供应", "油料保障");
+            String adsTable = Taxonomy.themeTable(adsTheme);
+            long adsRows = count(db, ADS, adsTable);
+            if (adsRows != 1) {
+                bad++; System.out.println("x [ERROR] COUNT | ads " + adsTable + "（主题 " + adsTheme
+                        + "）期望 1 行 实际 " + adsRows);
+            }
+            // 六张主题表都要建出来：没有领域表可汇总的那几类只建空表，但不许少交一张
+            for (String theme : Taxonomy.THEMES) {
+                if (count(db, ADS, Taxonomy.themeTable(theme)) < 0) {
+                    bad++; System.out.println("x [ERROR] ADS-THEME | 主题表没建出来：" + theme
+                            + " → " + Taxonomy.themeTable(theme));
+                }
+            }
+            // 「旧主题名一律塌进综合主题」正是这一批改掉的行为，这条守着别再塌回去
+            long general = count(db, ADS, "ads_general");
+            if (general != 0) {
+                bad++; System.out.println("x [ERROR] ADS-THEME | 旧主题名 rc 又塌进 ads_general："
+                        + general + " 行");
+            }
         } finally {
             for (String d : created) {
                 try { exec(db, "DROP DATABASE IF EXISTS `" + d + "`"); } catch (Exception ignore) { }
