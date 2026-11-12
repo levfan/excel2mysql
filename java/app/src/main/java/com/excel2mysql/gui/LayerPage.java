@@ -74,6 +74,14 @@ public final class LayerPage extends JPanel {
     /** 免配模板那条路的入口：拖进来的是标准/简易 Excel 或装它们的 ZIP。 */
     private final DropArea fileDrop = new DropArea(this::guessFromFiles, this::chooseGuessFiles,
             DropArea.LAYER_HINT, null);
+    /**
+     * 日志框右上角那颗清扫键：读源库结构、生成三层都会往日志里写几百行，
+     * 上一轮的行留在框里，下一轮真要找报错就得靠滚。只清这一页的记录，
+     * 映射、表格与已生成的脚本一概不动（与第一、二、三页同一口径）。
+     */
+    private final JButton clearLogBtn = new JButton("清除日志");
+    /** 清单 / 日志的分隔条：日志段默认压到最小行数，拖它才放大（自检量高度用）。 */
+    private javax.swing.JSplitPane logSplit;
     private final JButton readSrcBtn = new JButton("读源库结构");
     /** 读回源结构后按条款 184/183/188 自动铺一份映射；不点它时读结构也会自动跑一遍（内置模板态）。 */
     private final JButton autoMapBtn = new JButton("按源库结构自动映射");
@@ -122,8 +130,16 @@ public final class LayerPage extends JPanel {
                 }
             }
         });
-        add(new JScrollPane(table), BorderLayout.CENTER);
-        add(buildBottom(), BorderLayout.SOUTH);
+        // 清单与「开关＋三层生成键＋日志」之间一条可拖的分隔条：日志段默认只有自己的最小高度，
+        // 要读长日志就把分隔条往上拖，多出来的高度都由清单让出来（第一、二、三页同一套）。
+        // 不给固定高度：日志一行没写时也不该白占版面。
+        logSplit = new javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT,
+                new JScrollPane(table), buildBottom());
+        logSplit.setDividerSize(UiScale.px(6));
+        logSplit.setBorder(null);
+        // 余量全给上面的清单：日志段不会自己长大
+        logSplit.setResizeWeight(1.0);
+        add(logSplit, BorderLayout.CENTER);
         objBtn.addActionListener(e -> generate(LayerGen.Layer.OBJ));
         domBtn.addActionListener(e -> generate(LayerGen.Layer.DOM));
         adsBtn.addActionListener(e -> generate(LayerGen.Layer.ADS));
@@ -427,13 +443,25 @@ public final class LayerPage extends JPanel {
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
         bar.add(writeMode);
         bar.add(objBtn); bar.add(domBtn); bar.add(adsBtn);
-        p.add(bar, BorderLayout.NORTH);
+        // 日志区这一排：左边是写入开关与三层生成键，右边贴「清除日志」——
+        // 与第一、二、三页同一位置（日志框上方贴右），不再单占一行高度。
+        JPanel logHead = new JPanel(new BorderLayout());
+        logHead.add(bar, BorderLayout.CENTER);
+        JPanel clearRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(6), UiScale.px(2)));
+        clearLogBtn.setToolTipText("清空这一页的日志，映射、表格与已生成的脚本都不动");
+        clearLogBtn.addActionListener(e -> logPanel.clearLog());
+        clearRow.add(clearLogBtn);
+        logHead.add(clearRow, BorderLayout.EAST);
+        p.add(logHead, BorderLayout.NORTH);
         JScrollPane logScroll = new JScrollPane(logPanel);
-        // 高度不能跟着日志内容走：JTextPane 的 preferred 高度随行数无限涨，这块又在
-        // BorderLayout.SOUTH 上，读一次源库写几百行时会按 preferred 撑到上万像素、起点
-        // 跑到窗口上方，把中间的表格和上面的拖拽区整个盖住。钉死高度后日志多长都只在这个
-        // 框里滚（第一、三页靠 JSplitPane 的分隔条天然有这层约束，这一页没有分栏）。
-        logScroll.setPreferredSize(new java.awt.Dimension(0, UiScale.px(200)));
+        // 高度既不写死、也不跟着内容走：日志段默认压在自己的最小行数（4 行）上，
+        // 要读长日志就把它与清单之间那条分隔条往上拖——与第一、二、三页同一口径。
+        // 之前这里钉了 200px，日志一行没写也白占半屏，用户报「日志撑满整个工具」。
+        logScroll.setMinimumSize(new java.awt.Dimension(UiScale.px(300),
+                logPanel.getMinimumSize().height));
+        // 视口默认是白底、日志底色是浅灰：日志行不满一框时，下面那截白底看着就是
+        // 一大块空白面板。把视口底色对齐日志底色，整框才是一整块。
+        logScroll.getViewport().setBackground(logPanel.getBackground());
         p.add(logScroll, BorderLayout.CENTER);
         return p;
     }
@@ -983,6 +1011,10 @@ public final class LayerPage extends JPanel {
     }
 
     public LogPanel logPanel() { return logPanel; }
+    /** 「清除日志」那一颗：自检按用户的方式点它，不直接调 clearLog。 */
+    public JButton clearLogButton() { return clearLogBtn; }
+    /** 清单 / 日志那条分隔条：自检量日志段是不是压在最小高度上。 */
+    public javax.swing.JSplitPane logSplit() { return logSplit; }
     /** 免配模板那条路的拖拽区：自检按用户的方式把文件丢进去。 */
     public DropArea layerDropArea() { return fileDrop; }
     public JButton objButton() { return objBtn; }

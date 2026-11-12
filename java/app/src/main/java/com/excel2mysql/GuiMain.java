@@ -237,6 +237,8 @@ public final class GuiMain {
                     if (!dp.saveTo(dmSql) || dmSql.length() <= 0L) {
                         problems.add("第五页保存 .sql 没落盘：" + dmSql.getPath());
                     }
+                    // 日志段：几百行也不许长高、不许白占版面（用户报「日志撑满整个工具」）
+                    dm_log_bounded(frame, dp, problems);
                 }
                 // 第四页：页签存在、三按钮默认灰（未载入映射）、ads 依赖锁
                 if (frame.layerPage() == null) {
@@ -357,6 +359,8 @@ public final class GuiMain {
                     layer_db_guard(lp, frame, problems);
                     // RES_LAYER 忙时这一页会改共享状态的入口必须全灰（生成 worker 正读着那份映射与源结构）
                     layer_busy_lock(lp, frame, problems);
+                    // 第四、五页的「清除日志」：只清本页，别的页签与页面上的其它东西一概不动
+                    log_clear_buttons(frame, lp, problems);
                     // 产物根用完随手清掉：createTempDirectory 不会自己删，而 deleteOnExit 不递归、
                     // 底下那层 layer_*/ 留着它就删不掉父目录（上面那份临时映射夹具 mf 是单文件，deleteOnExit 够用）
                     deleteTree(outRoot);
@@ -3270,6 +3274,50 @@ public final class GuiMain {
         if (!lp.loadMappingButton().isEnabled() || !lp.readSourceButton().isEnabled()) {
             problems.add("任务收了摊，「载入映射文件」／「读源库结构」却没恢复可点");
         }
+    }
+
+    /**
+     * 第四、五页的「清除日志」：点它只清本页，别的页签的记录与页面上的映射、清单、
+     * 已生成的 DDL 一概不动。第一、二、三页早就有这颗键，这两页原本没有——
+     * 读一次源库结构就是几百行，上一轮的行留在框里，下一轮找报错只能靠滚。
+     *
+     * <p>验的是真按钮（doClick 走监听器同一条路），不是直接调 clearLog：
+     * 自检要证明的是"界面上这颗键管用"，不是"这个方法管用"。
+     */
+    private static void log_clear_buttons(MainFrame frame, com.excel2mysql.gui.LayerPage lp,
+                                          List<String> problems) {
+        com.excel2mysql.gui.DmPage dp = frame.dmPage();
+        if (dp == null) {
+            problems.add("第五页 dmPage 没挂上，「清除日志」无从验起");
+            return;
+        }
+        // 三个日志框先各有内容：空框上点清除，什么都证明不了
+        frame.logPanel().log("+ [OK] IMPORT | 清除日志只清本页的标记行");
+        lp.logPanel().log("+ [OK] LAYER | 待清除的标记行");
+        dp.logPanel().log("+ [OK] DM | 待清除的标记行");
+        if (lp.logPanel().lineCount() == 0 || dp.logPanel().lineCount() == 0) {
+            problems.add("第四/五页日志写了标记行却还是空的，清除按钮验不了");
+            return;
+        }
+        lp.clearLogButton().doClick();
+        if (lp.logPanel().lineCount() != 0) {
+            problems.add("第四页点了「清除日志」还剩 " + lp.logPanel().lineCount() + " 行");
+        }
+        if (!frame.logPanel().text().contains("清除日志只清本页的标记行")) {
+            problems.add("第四页清除日志把第一页的记录一起清了");
+        }
+        if (dp.logPanel().lineCount() == 0) {
+            problems.add("第四页清除日志把第五页的记录也清了");
+        }
+        dp.clearLogButton().doClick();
+        if (dp.logPanel().lineCount() != 0) {
+            problems.add("第五页点了「清除日志」还剩 " + dp.logPanel().lineCount() + " 行");
+        }
+        if (!frame.logPanel().text().contains("清除日志只清本页的标记行")) {
+            problems.add("第五页清除日志把第一页的记录一起清了");
+        }
+        System.out.println("- [INFO] GUI-SELFTEST | 第四、五页「清除日志」各清本页，"
+                + "别的页签记录与页面内容都没动");
     }
 
     /**
@@ -6273,38 +6321,73 @@ public final class GuiMain {
     }
 
     /**
-     * 第四页日志区：读源库一次会写几百行，日志框不能跟着内容长高。
-     * 直接往日志文档灌几百行（entries 不动，后面的断言读的仍是真日志），
-     * 切到这一页按生产尺寸排一次版，验表格区还有高度、日志段没越到上半边。
+     * 第四页日志区：读源库一次会写几百行，日志段不能跟着内容长高，也不该在没写字时白占半屏
+     * （用户报「日志撑满整个工具」）。做法与第一、二、三页一致——日志在一条可拖分隔条下方，
+     * 默认只占它自己的最小行数（4 行）。这里先量未写字时的高度，再灌 400 行量一次，
+     * 两次数值必须一样，且都得压在最小高度那一档。
      */
     private static void layer_log_bounded(MainFrame frame, com.excel2mysql.gui.LayerPage lp,
                                           List<String> problems) {
+        frame.selectTab(3);
+        // 与生产同一条摆窗口径：setSize 管的是外框，会把后面"客户区 1650x1170"那条压红
+        com.excel2mysql.gui.Windows.clientSize(frame.getContentPane(), frame, 1100, 780);
+        frame.validate();
+        int quiet = lp.logSplit().getBottomComponent().getHeight();
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < 400; i++) {
             sb.append("+ [OK] LAYER | 表 t_").append(i)
                     .append(" → 领域「工程类」/「建设管理」\n");
         }
         lp.logPanel().setText(sb.toString());
-        frame.selectTab(3);
-        // 与生产同一条摆窗口径：setSize 管的是外框，会把后面"客户区 1650x1170"那条压红
+        frame.validate();
+        int loaded = lp.logSplit().getBottomComponent().getHeight();
+        int table = lp.logSplit().getTopComponent().getHeight();
+        if (table <= 0) {
+            problems.add("第四页日志过百行后清单区被压没了：高 " + table);
+        } else if (loaded >= table) {
+            problems.add("第四页日志段比清单还高，日志撑满了这一页：" + loaded + " vs " + table);
+        }
+        if (Math.abs(loaded - quiet) > 2) {
+            problems.add("第四页日志段跟着内容长高：" + quiet + " → " + loaded);
+        }
+        // 下限只留这排按钮与 4 行日志：写死 200px 或跟着内容涨都会越过这一档
+        if (loaded > wantPx(120)) {
+            problems.add("第四页日志段白占版面（默认应只有 4 行）：高 " + loaded);
+        }
+        frame.selectTab(0);
+        frame.validate();
+    }
+
+    /**
+     * 第五页日志区同理：清单 / DDL 正文 / 日志三段都在可拖分隔条里，日志段默认只有 4 行。
+     * 之前它裸挂在 SOUTH 上没有滚动条，读一次达梦结构（几百张表）日志会一路撑到上万像素，
+     * 把清单和正文全挤走——这是用户报的「撑满整个工具」的原始形态。
+     */
+    private static void dm_log_bounded(MainFrame frame, com.excel2mysql.gui.DmPage dp,
+                                       List<String> problems) {
+        frame.selectTab(4);
         com.excel2mysql.gui.Windows.clientSize(frame.getContentPane(), frame, 1100, 780);
         frame.validate();
-        java.awt.BorderLayout bl = (java.awt.BorderLayout) lp.getLayout();
-        java.awt.Component north = (java.awt.Component) bl.getLayoutComponent(
-                java.awt.BorderLayout.NORTH);
-        java.awt.Component center = (java.awt.Component) bl.getLayoutComponent(
-                java.awt.BorderLayout.CENTER);
-        java.awt.Component south = (java.awt.Component) bl.getLayoutComponent(
-                java.awt.BorderLayout.SOUTH);
-        if (center.getHeight() <= 0) {
-            problems.add("第四页日志过百行后表格区被压没了：高 " + center.getHeight());
+        int quiet = dp.logSplit().getBottomComponent().getHeight();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 400; i++) {
+            sb.append("+ [OK] DM | 第 ").append(i).append(" 张表 T_OIL_").append(i).append('\n');
         }
-        if (south.getY() < north.getHeight()) {
-            problems.add("第四页日志区越到上半边盖住拖拽区：y=" + south.getY()
-                    + "，顶部高 " + north.getHeight());
+        dp.logPanel().setText(sb.toString());
+        frame.validate();
+        int loaded = dp.logSplit().getBottomComponent().getHeight();
+        int table = dp.logSplit().getTopComponent().getHeight();
+        if (table <= 0) {
+            problems.add("第五页日志过百行后 DDL 正文被压没了：高 " + table);
         }
-        if (south.getPreferredSize().height > wantPx(260)) {
-            problems.add("第四页日志区高度跟着内容涨：" + south.getPreferredSize().height);
+        if (Math.abs(loaded - quiet) > 2) {
+            problems.add("第五页日志段跟着内容长高：" + quiet + " → " + loaded);
+        }
+        if (loaded > wantPx(120)) {
+            problems.add("第五页日志段白占版面（默认应只有 4 行）：高 " + loaded);
+        }
+        if (dp.logSplit().getDividerSize() != wantPx(6)) {
+            problems.add("第五页日志分隔条不是 6px：" + dp.logSplit().getDividerSize());
         }
         frame.selectTab(0);
         frame.validate();

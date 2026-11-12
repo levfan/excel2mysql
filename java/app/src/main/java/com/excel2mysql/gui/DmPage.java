@@ -66,6 +66,15 @@ public final class DmPage extends JPanel {
     /** 清单过滤：一个模式几百张表时，只找得到滚动条。 */
     private final JTextField filterBox = new JTextField(14);
     private final JButton clearFilterBtn = new JButton("清空过滤");
+    /**
+     * 日志框右上角那颗清扫键：读结构、生成、写库都会往日志里垒行，
+     * 只清这一页的记录，清单、DDL 正文与已保存的文件一概不动
+     * （与第一、二、三、四页同一位置、同一口径）。
+     */
+    private final JButton clearLogBtn = new JButton("清除日志");
+    /** 清单 / 正文、正文 / 日志两条分隔条：日志段默认压在最小行数，拖它才放大（自检量高度用）。 */
+    private javax.swing.JSplitPane bodySplit;
+    private javax.swing.JSplitPane logSplit;
     /** 视图第 n 行对应 tables 里的第几条：过滤后选中范围要靠它换算。 */
     private final List<Integer> shownRows = new ArrayList<Integer>();
     /** 结构是从哪个模式读的、读回之后连接参数又改过没有。 */
@@ -103,8 +112,16 @@ public final class DmPage extends JPanel {
         setLayout(new BorderLayout(0, UiScale.px(6)));
         add(buildTop(), BorderLayout.NORTH);
         Tables.style(table);
-        add(new JScrollPane(table), BorderLayout.CENTER);
-        add(buildBottom(), BorderLayout.SOUTH);
+        // 三段上下排，段间各一条 6px 可拖分隔条：清单 / DDL 正文 / 日志。
+        // 日志段与正文段都只在自己的最小高度起步，余量全给清单——日志一行没写时
+        // 不会白占下半屏（用户报「日志撑满整个工具」）；要读长日志就把分隔条往上拖，
+        // 与第一、二、三、四页同一口径。
+        JPanel listBox = new JPanel(new BorderLayout());
+        listBox.add(new JScrollPane(table), BorderLayout.CENTER);
+        listBox.add(buildListHead(), BorderLayout.SOUTH);
+        logSplit = logBodySplit(new JScrollPane(output), buildLogBox());
+        bodySplit = logBodySplit(listBox, logSplit);
+        add(bodySplit, BorderLayout.CENTER);
         connectBtn.addActionListener(e -> connectAndList());
         genBtn.addActionListener(e -> generate());
         saveBtn.addActionListener(e -> chooseSavePath());
@@ -248,8 +265,8 @@ public final class DmPage extends JPanel {
         return p;
     }
 
-    private JPanel buildBottom() {
-        JPanel p = new JPanel(new BorderLayout());
+    /** 清单下面那一行：摘要 + 过滤 + 清空过滤。 */
+    private JPanel buildListHead() {
         JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
         head.add(listLabel);
         filterBox.setToolTipText("<html>按表名与表注释即时过滤清单；"
@@ -259,10 +276,37 @@ public final class DmPage extends JPanel {
         Buttons.secondary(clearFilterBtn);
         clearFilterBtn.addActionListener(e -> clearFilter());
         head.add(clearFilterBtn);
-        p.add(head, BorderLayout.NORTH);
-        p.add(new JScrollPane(output), BorderLayout.CENTER);
-        p.add(logPanel, BorderLayout.SOUTH);
-        return p;
+        return head;
+    }
+
+    /** 日志段：上面一排只有右对齐的「清除日志」，下面才是文本框，与其余四页同一排布。 */
+    private JPanel buildLogBox() {
+        clearLogBtn.setToolTipText("清空这一页的日志，清单、DDL 正文与已保存的文件都不动");
+        clearLogBtn.addActionListener(e -> logPanel.clearLog());
+        JPanel logHead = new JPanel(new FlowLayout(FlowLayout.RIGHT, UiScale.px(6), UiScale.px(2)));
+        logHead.add(clearLogBtn);
+        // 套滚动条且不写死高度：日志段默认就压在它自己的最小行数（4 行）上，
+        // 不再像之前那样固定占 160px——一行没写也白占版面，用户报「日志撑满整个工具」。
+        JScrollPane logScroll = new JScrollPane(logPanel);
+        logScroll.setMinimumSize(new java.awt.Dimension(UiScale.px(300),
+                logPanel.getMinimumSize().height));
+        // 视口白底、日志浅灰底：日志行不满一框时下面那截白底看着像一大块空白面板
+        logScroll.getViewport().setBackground(logPanel.getBackground());
+        JPanel logBox = new JPanel(new BorderLayout());
+        logBox.add(logHead, BorderLayout.NORTH);
+        logBox.add(logScroll, BorderLayout.CENTER);
+        return logBox;
+    }
+
+    /** 上下两段的可拖分隔条：余量全给上段，下段只占它自己的最小高度（日志不抢地方）。 */
+    private static javax.swing.JSplitPane logBodySplit(java.awt.Component top,
+                                                       java.awt.Component bottom) {
+        javax.swing.JSplitPane sp = new javax.swing.JSplitPane(
+                javax.swing.JSplitPane.VERTICAL_SPLIT, top, bottom);
+        sp.setDividerSize(UiScale.px(6));
+        sp.setBorder(null);
+        sp.setResizeWeight(1.0);
+        return sp;
     }
 
     private void refreshButtonStates() {
@@ -294,6 +338,16 @@ public final class DmPage extends JPanel {
 
     public LogPanel logPanel() {
         return logPanel;
+    }
+
+    /** 「清除日志」那一颗：自检按用户的方式点它，不直接调 clearLog。 */
+    public JButton clearLogButton() {
+        return clearLogBtn;
+    }
+
+    /** 正文 / 日志那条分隔条：自检量日志段是不是压在最小高度上。 */
+    public javax.swing.JSplitPane logSplit() {
+        return logSplit;
     }
 
     /** 自检与探针读这几样：驱动那一格、清单摘要、过滤与脏标记。 */
