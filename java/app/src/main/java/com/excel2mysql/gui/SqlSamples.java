@@ -35,7 +35,7 @@ public final class SqlSamples {
         }
     }
 
-    /** 共 144 条，顺序即对话框里目录的顺序。 */
+    /** 共 153 条，顺序即对话框里目录的顺序。 */
     public static final Sample[] ALL = new Sample[] {
         new Sample("建库与选库",
                 "建库", "建库（字符集与排序规则一次写全，避免事后改表）",
@@ -814,6 +814,101 @@ public final class SqlSamples {
                     "  ON t.id = b.id" + NL +
                     "WHERE NOT (BINARY b.cust_no <=> BINARY t.cust_no);" + NL +
                     "DROP TEMPORARY TABLE tmp_before;"),
+        new Sample("数据标准化与清洗",
+                "模糊命中清单", "模糊匹配先圈定要清洗的行：LIKE 找已知杂质，REGEXP 兜住未知字符",
+                "接手一批编号或名称，先看清哪些行混进了连字符、斜杠、全角符号。",
+                "不先圈范围就整表 REPLACE，会把本来正常的行一起改掉，事后说不清改了谁。",
+                "模糊匹配 LIKE REGEXP 命中清单 杂质字符 预览",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no AS 原值," + NL +
+                    "  HEX(order_no) AS 十六进制" + NL +
+                    "FROM t_order" + NL +
+                    "WHERE order_no LIKE '%-%'" + NL +
+                    "  OR order_no LIKE '%/%'" + NL +
+                    "  OR order_no REGEXP '[^A-Za-z0-9]';"),
+        new Sample("数据标准化与清洗",
+                "替换指定字符", "只改模糊命中的行：把编号里的连字符去掉（LIKE + REPLACE）",
+                "源端编号带分隔符，入库要统一成无分隔符的码。",
+                "全表无条件 REPLACE 会连带改到本就规范的行，也留不下改动依据。",
+                "替换 REPLACE 连字符 模糊命中 只改命中行 UPDATE",
+                            "UPDATE t_order" + NL +
+                    "SET order_no = REPLACE(order_no, '-', '')" + NL +
+                    "WHERE order_no LIKE '%-%';"),
+        new Sample("数据标准化与清洗",
+                "多符号归一", "一次替换多种写法：REGEXP 圈范围，嵌套 REPLACE 逐个归一",
+                "名称里全角括号、全角空格、斜杠混用，要收成同一种写法。",
+                "逐条写单字符替换容易漏组合，同一个字段还得反复改几遍。",
+                "多字符替换 嵌套REPLACE 全角括号 全角空格 REGEXP 归一",
+                            "UPDATE t_order" + NL +
+                    "SET name = REPLACE(REPLACE(REPLACE(name, '（', '('), '）', ')'), '　', '')" + NL +
+                    "WHERE name REGEXP '[（）　]';"),
+        new Sample("数据标准化与清洗",
+                "正则剔杂", "模糊剔除非法字符：编号只保留字母数字（REGEXP_REPLACE，8.0+）",
+                "编码类字段允许哪些字符是白名单，逐个枚举黑名单永远枚举不完。",
+                "只列几个已知脏字符，下一批数据换个符号又漏网。",
+                "正则替换 REGEXP_REPLACE 白名单 只留字母数字 非法字符",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  order_no AS 原值," + NL +
+                    "  REGEXP_REPLACE(order_no, '[^A-Za-z0-9]', '') AS 仅留字母数字" + NL +
+                    "FROM t_order" + NL +
+                    "WHERE order_no REGEXP '[^A-Za-z0-9]';"),
+        new Sample("数据标准化与清洗",
+                "中间片段改写", "只替换字符串中间几位：CONCAT + LEFT + SUBSTRING 拼回来",
+                "旧编码第 2 位是版本位，要按新规则统一改写，首尾保持不变。",
+                "整串覆盖会丢掉首尾的业务含义，也没法只针对某一批旧码。",
+                "替换中间字符 LEFT SUBSTRING CONCAT 版本位 模糊匹配",
+                            "UPDATE t_order" + NL +
+                    "SET old_code = CONCAT(LEFT(old_code, 1), '9', SUBSTRING(old_code, 3))" + NL +
+                    "WHERE old_code LIKE 'A0_'" + NL +
+                    "  AND CHAR_LENGTH(old_code) = 3;"),
+        new Sample("数据标准化与清洗",
+                "超长截断预览", "截断前先看影响面：CHAR_LENGTH 量长度，LEFT 只做只读预览",
+                "目标列要收窄，先确认有多少行会被截、截掉的到底是什么。",
+                "直接改列长度或整表截断，超长内容被悄悄切掉且无法回溯。",
+                "截断 LEFT CHAR_LENGTH 超长 预览 影响面",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  name AS 原值," + NL +
+                    "  CHAR_LENGTH(name) AS 字符数," + NL +
+                    "  LEFT(name, 8) AS 截到8字符" + NL +
+                    "FROM t_order" + NL +
+                    "WHERE CHAR_LENGTH(name) > 8;"),
+        new Sample("数据标准化与清洗",
+                "截断写回", "只截断真正超长的行：UPDATE + LEFT + 长度条件一起写",
+                "目标字段长度收敛，确认上一条预览后把超长行写成定长。",
+                "无条件 LEFT 会把短值也走一遍更新，产生大量无意义的 binlog。",
+                "截断写回 LEFT UPDATE 超长行 定长 只改命中",
+                            "UPDATE t_order" + NL +
+                    "SET name = LEFT(name, 8)" + NL +
+                    "WHERE CHAR_LENGTH(name) > 8;"),
+        new Sample("数据标准化与清洗",
+                "按分隔符截段", "按分隔符取一级段与末段：SUBSTRING_INDEX 正向、负向计数",
+                "层级编码写成 A-B-C，要拆出一级分类或最后一段做归口统计。",
+                "用固定位置 SUBSTRING 截，编码层级一变就截错段。",
+                "截断 SUBSTRING_INDEX 分隔符 一级分类 末段 层级编码",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  cat_code AS 原编码," + NL +
+                    "  SUBSTRING_INDEX(cat_code, '-', 1) AS 一级段," + NL +
+                    "  SUBSTRING_INDEX(cat_code, '-', - 1) AS 末段" + NL +
+                    "FROM t_order" + NL +
+                    "WHERE cat_code LIKE '%-%';"),
+        new Sample("数据标准化与清洗",
+                "清洗截断对照", "一条语句串起整条链：模糊命中 → 正则替换 → 截断 → 前后长度对照",
+                "入库前把名称清洗并收长，同时留下可核的改动依据。",
+                "替换和截断分两次跑，中间状态丢失，出问题时说不清是哪一步切坏的。",
+                "模糊匹配 替换 截断 组合 前后对照 REGEXP_REPLACE LEFT CHAR_LENGTH",
+                            "SELECT" + NL +
+                    "  id," + NL +
+                    "  name AS 清洗前," + NL +
+                    "  LEFT(REGEXP_REPLACE(TRIM(name), '[（）/]', ''), 8) AS 清洗截断后," + NL +
+                    "  CHAR_LENGTH(name) AS 原字符数," + NL +
+                    "  CHAR_LENGTH(LEFT(REGEXP_REPLACE(TRIM(name), '[（）/]', ''), 8)) AS 现字符数" + NL +
+                    "FROM t_order" + NL +
+                    "WHERE name REGEXP '[（）/]'" + NL +
+                    "  OR CHAR_LENGTH(TRIM(name)) > 8;"),
         new Sample("主数据与重复数据",
                 "主键候选", "业务主键候选体检：空值与重复一起看",
                 "从字段里挑业务主键，先看空值与重复。",

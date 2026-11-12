@@ -1,4 +1,4 @@
-"""逐条把 SQL 执行器的 144 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
+"""逐条把 SQL 执行器的 153 条示例打到真库上跑一遍，证明它们是可执行语句而不是摆设。
 
 每条之前重建一次临时环境。有几条天然依赖前一条的产物（加列之后才能改列名、
 建了索引才能删索引、建了映射落地表才能按它统计），这类依赖在 PREREQ 里显式声明并先跑一遍，
@@ -129,8 +129,8 @@ def cleanup():
 
 
 def main():
-    if len(SAMPLES) != 144:
-        print("条数不是 144：%d" % len(SAMPLES))
+    if len(SAMPLES) != 153:
+        print("条数不是 153：%d" % len(SAMPLES))
         return 1
     at = {}
     for i, sample in enumerate(SAMPLES, 1):
