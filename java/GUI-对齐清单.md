@@ -8477,3 +8477,31 @@ CENTER 高度被算成 -19830。
 
 - 版本号 5.6.0 → 5.7.0：老用户多出一件以前做不到的事（换配置后不重开程序即可生效），旧做法一字未动，按 minor 定档；9 处写死站点已同改，`check_generated` 通过
 - 本轮未出包：`dist` 里仍是 5.6.0（9d3951e）那份，要 5.7.0 从本次提交重出
+
+## 154. 布尔列改发 BOOLEAN：生成的 DDL 不再带整数显示宽度（2026-11-12）
+
+### 154.1 改的是什么
+
+| 改动 | 口径 |
+| --- | --- |
+| 第一页推断 | 空列按字段名判成布尔时发 `BOOLEAN`，不再发 `TINYINT(1)`；Python `core/infer.py` 与 Java `Infer.java` 同改，留痕文案里的类型名跟着变 |
+| 同类横扫 | 第五页达梦 `BIT/BOOL/BOOLEAN → BOOLEAN`（`DmMysql.java`）、第四页层间建模 `Types.BIT/BOOLEAN → BOOLEAN`（`LayerGen.java`），三处生成的 MySQL DDL 都不再带显示宽度 |
+| 语法高亮 | 两栈的 DDL 类型表补 `BOOL` / `BOOLEAN`（`main.py` 的 `DDL_TYPES`、`RichText.java` 的同名表），新发出去的词在预览里仍按类型上色 |
+| 使用说明 | 空列定类型那张表布尔一行改为 `BOOLEAN`，并写明它就是 MySQL 的 `TINYINT(1)` 语义、带显示宽度的写法在 8.0.17 起要报废弃告警 |
+
+### 154.2 跑数
+
+- 本机 MySQL 8.0.46 实测：`TINYINT(1)` / `INT(11)` / `BIGINT(20)` / `SMALLINT(6)` 建表都报 1681「Integer display width is deprecated」；
+  `BOOLEAN` 零告警，`SHOW CREATE TABLE` 里仍是 `tinyint(1)`，语义与改前一致
+- `pack_test.py` 1127 / 0 / 5（新增 B22g2：布尔列 DDL 的列定义是 `BOOLEAN DEFAULT NULL` 且整条 DDL 不含 `INT(`；
+  G6b2：真库执行后 `SHOW WARNINGS` 为空、`SHOW CREATE TABLE` 仍是 `tinyint(1)`）
+- Java 自检：空模板第 11 列期望改 `BOOLEAN`；达梦夹具加一列 `BIT`，DDL 断言 `enabled BOOLEAN DEFAULT NULL`
+- `pack_test38.py` 264 / 0 / 1、Java 十步 `+ [OK] BUILD`（SQL-DIFF 811 项、META-DIFF 5622 格、TYPE-DIFF 全 0），退出码全 0
+- `界面双端对撞`：不一致仍为 30 处（仅 Java 24 / 值不等 6），与 153 同基线
+- 金标准按 Python 侧重导出 `excel` / `meta` / `sql` 三份；导脚本会顺手重建夹具（zip 时间戳每次不同），
+  这一轮只拿 `dump_file` 读已有的夹具字节，夹具原文未动（golden 里的 `sha256` 仍与 HEAD 逐一对上）
+
+### 154.3 记账
+
+- 版本号 5.7.0 → 5.7.1：生成的 DDL 变了、老的写法不能原样留着（否则每张带布尔列的表都报警告），按 patch 定档；9 处站点已同改，`check_generated` 通过
+- 本轮未出包：`dist` 里仍是 5.6.0（9d3951e）那份，要 5.7.1 从本次提交重出
