@@ -100,7 +100,7 @@ public final class HelpDoc {
                     "这两个入口的图标上。包没解全时它们会弹窗说清缺哪个文件；还想看到 Java 的原始报错与退出码，" + NL +
                     "用 <code>启动-调试.bat</code>，它故意留着控制台。要命令行就在 cmd 里跑同一条命令但不给" + NL +
                     "<code>--gui</code>，例如" + NL +
-                    "<code>jre\\bin\\java.exe -jar excel2mysql-6.2.0.jar --check</code>。" + NL +
+                    "<code>jre\\bin\\java.exe -jar excel2mysql-6.2.1.jar --check</code>。" + NL +
                     "双击 jar 文件本身没有任何反应。</li>" + NL +
                     "</ul>" + NL +
                     "" + NL +
@@ -452,8 +452,10 @@ public final class HelpDoc {
                     "「表名和字段名取中文拼音首字母」勾上后整名取各音节首字母（订单金额 → <code>ddje</code>、" + NL +
                     "水库基础信息 → <code>skjcxx</code>）；「表名与字段名转大写」勾上后输出全大写" + NL +
                     "（<code>DING_DAN_JIN_E</code>、<code>T_IMPORT_DATA</code>）；「表名与字段名转小写」是它的对称档，" + NL +
-                    "两颗互斥——勾上一颗，另一颗自动取消。图形版启动时只勾「取首字母」，两颗大小写都不勾，" + NL +
-                    "新加文件按首字母 + 小写起名；取消首字母回到全拼。命令行不加参数时仍是全拼、小写。" + NL +
+                    "两颗互斥——勾上一颗，另一颗自动取消。图形版启动时勾「取首字母」与「转小写」两颗" + NL +
+                    "（<b>转小写默认选中</b>，2026-11-14 起），「转大写」不勾；新加文件按首字母 + 小写起名，" + NL +
+                    "结构定义 Sheet 里人工手写的字段名默认跟着转小写；取消首字母回到全拼。" + NL +
+                    "命令行不加参数时仍是全拼、小写。" + NL +
                     "转写出来的名字本来就落在小写，文件名括号里写下的英文表名也统一转小写，所以「转小写」" + NL +
                     "在这两路与不勾同结果；它真管到的是结构定义 Sheet 里人工手写的字段名" + NL +
                     "（<code>ITEM_CODE</code> → <code>item_code</code>），「转大写」同样管到它。两颗都不勾时" + NL +
