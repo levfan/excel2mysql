@@ -642,8 +642,8 @@ public final class MainFrame extends JFrame
         prefixBtns.add(replacePrefix);
         // 命名规则工具条贴表格上沿（与 main.py 同一位置）：它管的是"表名/字段名怎么起"，
         // 与表格内容同组，但不占下面前缀行——前缀行要留给输入框与两颗按钮。
-        // 只把首字母勾上（setSelected 不触发 ActionListener，启动时不会凭空打一行"切换"日志），
-        // 转大写保持未勾选，由用户按需勾上
+        // 只把首字母与转小写勾上（setSelected 不触发 ActionListener，启动时不会凭空打一行
+        // "切换"日志），转大写保持未勾选，由用户按需勾上（转小写默认勾选是用户 2026-11-14 点名）
         initialsBox = new javax.swing.JCheckBox("表名和字段名取中文拼音首字母");
         initialsBox.setSelected(true);
         initialsBox.setToolTipText("由中文转写的表名与字段名用拼音首字母（订单金额 → ddje、"
@@ -666,10 +666,11 @@ public final class MainFrame extends JFrame
                     + "（对之后添加的文件生效，结构定义 Sheet 里手写的字段名" + st[1] + "）");
         });
         lowerBox = new javax.swing.JCheckBox("表名与字段名转小写");
+        lowerBox.setSelected(true);
         lowerBox.setToolTipText("由中文转写出来的表名与字段名本来就落在小写（ding_dan_jin_e、skjcxx），"
                 + "这一档在转写那一路与不勾同结果；文件名括号里写下的英文表名本来也统一转小写。"
                 + "这颗真管到的是结构定义 Sheet 里人工手写的字段名：勾上才把它们转成小写"
-                + "（ITEM_CODE → item_code），两颗都不勾时一个字母都不动；"
+                + "（ITEM_CODE → item_code），默认已勾选；两颗都不勾时一个字母都不动；"
                 + "与「表名与字段名转大写」互斥，勾这颗会取消那一颗；"
                 + "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。");
         lowerBox.addActionListener(e -> {

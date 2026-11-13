@@ -108,8 +108,9 @@ public final class GuiMain {
                 com.excel2mysql.gui.MainFrame.connCandidates = keepCandidates;
                 holder[0] = frame;
                 if (!frame.initialsBox().isSelected() || frame.upperBox().isSelected()
-                        || frame.lowerBox().isSelected()) {
-                    problems.add("命名开关默认状态不对：首字母应勾选、两颗大小写都应不勾选");
+                        || !frame.lowerBox().isSelected()) {
+                    problems.add("命名开关默认状态不对：首字母与转小写应勾选、"
+                            + "转大写应不勾选（转小写默认选中是用户 2026-11-14 点名）");
                 }
                 // 空表引导语只在表还空着时画得出来，趁添加夹具之前验
                 ui_guidance(frame, problems);
@@ -423,8 +424,9 @@ public final class GuiMain {
                     problems.add("禁用态的「开始导入」底色不是禁用色，而是 "
                             + frame.importButton().getBackground());
                 }
-                // 后面几十处旧用例的期望值仍按全拼、小写写；先把首字母取消勾选保持口径不变
-                //（转大写默认就未勾），命名开关自己的用例（naming_switches）会重新勾上再验一遍
+                // 后面几十处旧用例的期望值仍按「两颗大小写都不勾」的口径写；先把首字母与
+                // 转小写取消勾选保持口径不变（转大写默认就未勾；三颗的默认态在建窗后已验过），
+                // 命名开关自己的用例（naming_switches）会重新勾上再验一遍
                 frame.initialsBox().setSelected(false);
                 frame.upperBox().setSelected(false);
                 frame.lowerBox().setSelected(false);
@@ -2219,8 +2221,9 @@ public final class GuiMain {
                     || !frame.logPanel().contains("[提示] 表名与字段名大小写切换为：小写")) {
                 problems.add("取消两颗开关没有留下日志");
             }
-            // 2b) 第二颗「转小写」（用户 2026-10-29 点名）：界面上要有、默认不勾、
+            // 2b) 第二颗「转小写」（用户 2026-10-29 点名）：界面上要有、
             // 勾上把「转大写」按掉，而且一次点击只留一条日志
+            //（默认勾选在启动段已单独验过，这里沿用按掉后的两颗都不勾状态）
             if (frame.lowerBox() == null) {
                 problems.add("界面上缺少「表名与字段名转小写」开关");
             } else if (!"表名与字段名转小写".equals(frame.lowerBox().getText())) {
@@ -2241,7 +2244,7 @@ public final class GuiMain {
                     problems.add("互斥切换多打了日志（被按掉那颗不该补一句）：多打 "
                             + (countCaseLogs(frame) - logsBefore - 2) + " 条");
                 }
-                frame.lowerBox().doClick();     // 收回默认档，后面的用例仍按全拼小写跑
+                frame.lowerBox().doClick();     // 按掉「转小写」，后面的用例按全拼、手写名保持原样跑
                 if (frame.lowerBox().isSelected() || frame.upperBox().isSelected()) {
                     problems.add("收尾没收干净，大小写开关还亮着");
                 }

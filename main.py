@@ -2526,9 +2526,12 @@ class MainWindow(QWidget):
             "由中文转写出来的表名与字段名本来就落在小写（ding_dan_jin_e、skjcxx），\n"
             "这一档在转写那一路与不勾同结果；文件名括号里写下的英文表名本来也统一转小写。\n"
             "这颗真管到的是结构定义 Sheet 里人工手写的字段名：勾上才把它们转成小写\n"
-            "（ITEM_CODE → item_code），两颗都不勾时一个字母都不动；\n"
+            "（ITEM_CODE → item_code），默认已勾选；两颗都不勾时一个字母都不动；\n"
             "与「表名与字段名转大写」互斥，勾这颗会取消那一颗；\n"
             "对之后添加的文件生效（表名前缀按输入原样拼接，不跟着转）。")
+        # 默认勾选（用户 2026-11-14 点名）：放在连信号之前设好，
+        # 启动时不会凭空打一行「大小写切换」日志（与 Java 侧 setSelected 同一手法）
+        self.chk_lower.setChecked(True)
         self.chk_lower.toggled.connect(self.on_lower_toggled)
         name_row.addWidget(self.chk_initials)
         name_row.addWidget(self.chk_upper)

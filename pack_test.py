@@ -4474,11 +4474,12 @@ check("M22o 同一份文件不勾任何大小写开关：手写名一个字母�
       and _lo_off["primary_key"] == "ITEM_CODE",
       [c["field"] for c in _lo_off["columns"]])
 
-# 图形版默认口径（用户 2026-10-28）：只勾首字母、转大写不勾，新加文件按首字母 + 小写起名
+# 图形版默认口径（用户 2026-10-28；转小写 2026-11-14 起默认选中）：
+# 勾首字母与转小写、转大写不勾，新加文件按首字母 + 小写起名
 _dw = app_main.MainWindow()
-check("M23 图形版默认只勾首字母，转大写与转小写都不勾选",
+check("M23 图形版默认勾首字母与转小写，转大写不勾选",
       _dw.chk_initials.isChecked() and not _dw.chk_upper.isChecked()
-      and not _dw.chk_lower.isChecked(),
+      and _dw.chk_lower.isChecked(),
       (_dw.chk_initials.isChecked(), _dw.chk_upper.isChecked(),
        _dw.chk_lower.isChecked()))
 check("M23a 默认状态在连信号前设好，启动时不会凭空打一行切换日志",
@@ -7031,9 +7032,9 @@ with open(nsql, "w", encoding="utf-8") as _nfh:
                "  PRIMARY KEY (`id`)\n"
                ") ENGINE=InnoDB COMMENT='大小写检查表';\n")
 nw = app_main.MainWindow()
-check("R43 第一页只勾首字母、两颗大小写默认不勾；第二页只留大小写开关且默认不勾选",
+check("R43 第一页勾首字母与转小写、转大写不勾；第二页只留大小写开关且默认不勾选",
       nw.chk_initials.isChecked() and not nw.chk_upper.isChecked()
-      and not nw.chk_lower.isChecked()
+      and nw.chk_lower.isChecked()
       and not nw.chk_sql_upper.isChecked() and not nw.chk_sql_lower.isChecked()
       and not hasattr(nw, "chk_sql_initials"))
 _orig_gofn5 = app_main.QFileDialog.getOpenFileNames
@@ -8026,24 +8027,27 @@ with io.open(_lcsql, "w", encoding="utf-8") as _fh:
               ") ENGINE=InnoDB COMMENT='小写检查表';\n")
 cw = app_main.MainWindow()
 cw._add_files([_lcxlsx_a])
-check("R80 两颗大小写开关默认都不勾：结构定义里手写的字段名原样保留",
-      not cw.chk_upper.isChecked() and not cw.chk_lower.isChecked()
-      and [c["field"] for c in cw.tables[0]["columns"]] == ["ITEM_CODE", "ITEM_NAME"],
-      [c["field"] for c in cw.tables[0]["columns"]])
+check("R80 转小写默认勾选（用户 2026-11-14 点名）：结构定义里手写的字段名默认就转成小写",
+      not cw.chk_upper.isChecked() and cw.chk_lower.isChecked()
+      and [c["field"] for c in cw.tables[0]["columns"]] == ["item_code", "item_name"]
+      and cw.tables[0]["primary_key"] == "item_code",
+      ([c["field"] for c in cw.tables[0]["columns"]], cw.tables[0]["primary_key"]))
+cw.chk_upper.setChecked(True)      # 切大写档：互斥按掉转小写，被按掉那颗不补日志
 _cw_log_before = cw.log.toPlainText().count("大小写切换为")
 cw.chk_lower.setChecked(True)
 check("R80b 勾「转小写」自动取消「转大写」，切换日志只多一条（按掉那颗不许再补一句）",
       not cw.chk_upper.isChecked() and cw.chk_lower.isChecked()
       and cw.log.toPlainText().count("大小写切换为") == _cw_log_before + 1,
       cw.log.toPlainText().count("大小写切换为") - _cw_log_before)
+cw.chk_lower.setChecked(False)
 cw._add_files([_lcxlsx_b])
-check("R80c 勾上转小写之后添加的表：结构定义里手写的大写字段名真的转成小写",
-      [c["field"] for c in cw.tables[-1]["columns"]] == ["item_code", "item_name"]
-      and cw.tables[-1]["primary_key"] == "item_code",
+check("R80c 两颗都不勾时添加的表：手写的大写字段名一个字母都不动（保持原样）",
+      [c["field"] for c in cw.tables[-1]["columns"]] == ["ITEM_CODE", "ITEM_NAME"]
+      and cw.tables[-1]["primary_key"] == "ITEM_CODE",
       ([c["field"] for c in cw.tables[-1]["columns"]], cw.tables[-1]["primary_key"]))
 cw.chk_upper.setChecked(True)
 _cw_lines = cw.log.toPlainText().splitlines()
-check("R80d 反向也互斥，且日志说的是当前生效那一档",
+check("R80d 勾「转大写」后日志说的是当前生效那一档",
       cw.chk_upper.isChecked() and not cw.chk_lower.isChecked()
       and "大小写切换为：大写" in _cw_lines[-1] and "跟着转大写" in _cw_lines[-1],
       _cw_lines[-1:])
