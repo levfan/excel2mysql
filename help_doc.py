@@ -84,7 +84,7 @@ SECTIONS = [
 这两个入口的图标上。包没解全时它们会弹窗说清缺哪个文件；还想看到 Java 的原始报错与退出码，
 用 <code>启动-调试.bat</code>，它故意留着控制台。要命令行就在 cmd 里跑同一条命令但不给
 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-5.8.0.jar --check</code>。
+<code>jre\\bin\\java.exe -jar excel2mysql-6.0.0.jar --check</code>。
 双击 jar 文件本身没有任何反应。</li>
 </ul>
 
@@ -1135,7 +1135,9 @@ dump 里认 <code>DELIMITER</code> 指令，触发器与存储过程的整句不
 不扫当前工作目录，也不读系统 <code>CLASSPATH</code>。
 这一页连不上时，本页日志会分清「没找到驱动」「驱动不认这条连接串」「网络通信异常」三种情况，
 其余四页照常用；这一页的翻译逻辑本身不依赖驱动。</p>
-<p>MySQL 目标库那一格填的是脚本开头的 <code>USE</code>；留空则不写 <code>USE</code>，
+<p><b>「MySQL 目标库」是个下拉</b>：候选就是上方「数据源连接信息」那颗库下拉里加载出来的清单，
+默认选中当前目标库；服务器上刚建的库还没重新加载时，也可以直接手填一个库名。
+这一格决定脚本开头的 <code>USE</code>；留空则不写 <code>USE</code>，
 「写入 MySQL 目标库」落在顶部连接栏所选的那本库。两者不是同一本库时，日志会先点出来再执行。</p>
 <p>类型与注释按下面这套口径翻：</p>
 <ul>

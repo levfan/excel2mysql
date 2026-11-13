@@ -36,6 +36,14 @@ public final class DmPage extends JPanel {
 
         boolean connected();
 
+        /**
+         * 顶部「数据源连接信息」那颗库下拉里此刻有哪些库。
+         *
+         * <p>这一页的目标库不再让人凭记忆手打：清单从哪儿来、这儿就从哪儿来，
+         * 免得一处写着 <code>demo</code>、另一处其实还空着。
+         */
+        java.util.List<String> databaseChoices();
+
         void warn(String text);
 
         void inform(String text);
@@ -53,7 +61,12 @@ public final class DmPage extends JPanel {
     private final javax.swing.JPasswordField passField = new javax.swing.JPasswordField(8);
     private final JTextField schemaField = new JTextField("", 8);
     private final JTextField paramField = new JTextField("", 10);
-    private final JTextField targetDbField = new JTextField("", 10);
+    /**
+     * MySQL 目标库：候选项就是顶部「数据源连接信息」那颗库下拉里的清单，
+     * 默认选中当前目标库；仍可手填（服务器上刚建的库还没重加载时用得上）。
+     */
+    private final javax.swing.JComboBox<String> targetDbCombo =
+            new javax.swing.JComboBox<String>();
     private final JButton connectBtn = new JButton("连达梦并列表");
     private final JButton genBtn = new JButton("生成 MySQL DDL");
     private final JButton saveBtn = new JButton("保存到 .sql");
@@ -82,6 +95,8 @@ public final class DmPage extends JPanel {
     /** 连上时读到的服务端版本：只在摘要末尾说一句，不占第二行。 */
     private String serverVersion = "";
     private boolean stale;
+    /** 上一回自动跟随的目标库：只有它还等于当前值时才继续跟，用户自己挑过就不再插手。 */
+    private String followedTarget = "";
     /** 上一次生成真正含哪些表：写入前的确认要把表名列给它看。 */
     private final List<String> lastTables = new ArrayList<String>();
     private final JTextArea output = new JTextArea(12, 60);
@@ -151,6 +166,13 @@ public final class DmPage extends JPanel {
         refreshDriverLabel();
         refreshSummary();
         refreshButtonStates();
+        // 进页就有个默认值：当前目标库。库清单还没加载出来时它就是 conn.ini 里写的那本，
+        // 等连接栏加载完库，MainFrame 会再喊一次 setDatabaseChoices 把候选补齐
+        String initDb = defaultTargetDb();
+        if (!initDb.isEmpty()) {
+            setTargetDb(initDb);
+        }
+        setDatabaseChoices(host.databaseChoices());
     }
 
     /** 驱动那一格的话：找到了报文件名，没找到就把放哪儿说全。 */
@@ -253,9 +275,12 @@ public final class DmPage extends JPanel {
         p.add(row, BorderLayout.CENTER);
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
         row2.add(new JLabel("MySQL 目标库"));
-        targetDbField.setToolTipText("生成的脚本开头写 USE 这一本库；留空则不写 USE，"
+        targetDbCombo.setEditable(true);
+        targetDbCombo.setPreferredSize(new java.awt.Dimension(UiScale.px(170), UiScale.px(24)));
+        targetDbCombo.setToolTipText("生成的脚本开头写 USE 这一本库；候选项就是上方「数据源连接信息」"
+                + "那颗库下拉里的清单，默认选中当前目标库；留空则不写 USE，"
                 + "「写入 MySQL 目标库」按顶部连接栏所选的库执行");
-        row2.add(targetDbField);
+        row2.add(targetDbCombo);
         row2.add(dropExisting);
         row2.add(lowerNames);
         row2.add(genBtn);
@@ -313,6 +338,113 @@ public final class DmPage extends JPanel {
         genBtn.setEnabled(!tables.isEmpty());
         saveBtn.setEnabled(lastOut != null && lastOut.tables > 0);
         writeBtn.setEnabled(lastOut != null && lastOut.tables > 0);
+    }
+
+    /** 目标库此刻的值：可编辑下拉以编辑框内容为准（用户可能刚手填了一本服务器上刚建的库）。 */
+    private String targetDb() {
+        Object v = targetDbCombo.getEditor().getItem();
+        String s = v == null ? "" : String.valueOf(v).trim();
+        if (s.isEmpty()) {
+            Object sel = targetDbCombo.getSelectedItem();
+            s = sel == null ? "" : String.valueOf(sel).trim();
+        }
+        return s;
+    }
+
+    private void setTargetDb(String db) {
+        String d = db == null ? "" : db.trim();
+        if (d.isEmpty()) {
+            targetDbCombo.setSelectedIndex(-1);
+            targetDbCombo.getEditor().setItem("");
+            return;
+        }
+        for (int i = 0; i < targetDbCombo.getItemCount(); i++) {
+            if (d.equals(targetDbCombo.getItemAt(i))) {
+                targetDbCombo.setSelectedIndex(i);
+                // 可编辑下拉：模型选中项与编辑框里的字是两份，程序改的那一份要同步过去，
+                // 否则 targetDb() 读回来还是上一次的字（自检里就撞到过这一步）
+                targetDbCombo.getEditor().setItem(d);
+                return;
+            }
+        }
+        // 清单里没有（库刚建、或用户手填）：补一项再选，别把它丢了
+        targetDbCombo.addItem(d);
+        targetDbCombo.setSelectedItem(d);
+        targetDbCombo.getEditor().setItem(d);
+    }
+
+    /**
+     * 目标库候选项＝顶部「数据源连接信息」那颗库下拉里的清单，默认选中当前目标库。
+     *
+     * <p>清单没变就整段返回：连库、重连会反复走到这里，真去重建一遍候选的话，
+     * 用户已经挑好（或手填）的库会被打回默认值。
+     */
+    public void setDatabaseChoices(List<String> dbs) {
+        List<String> want = new ArrayList<String>();
+        if (dbs != null) {
+            for (String d : dbs) {
+                if (d != null && !d.trim().isEmpty() && !want.contains(d.trim())) {
+                    want.add(d.trim());
+                }
+            }
+        }
+        List<String> now = new ArrayList<String>();
+        for (int i = 0; i < targetDbCombo.getItemCount(); i++) {
+            now.add(targetDbCombo.getItemAt(i));
+        }
+        if (now.equals(want)) {
+            return;
+        }
+        String keep = targetDb();
+        String pick = keep.isEmpty() ? defaultTargetDb() : keep;
+        if (pick.isEmpty() && !want.isEmpty()) {
+            pick = want.get(0);
+        }
+        if (want.isEmpty() && pick.isEmpty()) {
+            return;     // 清单还没加载出来、也没有当前目标库：留着上一次的候选
+        }
+        targetDbCombo.removeAllItems();
+        for (String d : want) {
+            targetDbCombo.addItem(d);
+        }
+        if (!pick.isEmpty()) {
+            setTargetDb(pick);
+        }
+    }
+
+    /** 默认值＝当前目标库（顶部连接栏选中的那本；还没加载库时就是 conn.ini 里写的）。 */
+    private String defaultTargetDb() {
+        Config cfg = host.currentConfig();
+        return cfg == null || cfg.database == null ? "" : cfg.database.trim();
+    }
+
+    /**
+     * 连接栏换了库时调这里：候选跟着换，值在"用户没自己动过"的前提下跟着当前目标库走。
+     *
+     * <p>跟进与不跟进的分界在 {@link #followedTarget}：上一回是我们替用户选的那本，
+     * 就继续跟；用户自己挑过（或手填过）另一本，就不再动他的选择——这一页允许写进
+     * 跟顶部不一样的库，日志会点出来。
+     */
+    public void syncTargetDb(List<String> dbs, String current) {
+        String before = targetDb();
+        setDatabaseChoices(dbs);
+        String db = current == null ? "" : current.trim();
+        if (db.isEmpty()) {
+            return;
+        }
+        if (before.isEmpty() || before.equals(followedTarget)) {
+            setTargetDb(db);
+            followedTarget = db;
+        }
+    }
+
+    /** 自检与对撞读这一格用：值、候选条数。 */
+    public String targetDbText() {
+        return targetDb();
+    }
+
+    public int targetDbChoiceCount() {
+        return targetDbCombo.getItemCount();
     }
 
     /** 自检与对撞读这三样：清单行数、输出正文、按钮可用性。 */
@@ -470,10 +602,10 @@ public final class DmPage extends JPanel {
         logPanel.log("+ [OK] DM | 读回 " + tables.size() + " 张表结构（模式 " + loadedFrom
                 + (serverVersion.isEmpty() ? "" : " | " + serverVersion)
                 + "），选中行点「生成 MySQL DDL」；一行都不选则按全部 " + tables.size() + " 张生成");
-        if (targetDbField.getText().trim().isEmpty()) {
+        if (targetDb().isEmpty()) {
             Config mysql = host.currentConfig();
             if (mysql != null && mysql.database != null) {
-                targetDbField.setText(mysql.database.trim());
+                setTargetDb(mysql.database.trim());
             }
         }
         lastOut = null;
@@ -511,7 +643,7 @@ public final class DmPage extends JPanel {
             host.warn("清单里选中的行一张表都没有，没有生成任何语句。");
             return null;
         }
-        DmMysql.Output out = DmMysql.script(picked, targetDbField.getText().trim(),
+        DmMysql.Output out = DmMysql.script(picked, targetDb(),
                 dropExisting.isSelected(), lowerNames.isSelected());
         lastOut = out;
         lastTables.clear();
@@ -583,7 +715,7 @@ public final class DmPage extends JPanel {
      * 自检跑的是同一个入口，靠 {@link #confirmWrite} 关掉弹框，只判文案与条件。
      */
     private boolean askWriteConfirm(Config cfg) {
-        String db = targetDbField.getText().trim();
+        String db = targetDb();
         if (db.isEmpty()) {
             db = cfg.database == null ? "" : cfg.database.trim();
         }
@@ -656,7 +788,7 @@ public final class DmPage extends JPanel {
             host.warn(LogText.NO_DB_HINT);
             return;
         }
-        String want = targetDbField.getText().trim();
+        String want = targetDb();
         if (!want.isEmpty() && cfg.database != null && !want.equalsIgnoreCase(cfg.database.trim())) {
             logPanel.log("! [WARN] DM-EXEC | 脚本开头写的是 USE `" + want + "`，与顶部所选库 "
                     + cfg.database + " 不是同一本，执行时会切过去");

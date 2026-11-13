@@ -462,6 +462,12 @@ public final class MainFrame extends JFrame
         dbCombo.setPreferredSize(new Dimension(UiScale.px(180), UiScale.px(24)));
         dbCombo.addActionListener(e -> {
             refreshDbLabels();
+            // 第五页那颗「MySQL 目标库」跟着走：用户在这儿换了库，那边默认就该是新库
+            // （那头自己挑过另一本就不再跟，由 DmPage 自己判）。正在重填列表时不动——
+            // addItem 会逐项触发一遍，那会儿清单还残缺，等 applyDatabases 结尾统一同步
+            if (!dbListReloading) {
+                syncDmTargetDb();
+            }
             // 选定库之后环境信息就没用了，自动收起；要换库再点「设置数据源信息」。
             // 重新填列表不算"选定"：Swing 里 addItem 会把第一项选上，那样一加载就收起，
             // 等于把用户下一步要用那颗下拉藏起来（Python 那边是 blockSignals 填的，天然不触发）
@@ -881,6 +887,7 @@ public final class MainFrame extends JFrame
             }
         }
         refreshDbLabels();
+        syncDmTargetDb();
     }
 
     public boolean databaseChooserEnabled() {
@@ -951,6 +958,18 @@ public final class MainFrame extends JFrame
         importBtn.setEnabled(!tables.isEmpty());
         log("[已加载] 可用数据库：" + String.join(", ", dbs));
         refreshDbLabels();
+        syncDmTargetDb();
+    }
+
+    /**
+     * 库清单/当前目标库变了，第五页那颗「MySQL 目标库」下拉跟着换候选。
+     *
+     * <p>它默认就该是当前目标库——用户不必在两处各挑一次；已经挑过的值那页自己会留住。
+     */
+    private void syncDmTargetDb() {
+        if (dmPage != null) {
+            dmPage.syncTargetDb(databaseChoices(), selectedDatabase());
+        }
     }
 
     /**
@@ -3097,6 +3116,26 @@ public final class MainFrame extends JFrame
 
     public javax.swing.JComboBox<String> dbCombo() {
         return dbCombo;
+    }
+
+    /**
+     * 顶部这颗库下拉此刻的清单，供第五页「MySQL 目标库」做候选项。
+     *
+     * <p>只读一份副本：那边要的是"有哪些库可选"，不该拿到这个控件去改。
+     */
+    @Override
+    public java.util.List<String> databaseChoices() {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        if (dbCombo == null) {
+            return out;
+        }
+        for (int i = 0; i < dbCombo.getItemCount(); i++) {
+            String d = dbCombo.getItemAt(i);
+            if (d != null && !d.trim().isEmpty() && !out.contains(d.trim())) {
+                out.add(d.trim());
+            }
+        }
+        return out;
     }
 
     /** 双端界面枚举对撞器要按页归属分按钮（两页有重名按钮）。 */
