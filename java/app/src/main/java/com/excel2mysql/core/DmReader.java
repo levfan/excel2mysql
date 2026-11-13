@@ -342,4 +342,85 @@ public final class DmReader implements AutoCloseable {
         }
         return jars.size() + " 个：" + jars;
     }
+
+    /** 一次脚本执行的收成：共几条、跑到第几条、首条错误、有没有中途取消。 */
+    public static final class ExecReport {
+        public int statements;
+        public int executed;
+        public String error = "";
+        public boolean cancelled;
+    }
+
+    /**
+     * 把生成的脚本逐条发给达梦执行（MySQL → DM8 那个方向的「写入达梦目标库」）。
+     * DDL 在达梦里同样隐式提交，逐条失败只记账继续，不掀整轮——与第三个页签
+     * SqlExecute 的逐条口径一致，不在这条路上另发明一套执行语义。
+     */
+    public ExecReport runScript(String script, java.util.function.Consumer<String> log,
+                                java.util.function.BooleanSupplier cancelled) {
+        ExecReport r = new ExecReport();
+        List<String> stmts = splitStatements(script);
+        r.statements = stmts.size();
+        java.sql.Statement st = null;
+        try {
+            st = conn.createStatement();
+            for (String s : stmts) {
+                if (cancelled != null && cancelled.getAsBoolean()) {
+                    r.cancelled = true;
+                    break;
+                }
+                try {
+                    st.execute(s);
+                    r.executed++;
+                } catch (SQLException e) {
+                    if (r.error.isEmpty()) {
+                        r.error = LogText.describe(e);
+                    }
+                    if (log != null) {
+                        log.accept("x [ERROR] DM-EXEC | 语句被拒：" + head(s) + " — "
+                                + LogText.describe(e));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            if (r.error.isEmpty()) {
+                r.error = LogText.describe(e);
+            }
+        } finally {
+            if (st != null) {
+                try {
+                    st.close();
+                } catch (SQLException ignored) {
+                    // 收尾不抢业务的错
+                }
+            }
+        }
+        return r;
+    }
+
+    /** 按 ";\n" 拆语句但保留语句内分号（与 LayerGen.splitStatements 同一口径）。 */
+    private static List<String> splitStatements(String sql) {
+        List<String> out = new ArrayList<String>();
+        StringBuilder cur = new StringBuilder();
+        for (String line : (sql == null ? "" : sql).split("\n", -1)) {
+            cur.append(line).append("\n");
+            if (line.trim().endsWith(";")) {
+                String s = cur.toString().trim();
+                if (s.endsWith(";")) {
+                    s = s.substring(0, s.length() - 1);
+                }
+                out.add(s);
+                cur.setLength(0);
+            }
+        }
+        if (cur.toString().trim().length() > 0) {
+            out.add(cur.toString().trim());
+        }
+        return out;
+    }
+
+    private static String head(String stmt) {
+        String s = stmt.trim();
+        return s.length() <= 60 ? s : s.substring(0, 60) + "…";
+    }
 }

@@ -6,6 +6,8 @@ import com.excel2mysql.core.DmMysql;
 import com.excel2mysql.core.DmReader;
 import com.excel2mysql.core.ImportParse;
 import com.excel2mysql.core.LogText;
+import com.excel2mysql.core.MysqlDm;
+import com.excel2mysql.core.MysqlReader;
 import com.excel2mysql.core.SqlExecute;
 
 import java.awt.BorderLayout;
@@ -28,7 +30,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 
-/** 第 5 页签：连达梦读表结构，生成 MySQL 建表语句（含表与字段注释）。 */
+/** 第 5 页签：达梦 DM8 与 MySQL 互转建表语句——DM8 → MySQL（默认）或 MySQL → DM8，均含表与字段注释。 */
 public final class DmPage extends JPanel {
 
     public interface Host {
@@ -71,6 +73,15 @@ public final class DmPage extends JPanel {
     private final JButton genBtn = new JButton("生成 MySQL DDL");
     private final JButton saveBtn = new JButton("保存到 .sql");
     private final JButton writeBtn = new JButton("写入 MySQL 目标库");
+    /**
+     * 转换方向：DM8 → MySQL（默认，读达梦产 MySQL DDL）或 MySQL → DM8（读顶部连接栏的
+     * MySQL 库产达梦 DDL）。翻方向就清清单重来——两向共用一套表结构体，但目标与按钮完全换了人。
+     */
+    private final javax.swing.JComboBox<String> directionCombo = new javax.swing.JComboBox<String>(
+            new String[]{"DM8 → MySQL", "MySQL → DM8"});
+    private boolean dmToMysql = true;
+    /** 「MySQL 目标库」这行的标题随方向翻：反向时目标是达梦模式，由模式那格承担。 */
+    private final JLabel targetLabel = new JLabel("MySQL 目标库");
     private final JCheckBox dropExisting = new JCheckBox("先 DROP 已存在表", false);
     private final JCheckBox lowerNames = new JCheckBox("表名与字段名转小写", true);
     private final JLabel listLabel = new JLabel("未连接达梦");
@@ -140,7 +151,7 @@ public final class DmPage extends JPanel {
         connectBtn.addActionListener(e -> connectAndList());
         genBtn.addActionListener(e -> generate());
         saveBtn.addActionListener(e -> chooseSavePath());
-        writeBtn.addActionListener(e -> writeToMysql());
+        writeBtn.addActionListener(e -> writeToTarget());
         output.setEditable(false);
         output.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN,
                 UiScale.fontPt(UiScale.UI_POINT_SIZE)));
@@ -253,8 +264,14 @@ public final class DmPage extends JPanel {
 
     private JPanel buildTop() {
         JPanel p = new JPanel(new BorderLayout());
-        p.add(PageIntro.of("连达梦读表结构，生成 MySQL 建表语句"), BorderLayout.NORTH);
+        p.add(PageIntro.of("达梦 DM8 与 MySQL 互转建表语句（含表与字段注释）"), BorderLayout.NORTH);
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
+        directionCombo.setToolTipText("<html>DM8 → MySQL：连达梦读结构，生成 MySQL 建表语句。<br>"
+                + "MySQL → DM8：读顶部连接栏所选 MySQL 库的结构，生成达梦建表语句；"
+                + "两向都可保存 .sql 或直接写入目标库。</html>");
+        directionCombo.addActionListener(e -> applyDirection());
+        row.add(new JLabel("方向"));
+        row.add(directionCombo);
         row.add(new JLabel("达梦主机"));
         row.add(hostField);
         row.add(new JLabel("端口"));
@@ -274,7 +291,7 @@ public final class DmPage extends JPanel {
         row.add(driverLabel);
         p.add(row, BorderLayout.CENTER);
         JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, UiScale.px(6), UiScale.px(2)));
-        row2.add(new JLabel("MySQL 目标库"));
+        row2.add(targetLabel);
         targetDbCombo.setEditable(true);
         targetDbCombo.setPreferredSize(new java.awt.Dimension(UiScale.px(170), UiScale.px(24)));
         targetDbCombo.setToolTipText("生成的脚本开头写 USE 这一本库；候选项就是上方「数据源连接信息」"
@@ -534,7 +551,150 @@ public final class DmPage extends JPanel {
         return c;
     }
 
+    /**
+     * 翻方向：按钮文案、目标格的含义跟着换，清单与正文清空重来（两向的表结构是两本库的，
+     * 混在一张清单里只会导错方向）。模式那格两向都是达梦的模式：正向当来源、反向当目标。
+     */
+    private void applyDirection() {
+        dmToMysql = directionCombo.getSelectedIndex() != 1;
+        connectBtn.setText(dmToMysql ? "连达梦并列表" : "连 MySQL 并列表");
+        genBtn.setText(dmToMysql ? "生成 MySQL DDL" : "生成 DM DDL");
+        writeBtn.setText(dmToMysql ? "写入 MySQL 目标库" : "写入 DM 目标库");
+        targetLabel.setText(dmToMysql ? "MySQL 目标库" : "DM 目标模式");
+        targetDbCombo.setEnabled(dmToMysql);
+        targetDbCombo.setToolTipText(dmToMysql
+                ? "生成的脚本开头写 USE 这一本库；候选项就是上方「数据源连接信息」"
+                        + "那颗库下拉里的清单，默认选中当前目标库；留空则不写 USE，"
+                        + "「写入 MySQL 目标库」按顶部连接栏所选的库执行"
+                : "反向转换的目标是达梦模式，由左边「模式」那格承担；这里只在正向时用");
+        listLabel.setText(dmToMysql ? "未连接达梦" : "未连接 MySQL");
+        tables.clear();
+        lastOut = null;
+        lastTables.clear();
+        output.setText("");
+        loadedFrom = "";
+        stale = false;
+        refill();
+        refreshButtonStates();
+        logPanel.log("- [INFO] DM | 方向切到「"
+                + (dmToMysql ? "DM8 → MySQL" : "MySQL → DM8")
+                + "」，清单已清空，重新列表后再生成");
+    }
+
+    /** MySQL → DM8：源是顶部连接栏所选的 MySQL 库，读信息架构表结构。 */
+    private void connectAndListMysql() {
+        final Config cfg = host.currentConfig();
+        if (cfg == null || !cfg.hasDatabase()) {
+            host.warn(LogText.NO_DB_HINT);
+            return;
+        }
+        final String db = cfg.database.trim();
+        host.runDmTask("正在连接 MySQL 并读取表结构…", new Function<ImportParse.Sink, Object>() {
+            @Override public Object apply(ImportParse.Sink sink) {
+                sink.step("连接 MySQL " + cfg.host + ":" + cfg.port + " 库 " + db);
+                try {
+                    MysqlReader.Result r = MysqlReader.readAll(cfg, db,
+                            n -> sink.advance(1, "读 " + n), () -> sink.cancelled());
+                    if (sink.cancelled()) {
+                        sink.log("! [WARN] MYSQL | 已取消：已读到 " + r.tables.size()
+                                + " 张，界面上仍是上一份结构");
+                        return null;
+                    }
+                    return new Object[]{r, null};
+                } catch (Exception ex) {
+                    return new Object[]{null, LogText.describe(ex)};
+                }
+            }
+        }, new Consumer<Object>() {
+            @Override public void accept(Object res) {
+                if (res == null) {
+                    return;
+                }
+                Object[] arr = (Object[]) res;
+                if (arr[1] != null) {
+                    logPanel.error("x [ERROR] MYSQL | 连接或读结构失败：无法连接到 "
+                            + cfg.host + ":" + cfg.port + "（库 " + db + "）"
+                            + LogText.NL + LogText.indentDetail(String.valueOf(arr[1])));
+                    host.informError("连不上 MySQL", "无法连接到 " + cfg.host + ":" + cfg.port
+                            + "（库 " + db + "）：\n" + arr[1]);
+                    return;
+                }
+                MysqlReader.Result r = (MysqlReader.Result) arr[0];
+                applyTables(r.tables, r.version, "库", db);
+            }
+        });
+    }
+
+    /** 写入按钮按方向分流：正向发 MySQL（SqlExecute 那条既有口径），反向发达梦。 */
+    private void writeToTarget() {
+        if (dmToMysql) {
+            writeToMysql();
+        } else {
+            writeToDm();
+        }
+    }
+
+    /**
+     * MySQL → DM8 的「写入 DM 目标库」：脚本发给达梦逐条执行（DDL 隐式提交，
+     * 逐条失败只记账继续），连接就用左边那排达梦参数、目标模式就是「模式」那格。
+     */
+    private void writeToDm() {
+        if (lastOut == null || lastOut.sql.trim().isEmpty()) {
+            host.warn("还没有可执行的脚本：先点「生成 DM DDL」。");
+            return;
+        }
+        final DmReader.Conf cfg = readConf();
+        if (cfg.schema.isEmpty()) {
+            host.warn("模式名为空：写入目标是达梦的模式，先在「模式」那格填一个。");
+            return;
+        }
+        if (!DmReader.driverPresent()) {
+            host.warn(DmReader.missingDriverHint());
+            return;
+        }
+        if (stale) {
+            host.warn("结构读自「" + loadedFrom + "」且参数已改动：先重连、重新生成再写入。");
+            return;
+        }
+        final String script = lastOut.sql;
+        if (confirmWrite && !askWriteConfirm("达梦模式 " + cfg.schema, "确认写入达梦")) {
+            return;
+        }
+        host.runDmTask("正在把 MySQL 结构写入达梦…", new Function<ImportParse.Sink, Object>() {
+            @Override public Object apply(ImportParse.Sink sink) {
+                DmReader r = null;
+                try {
+                    r = DmReader.open(cfg);
+                    return r.runScript(script, sink::log, () -> sink.cancelled());
+                } catch (Exception ex) {
+                    sink.logError("x [ERROR] DM-EXEC | 连接或执行失败：无法连接到 "
+                            + cfg.host + ":" + cfg.port + "（模式 " + cfg.schema + "）"
+                            + LogText.NL + LogText.indentDetail(LogText.describe(ex)));
+                    return null;
+                } finally {
+                    if (r != null) {
+                        r.close();
+                    }
+                }
+            }
+        }, new Consumer<Object>() {
+            @Override public void accept(Object res) {
+                DmReader.ExecReport rep = (DmReader.ExecReport) res;
+                if (rep == null) {
+                    return;
+                }
+                host.inform("写入达梦结束：共 " + rep.statements + " 条语句，执行到第 "
+                        + rep.executed + " 条" + (rep.cancelled ? "，中途取消" : "")
+                        + (rep.error == null || rep.error.isEmpty() ? "" : "，首条错误：" + rep.error));
+            }
+        });
+    }
+
     public void connectAndList() {
+        if (!dmToMysql) {
+            connectAndListMysql();
+            return;
+        }
         final DmReader.Conf cfg = readConf();
         if (cfg.schema.isEmpty()) {
             logPanel.error("x [ERROR] DM | 模式名为空：达梦的表按模式（OWNER）归口，"
@@ -586,23 +746,27 @@ public final class DmPage extends JPanel {
                             + "（用户 " + cfg.user + "，模式 " + cfg.schema + "）：\n" + arr[1]);
                     return;
                 }
-                applyTables((List<DmMysql.Table>) arr[0], String.valueOf(arr[2]));
+                applyTables((List<DmMysql.Table>) arr[0], String.valueOf(arr[2]),
+                        "模式", cfg.schema);
             }
         });
     }
 
-    private void applyTables(List<DmMysql.Table> read, String version) {
+    private void applyTables(List<DmMysql.Table> read, String version,
+                             String kind, String source) {
         tables.clear();
         tables.addAll(read);
-        loadedFrom = schemaField.getText().trim();
+        loadedFrom = source == null ? "" : source.trim();
         serverVersion = version == null ? "" : version;
         stale = false;
         refill();
         refreshDriverLabel();
-        logPanel.log("+ [OK] DM | 读回 " + tables.size() + " 张表结构（模式 " + loadedFrom
+        logPanel.log("+ [OK] " + (dmToMysql ? "DM" : "MYSQL") + " | 读回 " + tables.size()
+                + " 张表结构（" + kind + " " + loadedFrom
                 + (serverVersion.isEmpty() ? "" : " | " + serverVersion)
-                + "），选中行点「生成 MySQL DDL」；一行都不选则按全部 " + tables.size() + " 张生成");
-        if (targetDb().isEmpty()) {
+                + "），选中行点「" + genBtn.getText() + "」；一行都不选则按全部 "
+                + tables.size() + " 张生成");
+        if (dmToMysql && targetDb().isEmpty()) {
             Config mysql = host.currentConfig();
             if (mysql != null && mysql.database != null) {
                 setTargetDb(mysql.database.trim());
@@ -643,8 +807,11 @@ public final class DmPage extends JPanel {
             host.warn("清单里选中的行一张表都没有，没有生成任何语句。");
             return null;
         }
-        DmMysql.Output out = DmMysql.script(picked, targetDb(),
-                dropExisting.isSelected(), lowerNames.isSelected());
+        DmMysql.Output out = dmToMysql
+                ? DmMysql.script(picked, targetDb(),
+                        dropExisting.isSelected(), lowerNames.isSelected())
+                : MysqlDm.script(picked,
+                        dropExisting.isSelected(), lowerNames.isSelected());
         lastOut = out;
         lastTables.clear();
         for (DmMysql.Table one : picked) {
@@ -713,25 +880,22 @@ public final class DmPage extends JPanel {
      *
      * <p>勾了「先 DROP 已存在表」时这一步不可恢复，把要动的表名先列出来再点；
      * 自检跑的是同一个入口，靠 {@link #confirmWrite} 关掉弹框，只判文案与条件。
+     * targetDesc 两向不同：正向是「MySQL 库名」、反向是「达梦模式 X」，标题跟着换。
      */
-    private boolean askWriteConfirm(Config cfg) {
-        String db = targetDb();
-        if (db.isEmpty()) {
-            db = cfg.database == null ? "" : cfg.database.trim();
-        }
-        StringBuilder msg = new StringBuilder("<html>将在 MySQL 库 <b>").append(escHtml(db))
-                .append("</b> 执行 ").append(lastOut.tables).append(" 张表的建表语句");
+    private boolean askWriteConfirm(String targetDesc, String title) {
+        StringBuilder msg = new StringBuilder("<html>将在 ").append(escHtml(targetDesc))
+                .append(" 执行 ").append(lastOut.tables).append(" 张表的建表语句");
         if (dropExisting.isSelected()) {
             msg.append("，并先 DROP 同名表（<b>不可恢复</b>）");
         }
         msg.append("。<br>涉及表：").append(escHtml(previewNames(lastTables)))
                 .append("<br><br>确认执行？</html>");
         int pick = javax.swing.JOptionPane.showConfirmDialog(this, msg.toString(),
-                "确认写入 MySQL", javax.swing.JOptionPane.OK_CANCEL_OPTION,
+                title, javax.swing.JOptionPane.OK_CANCEL_OPTION,
                 dropExisting.isSelected() ? javax.swing.JOptionPane.WARNING_MESSAGE
                         : javax.swing.JOptionPane.QUESTION_MESSAGE);
         if (pick != javax.swing.JOptionPane.OK_OPTION) {
-            logPanel.log("- [INFO] DM-EXEC | 已取消写入，库 " + db + " 一条语句都没执行");
+            logPanel.log("- [INFO] DM-EXEC | 已取消写入，" + targetDesc + " 一条语句都没执行");
             return false;
         }
         return true;
@@ -755,13 +919,14 @@ public final class DmPage extends JPanel {
         return v == null ? "" : v.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
-    /** 默认文件名带模式与时间：同一模式跑两次不该把上一份盖掉。 */
+    /** 默认文件名带来源与时间：同一模式跑两次不该把上一份盖掉。 */
     public String suggestedSaveName() {
         String sch = loadedFrom.isEmpty() ? schemaField.getText().trim() : loadedFrom;
         sch = sch.replaceAll("[^A-Za-z0-9_]", "");
         String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss")
                 .format(new java.util.Date());
-        return "dm_to_mysql" + (sch.isEmpty() ? "" : "_" + sch) + "_" + stamp + ".sql";
+        return (dmToMysql ? "dm_to_mysql" : "mysql_to_dm")
+                + (sch.isEmpty() ? "" : "_" + sch) + "_" + stamp + ".sql";
     }
 
     private void chooseSavePath() {
@@ -798,7 +963,9 @@ public final class DmPage extends JPanel {
             return;
         }
         String script = lastOut.sql;
-        if (confirmWrite && !askWriteConfirm(cfg)) {
+        String targetDesc = "MySQL 库 " + (want.isEmpty()
+                ? (cfg.database == null ? "" : cfg.database.trim()) : want);
+        if (confirmWrite && !askWriteConfirm(targetDesc, "确认写入 MySQL")) {
             return;
         }
         host.runDmTask("正在把达梦结构写入 MySQL…", new Function<ImportParse.Sink, Object>() {
@@ -836,8 +1003,18 @@ public final class DmPage extends JPanel {
         });
     }
 
-    /** 自检用：直接灌一份结构进来走界面那一条路，不经过达梦连接。 */
+    /** 自检用：直接灌一份结构进来走界面那一条路，不经过达梦/MySQL 连接。 */
     public void setTablesForSelftest(List<DmMysql.Table> read) {
-        applyTables(read, "");
+        applyTables(read, "", "模式", "");
+    }
+
+    /** 自检用：翻到指定方向（true = DM8 → MySQL），清掉清单与正文，之后走生成那条路。 */
+    public void setDirectionForSelftest(boolean dmToMysqlDirection) {
+        directionCombo.setSelectedIndex(dmToMysqlDirection ? 0 : 1);
+    }
+
+    /** 自检用：当前方向是不是 DM8 → MySQL。 */
+    public boolean isDmToMysql() {
+        return dmToMysql;
     }
 }

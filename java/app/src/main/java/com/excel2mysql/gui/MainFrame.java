@@ -169,7 +169,7 @@ public final class MainFrame extends JFrame
     private SqlPage sqlPage;
     /** 第四页「分层建模」：只在构造期建一次，Host 回调与自检都走它。 */
     private LayerPage layerPage;
-    /** 第五页「达梦 → MySQL」：达梦那边是本页自己的连接，MySQL 这端复用顶部连接栏。 */
+    /** 第五页「达梦 ⇄ MySQL」：达梦那边是本页自己的连接，MySQL 这端复用顶部连接栏。 */
     private DmPage dmPage;
     private ProgressDialog lastTask;
     /** 最近一次请求的任务标题：原地模式不弹框，标题也要留痕才断言得了"用的是 Python 原话"。 */
@@ -281,7 +281,7 @@ public final class MainFrame extends JFrame
         layerPage = new LayerPage(this);
         tabs.addTab("分层建模", layerPage);
         dmPage = new DmPage(this);
-        tabs.addTab("达梦 → MySQL", dmPage);
+        tabs.addTab("达梦 ⇄ MySQL", dmPage);
         add(tabs, BorderLayout.CENTER);
         // Ctrl+V 的绑定要放在三页都建完之后：文本控件的改挂是遍历这棵树做的，
         // 早一步遍历只会扑空（那时树里还没有输入框与 SQL 编辑区）

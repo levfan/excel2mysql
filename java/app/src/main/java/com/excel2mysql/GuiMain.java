@@ -122,7 +122,7 @@ public final class GuiMain {
                 } else {
                     com.excel2mysql.gui.DmPage dp = frame.dmPage();
                     if (frame.tabs().getTabCount() != 5
-                            || !"达梦 → MySQL".equals(frame.tabs().getTitleAt(4))) {
+                            || !"达梦 ⇄ MySQL".equals(frame.tabs().getTitleAt(4))) {
                         problems.add("第五页没排在第 5 位或标题不对：共 "
                                 + frame.tabs().getTabCount() + " 页");
                     }
@@ -237,6 +237,31 @@ public final class GuiMain {
                     if (!dp.saveTo(dmSql) || dmSql.length() <= 0L) {
                         problems.add("第五页保存 .sql 没落盘：" + dmSql.getPath());
                     }
+                    // 反向（MySQL → DM8）：翻方向清清单、目标格与按钮跟着换、
+                    // 生成的 DDL 是达梦形状（双引号标识符 + COMMENT ON + IDENTITY）
+                    dp.setDirectionForSelftest(false);
+                    if (dp.isDmToMysql()) {
+                        problems.add("方向切到 MySQL → DM8 后没生效");
+                    }
+                    if (!dp.suggestedSaveName().startsWith("mysql_to_dm_")) {
+                        problems.add("反向的默认保存名没带方向前缀：" + dp.suggestedSaveName());
+                    }
+                    java.util.List<com.excel2mysql.core.DmMysql.Table> myTables =
+                            new java.util.ArrayList<com.excel2mysql.core.DmMysql.Table>();
+                    myTables.add(myFixture());
+                    dp.setTablesForSelftest(myTables);
+                    String myDdl = dp.generate() == null ? "" : dp.outputText();
+                    if (!myDdl.contains("CREATE TABLE \"t_oil\"")
+                            || !myDdl.contains("\"id\" BIGINT IDENTITY(1,1) NOT NULL")
+                            || !myDdl.contains("\"name\" VARCHAR(200) NOT NULL")
+                            || !myDdl.contains("PRIMARY KEY (\"id\")")) {
+                        problems.add("反向生成的达梦 DDL 不像样：" + myDdl);
+                    }
+                    if (!myDdl.contains("COMMENT ON TABLE \"t_oil\" IS '油料台账'")
+                            || !myDdl.contains("COMMENT ON COLUMN \"t_oil\".\"name\" IS '名称'")) {
+                        problems.add("达梦注释没走 COMMENT ON：" + myDdl);
+                    }
+                    mysql_dm_ddl_selftest(problems);
                     // 日志段：几百行也不许长高、不许白占版面（用户报「日志撑满整个工具」）
                     dm_log_bounded(frame, dp, problems);
                 }
@@ -3253,6 +3278,66 @@ public final class GuiMain {
         return t;
     }
 
+    /** 一张 MySQL 侧的夹具：自增主键、无符号整数、字符长度、默认值、认不出的类型各来一样。 */
+    private static com.excel2mysql.core.DmMysql.Table myFixture() {
+        com.excel2mysql.core.DmMysql.Table t = new com.excel2mysql.core.DmMysql.Table();
+        t.schema = "testdb";
+        t.name = "t_oil";
+        t.comment = "油料台账";
+        com.excel2mysql.core.DmMysql.Column id = myCol("id", "bigint", false, "", "主键");
+        id.autoIncrement = true;
+        t.columns.add(id);
+        t.columns.add(myCol("name", "varchar(50)", false, "", "名称"));
+        t.columns.add(myCol("qty", "int unsigned", true, "", "数量"));
+        t.columns.add(myCol("price", "decimal(12,2)", true, "0.00", "单价"));
+        t.columns.add(myCol("big", "text", true, "", "说明"));
+        t.columns.add(myCol("created", "timestamp", true, "CURRENT_TIMESTAMP", "创建时间"));
+        t.columns.add(myCol("weird", "VagueType", true, "", "认不出的类型"));
+        t.primaryKeys.add("id");
+        return t;
+    }
+
+    private static com.excel2mysql.core.DmMysql.Column myCol(String name, String type,
+                                                             boolean nullable, String def,
+                                                             String cm) {
+        com.excel2mysql.core.DmMysql.Column c = new com.excel2mysql.core.DmMysql.Column();
+        c.name = name;
+        c.type = type;
+        c.nullable = nullable;
+        c.dbDefault = def;
+        c.comment = cm;
+        return c;
+    }
+
+    /** MySQL → 达梦的转换口径逐条断言：IDENTITY、4 倍字符长度、COMMENT ON、默认值收窄。 */
+    private static void mysql_dm_ddl_selftest(List<String> problems) {
+        List<String> warns = new ArrayList<String>();
+        String ddl = com.excel2mysql.core.MysqlDm.ddl(myFixture(), true, warns);
+        String[] want = {
+                "CREATE TABLE \"t_oil\" (",
+                "  \"id\" BIGINT IDENTITY(1,1) NOT NULL",
+                "  \"name\" VARCHAR(200) NOT NULL",
+                "  \"qty\" INT DEFAULT NULL",
+                "  \"price\" DECIMAL(12,2) DEFAULT 0.00",
+                "  \"big\" CLOB DEFAULT NULL",
+                "  \"created\" TIMESTAMP DEFAULT SYSDATE",
+                "  PRIMARY KEY (\"id\")",
+                "COMMENT ON TABLE \"t_oil\" IS '油料台账'",
+                "COMMENT ON COLUMN \"t_oil\".\"name\" IS '名称'",
+        };
+        for (String w : want) {
+            if (!ddl.contains(w)) {
+                problems.add("MySQL→达梦 少了这一段：" + w + "｜实际：" + ddl);
+            }
+        }
+        if (!ddl.contains("\"weird\" CLOB")) {
+            problems.add("认出的类型没落 CLOB 或列被丢了：" + ddl);
+        }
+        if (!warns.toString().contains("无符号") || !warns.toString().contains("不认识")) {
+            problems.add("无符号与认不出的类型没记账：" + warns);
+        }
+    }
+
     /** 一张覆盖面够宽的达梦表：主键、变长、定标数、大对象、时间戳、非法列名各来一样。 */
     private static com.excel2mysql.core.DmMysql.Table dmFixture() {
         com.excel2mysql.core.DmMysql.Table t = new com.excel2mysql.core.DmMysql.Table();
@@ -3429,7 +3514,7 @@ public final class GuiMain {
      */
     private static final String[] STATIC_TEXTS = {
             "中英表头建模，回写库", "解析建表语句，回写库", "执行脚本与临时语句",
-            "读 ods 建模 obj/dom/ads", "连达梦读表结构，生成 MySQL 建表语句",
+            "读 ods 建模 obj/dom/ads", "达梦 DM8 与 MySQL 互转建表语句（含表与字段注释）",
             "主机：", "端口：", "用户名：", "密码：", "目标库：",
             "命名规则：", "命名规则：", "表名前缀：", "表名前缀：",
             "SQL 文本", "执行结果", "还没有执行结果"};

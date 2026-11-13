@@ -35,6 +35,8 @@ public final class DmMysql {
         public boolean nullable = true;
         public String dbDefault = "";
         public String comment = "";
+        /** MySQL 侧的 AUTO_INCREMENT：翻到达梦落 IDENTITY(1,1)（达梦没有自增语法同名物）。 */
+        public boolean autoIncrement;
     }
 
     public static final class Table {
