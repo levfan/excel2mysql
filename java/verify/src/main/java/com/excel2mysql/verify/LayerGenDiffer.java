@@ -120,6 +120,48 @@ public final class LayerGenDiffer {
         if (!ads.transformSql.contains("MAX(`src_batch_id`)")) {
             bad++; shown.add("ads 的 src_batch_id 没从 dom 聚合回填");
         }
+        // ETL 批次号必须是生成这一刻定下的具体值：旧口径写死 '@src_batch_id'，交付脚本跑完
+        // etl_batch_id 全是这个字符串，批次追溯就断了。判据三条：没有占位符、全篇同一个值、
+        // 是 17 位数字（14 位时间 + 3 位序号），且字段映射的转换规则与 SQL 同源。
+        if (ads.transformSql.contains("@src_batch_id") || ads.fieldMapping.toString().contains("@src_batch_id")) {
+            bad++; shown.add("ads 的 etl_batch_id 还是 @src_batch_id 占位符");
+        }
+        Set<String> bids = batchIdsOf(ads.transformSql);
+        if (bids.size() != 1) {
+            bad++; shown.add("ads 的 etl_batch_id 应全篇同一个具体值，实际 " + bids);
+        } else {
+            String bid = bids.iterator().next();
+            if (bid.length() != 17 || !bid.matches("[0-9]{17}")) {
+                bad++; shown.add("ads 的 etl_batch_id 不是 17 位数字批次号：" + bid);
+            }
+            String rule = "'" + bid + "'";
+            boolean mapOk = false;
+            for (MappingFile.FieldMap f : ads.fieldMapping) {
+                if ("etl_batch_id".equals(f.dstField) && rule.equals(f.transformRule)) {
+                    mapOk = true;
+                }
+            }
+            if (!mapOk) { bad++; shown.add("字段映射里 etl_batch_id 的取值与转换 SQL 不一致：" + rule); }
+            if (!ads.transformSql.contains("-- ETL 批次号 etl_batch_id = " + bid)) {
+                bad++; shown.add("转换 SQL 顶上没写明本次批次号");
+            }
+        }
+        // 调用方自己给批次号时不许被换掉：同一个值要原样落进 SQL（同一次运行三层同一个批次）
+        LayerGen.GenOptions fixed = new LayerGen.GenOptions();
+        fixed.batchId = "20260101000000001";
+        LayerGen.LayerOutput fixedAds = LayerGen.genLayer(LayerGen.Layer.ADS, m, src, fixed);
+        if (!fixedAds.transformSql.contains("'20260101000000001' AS `etl_batch_id`")
+                || !"20260101000000001".equals(fixedAds.batchId)) {
+            bad++; shown.add("调用方指定的批次号没被沿用");
+        }
+        // 没给批次号时每次生成都现取一个（不能再回到常量占位符）
+        LayerGen.LayerOutput autoAds = LayerGen.genLayer(LayerGen.Layer.ADS, m, src,
+                new LayerGen.GenOptions());
+        if (autoAds.batchId.isEmpty()
+                || !autoAds.batchId.matches("[0-9]{17}")
+                || !autoAds.transformSql.contains("'" + autoAds.batchId + "' AS `etl_batch_id`")) {
+            bad++; shown.add("未给批次号时没自动取具体值：" + autoAds.batchId);
+        }
 
         // ---- 合并护栏：超限不再拒绝，改成自动拆成每个领域目标表 ----
         // 11 张源表写同一个目标表：超来源数上限 → 每张源表一张能建出来的领域目标表
@@ -557,6 +599,18 @@ public final class LayerGenDiffer {
         int n = 0;
         for (int i = s.indexOf(needle); i >= 0; i = s.indexOf(needle, i + needle.length())) { n++; }
         return n;
+    }
+
+    /**
+     * 转换 SQL 里 etl_batch_id 的全部取值（已去掉引号）。正常只有一个；多于一个说明同一次
+     * 生成里串了批次，少于一个说明这条 INSERT 压根没写批次号。
+     */
+    private static Set<String> batchIdsOf(String sql) {
+        Set<String> out = new LinkedHashSet<String>();
+        java.util.regex.Matcher mt = java.util.regex.Pattern
+                .compile("'([0-9]{6,})' AS `etl_batch_id`").matcher(sql);
+        while (mt.find()) { out.add(mt.group(1)); }
+        return out;
     }
 
     private static int countMapping(List<MappingFile.FieldMap> rows, List<String> fields) {

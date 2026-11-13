@@ -126,14 +126,23 @@ public final class DomainGuess {
         Fields cf = classifiable(in);
         String fields = cf.joined.toString();
         String cn = nz(in.tableCn).isEmpty() ? stem : in.tableCn.trim();
+        // 维度先算一遍：管道表的弱证据（英文表名后缀）要拿它复核，领域判完也要用它
+        List<String> preDims = Taxonomy.dims(cf.comments, cf.names, MAX_DIMS);
 
         if (Taxonomy.isMeta(cn, in.tableEn)) {
-            c.domain = "综合";
-            c.sub = "信息化";
-            c.guessed = true;
-            c.status = "自动识别";
-            c.basis = "系统表（字典/日志/账号一类）归综合/信息化";
-            return c;
+            // 强证据（中文词 / sys_ 前缀）是铁证；只有英文表名后缀是弱证据——
+            // 人员主档 t_staff_user、品名目录 t_equip_catalog 这类业务主数据也常带
+            // _user/_catalog 尾巴，但字段里明确是「人/物资」实体，不当管道表
+            if (Taxonomy.isMetaStrong(cn, in.tableEn) || preDims.isEmpty()) {
+                c.domain = "综合";
+                c.sub = "信息化";
+                c.guessed = true;
+                c.status = "自动识别";
+                c.basis = "系统表（字典/日志/账号一类）归综合/信息化";
+                return c;
+            }
+            c.basis = "表名后缀像系统表，但字段明确是「"
+                    + Taxonomy.dimCn(preDims.get(0)) + "」业务数据，按业务表判定；";
         }
 
         Taxonomy.Prior p = Taxonomy.prior(in.system, in.tableEn);
@@ -143,14 +152,17 @@ public final class DomainGuess {
             c.sub = p.sub;
             c.guessed = true;
             c.status = "自动识别";
-            c.basis = p.via + "先验归领域「" + p.domain + "」/「" + p.sub + "」";
+            c.basis = nz(c.basis) + p.via + "先验归领域「" + p.domain + "」/「" + p.sub + "」";
             String best = null;
             int bestScore = 0;
             Taxonomy.Domain d = Taxonomy.domain(p.domain);
             if (d != null) {
                 for (String sub : d.subs) {
-                    // 先验已经说了系统，细化只看这张表自己的名字与字段，免得系统名又把默认档数回来
-                    int s = Taxonomy.scoreSub(sub, cn, stem, "", fields);
+                    // 先验已经说了系统，细化只看这张表自己的名字与字段，免得系统名又把默认档数回来；
+                    // 先验子领域打底 PRIOR_SUB_BONUS 分：字段噪声（实力表字段里带一句「油料」）
+                    // 赢不过它，表名/字段有真证据（命中一次 3 分起）才允许换档
+                    int s = Taxonomy.scoreSub(sub, cn, stem, "", fields)
+                            + (sub.equals(p.sub) ? PRIOR_SUB_BONUS : 0);
                     if (s > bestScore) {
                         bestScore = s;
                         best = sub;
@@ -162,7 +174,13 @@ public final class DomainGuess {
                 c.sub = best;
                 c.basis += "；表名/字段命中「" + hit + "」细化到「" + best + "」";
             }
-            c.dims = Taxonomy.dims(cf.comments, cf.names, MAX_DIMS);
+            c.dims = preDims;
+            if (c.dims.isEmpty()) {
+                c.dims = dimsFromName(cn, in.tableEn);
+                if (!c.dims.isEmpty()) {
+                    c.basis += "；字段里没有维度词，按表名补判维度";
+                }
+            }
             if (c.dims.isEmpty()) {
                 c.warning = in.tableEn + " 未见十类对象维度关键词，obj 层不产这张表";
             }
@@ -212,10 +230,34 @@ public final class DomainGuess {
                 + " 分）归「" + bestDomain + "」"
                 + (hit == null ? "" : "，子领域命中「" + hit + "」");
         c.dims = Taxonomy.dims(in.fieldComments, in.fieldNames, MAX_DIMS);
+        if (c.dims.isEmpty() && !preDims.isEmpty()) {
+            c.dims = preDims;
+        }
+        if (c.dims.isEmpty()) {
+            c.dims = dimsFromName(cn, in.tableEn);
+            if (!c.dims.isEmpty()) {
+                c.basis += "；字段里没有维度词，按表名补判维度";
+            }
+        }
         if (c.dims.isEmpty()) {
             c.warning = in.tableEn + " 未见十类对象维度关键词，obj 层不产这张表";
         }
         return c;
+    }
+
+    /** 先验子领域的打底分：挑战者要靠真证据（表名命中 3 分起）赢过它才换档。 */
+    private static final int PRIOR_SUB_BONUS = 2;
+
+    /**
+     * 字段里数不出维度词时的兜底：拿表中文名与表名再判一次（表名也是业务证据，
+     * 「人员主档表」整表就是一个人）。仍数不出就真没有——返回空，由调用方写告警。
+     */
+    private static List<String> dimsFromName(String tableCn, String tableEn) {
+        List<String> cn = new ArrayList<String>();
+        cn.add(nz(tableCn));
+        List<String> en = new ArrayList<String>();
+        en.add(nz(tableEn));
+        return Taxonomy.dims(cn, en, MAX_DIMS);
     }
 
     private static Verdict row(Input in, Cls c) {

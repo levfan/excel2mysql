@@ -351,6 +351,29 @@ public final class GuiMain {
                     }
                     if (!found) { problems.add("只生成模式 generateTo(obj) 后没在临时根落下 obj_ddl.sql"); }
                     if (!exceptionApplied) { problems.add("字段映射例外没覆盖进 obj_field_mapping.csv"); }
+                    // ads 的 ETL 批次号：不许再是 @src_batch_id 占位符，得是生成这一刻的具体值，
+                    // 并在日志里点名这一批（现场拿日志对交付 SQL 靠这一行）
+                    lp.generateTo(com.excel2mysql.core.LayerGen.Layer.ADS, outRoot.getPath());
+                    if (!lp.logPanel().contains("ads 批次号 etl_batch_id = ")) {
+                        problems.add("ads 生成没在日志里点名批次号");
+                    }
+                    boolean adsChecked = false;
+                    java.io.File[] adirs = outRoot.listFiles();
+                    if (adirs != null) {
+                        for (java.io.File d : adirs) {
+                            java.io.File tf = new java.io.File(d, "ads_transform.sql");
+                            if (!tf.isFile()) { continue; }
+                            String adsSql = new String(java.nio.file.Files.readAllBytes(tf.toPath()),
+                                    java.nio.charset.StandardCharsets.UTF_8);
+                            if (adsSql.contains("@src_batch_id")) {
+                                problems.add("ads 转换 SQL 的 etl_batch_id 还是 @src_batch_id 占位符");
+                            } else if (!adsSql.matches("(?s).*'[0-9]{17}' AS `etl_batch_id`.*")) {
+                                problems.add("ads 转换 SQL 的 etl_batch_id 不是具体批次号");
+                            }
+                            adsChecked = true;
+                        }
+                    }
+                    if (!adsChecked) { problems.add("ads 生成没落下 ads_transform.sql"); }
                     // 依赖锁：仅生成 obj 后 ads 仍不该亮（dom 未生成）——这条锁死 adsBtn.setEnabled(ready)
                     if (lp.adsButton().isEnabled()) {
                         problems.add("仅生成 obj 后 ads 不该亮（dom 未生成）");
@@ -597,6 +620,8 @@ public final class GuiMain {
                 ddl_dialog_and_widgets(frame, files, problems);
                 // 导入那条路的文案与计项口径
                 import_run(problems);
+                // 分层入库预检的纯函数：DDL 类型解析、数值样本判定、源表与聚合识别
+                layer_gen_precheck(problems);
                 sql_run_connect_failure(problems);
                 // 子线程出意外时的兜底文案
                 task_crash(frame, problems);
@@ -2990,6 +3015,56 @@ public final class GuiMain {
                 }
             }
         }
+        // 7b) 管道表判定分档：中文字典/日志与 sys_ 前缀是铁证；只有英文表名后缀（_user/_catalog）
+        // 是弱证据，字段里明确是业务实体（姓名/身份证）就不许被劫进信息化——人员主档表正是这样
+        java.util.List<com.excel2mysql.core.DomainGuess.Input> biz =
+                new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
+        biz.add(guessIn("人员主档表.xlsx", "仓库业务综合管理系统", "人员主档表",
+                "ods_ckywzhglxt_t_staff_user", 3, "",
+                new String[]{"姓名", "性别", "身份证号"}));
+        com.excel2mysql.core.DomainGuess.Verdict bizV = DomainGuess.guess(biz, nm).get(0);
+        if ("信息化".equals(bizV.map.domainSub)) {
+            problems.add("业务主数据被表名后缀 _user 判成了系统表：" + DomainGuess.describe(bizV));
+        }
+        if (!bizV.map.objDims.contains("dim_person")) {
+            problems.add("人员主档表的业务维度没判出来：" + bizV.map.objDims);
+        }
+        biz.clear();
+        biz.add(guessIn("字典数据表.xlsx", "仓库业务综合管理系统", "字典数据表",
+                "ods_ckywzhglxt_sys_dict_data", 2, "",
+                new String[]{"字典类型", "类型编码"}));
+        com.excel2mysql.core.DomainGuess.Verdict dictV = DomainGuess.guess(biz, nm).get(0);
+        if (!"信息化".equals(dictV.map.domainSub)) {
+            problems.add("中文名带「字典」的仍是铁证管道表，不该被业务维度翻回去："
+                    + DomainGuess.describe(dictV));
+        }
+        // 7c) 英文词按整词命中：字段名 operation_type 不许再把「ration」算成给养保障
+        biz.clear();
+        biz.add(guessIn("数据审计记录表.xlsx", "仓库业务综合管理系统", "数据审计记录表",
+                "ods_ckywzhglxt_dc_data_audit_record", 2, "",
+                new String[]{"操作类型", "审计结果"}));
+        com.excel2mysql.core.DomainGuess.Verdict tok = DomainGuess.guess(biz, nm).get(0);
+        if (!"物资保障".equals(tok.map.domainSub)) {
+            problems.add("字段名 operation 的子串误命中没修掉（应留在先验的物资保障）："
+                    + DomainGuess.describe(tok));
+        }
+        // 7d) 先验子领域打底：给养系统的实力表字段里带一句「油料」，不许整表翻成油料保障
+        biz.clear();
+        biz.add(guessIn("单位实力查询.xlsx", "军队给养系统", "单位实力查询",
+                "ods_jdjyxt_dwslcx", 3, "",
+                new String[]{"油料实力", "给养实力", "人员实力"}));
+        com.excel2mysql.core.DomainGuess.Verdict pri = DomainGuess.guess(biz, nm).get(0);
+        if (!"给养保障".equals(pri.map.domainSub)) {
+            problems.add("先验子领域没打底，字段噪声把表翻走了：" + DomainGuess.describe(pri));
+        }
+        // 7e) 字段里数不出维度词时按表名补判：整表就是「人员」，obj 不该少这一张
+        biz.clear();
+        biz.add(guessIn("人员主档表.xlsx", "军队人员保障信息综合管理系统", "人员主档表",
+                "ods_jdbzkxt_ryzdb", 0, "", new String[]{}));
+        com.excel2mysql.core.DomainGuess.Verdict nameDim = DomainGuess.guess(biz, nm).get(0);
+        if (!nameDim.map.objDims.contains("dim_person")) {
+            problems.add("表名补判维度没生效：" + DomainGuess.describe(nameDim));
+        }
         // 8) 一源一表：三张各 50 列的同子领域表产三张目标表，互不合并
         java.util.List<com.excel2mysql.core.DomainGuess.Input> wide =
                 new java.util.ArrayList<com.excel2mysql.core.DomainGuess.Input>();
@@ -3630,12 +3705,24 @@ public final class GuiMain {
         }
         String f0 = frame.tables().get(0).filepath;
         String f1 = frame.tables().get(1).filepath;
+        String badName = frame.tables().get(1).tableName;
         List<MainFrame.ImportOutcome> outs = new ArrayList<MainFrame.ImportOutcome>();
-        outs.add(new MainFrame.ImportOutcome(f0, true));
-        outs.add(new MainFrame.ImportOutcome(f1, false));
+        outs.add(new MainFrame.ImportOutcome(f0, true, frame.tables().get(0).tableName, "导入 4 行"));
+        outs.add(new MainFrame.ImportOutcome(f1, false, badName,
+                "建表失败：SQLException（MySQL 错误码 1064）：语法错"));
         String summary = frame.finishImport(outs, false);
         if (!summary.contains("成功 1 张表，失败 1 张表")) {
             problems.add("收尾汇总文案不对：" + summary.replace((char) 10, ' '));
+        }
+        // 失败原因要按表名逐条落到弹窗里：只写"失败 N 张"，现场还得自己去日志翻是哪张表
+        if (!summary.contains("失败的 1 张表（表名与原因）：")
+                || !summary.contains("`" + badName + "`")
+                || !summary.contains("建表失败：SQLException（MySQL 错误码 1064）：语法错")) {
+            problems.add("失败清单没按表名给出具体报错：" + summary.replace((char) 10, ' '));
+        }
+        frame.informImportDone(summary, true);
+        if (!"warning".equals(frame.lastDialogIcon())) {
+            problems.add("有失败时导入弹窗该用警告级图标，实际 " + frame.lastDialogIcon());
         }
         if (!frame.logPanel().contains("===== 全部完成：成功 1 张表，失败 1 张表 =====")) {
             problems.add("收尾没有写汇总日志行");
@@ -3678,6 +3765,14 @@ public final class GuiMain {
         }
         if (frame.logPanel().isErrorLine("成功 2 张表，失败 0 张表")) {
             problems.add("零失败的汇总行被标成了错误级");
+        }
+        // 夹具只给路径与"失败"（老调用那样）：表名与原因缺失也要写成能读的一行，
+        // 不能渲染成 "``（）："这种空白，让人以为程序坏了
+        List<MainFrame.ImportOutcome> bare = new ArrayList<MainFrame.ImportOutcome>();
+        bare.add(new MainFrame.ImportOutcome("C:/tmp/bare.xlsx", false));
+        String bareMsg = frame.finishImport(bare, false);
+        if (!bareMsg.contains("`（未命名表）`（bare.xlsx）：（没有拿到报错正文，见日志）")) {
+            problems.add("失败清单缺表名/原因时没兜底：" + bareMsg.replace((char) 10, ' '));
         }
         frame.clearAll();
     }
@@ -8983,6 +9078,83 @@ public final class GuiMain {
         @Override
         public void warn(String text) {
             pops.add(text);
+        }
+    }
+
+    /**
+     * 分层入库预检的纯函数：DDL 解析出目标列类型、数值样本判定、FROM 源表识别、聚合识别。
+     * 这四件是「按数据修精度」的地基——解析错了预检就睁眼瞎，先在这里钉死。
+     */
+    private static void layer_gen_precheck(List<String> problems) {
+        String ddl = "USE `obj`;\n\nDROP TABLE IF EXISTS `dim_person`;\n\n"
+                + "CREATE TABLE `dim_person` (\n"
+                + "  `person_id` VARCHAR(64) NOT NULL COMMENT 'dim_person 主键',\n"
+                + "  `id` BIGINT DEFAULT NULL COMMENT '主键',\n"
+                + "  `qty` DECIMAL(18,4) DEFAULT NULL COMMENT '数量',\n"
+                + "  PRIMARY KEY (`person_id`)\n"
+                + ") ENGINE=InnoDB;";
+        java.util.Map<String, java.util.Map<String, String>> types =
+                com.excel2mysql.core.LayerGen.ddlColumnTypes(ddl);
+        if (types.size() != 1 || types.get("dim_person") == null
+                || !"BIGINT".equals(types.get("dim_person").get("id"))
+                || !"DECIMAL(18,4)".equals(types.get("dim_person").get("qty"))
+                || !"VARCHAR(64)".equals(types.get("dim_person").get("person_id"))) {
+            problems.add("DDL 解析没拿到目标列类型：" + types);
+        }
+        if (com.excel2mysql.core.LayerGen.sampleFits("BIGINT", "f3a9c2d0e1b2")) {
+            problems.add("数值列的样本判定放过了 UUID 字符串");
+        }
+        if (com.excel2mysql.core.LayerGen.sampleFits("VARCHAR(10)", "12345678901")
+                || !com.excel2mysql.core.LayerGen.sampleFits("VARCHAR(10)", "1234567890")
+                || !com.excel2mysql.core.LayerGen.sampleFits("VARCHAR(64)", "1234567890")) {
+            problems.add("VARCHAR 的长度判定不对：超长要拦、没超要放");
+        }
+        // 修精度必须给出「能装下样本的最窄类型」，不是一律退 TEXT：
+        // 全数字 id → INT/BIGINT，32 位 UUID → VARCHAR 档，超长文本才 TEXT
+        java.util.List<String> uuids = java.util.Arrays.asList(
+                "f3a9c2d0e1b24d6e8a15c0d3f4e5a6b7", "08b7a6e5d4c3b2a190817263544536f2");
+        String uuidType = com.excel2mysql.core.Infer.typeOfSamples(uuids, false);
+        if (uuidType == null || !uuidType.startsWith("VARCHAR(") || uuidType.startsWith("TEXT")) {
+            problems.add("UUID 样本没落进 VARCHAR 档：" + uuidType);
+        }
+        if (!"INT".equals(com.excel2mysql.core.Infer.typeOfSamples(
+                java.util.Arrays.asList("123", "456"), false))) {
+            problems.add("全数字小整数样本没判成 INT：" + com.excel2mysql.core.Infer.typeOfSamples(
+                    java.util.Arrays.asList("123", "456"), false));
+        }
+        if (!"BIGINT".equals(com.excel2mysql.core.Infer.typeOfSamples(
+                java.util.Arrays.asList("2200000000", "2200000001"), false))) {
+            problems.add("超出 INT 的整数样本没判成 BIGINT");
+        }
+        String mixed = com.excel2mysql.core.Infer.typeOfSamples(
+                java.util.Arrays.asList("123", "f3a9c2d0e1b24d6e8a15c0d3f4e5a6b7"), true);
+        if (mixed == null || !mixed.startsWith("VARCHAR(")) {
+            problems.add("强制文本判定没落进 VARCHAR 档：" + mixed);
+        }
+        if (com.excel2mysql.core.Infer.typeOfSamples(
+                java.util.Arrays.asList("", null), false) != null) {
+            problems.add("样本全空时不该有证据改类型");
+        }
+        if (!com.excel2mysql.core.LayerGen.sampleFits("BIGINT", "123")
+                || !com.excel2mysql.core.LayerGen.sampleFits("DECIMAL(18,4)", "-3.5")
+                || !com.excel2mysql.core.LayerGen.sampleFits("VARCHAR(64)", "f3a9c2d0e1b2")
+                || !com.excel2mysql.core.LayerGen.sampleFits("BIGINT", null)
+                || !com.excel2mysql.core.LayerGen.sampleFits("BIGINT", "")) {
+            problems.add("数值/文本样本判定误伤合法值");
+        }
+        String objStmt = "INSERT INTO `dim_org` SELECT `id` FROM (SELECT DISTINCT `id` "
+                + "FROM `ods`.`ods_t_staff_user`) AS `e_ods_t_staff_user`";
+        java.util.List<String[]> srcs = com.excel2mysql.core.LayerGen.sourcesOf(objStmt);
+        if (srcs.size() != 1 || !"ods".equals(srcs.get(0)[0])
+                || !"ods_t_staff_user".equals(srcs.get(0)[1])) {
+            problems.add("FROM 源表识别不对（UNION 多支应逐条返回）：" + srcs.size());
+        }
+        if (com.excel2mysql.core.LayerGen.hasAggregate(objStmt)) {
+            problems.add("逐列直取的语句被当成了聚合语句，预检会整个跳过");
+        }
+        if (!com.excel2mysql.core.LayerGen.hasAggregate(
+                "INSERT INTO `ads_general` SELECT COUNT(*) AS `idx_value` FROM `dom`.`dwd_x`")) {
+            problems.add("聚合语句没被识别，ads 的采样预检会做无用功");
         }
     }
 

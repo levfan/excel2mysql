@@ -576,6 +576,79 @@ public final class Infer {
         return VARCHAR_MAX_CHARS;
     }
 
+    /**
+     * 一组样本值按 {@link #inferColumns} 同一套值判定给出<b>能装下它们的最窄类型</b>：
+     * 整数走 INT / BIGINT / DECIMAL(n,0)，小数走 DECIMAL(p,s)，文本走 VARCHAR(档位)
+     * （观测长度 + 余量，与建表页同一档位规则），只有超长文本才 TEXT/MEDIUMTEXT——
+     * 全数字的 id 不会退成 TEXT，32 位 UUID 落 VARCHAR(64) 档（观测 32 + 余量 16 → 48，
+     * 32 档只留给观测 ≤16 字节的列，拿不准宁宽不窄）。
+     *
+     * <p>样本全空返回 null，调用方保持原类型不动；forceString 跳过数值分支按文本判——
+     * 数值列被塞进非数字值时（1366/1265），那个值显然是文本，再判成 INT 会二次失败。
+     */
+    public static String typeOfSamples(List<String> samples, boolean forceString) {
+        int maxLen = 0;
+        boolean hasValue = false;
+        boolean allInt = true;
+        boolean allDec = true;
+        int obsInt = 0;
+        int obsScale = 0;
+        BigDecimal extreme = null;
+        for (String raw : samples) {
+            if (raw == null) {
+                continue;
+            }
+            String v = raw.trim();
+            if (v.isEmpty()) {
+                continue;
+            }
+            hasValue = true;
+            maxLen = Math.max(maxLen, v.getBytes(UTF8).length);
+            boolean intOk = v.matches("-?\\d+") && !hasLeadingZero(v);
+            boolean decOk = intOk || v.matches("-?\\d+\\.\\d+");
+            if (!intOk) {
+                allInt = false;
+            }
+            if (!decOk) {
+                allDec = false;
+            }
+            if (decOk) {
+                BigDecimal d = new BigDecimal(v.replace(",", "").replace("，", ""));
+                int digits = Math.max(1, d.precision() - Math.max(d.scale(), 0));
+                obsInt = Math.max(obsInt, digits);
+                obsScale = Math.max(obsScale, Math.max(0, d.scale()));
+                BigDecimal abs = d.abs();
+                extreme = extreme == null || abs.compareTo(extreme) > 0 ? abs : extreme;
+            }
+        }
+        if (!hasValue) {
+            return null;
+        }
+        if (!forceString && allInt) {
+            if (extreme.compareTo(BIGINT_MAX) > 0) {
+                String t = intDecimalType(obsInt);
+                return t == null ? stringType(maxLen) : t;
+            }
+            return extreme.compareTo(INT_MAX) > 0 ? "BIGINT" : "INT";
+        }
+        if (!forceString && allDec) {
+            String t = decimalType(obsInt, obsScale, 4, false);
+            return t == null ? stringType(maxLen) : t;
+        }
+        return stringType(maxLen);
+    }
+
+    /** 文本档：观测长度 + 余量，落 VARCHAR 档位；超长才 TEXT——与 inferColumns 的文本分支同口径。 */
+    private static String stringType(int maxLen) {
+
+        long headroom = Math.max(16, maxLen / 5);
+        long needed = maxLen + headroom;
+        if (needed <= VARCHAR_MAX_CHARS) {
+            return "VARCHAR(" + varcharTier((int) needed) + ")";
+        }
+        return needed <= 65535 ? "TEXT" : "MEDIUMTEXT";
+    }
+
     /** 对齐 Python 的 str(v)：float 走 repr，日期走 isoformat，布尔是 True/False。 */
     public static String pyStr(Object v) {
         if (v == null) {

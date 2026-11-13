@@ -29,11 +29,33 @@ public final class LayerGen {
         public String domDb = "dom";
         public String adsDb = "ads";
         public boolean writeMode = false;
-        public String batchId = "@src_batch_id";
+        /**
+         * ETL 批次号：生成这一刻定成具体值（14 位时间 + 3 位序号）写进 ads 的 INSERT 与字段映射。
+         * 留空表示"由本次生成自己取一个"，{@link #genLayer} 会补上——任何调用方都不会再拿到
+         * {@code @src_batch_id} 那种占位符。调用方先赋值时沿用（同一次运行三层同一个批次）。
+         */
+        public String batchId = "";
+    }
+
+    /**
+     * 本次生成的 ETL 批次号：14 位时间（yyyyMMddHHmmss）+ 3 位序号，纯数字，直接当字面量落进 SQL。
+     *
+     * <p>不用 UUID 的理由：批次号要能排序、能一眼看出是哪天哪一批，现场对账时比 36 位带横线的
+     * UUID 好念；列是 {@code VARCHAR(255)}，17 位数字装得下。同一秒内生成两次也不会撞（序号不同）。
+     */
+    public static String newBatchId() {
+        // 明确用 ROOT 区域：某些区域（如泰语）的日期格式会给非 ASCII 数字，
+        // 批次号必须是纯 0-9，否则落进列里既不是数值也对不上日志
+        String ts = new java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.ROOT)
+                .format(new java.util.Date());
+        int seq = java.util.concurrent.ThreadLocalRandom.current().nextInt(1000);
+        return ts + String.format(java.util.Locale.ROOT, "%03d", Integer.valueOf(seq));
     }
 
     public static final class LayerOutput {
         public Layer layer;
+        /** 本次生成用的 ETL 批次号：只有 ads 会把它写进数据，界面与日志据此点名这一批。 */
+        public String batchId = "";
         public String ddlSql = "";
         public String transformSql = "";
         public List<MappingFile.FieldMap> fieldMapping = new ArrayList<MappingFile.FieldMap>();
@@ -142,7 +164,7 @@ public final class LayerGen {
         GOV_COMMENT.put("caliber_ver", "统计口径版本");
         GOV_COMMENT.put("src_row_cnt", "源记录数");
         GOV_COMMENT.put("excluded_row_cnt", "剔除记录数");
-        GOV_COMMENT.put("etl_batch_id", "ETL 批次号，取本次运行批次（只生成脚本时为占位符）");
+        GOV_COMMENT.put("etl_batch_id", "ETL 批次号，生成时写入本次运行批次（形如 20261113193547042），六张主题表同一批");
         GOV_NAMES.addAll(GOV_COMMENT.keySet());
     }
 
@@ -172,12 +194,21 @@ public final class LayerGen {
     }
 
     public static LayerOutput genLayer(Layer layer, MappingFile m, List<SourceTable> src, GenOptions o) {
+        // 批次号在"生成"这一刻就定值：以前留 @src_batch_id 占位符，交付脚本跑完 etl_batch_id
+        // 全是这个字符串，批次回溯就断了。调用方给了就沿用（同一次运行三层同一个批次），
+        // 没给就现取一个——六张主题表共用这个值，不会一张表一个。
+        if (o.batchId == null || o.batchId.trim().isEmpty()) {
+            o.batchId = newBatchId();
+        }
+        LayerOutput out;
         switch (layer) {
-            case OBJ: return genObj(m, src, o);
-            case DOM: return genDom(m, src, o);
-            case ADS: return genAds(m, src, o);
+            case OBJ: out = genObj(m, src, o); break;
+            case DOM: out = genDom(m, src, o); break;
+            case ADS: out = genAds(m, src, o); break;
             default: throw new IllegalArgumentException("未知层：" + layer);
         }
+        out.batchId = o.batchId;
+        return out;
     }
 
     private static Map<String, SourceTable> byName(List<SourceTable> src) {
@@ -747,6 +778,10 @@ public final class LayerGen {
         }
         StringBuilder ddl = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
         StringBuilder dml = new StringBuilder("USE `" + o.adsDb + "`;\n\n");
+        // SQL 顶上写明这一批的批次号：交付文件被谁执行、什么时候执行，etl_batch_id 记的都是
+        // 生成这一刻定下的值——现场据此能把这批数据对回这次生成，不必再去猜。
+        dml.append("-- ETL 批次号 etl_batch_id = ").append(o.batchId)
+           .append("（本次生成批次，六张主题表同一批；要换批次请重新生成脚本）\n\n");
         int capped = 0;
         int castMeasures = 0;
         List<String> cappedSample = new ArrayList<String>();
@@ -1340,6 +1375,8 @@ public final class LayerGen {
         public int tablesCreated;
         public long rowsAffected;
         public List<String> errors = new ArrayList<String>();
+        /** 按数据修精度改过的列："表.列（原类型→新类型）"，日志与收尾要逐列点名。 */
+        public List<String> columnsWidened = new ArrayList<String>();
     }
 
     /** 读源库用户表结构（VIEW 排除），列按 ORDINAL_POSITION 序。不报进度、也不可中止的调用方走这一句。 */
@@ -1479,6 +1516,11 @@ public final class LayerGen {
             sink.advance(1, "DDL 第 " + pos + "/" + ddlTotal + " 条 · " + stmtHead(stmt));
         }
         int dmlTotal = dmlStmts.size();
+        // 入库前的数据预检（tab1「按数据修精度」的分层版）：obj/dom 生成只看得到声明类型，
+        // 「BIGINT 列里装着 32 位 UUID」这种声明与数据不符要到灌数才炸。这里在 DDL 跑完、
+        // 灌数之前，按源表采样 200 行对照目标列类型，装不下的目标列提前按数据修精度改类型；
+        // 采样只覆盖了前 200 行，灌数途中仍有修精度重试兜底
+        precheckSampleTypes(db, out, dmlStmts, wr, sink);
         for (String stmt : dmlStmts) {
             if (sink.cancelled()) {
                 sink.log("! [WARN] LAYER-EXEC | 已取消：库 " + targetDb + " 的转换 SQL 停在第 "
@@ -1492,7 +1534,17 @@ public final class LayerGen {
             }
             java.sql.Statement s = db.connection().createStatement();
             try {
-                int n = s.executeUpdate(stmt);
+                int n;
+                try {
+                    n = s.executeUpdate(stmt);
+                } catch (java.sql.SQLException e) {
+                    // 数据里的值装不进声明的列（典型：id 列元数据写 BIGINT、数据已经是
+                    // 32 位 UUID）→ 按源列样本修精度后重试一次，别让整轮入库卡在一张表上
+                    if (!widenAndRetry(db, stmt, e, out, wr, sink)) {
+                        throw e;
+                    }
+                    n = s.executeUpdate(stmt);
+                }
                 db.connection().commit();
                 if (n > 0) { wr.rowsAffected += n; }
             } catch (java.sql.SQLException e) {
@@ -1528,6 +1580,354 @@ public final class LayerGen {
     private static String stmtHead(String stmt) {
         String s = stmt.trim();
         return s.length() <= 60 ? s : s.substring(0, 60) + "…";
+    }
+
+    /** 写库失败里"列装不下"的那几种：截断 / 超长 / 非法值，加宽重试能救回来的。 */
+    static boolean isWidenable(java.sql.SQLException e) {
+        int code = e.getErrorCode();
+        return code == 1265 || code == 1406 || code == 1366;
+    }
+
+    /** 每张源表的采样行数：够暴露「声明数值、实为 UUID」这类冲突，又不至于拖慢入库。 */
+    static final int SAMPLE_ROWS = 200;
+
+    /**
+     * 目标列类型表：从 DDL 串解析「表 → (列 → 声明类型)」，数据预检与灌数重试共用这一份事实，
+     * 不再各猜一遍。DROP/USE 行自然匹配不上列形状，静默跳过。
+     */
+    public static Map<String, Map<String, String>> ddlColumnTypes(String ddl) {
+        Map<String, Map<String, String>> out = new LinkedHashMap<String, Map<String, String>>();
+        java.util.regex.Pattern head =
+                java.util.regex.Pattern.compile("CREATE TABLE `([A-Za-z0-9_]+)`");
+        java.util.regex.Pattern col = java.util.regex.Pattern
+                .compile("^\\s*`([A-Za-z0-9_]+)`\\s+([A-Z]+(?:\\([0-9,]+\\))?)\\s");
+        String cur = null;
+        for (String line : (ddl == null ? "" : ddl).split("\n", -1)) {
+            java.util.regex.Matcher mh = head.matcher(line);
+            if (mh.find()) {
+                cur = mh.group(1);
+                if (!out.containsKey(cur)) {
+                    out.put(cur, new LinkedHashMap<String, String>());
+                }
+                continue;
+            }
+            if (cur == null) { continue; }
+            java.util.regex.Matcher mc = col.matcher(line);
+            if (mc.find()) {
+                out.get(cur).put(mc.group(1), mc.group(2));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 样本值能不能装进声明的类型：数值列要纯数字，VARCHAR/CHAR 要字符数不超长，
+     * 其余类型不做内容判。装不下就走「按数据修精度」那条路改类型，不是一律退 TEXT。
+     */
+    public static boolean sampleFits(String ddlType, String value) {
+        String t = ddlType == null ? "" : ddlType.trim().toUpperCase(java.util.Locale.ROOT);
+        if (value == null) {
+            return true;
+        }
+        String v = value.trim();
+        if (v.isEmpty()) {
+            return true;
+        }
+        boolean numeric = t.startsWith("INT") || t.startsWith("BIGINT") || t.startsWith("SMALLINT")
+                || t.startsWith("TINYINT") || t.startsWith("DECIMAL") || t.startsWith("NUMERIC")
+                || t.startsWith("FLOAT") || t.startsWith("DOUBLE");
+        if (numeric) {
+            return v.matches("-?[0-9]+(\\.[0-9]+)?");
+        }
+        if (t.startsWith("VARCHAR") || t.startsWith("CHAR")) {
+            java.util.regex.Matcher mt = java.util.regex.Pattern
+                    .compile("\\((\\d+)\\)").matcher(t);
+            if (mt.find()) {
+                return v.length() <= Integer.parseInt(mt.group(1));
+            }
+        }
+        return true;
+    }
+
+    /** 转换语句里 FROM 的源表（库名限定成对返回）；obj 的 UNION ALL 会返回多张。 */
+    public static List<String[]> sourcesOf(String stmt) {
+        List<String[]> out = new ArrayList<String[]>();
+        java.util.regex.Matcher mt = java.util.regex.Pattern
+                .compile("FROM `([A-Za-z0-9_]+)`\\.`([A-Za-z0-9_]+)`")
+                .matcher(stmt == null ? "" : stmt);
+        while (mt.find()) {
+            out.add(new String[]{mt.group(1), mt.group(2)});
+        }
+        return out;
+    }
+
+    /** ads 那种聚合语句：指标值在 SQL 里已经 CAST/聚合，采样源列没有意义，预检跳过。 */
+    public static boolean hasAggregate(String stmt) {
+        String u = (stmt == null ? "" : stmt).toUpperCase(java.util.Locale.ROOT);
+        return u.contains("COUNT(") || u.contains("SUM(") || u.contains("AVG(")
+                || u.contains("MAX(") || u.contains("MIN(");
+    }
+
+    /**
+     * 入库前的数据预检：按 INSERT 语句找出源表，每张采样 {@link #SAMPLE_ROWS} 行，
+     * 对照字段映射与目标列声明类型，装不下的列提前<b>按数据修精度</b>改类型
+     * （整数→INT/BIGINT、UUID/文本→VARCHAR 档位，只有超长文本才 TEXT）。尽力而为：
+     * 读不到源表、修精度失败都只记 WARN 不拦入库，灌数途中的修精度重试继续兜底。
+     */
+    private static void precheckSampleTypes(DbClient db, LayerOutput out, List<String> dmlStmts,
+                                            WriteResult wr, ImportParse.Sink sink) {
+        Map<String, Map<String, String>> types = ddlColumnTypes(out.ddlSql);
+        if (types.isEmpty()) { return; }
+        Set<String> sampled = new LinkedHashSet<String>();
+        for (String stmt : dmlStmts) {
+            if (hasAggregate(stmt)) { continue; }
+            String target = insertTarget(stmt);
+            Map<String, String> cols = types.get(target);
+            if (cols == null || cols.isEmpty()) { continue; }
+            for (String[] src : sourcesOf(stmt)) {
+                String key = src[0] + "." + src[1];
+                if (!sampled.add(key)) { continue; }
+                Map<String, List<String[]>> pairs = srcFieldsOf(out, src[1], target, cols);
+                if (pairs.isEmpty()) { continue; }
+                java.sql.Statement s = null;
+                java.sql.ResultSet rs = null;
+                try {
+                    s = db.connection().createStatement();
+                    rs = s.executeQuery("SELECT * FROM `" + src[0] + "`.`" + src[1]
+                            + "` LIMIT " + SAMPLE_ROWS);
+                    checkSample(db, rs, src[1], pairs, wr, sink);
+                } catch (java.sql.SQLException e) {
+                    sink.log("! [WARN] LAYER-EXEC | 数据预检跳过源表 " + key + "：" + e.getMessage());
+                } finally {
+                    try {
+                        if (rs != null) { rs.close(); }
+                        if (s != null) { s.close(); }
+                    } catch (java.sql.SQLException ignore) {
+                        // 预检的收尾不抢业务的错
+                    }
+                }
+            }
+        }
+    }
+
+    /** 字段映射按源字段收拢：srcField（小写）→ 这一路喂给目标表的哪些列（[目标表, 列, 声明类型]）。 */
+    private static Map<String, List<String[]>> srcFieldsOf(LayerOutput out, String srcTable,
+                                                           String target,
+                                                           Map<String, String> cols) {
+        Map<String, List<String[]>> map = new LinkedHashMap<String, List<String[]>>();
+        for (MappingFile.FieldMap f : out.fieldMapping) {
+            if (!target.equals(f.dstTable) || f.srcTable == null || f.srcField == null
+                    || f.srcField.isEmpty() || !srcTable.equalsIgnoreCase(f.srcTable)) {
+                continue;
+            }
+            String type = cols.get(f.dstField);
+            if (type == null) { continue; }
+            String key = f.srcField.toLowerCase(java.util.Locale.ROOT);
+            List<String[]> list = map.get(key);
+            if (list == null) {
+                list = new ArrayList<String[]>();
+                map.put(key, list);
+            }
+            list.add(new String[]{f.dstTable, f.dstField, type});
+        }
+        return map;
+    }
+
+    /** 逐行收样本值；同一列只判一次「装不装得下」，首个装不下的样本值留作日志示例。 */
+    private static void checkSample(DbClient db, java.sql.ResultSet rs, String srcTable,
+                                    Map<String, List<String[]>> pairs, WriteResult wr,
+                                    ImportParse.Sink sink) throws java.sql.SQLException {
+        java.sql.ResultSetMetaData md = rs.getMetaData();
+        Map<String, Integer> at = new LinkedHashMap<String, Integer>();
+        for (int i = 1; i <= md.getColumnCount(); i++) {
+            at.put(md.getColumnLabel(i).toLowerCase(java.util.Locale.ROOT), Integer.valueOf(i));
+        }
+        Map<String, List<String>> values = new LinkedHashMap<String, List<String>>();
+        Map<String, String> example = new LinkedHashMap<String, String>();
+        Map<String, String[]> meta = new LinkedHashMap<String, String[]>();
+        while (rs.next()) {
+            for (Map.Entry<String, List<String[]>> e : pairs.entrySet()) {
+                Integer i = at.get(e.getKey());
+                if (i == null) { continue; }
+                for (String[] p : e.getValue()) {
+                    String key = p[0] + "." + p[1];
+                    String v = rs.getString(i.intValue());
+                    List<String> bucket = values.get(key);
+                    if (bucket == null) {
+                        bucket = new ArrayList<String>();
+                        values.put(key, bucket);
+                        meta.put(key, p);
+                    }
+                    if (bucket.size() < SAMPLE_ROWS) {
+                        bucket.add(v);
+                    }
+                    if (!example.containsKey(key) && !sampleFits(p[2], v)) {
+                        example.put(key, preview(v));
+                    }
+                }
+            }
+        }
+        for (Map.Entry<String, String> bad : example.entrySet()) {
+            String[] p = meta.get(bad.getKey());
+            widenColumn(db, p[0], p[1], srcTable, values.get(bad.getKey()), bad.getValue(),
+                    p[2], "数据预检", false, wr, sink);
+        }
+    }
+
+    /**
+     * 按数据修精度：把目标列改成<b>能装下样本的最窄类型</b>（整数→INT/BIGINT、小数→DECIMAL、
+     * UUID/文本→VARCHAR 档位，只有超长文本才 TEXT）——不是一律退 TEXT：
+     * id 全数字就该是 INT/BIGINT，UUID 就该是 VARCHAR，才是 tab1 同一套「按数据长度修精度」。
+     */
+    private static boolean widenColumn(DbClient db, String table, String column, String srcTable,
+                                       List<String> values, String example, String declaredType,
+                                       String why, boolean forceString, WriteResult wr,
+                                       ImportParse.Sink sink) {
+        String fit = Infer.typeOfSamples(values, forceString);
+        if (fit == null || fit.equalsIgnoreCase(declaredType)) {
+            return false;      // 样本全空没有证据 / 已经装得下：保持原类型，别瞎改
+        }
+        try {
+            String[] info = columnInfo(db, table, column);
+            if (info == null || "PRI".equals(info[1])) { return false; }
+            java.sql.Statement st = db.connection().createStatement();
+            try {
+                st.execute("ALTER TABLE `" + table + "` MODIFY `" + column + "` " + fit + " NULL");
+                db.connection().commit();
+            } finally {
+                st.close();
+            }
+            wr.columnsWidened.add(table + "." + column + "（" + info[0] + "→" + fit + "）");
+            sink.log("! [WARN] LAYER-EXEC | " + why + "：源表 " + srcTable + " 的样本值装不进 "
+                    + info[0] + "（示例 " + example + "），目标列 " + table + "." + column
+                    + " 按数据修精度改为 " + fit + "；交付 SQL 里仍是原类型，"
+                    + "重跑生成前请先在映射/源结构里放宽这一列");
+            return true;
+        } catch (Exception ex) {
+            sink.log("! [WARN] LAYER-EXEC | " + why + "修精度失败 " + table + "." + column
+                    + "：" + ex.getMessage());
+            return false;
+        }
+    }
+
+    private static String preview(String s) {
+        String v = s == null ? "" : s.replace("\r", " ").replace("\n", " ");
+        return v.length() <= 40 ? v : v.substring(0, 40) + "…";
+    }
+
+    /** 从报错原文里取列名：MySQL 的原话形如 "… for column 'id' at row 1"。取不到返回空串。 */
+    public static String truncatedColumn(String message) {
+        if (message == null) { return ""; }
+        java.util.regex.Matcher mt = java.util.regex.Pattern
+                .compile("[Cc]olumn '`?([A-Za-z0-9_]+)`?'").matcher(message);
+        return mt.find() ? mt.group(1) : "";
+    }
+
+    /** 从 INSERT 语句里取目标表名；取不到返回空串。 */
+    static String insertTarget(String stmt) {
+        java.util.regex.Matcher mt = java.util.regex.Pattern
+                .compile("INSERT INTO `([A-Za-z0-9_]+)`").matcher(stmt);
+        return mt.find() ? mt.group(1) : "";
+    }
+
+    /** 查列现状：[类型, 键位]；查不到返回 null。 */
+    private static String[] columnInfo(DbClient db, String table, String column)
+            throws java.sql.SQLException {
+        java.sql.PreparedStatement ps = db.connection().prepareStatement(
+                "SELECT DATA_TYPE, COLUMN_KEY FROM information_schema.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+        try {
+            ps.setString(1, table);
+            ps.setString(2, column);
+            java.sql.ResultSet rs = ps.executeQuery();
+            if (!rs.next()) { return null; }
+            return new String[]{rs.getString(1), rs.getString(2)};
+        } finally {
+            ps.close();
+        }
+    }
+
+    /**
+     * 写不进去先自救一次：1265 / 1406 / 1366 说明源数据装不进声明的列。按字段映射找到这列的
+     * 源字段，采样 {@link #SAMPLE_ROWS} 行<b>按数据修精度</b>定新类型（整数→INT/BIGINT、
+     * 小数→DECIMAL、UUID/文本→VARCHAR 档位）再重试本条 INSERT——绝不一律退 TEXT：
+     * id 全数字就该是 INT/BIGINT，UUID 就该是 VARCHAR。1265/1366 的失败值显然不是纯数字
+     * （数值列被塞进 UUID），样本按文本判；采不到样本时以 VARCHAR(255) 兜底。
+     * 主键列不动、修不了就原错误抛回；交付 SQL 里这列仍是窄类型，日志会提醒重新生成前先放宽。
+     */
+    static boolean widenAndRetry(DbClient db, String insertStmt, java.sql.SQLException e,
+                                 LayerOutput out, WriteResult wr, ImportParse.Sink sink) {
+        if (!isWidenable(e)) { return false; }
+        String table = insertTarget(insertStmt);
+        String column = truncatedColumn(e.getMessage());
+        if (table.isEmpty() || column.isEmpty()) { return false; }
+        try {
+            String[] info = columnInfo(db, table, column);
+            if (info == null || "PRI".equals(info[1])) { return false; }
+            String[] src = sourceOfColumn(out, table, column, insertStmt);
+            List<String> values = src == null
+                    ? new ArrayList<String>() : sampleColumn(db, src[0], src[1], src[2]);
+            boolean forceString = e.getErrorCode() == 1265 || e.getErrorCode() == 1366;
+            String fit = Infer.typeOfSamples(values, forceString);
+            if (fit == null) { fit = "VARCHAR(255)"; }
+            if (fit.equalsIgnoreCase(info[0])) { return false; }
+            java.sql.Statement st = db.connection().createStatement();
+            try {
+                st.execute("ALTER TABLE `" + table + "` MODIFY `" + column + "` " + fit + " NULL");
+                db.connection().commit();
+            } finally {
+                st.close();
+            }
+            wr.columnsWidened.add(table + "." + column + "（" + info[0] + "→" + fit + "）");
+            sink.log("! [WARN] LAYER-EXEC | 写入报错自动修精度：" + table + "." + column
+                    + "（" + info[0] + " → " + fit + "）后重试本条 INSERT：" + e.getMessage()
+                    + "\n    交付 SQL 里这列仍是原类型；重跑生成前请先在映射/源结构里放宽这一列");
+            return true;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    /** 这列的取值来自哪张源表的哪个字段：[库名, 源表, 源字段]；映射里找不到返回 null。 */
+    private static String[] sourceOfColumn(LayerOutput out, String table, String column,
+                                           String insertStmt) {
+        String srcTable = null;
+        String srcField = null;
+        for (MappingFile.FieldMap f : out.fieldMapping) {
+            if (table.equals(f.dstTable) && column.equals(f.dstField)
+                    && f.srcTable != null && !f.srcTable.isEmpty()
+                    && f.srcField != null && !f.srcField.isEmpty()) {
+                srcTable = f.srcTable;
+                srcField = f.srcField;
+                break;
+            }
+        }
+        if (srcTable == null) { return null; }
+        for (String[] from : sourcesOf(insertStmt)) {
+            if (from[1].equalsIgnoreCase(srcTable)) {
+                return new String[]{from[0], from[1], srcField};
+            }
+        }
+        return null;
+    }
+
+    /** 采源列一列的样本值，够修精度定类型用。 */
+    private static List<String> sampleColumn(DbClient db, String dbn, String table, String column)
+            throws java.sql.SQLException {
+        List<String> out = new ArrayList<String>();
+        java.sql.Statement s = db.connection().createStatement();
+        java.sql.ResultSet rs = null;
+        try {
+            rs = s.executeQuery("SELECT `" + column + "` FROM `" + dbn + "`.`" + table
+                    + "` LIMIT " + SAMPLE_ROWS);
+            while (rs.next()) {
+                out.add(rs.getString(1));
+            }
+        } finally {
+            if (rs != null) { rs.close(); }
+            s.close();
+        }
+        return out;
     }
 
     /** 按 ";\n" 拆语句，但保留语句内的分号（注释行里的 -- 不拆）。与 DbClient.createTable 同口径。 */

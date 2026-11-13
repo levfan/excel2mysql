@@ -237,9 +237,9 @@ public final class Taxonomy {
                     + "salary allowance subsidy welfare"},
             {"科研费", "科研 课题 项目经费 研发 research project"},
             {"基本建设费", "基建 建设 工程 投资 概算 结算 决算 construction investment budget"},
-            {"油料保障", "油 油料 加油 油库 油品 加油站 油罐 收发油 oil fuel tanker"},
+            {"油料保障", "油料 加油 油库 油品 加油站 油罐 收发油 oil fuel tanker"},
             {"被装保障", "被装 服装 鞋 帽 军需 装具 卧具 clothing uniform"},
-            {"给养保障", "给养 食品 伙食 粮 副食 饮水 给养器材 food ration"},
+            {"给养保障", "给养 食品 伙食 粮 副食 饮水 给养器材 粮油 食用油 food ration"},
             {"物资保障", "物资 库存 仓库 器材 装备 出入库 调拨 物流 资产 仓储 "
                     + "material inventory warehouse logistics asset"},
             {"采购保障", "采购 招标 投标 供应商 合同 订单 竞价 商城 比价 "
@@ -309,7 +309,13 @@ public final class Taxonomy {
             {"ods_zbslxt", "装备实力系统", "保障", "实力数据"},
     };
 
-    /** 管道/系统表：字典、日志、账号、权限这一类不承载业务，统一归综合/信息化。 */
+    /**
+     * 管道/系统表：字典、日志、账号、权限这一类不承载业务，统一归综合/信息化。
+     * 词与 <code>sys_/qrtz_/act_/oauth_</code> 前缀是<b>铁证</b>；只有英文表名后缀
+     * （_log/_config/_user…）是<b>弱证据</b>——业务主数据常带这种尾巴
+     * （人员主档 t_staff_user、品名目录 t_equip_catalog），判定方要按有没有
+     * 业务实体维度再复核，见 {@link #isMetaStrong}。
+     */
     private static final String[] META_WORDS = {
             "用户表", "角色", "权限", "菜单", "字典", "参数", "配置", "日志", "调度",
             "元数据", "系统表", "操作记录", "登录", "在线用户", "数据目录", "数据源",
@@ -480,6 +486,14 @@ public final class Taxonomy {
 
     /** 系统表判定：名字一看就是管道表，不给它猜业务领域。 */
     public static boolean isMeta(String tableCn, String tableEn) {
+        return isMetaStrong(tableCn, tableEn) || metaSuffixHit(tableEn);
+    }
+
+    /**
+     * 管道表的<b>强证据</b>：中文名带字典/日志/权限这类词，或物理表名带 sys_/qrtz_/act_/oauth_
+     * 前缀（框架自带的系统 schema）。命中即判综合/信息化，不看别的。
+     */
+    public static boolean isMetaStrong(String tableCn, String tableEn) {
         String cn = tableCn == null ? "" : tableCn;
         for (String w : META_WORDS) {
             if (cn.contains(w)) {
@@ -487,13 +501,19 @@ public final class Taxonomy {
             }
         }
         String en = tableEn == null ? "" : tableEn.toLowerCase();
-        for (String s : META_SUFFIX) {
-            if (en.endsWith(s) || en.contains(s + "_")) {
+        for (String p : META_PREFIX) {
+            if (en.startsWith(p)) {
                 return true;
             }
         }
-        for (String p : META_PREFIX) {
-            if (en.startsWith(p)) {
+        return false;
+    }
+
+    /** 管道表的<b>弱证据</b>：只有英文表名后缀命中。调用方要拿业务维度复核后再采信。 */
+    public static boolean metaSuffixHit(String tableEn) {
+        String en = tableEn == null ? "" : tableEn.toLowerCase();
+        for (String s : META_SUFFIX) {
+            if (en.endsWith(s) || en.contains(s + "_")) {
                 return true;
             }
         }
@@ -603,11 +623,45 @@ public final class Taxonomy {
         if (text == null || text.isEmpty() || word == null || word.isEmpty()) {
             return 0;
         }
+        if (isAscii(word)) {
+            return asciiHits(text, word);
+        }
+        return countOf(text, word);
+    }
+
+    private static boolean isAscii(String word) {
+        for (int i = 0; i < word.length(); i++) {
+            if (word.charAt(i) > 127) { return false; }
+        }
+        return true;
+    }
+
+    private static int countOf(String text, String word) {
         int n = 0;
         int i = text.indexOf(word);
         while (i >= 0) {
             n++;
             i = text.indexOf(word, i + word.length());
+        }
+        return n;
+    }
+
+    /**
+     * 英文词按<b>整词</b>命中（允许 -s / -es 复数）：'ration' 不许再作为子串命中
+     * operation / configuration / duration——现场 380 张表里 3 张因此被判进
+     * 「给养保障」（字段里有 operation_type 这类列名）。中文词继续按子串走，
+     * 短词（粮、油）在中文里本来就是整词。
+     */
+    private static int asciiHits(String text, String word) {
+        String w = word.toLowerCase(java.util.Locale.ROOT);
+        int n = 0;
+        for (String tok : text.toLowerCase(java.util.Locale.ROOT).split("[^a-z0-9]+")) {
+            if (tok.isEmpty()) { continue; }
+            if (tok.equals(w)
+                    || tok.equals(w + "s") || tok.equals(w + "es")
+                    || (w.endsWith("s") && tok.equals(w.substring(0, w.length() - 1)))) {
+                n++;
+            }
         }
         return n;
     }

@@ -708,6 +708,11 @@ public final class LayerPage extends JPanel {
                 sink.advance(1, "落盘完成");
                 sink.log("- [INFO] LAYER | " + layer + " 表 " + out.tableCount + " 张 | 字段映射 "
                         + out.fieldMapping.size() + " 条 | 未绑定 " + out.unbound.size() + " 张 | 产物 " + dir);
+                if (layer == LayerGen.Layer.ADS) {
+                    // 批次号是具体值，日志里点名这一批：现场拿日志对交付 SQL 的 etl_batch_id 就靠这一行
+                    sink.log("- [INFO] LAYER | ads 批次号 etl_batch_id = " + out.batchId
+                            + "（六张主题表同一批，已写进转换 SQL 与字段映射）");
+                }
                 for (String w : out.warnings) { sink.log("! [WARN] LAYER | " + w); }
                 if (sink.cancelled()) {
                     sink.log("! [WARN] LAYER | 已取消：" + layer + " 不入库，只留已落盘的产物 " + dir);
@@ -750,7 +755,9 @@ public final class LayerPage extends JPanel {
             LayerGen.WriteResult wr = LayerGen.execute(out, target, c, sink);
             sink.log("- [INFO] LAYER-EXEC | " + layer + " → 库 " + target
                     + " | 建表 " + wr.tablesCreated + " | 影响行 " + wr.rowsAffected
-                    + " | 错误 " + wr.errors.size());
+                    + " | 错误 " + wr.errors.size()
+                    + (wr.columnsWidened.isEmpty() ? "" : " | 按数据修精度 " + wr.columnsWidened.size()
+                            + " 列：" + String.join("、", wr.columnsWidened)));
         } catch (Exception ex) {
             // 这句既可能是握手失败（什么都没跑），也可能是连上之后 execute 中途抛（已跑掉一部分），
             // 所以不写"连接失败…入库未执行"那种只认前一种的断言
