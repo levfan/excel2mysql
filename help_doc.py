@@ -84,7 +84,7 @@ SECTIONS = [
 这两个入口的图标上。包没解全时它们会弹窗说清缺哪个文件；还想看到 Java 的原始报错与退出码，
 用 <code>启动-调试.bat</code>，它故意留着控制台。要命令行就在 cmd 里跑同一条命令但不给
 <code>--gui</code>，例如
-<code>jre\\bin\\java.exe -jar excel2mysql-6.1.0.jar --check</code>。
+<code>jre\\bin\\java.exe -jar excel2mysql-6.2.0.jar --check</code>。
 双击 jar 文件本身没有任何反应。</li>
 </ul>
 
@@ -1139,21 +1139,24 @@ dump 里认 <code>DELIMITER</code> 指令，触发器与存储过程的整句不
 </ul>
 """),
 
-    ("dameng", "达梦转 MySQL 页", """
-<h2>达梦转 MySQL 页（第五个页签，Java 图形版）</h2>
-<p>这一页连一个达梦（DM8）数据源，把选中的表或整个模式的表读成 MySQL 建表语句，
-表注释与字段注释一并带过来。Python 图形版仍是三个页签，这一页只在 Java 图形版有。</p>
+    ("dameng", "达梦与 MySQL 互转页", """
+<h2>达梦与 MySQL 互转页（第五个页签，Java 图形版）</h2>
+<p>这一页在达梦（DM8）与 MySQL 之间双向转表结构：<b>DM8 → MySQL</b>（默认）连达梦读结构、
+生成 MySQL 建表语句；<b>MySQL → DM8</b> 读顶部连接栏所选 MySQL 库的结构、生成达梦建表语句。
+表注释与字段注释两个方向都一并带过来。Python 图形版仍是三个页签，这一页只在 Java 图形版有。</p>
 <table class="t">
 <tr><th>步骤</th><th>操作</th></tr>
-<tr><td>1</td><td>填达梦的主机、端口（默认 <code>5236</code>）、用户名、口令与模式名
+<tr><td>1</td><td>先在<b>「方向」</b>下拉选定转换方向（翻方向会清空清单重来）。
+DM8 → MySQL：填达梦的主机、端口（默认 <code>5236</code>）、用户名、口令与模式名
 （目录视图里的 <code>OWNER</code>，通常就是登录用户名，例如 <code>SYSDBA</code>），
-点<b>「连达梦并列表」</b>；进度框会逐张报读到第几张，随时可取消</td></tr>
-<tr><td>2</td><td>清单列出每张表的表注释、字段数与主键；点<b>「生成 MySQL DDL」</b></td></tr>
-<tr><td>3</td><td>选中若干行只生成选中的表，一行都不选则整个模式一起生成；
-勾「表名与字段名转小写」把达梦默认的大写名折成小写，勾「先 DROP 已存在表」在每张表前补一句
-<code>DROP TABLE IF EXISTS</code></td></tr>
-<tr><td>4</td><td><b>「保存到 .sql」</b>落一份 UTF-8 脚本；<b>「写入 MySQL 目标库」</b>把这份脚本
-发到 MySQL 执行，用的就是「SQL 执行器」那套逐条执行与事务口径，日志也写在同一页下方</td></tr>
+点<b>「连达梦并列表」</b>；MySQL → DM8：源是顶部连接栏所选的 MySQL 库，
+点<b>「连 MySQL 并列表」</b>。进度框都逐张报读到第几张，随时可取消</td></tr>
+<tr><td>2</td><td>清单列出每张表的表注释、字段数与主键；点<b>「生成 MySQL DDL」/「生成 DM DDL」</b></td></tr>
+<tr><td>3</td><td>选中若干行只生成选中的表，一行都不选则整个模式/整个库一起生成；
+勾「表名与字段名转小写」折小写，勾「先 DROP 已存在表」在每张表前补一句 DROP</td></tr>
+<tr><td>4</td><td><b>「保存到 .sql」</b>落一份 UTF-8 脚本（文件名带方向与来源）；
+<b>「写入 MySQL 目标库」/「写入 DM 目标库」</b>把这份脚本发到目标端执行：
+MySQL 走「SQL 执行器」那套逐条口径，达梦逐条执行、单条失败只记账继续，日志都写在同一页下方</td></tr>
 </table>
 <p class="tip"><b>达梦的 JDBC 驱动不进仓库</b>（第三方二进制）。Java 交付包里预建了程序同级的
 <code>drivers</code> 这一层，出包时现场备着驱动就一并带上，打开包就能直接连；
@@ -1163,11 +1166,13 @@ dump 里认 <code>DELIMITER</code> 指令，触发器与存储过程的整句不
 不扫当前工作目录，也不读系统 <code>CLASSPATH</code>。
 这一页连不上时，本页日志会分清「没找到驱动」「驱动不认这条连接串」「网络通信异常」三种情况，
 其余四页照常用；这一页的翻译逻辑本身不依赖驱动。</p>
-<p><b>「MySQL 目标库」是个下拉</b>：候选就是上方「数据源连接信息」那颗库下拉里加载出来的清单，
-默认选中当前目标库；服务器上刚建的库还没重新加载时，也可以直接手填一个库名。
+<p><b>「MySQL 目标库」是个下拉</b>（只在 DM8 → MySQL 方向用）：候选就是上方
+「数据源连接信息」那颗库下拉里加载出来的清单，默认选中当前目标库；
+服务器上刚建的库还没重新加载时，也可以直接手填一个库名。
 这一格决定脚本开头的 <code>USE</code>；留空则不写 <code>USE</code>，
-「写入 MySQL 目标库」落在顶部连接栏所选的那本库。两者不是同一本库时，日志会先点出来再执行。</p>
-<p>类型与注释按下面这套口径翻：</p>
+「写入 MySQL 目标库」落在顶部连接栏所选的那本库。两者不是同一本库时，日志会先点出来再执行。
+MySQL → DM8 方向这格灰着：目标是达梦的模式，由左边「模式」那格承担。</p>
+<p>类型与注释按下面这套口径翻（<b>DM8 → MySQL</b>）：</p>
 <ul>
 <li>变长字符按达梦声明的字节数 1:1 译成 MySQL 的字符数（达梦按字节、MySQL 按字符，
 只会更宽不会装不下）；超出 VARCHAR 上限的落 <code>LONGTEXT</code></li>
@@ -1184,6 +1189,23 @@ dump 里认 <code>DELIMITER</code> 指令，触发器与存储过程的整句不
 注释里的换行压成空格、单引号翻倍、超过 1024 字符截断</li>
 <li>外键、唯一索引、检查约束不搬：这些约束与 MySQL 端已有表结构对不对得上，这一页判断不了，
 留给建表之后手工加</li>
+</ul>
+<p><b>MySQL → DM8</b> 反向按这套口径翻：</p>
+<ul>
+<li>字符列按 <b>4 字节/字符</b>放大长度再落达梦（MySQL 按字符、达梦按字节，
+utf8mb4 一个字符最多 4 字节，宁宽不窄）：<code>VARCHAR(50)</code> →
+<code>VARCHAR(200)</code>；放大后超了达梦 VARCHAR 上限的落 <code>CLOB</code></li>
+<li><code>AUTO_INCREMENT</code> 落达梦的 <code>IDENTITY(1,1)</code>；
+<code>TINYINT/SMALLINT/MEDIUMINT/INT/BIGINT</code> 对应同名整数（<code>MEDIUMINT</code> → <code>INT</code>）；
+<code>BIGINT UNSIGNED</code> 按 <code>DECIMAL(20,0)</code> 保住取值范围，其余无符号整数收进有符号区间并逐列点名</li>
+<li><code>DECIMAL(p,s)</code> 精度收到 38（达梦上限）；<code>TEXT</code> 族落 <code>CLOB</code>、
+<code>BLOB</code> 族落 <code>BLOB</code>；<code>TIME</code>/<code>YEAR</code>/<code>JSON</code>
+达梦没有同名类型，落 <code>VARCHAR(12)</code>/<code>SMALLINT</code>/<code>CLOB</code> 并逐列点名</li>
+<li>注释走 <code>COMMENT ON TABLE/COLUMN</code> 单独跟在建表后（达梦不认行内
+<code>COMMENT '…'</code>）；<code>timestamp</code> → <code>TIMESTAMP</code>，
+默认值 <code>CURRENT_TIMESTAMP</code> 一族译成 <code>SYSDATE</code>，表达式默认值丢掉不猜</li>
+<li>表名与字段名<b>中文也照搬</b>（达梦双引号标识符照收，内部双引号翻倍）；
+外键、唯一索引、检查约束同样不搬</li>
 </ul>
 <p>读结构走达梦的 <code>ALL_TABLES</code>、<code>ALL_TAB_COLUMNS</code>、
 <code>ALL_TAB_COMMENTS</code>、<code>ALL_COL_COMMENTS</code>、<code>ALL_CONSTRAINTS</code>
@@ -1503,7 +1525,7 @@ SQL 执行器页右半边的结果区），互不串扰，各自保留最近 200
 <li><b>三段高度可拖拽</b>：「Excel 导入」页的拖拽区 / 待导入文件表 / 日志区之间、
 「SQL 脚本改名」页的拖拽区 / 待处理文件表格区 / 日志区之间，各有一条 6px 宽的横向分隔条，
 按住即可上下拖动，一边变高另一边变窄。任何一段都不允许拖到 0，不会拖丢后找不回来。
-「分层建模」页（清单 / 日志）与「达梦 → MySQL」页（清单 / DDL 正文 / 日志）用的是同一套分隔条，
+「分层建模」页（清单 / 日志）与「达梦 ⇄ MySQL」页（清单 / DDL 正文 / 日志）用的是同一套分隔条，
 日志段一样默认只占最小高度，要读长日志就把它往上拖。
 五个页签的高度分配都<b>不写入配置</b>，重开程序回到初始比例</li>
 <li><b>日志区有最小高度</b>（按日志那一档字号算四行）：把分隔条拖到极限也不会被压成一两行。
