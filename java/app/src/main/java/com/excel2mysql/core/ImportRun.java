@@ -112,7 +112,7 @@ public final class ImportRun {
                 if (r.rowFit != null && r.rowFit.refuse != null) {
                     // 建模阶段就判得出这条 DDL 会被库拒（1118/1117），不发出去：
                     // 建表是隐式提交，半途报错既回滚不了也说不清，现场只会看到"导入失败"
-                    row.message = r.rowFit.refuse.reason;
+                    row.message = "建表前拦下：" + r.rowFit.refuse.reason;
                     // 拆出来的 Excel 已经在建模那一步落盘了，这里只提醒去拖回来，
                     // 别再让人对着拦下理由找"那我该怎么办"
                     String hint = "";
@@ -141,7 +141,9 @@ public final class ImportRun {
                     db.createTable(ddl);
                     sink.log(createdLog(name));
                 } catch (Exception e) {
-                    row.message = "建表失败: " + LogText.describe(e);
+                    // 与日志同一条展开（异常类型 + MySQL 错误码 + 服务端原话），
+                    // 弹窗里那一行才够拿去查
+                    row.message = "建表失败：" + LogText.describe(e);
                     sink.logError(createFailLog(name, target, LogText.describe(e), ddl));
                     results.add(row);
                     sink.advance(1 + total, "跳过 `" + name + "`");
@@ -171,7 +173,7 @@ public final class ImportRun {
                     row.message = "导入 " + written + " 行";
                     sink.log(importedLog(name, written));
                 } catch (Exception e) {
-                    row.message = "导入失败: " + LogText.describe(e);
+                    row.message = "导入失败（本表 " + total + " 行未写入）：" + LogText.describe(e);
                     sink.logError(importFailLog(name, target, total, LogText.describe(e)));
                 }
                 results.add(row);

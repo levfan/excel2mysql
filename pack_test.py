@@ -5870,6 +5870,30 @@ check("Q14b 导入失败同样把任务位还掉（失败不等于「还在跑�
 check("Q15 失败逐条标红且汇总记为失败",
       "[建表失败]" in fw.log.toPlainText() and "失败 2 张表" in fw.log.toPlainText(),
       [l for l in fw.log.toPlainText().splitlines() if "建表失败" in l][:1])
+_pop = [b for t, b in POPUPS if t == "导入完成"]
+check("Q15b 失败弹窗按表名逐条列出原因（不只报失败几张）",
+      bool(_pop) and "失败的 2 张表（表名与原因）" in _pop[-1]
+      and all(("`%s`" % t["table_name"]) in _pop[-1] for t in fw.tables)
+      and "建表失败：" in _pop[-1] and "模拟：建表语句被服务端拒绝" in _pop[-1],
+      _pop[-1] if _pop else None)
+check("Q15c 每条失败带上文件，并指明完整报错去日志按表名搜",
+      bool(_pop) and all(("（%s）" % os.path.basename(t["filepath"])) in _pop[-1]
+                         for t in fw.tables)
+      and "完整的建表语句、目标库与回滚说明见日志（按表名搜索）。" in _pop[-1],
+      _pop[-1] if _pop else None)
+_rows, _more = app_main.import_fail_lines(
+    [{"name": "t_%d" % i, "file": "a.xlsx", "ok": False, "msg": "建表失败：boom"}
+     for i in range(app_main.IMPORT_FAIL_LIST_MAX + 2)])
+check("Q15d 失败清单最多列 %d 张，剩余的用一句话交代" % app_main.IMPORT_FAIL_LIST_MAX,
+      len(_rows) == app_main.IMPORT_FAIL_LIST_MAX and _more == 2, (len(_rows), _more))
+_long = app_main.brief_reason("第一行\n第二行" * 100)
+check("Q15e 超长报错压成一行、截断并指向日志",
+      "\n" not in _long and _long.endswith("…（原文见日志）")
+      and len(_long) <= app_main.IMPORT_FAIL_REASON_MAX + len("…（原文见日志）"),
+      (_long[:60], len(_long)))
+check("Q15f 没有报错正文时写明见日志，不留一行空白",
+      app_main.brief_reason("") == "（没有拿到报错正文，见日志）",
+      app_main.brief_reason(""))
 
 # ---- 停止导入 ----
 app_main.connect = _fake_connect

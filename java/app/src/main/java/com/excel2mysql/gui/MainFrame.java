@@ -1188,20 +1188,41 @@ public final class MainFrame extends JFrame
         dialog("连接失败", text, javax.swing.JOptionPane.ERROR_MESSAGE);
     }
 
-    /** 一张表的成功/失败，只带文件路径：收尾要按文件决定留不留。 */
+    /**
+     * 一张表的成功/失败：文件路径决定清单留不留，表名与原因进收尾弹窗的失败清单。
+     * 表名与原因可以为空（老调用与自检夹具只关心 成功/失败 时仍能用两参构造），
+     * 空原因在弹窗里会写成"没有拿到报错正文"，不会渲染成一行空白。
+     */
     public static final class ImportOutcome {
         public final String filepath;
         public final boolean ok;
+        public final String tableName;
+        public final String message;
 
         public ImportOutcome(String filepath, boolean ok) {
+            this(filepath, ok, null, "");
+        }
+
+        public ImportOutcome(String filepath, boolean ok, String tableName, String message) {
             this.filepath = filepath;
             this.ok = ok;
+            this.tableName = tableName;
+            this.message = message == null ? "" : message;
         }
     }
+
+    /** 失败清单最多列这么多张：再多就把人埋进弹窗里，剩下的按表名去日志搜。 */
+    static final int IMPORT_FAIL_LIST_MAX = 50;
+    /** 单条原因的上限：够放错误码与报错原话，完整原文在日志。 */
+    static final int IMPORT_FAIL_REASON_MAX = 200;
 
     /**
      * 导入收尾：汇总日志 -> 清单原样留着（成功的也不抽走）-> 把要在弹窗里重复的那句话返回。
      * 对应 main.py 的 _on_finished_all。
+     *
+     * 有失败时弹窗正文按<b>表名</b>逐条点名：表名、文件、卡在哪一步、服务端原话（含错误码）。
+     * 只报"失败 N 张"等于让人自己回几百行日志里翻是哪几张——现场要的是"改哪张表"。
+     * 每条压成一行、原因过长截断，完整的建表语句与回滚说明仍在日志里（按表名可搜）。
      *
      * 导入完成的文件仍留在待导入列表里（用户 2026-11-09 点名：执行完不要清空待上传区域）：
      * 同一批文件常要再导一次到另一个库、或换个前缀再导，自动抽走等于逼人重新拖一遍。
@@ -1242,15 +1263,55 @@ public final class MainFrame extends JFrame
 
         StringBuilder msg = new StringBuilder("成功 ").append(ok).append(" 张表，失败 ")
                 .append(fail).append(" 张表。");
+        if (fail > 0) {
+            // 只报"失败 N 张"等于把人推进几百行日志里翻表名：按表名逐条点名，
+            // 每条带文件、哪一步失败、服务端原话（含 MySQL 错误码）
+            msg.append(NEWLINE).append("失败的 ").append(fail).append(" 张表（表名与原因）：");
+            int shown = 0;
+            for (ImportOutcome o : outcomes) {
+                if (o.ok) {
+                    continue;
+                }
+                if (shown >= IMPORT_FAIL_LIST_MAX) {
+                    break;
+                }
+                shown++;
+                msg.append(NEWLINE).append(importFailLine(shown, o));
+            }
+            if (fail > shown) {
+                msg.append(NEWLINE).append("  另有 ").append(fail - shown)
+                        .append(" 张失败未列出，日志里每张表都有对应的失败行（按表名搜索）。");
+            }
+        }
         if (!done.isEmpty()) {
             msg.append(NEWLINE + "导入完成的 ").append(done.size())
                     .append(" 张表仍留在待导入列表里。");
         }
         if (fail > 0) {
             msg.append(NEWLINE + "失败的表也在列表里，可调整后重试。");
+            msg.append(NEWLINE + "完整的建表语句、目标库与回滚说明见日志（按表名搜索）。");
         }
-        msg.append(NEWLINE + "详见日志。");
         return msg.toString();
+    }
+
+    /** 把多行报错压成一行给弹窗看（与 Python 侧 brief_reason 同一口径）。 */
+    private static String briefReason(String text) {
+        String body = text == null ? "" : text.trim().replaceAll("\\s+", " ");
+        if (body.isEmpty()) {
+            return "（没有拿到报错正文，见日志）";
+        }
+        if (body.length() > IMPORT_FAIL_REASON_MAX) {
+            body = body.substring(0, IMPORT_FAIL_REASON_MAX).trim() + "…（原文见日志）";
+        }
+        return body;
+    }
+
+    /** 失败表的一行：`序号）表名（文件）：原因`。表名排在最前，是按表名排查的那一眼。 */
+    private static String importFailLine(int seq, ImportOutcome o) {
+        String name = (o.tableName == null || o.tableName.isEmpty()) ? "（未命名表）" : o.tableName;
+        String base = (o.filepath == null || o.filepath.isEmpty()) ? "" : baseName(o.filepath);
+        String where = base.isEmpty() ? "" : "（" + base + "）";
+        return "  " + seq + "）`" + name + "`" + where + "：" + briefReason(o.message);
     }
 
     private static String names(List<TableOps.Table> list) {
@@ -1304,14 +1365,18 @@ public final class MainFrame extends JFrame
             try {
                 final List<ImportRun.Row> rows = ImportRun.run(cfg, work, drop, sink);
                 final List<ImportOutcome> outcomes = new ArrayList<ImportOutcome>();
+                boolean anyFail = false;
                 for (ImportRun.Row r : rows) {
-                    outcomes.add(new ImportOutcome(r.filepath, r.ok));
+                    // 表名与原因一并带走：收尾弹窗要按表名逐条列出失败原因
+                    outcomes.add(new ImportOutcome(r.filepath, r.ok, r.tableName, r.message));
+                    anyFail = anyFail || !r.ok;
                 }
+                final boolean anyFailFinal = anyFail;
                 final boolean cancelled = progress.isCancelled();
                 SwingUtilities.invokeLater(() -> finishTask(task, () -> {
                     progress.close();
                     // 弹窗与日志双写：日志可回溯，弹窗防走神漏看（Python 侧同一句话写两处）
-                    inform2("导入完成", finishImport(outcomes, cancelled));
+                    informImportDone(finishImport(outcomes, cancelled), anyFailFinal);
                 }));
             } catch (Throwable t) {
                 crash(t, progress, task);
@@ -5196,6 +5261,16 @@ public final class MainFrame extends JFrame
      */
     public void inform2(String title, String text) {
         dialog(title, text, javax.swing.JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /**
+     * 导入收尾弹窗：「导入完成」这个标题不变，有失败时按警告级出图标——
+     * 与「SQL 执行器」收尾同一口径，图标本身也是一句"这次没全成"。
+     */
+    public void informImportDone(String text, boolean fail) {
+        dialog("导入完成", text, fail
+                ? javax.swing.JOptionPane.WARNING_MESSAGE
+                : javax.swing.JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** 出错类弹窗：Python 用 QMessageBox.critical，图标也是"这次没做成"的一部分。 */

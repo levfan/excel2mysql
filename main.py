@@ -857,6 +857,40 @@ def indent_detail(text: str, pad: str = "    ") -> str:
     return "\n".join(pad + ln for ln in str(text).splitlines())
 
 
+# 导入收尾的失败清单：弹窗里按表名逐条点名，不只报一个"失败 N 张"。
+# 日志里那几行（[建表失败] / [导入失败]）已经有目标库、错误码、失败的建表 DDL
+# 与回滚说明；弹窗要给的是"哪张表、在哪一步、被什么拒了"这三件能立刻去查的事，
+# 所以每条压成一行、原因超长截断，并在末尾指向日志里的完整原文。
+IMPORT_FAIL_LIST_MAX = 50
+IMPORT_FAIL_REASON_MAX = 200
+
+
+def brief_reason(text, limit=IMPORT_FAIL_REASON_MAX) -> str:
+    """把多行报错压成一行给弹窗看；超过上限就截断并说明原文在日志。"""
+    body = " ".join(str(text or "").split())
+    if not body:
+        return "（没有拿到报错正文，见日志）"
+    if len(body) > limit:
+        body = body[:limit].rstrip() + "…（原文见日志）"
+    return body
+
+
+def import_fail_lines(results):
+    """失败的表逐条一行：`序号）`表名`（文件）：原因`。
+
+    表名排在最前面——用户口径是"按表名给出可排查的报错"，扫一眼就该知道
+    哪张表要改。返回 (行列表, 因条数上限没列出的失败数)。
+    """
+    fails = [r for r in results if not r.get("ok")]
+    lines = []
+    for i, r in enumerate(fails[:IMPORT_FAIL_LIST_MAX], 1):
+        name = r.get("name") or "（未命名表）"
+        base = os.path.basename(r.get("file") or "")
+        where = f"（{base}）" if base else ""
+        lines.append("  %d）`%s`%s：%s" % (i, name, where, brief_reason(r.get("msg"))))
+    return lines, max(0, len(fails) - len(lines))
+
+
 def format_file_size(size) -> str:
     """脚本文件大小按人看的一档显示；两栈同一套进位与一位小数。"""
     if size is None:
@@ -2104,7 +2138,8 @@ class ImportWorker(QThread):
                 if refuse:
                     # 建模阶段就判得出这条 DDL 会被库拒（1118/1117），不发出去：
                     # 建表是隐式提交，半途报错既回滚不了也说不清，现场只会看到"导入失败"
-                    result["msg"] = refuse["reason"]
+                    # 失败清单要能看出这是"没发出去"而不是"发出去了被拒"，所以带上前缀
+                    result["msg"] = "建表前拦下：" + refuse["reason"]
                     hint = ""
                     split = t.get("wide_split") or {}
                     if split.get("ok"):
@@ -2129,7 +2164,9 @@ class ImportWorker(QThread):
                     create_table(conn, ddl)
                     rep.log(f"[建表成功] `{name}`")
                 except Exception as e:
-                    result["msg"] = f"建表失败: {e}"
+                    # 原因用与日志同一条展开（异常类型 + MySQL 错误码 + 服务端原话），
+                    # 弹窗里那一行才够拿去查；直接 str(e) 会是 (1064, '...') 这种元组
+                    result["msg"] = "建表失败：" + describe_db_error(e)
                     rep.log_error(
                         f"[建表失败] 表 `{name}`（目标库 {target}）建表语句被 MySQL 拒绝\n"
                         + indent_detail(describe_db_error(e)) + "\n"
@@ -2155,7 +2192,8 @@ class ImportWorker(QThread):
                     result["msg"] = f"导入 {rows} 行"
                     rep.log(f"[导入完成] `{name}` 共 {rows} 行")
                 except Exception as e:
-                    result["msg"] = f"导入失败: {e}"
+                    result["msg"] = ("导入失败（本表 %d 行未写入）：%s"
+                                     % (total, describe_db_error(e)))
                     conn.rollback()
                     rep.log_error(
                         f"[导入失败] 表 `{name}`（目标库 {target}）共 {total} 行数据未能写入，"
@@ -5487,11 +5525,22 @@ class MainWindow(QWidget):
         self.btn_import.setEnabled(bool(self.tables))
         self.btn_stop.setEnabled(False)
         msg = f"成功 {ok} 张表，失败 {fail} 张表。"
+        if fail:
+            # 只报"失败 N 张"等于把人推进几百行日志里翻表名：按表名逐条点名，
+            # 每条带文件、哪一步失败、服务端原话（含 MySQL 错误码），
+            # 现场拿这一行就能判断是改 Excel 还是改库。
+            rows, more = import_fail_lines(results)
+            msg += f"\n失败的 {fail} 张表（表名与原因）：\n" + "\n".join(rows)
+            if more:
+                msg += (f"\n  另有 {more} 张失败未列出，"
+                        "日志里每张表都有对应的失败行（按表名搜索）。")
         if kept:
             msg += f"\n导入完成的 {len(kept)} 张表仍留在待导入列表里。"
         if fail:
             msg += "\n失败的表也在列表里，可调整后重试。"
-        popup_box(self, "导入完成", msg + "\n详见日志。")
+            msg += "\n完整的建表语句、目标库与回滚说明见日志（按表名搜索）。"
+        # 有失败按警告级弹：与「SQL 执行器」那条口径一致，图标本身也是一句"这次没全成"
+        popup_box(self, "导入完成", msg, "warning" if fail else "information")
 
 
 # ---------------------------------------------------------------------------
