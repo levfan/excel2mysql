@@ -8662,3 +8662,26 @@ CENTER 高度被算成 -19830。
 
 
 
+
+## 161. 第五页双向化：补 MySQL → DM8 反向转换（2026-11-14）
+
+### 161.1 改的是什么
+
+| 改动 | 口径 |
+| --- | --- |
+| 页签与方向 | 「达梦 → MySQL」改名「达梦 ⇄ MySQL」，页首加「方向」下拉（DM8 → MySQL / MySQL → DM8）；翻方向清空清单与正文，按钮文案（连…并列表 / 生成…DDL / 写入…目标库）与目标格含义跟着换 |
+| 反向的源与目标 | MySQL → DM8：源 = 顶部连接栏所选 MySQL 库（`MysqlReader` 读 information_schema：表注释、COLUMN_TYPE 原文、默认值、EXTRA 里的 AUTO_INCREMENT、主键），目标 = 左边那排达梦参数 +「模式」那格；「MySQL 目标库」下拉此向灰着 |
+| 生成器 | 新增 `core/MysqlDm.java`，与 `DmMysql` 互为反向：双引号标识符（**中文表名/列名照搬**，引号翻倍转义）、`COMMENT ON TABLE/COLUMN` 单独跟在建表后、`AUTO_INCREMENT` → `IDENTITY(1,1)` |
+| 类型换算 | 字符列按 **4 字节/字符**放大（`VARCHAR(50)` → `VARCHAR(200)`，超上限落 CLOB）；`MEDIUMINT`→`INT`、`BIGINT UNSIGNED`→`DECIMAL(20,0)`（其余无符号收进有符号区间并点名）、精度收到 38、`TEXT`族→`CLOB`、`TIME/YEAR/JSON` 落 `VARCHAR(12)/SMALLINT/CLOB` 并逐列点名；默认值只搬字面量与 `CURRENT_TIMESTAMP`→`SYSDATE`，表达式默认值丢掉不猜 |
+| 写入达梦 | `DmReader.runScript`：逐条执行、DDL 隐式提交、单条失败只记账继续（与 SQL 执行器逐条口径一致）；写入前确认框按方向写「MySQL 库 X / 达梦模式 X」 |
+| 自检 | 反向块（翻方向、保存名 `mysql_to_dm_*` 前缀、生成的 DDL 形状、COMMENT ON）+ `mysql_dm_ddl_selftest`（IDENTITY、4 倍长度、无符号、CLOB、SYSDATE、认不出的类型记账）；变异抽查把 4 倍长度改 1 倍 → 自检如期红 → 还原 |
+
+### 161.2 跑数
+
+- Java 十步 `+ [OK] BUILD`（0 条 `[ERROR]`）；pack_test 全绿（G0 红仍是 3306 端口不通）
+- `check_generated` 两份生成物逐字节一致；帮助文档「达梦与 MySQL 互转页」重写并重导
+
+### 161.3 记账
+
+- 新增一条转换通道（以前做不到：MySQL → DM8），版本 **6.1.0 → 6.2.0**（minor）
+- 外键/唯一索引/检查约束两个方向都不搬（既有口径）；MySQL→DM 的字符长度按 4 倍放大取保守值，过宽时手动改映射
