@@ -128,6 +128,17 @@ public final class RowFit {
     }
 
     public static Plan rowPlan(List<Infer.Column> cols, int pageSize) {
+        return rowPlan(cols, pageSize, 0L);
+    }
+
+    /**
+     * 同上，但把 {@code extraLocal} 字节额外算进行内占用。
+     *
+     * <p>为什么需要：带主键的表，聚簇索引记录里还要多留一份键与索引头，实测比同列不带主键
+     * 的表少装约 205 字节——纯 VARCHAR(64) 列不带主键 195 列能建、带主键只到 190 列，
+     * 纯 TEXT 列同样 195/190（每次都差 5 列 × 41 字节）。这个差额不随类型变化，按固定额加。
+     */
+    public static Plan rowPlan(List<Infer.Column> cols, int pageSize, long extraLocal) {
         Plan p = new Plan();
         long server = 0;
         long local = 0;
@@ -138,7 +149,7 @@ public final class RowFit {
         }
         p.columns = cols.size();
         p.localLimit = pageSize / 2 - HALF_PAGE_SLACK;
-        p.local = local + ROW_FIXED + ((cols.size() + 7) / 8);
+        p.local = local + ROW_FIXED + ((cols.size() + 7) / 8) + extraLocal;
         p.server = server;
         p.ok = server <= SERVER_ROW_LIMIT && p.local <= p.localLimit
                 && p.columns <= INNODB_MAX_COLUMNS;
@@ -154,7 +165,7 @@ public final class RowFit {
      * 行内取整列走行外的字节；结构定义与主键列不许动，按现值算。
      */
     private static boolean canEverFit(List<Infer.Column> cols, Plan plan, boolean onlyInferred,
-                                      java.util.Set<String> keepType) {
+                                      java.util.Set<String> keepType, long extraLocal) {
         long server = 0;
         long local = 0;
         for (Infer.Column c : cols) {
@@ -167,7 +178,7 @@ public final class RowFit {
             server += Math.min(pair[0], SERVER_BLOB_BYTES);
             local += Math.min(pair[1], EXT_BYTES);
         }
-        long localTotal = local + ROW_FIXED + ((cols.size() + 7) / 8);
+        long localTotal = local + ROW_FIXED + ((cols.size() + 7) / 8) + extraLocal;
         return server <= SERVER_ROW_LIMIT && localTotal <= plan.localLimit;
     }
 
@@ -207,24 +218,32 @@ public final class RowFit {
      */
     public static Fit fit(List<Infer.Column> cols, int pageSize, boolean onlyInferred,
                           java.util.Set<String> keepType) {
+        return fit(cols, pageSize, onlyInferred, keepType, 0L);
+    }
+
+    /** 再放开一档：把 {@code extraLocal}（带主键时的索引开销）算进行内占用。 */
+    public static Fit fit(List<Infer.Column> cols, int pageSize, boolean onlyInferred,
+                          java.util.Set<String> keepType, long extraLocal) {
         Fit f = new Fit();
-        f.plan = rowPlan(cols, pageSize);
+        f.plan = rowPlan(cols, pageSize, extraLocal);
         if (f.plan.columns > INNODB_MAX_COLUMNS) {
             f.refuse = refuse(cols, f.plan, "这张表 " + f.plan.columns + " 列，超过 InnoDB 每表列数上限 "
-                    + INNODB_MAX_COLUMNS + "（报 1117 Too many columns，与列的类型无关）", pageSize);
+                    + INNODB_MAX_COLUMNS + "（报 1117 Too many columns，与列的类型无关）", pageSize,
+                    extraLocal);
             return f;
         }
         int guard = 0;
-        while (!f.plan.ok && guard++ < 8192 && canEverFit(cols, f.plan, onlyInferred, keepType)) {
+        while (!f.plan.ok && guard++ < 8192
+                && canEverFit(cols, f.plan, onlyInferred, keepType, extraLocal)) {
             String[] moved = degradeOnce(cols, f.plan, onlyInferred, keepType);
             if (moved == null) {
                 break;
             }
             f.conversions.add(moved);
-            f.plan = rowPlan(cols, pageSize);
+            f.plan = rowPlan(cols, pageSize, extraLocal);
         }
         if (!f.plan.ok) {
-            f.refuse = refuse(cols, f.plan, refuseReason(cols, f.plan), pageSize);
+            f.refuse = refuse(cols, f.plan, refuseReason(cols, f.plan), pageSize, extraLocal);
         }
         return f;
     }
@@ -385,7 +404,8 @@ public final class RowFit {
     }
 
     /** 按列序贪心装箱，给出"至少拆成几段、每段几列几字节"。 */
-    private static Refuse refuse(List<Infer.Column> cols, Plan plan, String reason, int pageSize) {
+    private static Refuse refuse(List<Infer.Column> cols, Plan plan, String reason, int pageSize,
+                                 long extraLocal) {
         Refuse r = new Refuse();
         r.reason = reason;
         r.columns = plan.columns;
@@ -395,16 +415,16 @@ public final class RowFit {
         for (Infer.Column c : cols) {
             List<Infer.Column> trial = new ArrayList<Infer.Column>(cur);
             trial.add(c);
-            if (rowPlan(trial, pageSize).ok || cur.isEmpty()) {
+            if (rowPlan(trial, pageSize, extraLocal).ok || cur.isEmpty()) {
                 cur = trial;
                 continue;
             }
-            r.split.add(rowPlan(cur, pageSize));
+            r.split.add(rowPlan(cur, pageSize, extraLocal));
             cur = new ArrayList<Infer.Column>();
             cur.add(c);
         }
         if (!cur.isEmpty()) {
-            r.split.add(rowPlan(cur, pageSize));
+            r.split.add(rowPlan(cur, pageSize, extraLocal));
         }
         return r;
     }

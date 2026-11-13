@@ -81,8 +81,10 @@ public final class LayerGenDiffer {
         for (String g : LayerGen.GOV_ADS) {
             if (!ads.ddlSql.contains("`" + g + "`")) { bad++; shown.add("ads 缺通用字段 " + g); }
         }
-        if (!ads.transformSql.contains("GROUP BY") || !ads.transformSql.contains("COUNT(*)")) {
-            bad++; shown.add("ads 缺模板聚合 GROUP BY/COUNT(*)");
+        // 2026-11-13 起模板聚合不再带 GROUP BY：整表单行的聚合查询对空表也返回一行，
+        // 空表不会在 ads 里凭空少一条（COUNT 得 0）。判据只保留「按行数 COUNT(*) 出值」
+        if (!ads.transformSql.contains("COUNT(*)")) {
+            bad++; shown.add("ads 缺模板聚合 COUNT(*)");
         }
         // 同一主题装了多个领域目标表时，一个目标一条 INSERT：旧写法只取组里第一张表，
         // 其余领域的表根本没进汇总；idx_value 与 dim_key_json 也要落，不然指标表只有行数没有值。
@@ -294,10 +296,11 @@ public final class LayerGenDiffer {
                     + firstLines(mdom2.transformSql, 3));
         }
         // ads：有数值指标就按 SUM/AVG 出，单位从注释括号取；不再一律按行数 COUNT(*)
-        if (!mads2.transformSql.contains("SUM(`amount`) AS `idx_value`")) {
+        // 指标值一律 IFNULL(agg, 0)：空表/全 NULL 时落 0，不留 NULL 行
+        if (!mads2.transformSql.contains("IFNULL(SUM(`amount`), 0) AS `idx_value`")) {
             bad++; shown.add("ads 没把 amount 当可求和指标：" + firstLines(mads2.transformSql, 3));
         }
-        if (!mads2.transformSql.contains("AVG(`rate`) AS `idx_value`")) {
+        if (!mads2.transformSql.contains("IFNULL(AVG(`rate`), 0) AS `idx_value`")) {
             bad++; shown.add("ads 没把比率列 rate 按 AVG 聚合");
         }
         if (!mads2.transformSql.contains("'元' AS `idx_unit`")
@@ -337,14 +340,17 @@ public final class LayerGenDiffer {
             bad++; shown.add("指标命中不足：" + miss);
         }
         // 文本存数值必须 CAST：直接 SUM(`qty`) 在 MySQL 里是字符串求和，恒为 0
-        if (!hads.transformSql.contains("SUM(CAST(NULLIF(REPLACE(REPLACE(TRIM(`qty`)")) {
-            bad++; shown.add("文本数值列 qty 没走 CAST 聚合：" + firstLines(hads.transformSql, 4));
+        // 文本存数值要 CAST + 数值守卫：一行都转不出数时退回 COUNT(*)，否则恒 0
+        if (!hads.transformSql.contains("SUM(CAST(CASE WHEN REPLACE(REPLACE(TRIM(`qty`)")
+                || !hads.transformSql.contains("REGEXP '^-?[0-9]+")) {
+            bad++; shown.add("文本数值列 qty 没走 CAST 聚合（或没加数值守卫）："
+                    + firstLines(hads.transformSql, 4));
         }
-        if (!hads.transformSql.contains("AVG(CAST(NULLIF(REPLACE(REPLACE(TRIM(`price_text`)")) {
+        if (!hads.transformSql.contains("AVG(CAST(CASE WHEN REPLACE(REPLACE(TRIM(`price_text`)")) {
             bad++; shown.add("文本单价 price_text 没走 CAST + AVG");
         }
         // 存量类取期末值：余额每期一张快照，SUM 会把历史期累加
-        if (!hads.transformSql.contains("MAX(`balance`) AS `idx_value`")) {
+        if (!hads.transformSql.contains("IFNULL(MAX(`balance`), 0) AS `idx_value`")) {
             bad++; shown.add("余额列 balance 没按期末值取 MAX");
         }
         if (!hads.transformSql.contains("'吨' AS `idx_unit`")) {
@@ -381,17 +387,17 @@ public final class LayerGenDiffer {
             bad++; shown.add("表注释/表名没被当证据：" + cmiss);
         }
         // 库存表里的无量纲列按期末值取 MAX（每期一张快照），注释里的「吨」要落到 idx_unit
-        if (!ctxads.transformSql.contains("MAX(`value`) AS `idx_value`")) {
+        if (!ctxads.transformSql.contains("IFNULL(MAX(`value`), 0) AS `idx_value`")) {
             bad++; shown.add("库存表里无注释的 value 没按存量取 MAX：" + firstLines(ctxads.transformSql, 4));
         }
-        if (!ctxads.transformSql.contains("MAX(CAST(NULLIF(REPLACE(REPLACE(TRIM(`qty`)")) {
+        if (!ctxads.transformSql.contains("MAX(CAST(CASE WHEN REPLACE(REPLACE(TRIM(`qty`)")) {
             bad++; shown.add("库存表里的文本数值列 qty 没按存量 MAX + CAST 聚合");
         }
         if (!ctxads.transformSql.contains("'吨' AS `idx_unit`")) {
             bad++; shown.add("表注释里的单位（吨）没带到指标上");
         }
         // 经费表：无量纲列按金额给「元」，口径仍是求和
-        if (!ctxads.transformSql.contains("SUM(`budget_num`) AS `idx_value`")
+        if (!ctxads.transformSql.contains("IFNULL(SUM(`budget_num`), 0) AS `idx_value`")
                 || !ctxads.transformSql.contains("'元' AS `idx_unit`")) {
             bad++; shown.add("经费表里的 budget_num 没按金额（SUM/元）出指标");
         }

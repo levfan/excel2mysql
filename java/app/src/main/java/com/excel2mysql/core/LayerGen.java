@@ -59,6 +59,23 @@ public final class LayerGen {
     private static final int DOM_PAGE_SIZE = 16384;
 
     /**
+     * 带主键的表在聚簇索引里要多留一份键与索引头，实测比同列不带主键的表少装约 205 字节
+     * （纯 VARCHAR(64) / 纯 TEXT 的翻转点都是不带主键 195 列、带主键 190 列，恒定差 5 列）。
+     * 再留 55 字节余量：模型按 41 字节/列估算，正好压线的那张表（dim_code_info_21，账上 8126）
+     * 真建还是报 1118，说明估算与实测之间有个位数字节的漂移，宁可早拆一张表。
+     */
+    private static final long PK_LOCAL_MARGIN = 260L;
+
+    /** 这张表的列里，主键带来的额外行内开销。 */
+    private static long keyMargin(List<Infer.Column> cols) {
+        int pk = 0;
+        for (Infer.Column c : cols) {
+            if (c.primaryKey) { pk++; }
+        }
+        return pk == 0 ? 0L : PK_LOCAL_MARGIN * pk;
+    }
+
+    /**
      * 一张待生成的领域目标表。origin 记映射里写的原始目标名：合并超限时这一组会被拆成多张，
      * ads 按 origin 把「一张领域表」展开成实际生成的若干张，不会漏汇总。
      */
@@ -129,8 +146,11 @@ public final class LayerGen {
         GOV_NAMES.addAll(GOV_COMMENT.keySet());
     }
 
-    /** ads 每张领域表最多落的指标数：几百个数值列全摊成 INSERT 会让交付 SQL 无法阅读。 */
-    public static final int MAX_ADS_MEASURES = 20;
+    /**
+     * ads 单张领域表的指标数告警线：超过就在日志里点一句「交付 SQL 会很长」，
+     * 但一个指标都不丢——业务方要的是「每个指标都有数」，砍指标就是把数据砍掉。
+     */
+    public static final int ADS_MEASURE_WARN = 200;
 
     /** 表 5-1：十类维度建议主键。 */
     public static final Map<String, String> DIM_PK = new LinkedHashMap<String, String>();
@@ -230,10 +250,14 @@ public final class LayerGen {
             // 目标表名 + 源表注释一起当表级证据：源表注释最贴近业务（「油料库存表（吨）」），
             // 目标名里也常带英文词根（dwd_oil_stock），两个都留给 FieldClass 去认。
             g.ctx = FieldClass.Ctx.of(g.target, sourceComments(g.sources));
-            Set<String> seen = new LinkedHashSet<String>();
+            // 同名判重按小写（MySQL 列名不分大小写），且同名不同定义要放宽类型：
+            // 先到的那张表把列定成 VARCHAR(10)/DATETIME，后一张表的值一灌进来就截断报错
+            Map<String, Infer.Column> byField = new LinkedHashMap<String, Infer.Column>();
             for (SourceTable s : g.sources) {
                 for (Infer.Column c : s.columns) {
-                    if (!seen.add(c.field)) {
+                    String key = c.field == null ? "" : c.field.toLowerCase(java.util.Locale.ROOT);
+                    if (byField.containsKey(key)) {
+                        putMerged(byField, c);
                         continue;
                     }
                     // 治理字段名归生成器；判不出类别、或一看就是系统审计列的不进层——
@@ -245,10 +269,12 @@ public final class LayerGen {
                         }
                         continue;
                     }
-                    g.cols.add(g.multi ? copyMerged(c, g.ctx) : copyCol(c, c.primaryKey, g.ctx));
+                    Infer.Column col = g.multi ? copyMerged(c, g.ctx) : copyCol(c, c.primaryKey, g.ctx);
+                    byField.put(key, col);
+                    g.cols.add(col);
                 }
             }
-            g.entityIdFromSource = g.multi && seen.contains("entity_id");
+            g.entityIdFromSource = g.multi && byField.containsKey("entity_id");
             addGovernance(g.cols, GOV_OBJ_DOM);
             if (g.multi) { markEntityIdPk(g.cols); }
             g.overLimit = refuseReason(g);
@@ -298,7 +324,7 @@ public final class LayerGen {
             Set<String> seen = new LinkedHashSet<String>();
             FieldClass.Ctx sc = FieldClass.Ctx.of(g.target, e.getKey().comment);
             for (Infer.Column c : e.getKey().columns) {
-                if (!seen.add(c.field)) { continue; }
+                if (!seen.add(c.field.toLowerCase(java.util.Locale.ROOT))) { continue; }
                 if (isGovField(c.field) || !FieldClass.keep(c, sc)) { continue; }
                 business.add(copyCol(c, c.primaryKey, sc));
             }
@@ -340,7 +366,7 @@ public final class LayerGen {
             return "合并后 " + g.cols.size() + " 列，超过 " + MAX_MERGE_COLUMNS
                     + " 列上限（自动拆成每个领域目标表）。源表：" + names;
         }
-        RowFit.Plan p = RowFit.rowPlan(g.cols, DOM_PAGE_SIZE);
+        RowFit.Plan p = RowFit.rowPlan(g.cols, DOM_PAGE_SIZE, keyMargin(g.cols));
         if (!p.ok) {
             return "合并后 " + p.columns + " 列，行上限体检不通过（server " + p.server + " / "
                     + RowFit.SERVER_ROW_LIMIT + "，行内 " + p.local + " / " + p.localLimit
@@ -508,7 +534,9 @@ public final class LayerGen {
         for (SourceTable s : sources) {
             boolean multi = cur.sources.size() + 1 > 1;
             Map<String, Infer.Column> cand = new LinkedHashMap<String, Infer.Column>(curCols);
-            for (Infer.Column c : businessColsOf(s, multi)) { cand.put(c.field, c); }
+            // 同名判重按小写：MySQL 的列名不分大小写，`SL` 与 `sl` 并进同一张维表就是
+            // Duplicate column name（建表直接失败），先去重再把类型放宽
+            for (Infer.Column c : businessColsOf(s, multi)) { putMerged(cand, c); }
             List<Infer.Column> base = objBase(dim, pk);
             if (!cur.sources.isEmpty()
                     && (cur.sources.size() >= MAX_MERGE_SOURCES
@@ -518,7 +546,7 @@ public final class LayerGen {
                 cur = new ObjPlan();
                 curCols = new LinkedHashMap<String, Infer.Column>();
                 cand = new LinkedHashMap<String, Infer.Column>();
-                for (Infer.Column c : businessColsOf(s, false)) { cand.put(c.field, c); }
+                for (Infer.Column c : businessColsOf(s, false)) { putMerged(cand, c); }
             }
             cur.sources.add(s);
             curCols = cand;
@@ -534,10 +562,11 @@ public final class LayerGen {
             normalizeForMulti(p.cols, p.multi);
             List<List<Infer.Column>> chunks;
             if (chunkFits(base, p.cols)) {
-                chunks = new ArrayList<List<Infer.Column>>();
-                chunks.add(finishChunk(base, p.cols, out));
+                chunks = fitOrSplit(base, p.cols, out);
             } else {
                 chunks = packColumns(base, p.cols, out);
+            }
+            if (chunks.size() > 1) {
                 out.warnings.add("对象维度 " + dim + "（" + Taxonomy.dimCn(dim) + "）由 "
                         + p.sources.size() + " 张源表组装会成 " + (base.size() + p.cols.size())
                         + " 列超大宽表，不符合 MySQL 建表规范，已拆成 " + chunks.size()
@@ -555,6 +584,61 @@ public final class LayerGen {
         return result;
     }
 
+    /**
+     * 把一列并进「维表列清单」，键取小写。
+     *
+     * <p>同名不同大小写（`SL` / `sl`）在 MySQL 里是同一列，留着就是建表报
+     * Duplicate column name；同名不同定义（`VARCHAR(10)` 与 `VARCHAR(64)`、
+     * `INT` 与 `VARCHAR`）则必须取能装下两边的那个，否则后一张源表的数据一进来就
+     * 报 Data too long / Incorrect integer value。
+     */
+    private static void putMerged(Map<String, Infer.Column> cols, Infer.Column c) {
+        String key = c.field.toLowerCase(java.util.Locale.ROOT);
+        Infer.Column old = cols.get(key);
+        if (old == null) {
+            cols.put(key, c);
+            return;
+        }
+        old.type = mergedType(old.type, c.type);
+        if (old.comment == null || old.comment.trim().isEmpty()) { old.comment = c.comment; }
+    }
+
+    /** 两列类型取并：同类型不动，文本类取更宽的，数值类取装得更多的，跨类一律退字符串。 */
+    private static String mergedType(String a, String b) {
+        String x = a == null ? "" : a.trim().toUpperCase(java.util.Locale.ROOT);
+        String y = b == null ? "" : b.trim().toUpperCase(java.util.Locale.ROOT);
+        if (x.equals(y)) { return a; }
+        if (x.isEmpty()) { return b; }
+        if (y.isEmpty()) { return a; }
+        Integer nx = RowFit.varcharN(x);
+        Integer ny = RowFit.varcharN(y);
+        if (nx != null && ny != null) {
+            int n = Math.max(nx.intValue(), ny.intValue());
+            return "VARCHAR(" + Math.min(n, 1024) + ")";
+        }
+        boolean textX = x.startsWith("TEXT") || x.startsWith("TINYTEXT") || x.startsWith("MEDIUMTEXT")
+                || x.startsWith("LONGTEXT") || x.startsWith("BLOB");
+        boolean textY = y.startsWith("TEXT") || y.startsWith("TINYTEXT") || y.startsWith("MEDIUMTEXT")
+                || y.startsWith("LONGTEXT") || y.startsWith("BLOB");
+        if (textX || textY) { return "TEXT"; }
+        boolean numX = x.startsWith("DECIMAL") || x.startsWith("NUMERIC") || x.startsWith("INT")
+                || x.startsWith("BIGINT") || x.startsWith("SMALLINT") || x.startsWith("TINYINT")
+                || x.startsWith("DOUBLE") || x.startsWith("FLOAT");
+        boolean numY = y.startsWith("DECIMAL") || y.startsWith("NUMERIC") || y.startsWith("INT")
+                || y.startsWith("BIGINT") || y.startsWith("SMALLINT") || y.startsWith("TINYINT")
+                || y.startsWith("DOUBLE") || y.startsWith("FLOAT");
+        if (numX && numY) {
+            return RowFit.colBytes(x)[0] >= RowFit.colBytes(y)[0] ? x : y;
+        }
+        if (nx != null || ny != null) {
+            int n = nx != null ? nx.intValue() : ny.intValue();
+            return "VARCHAR(" + Math.min(Math.max(n, 255), 1024) + ")";
+        }
+        // 数值列撞上日期列/字符串列：源值里必然有一边装不下（实测 `ztmc` 塞进 DATETIME
+        // 报 Incorrect datetime value），统一退成字符串，值原样保住
+        return "VARCHAR(255)";
+    }
+
     /** 维表每张都要带的列：条款 183 建议主键 + 表 5-3 治理字段。 */
     private static List<Infer.Column> objBase(String dim, String pk) {
         List<Infer.Column> base = new ArrayList<Infer.Column>();
@@ -570,7 +654,10 @@ public final class LayerGen {
         List<Infer.Column> out = new ArrayList<Infer.Column>();
         FieldClass.Ctx sc = FieldClass.Ctx.of(s.name, s.comment);
         for (Infer.Column c : s.columns) {
-            if (c.primaryKey || isGovField(c.field) || !FieldClass.keep(c, sc)) { continue; }
+            // 治理字段与维度主键按小写判：源表里写成 `SRC_CODE` 也是同一列，重复并进去建表就撞名
+            String low = c.field == null ? "" : c.field.toLowerCase(java.util.Locale.ROOT);
+            if (c.primaryKey || isGovField(low) || DIM_PK.containsValue(low)
+                    || !FieldClass.keep(c, sc)) { continue; }
             out.add(multi ? copyMerged(c, sc) : copyCol(c, false, sc));
         }
         return out;
@@ -681,16 +768,11 @@ public final class LayerGen {
                 for (Measure mm : measures) {
                     if (mm.cast) { castMeasures++; }
                 }
-                if (measures.size() > MAX_ADS_MEASURES) {
-                    int cut = measures.size() - MAX_ADS_MEASURES;
-                    capped += cut;
-                    List<String> dropped = new ArrayList<String>();
-                    for (Measure mm : measures.subList(MAX_ADS_MEASURES, measures.size())) {
-                        if (dropped.size() < 6) { dropped.add(mm.field); }
+                if (measures.size() > ADS_MEASURE_WARN) {
+                    capped++;
+                    if (cappedSample.size() < 6) {
+                        cappedSample.add(domTable + "：" + measures.size() + " 个");
                     }
-                    measures = measures.subList(0, MAX_ADS_MEASURES);
-                    cappedSample.add(domTable + "：丢了 " + cut + " 个（示例 " + join(dropped, "、")
-                            + "）");
                 }
                 if (measures.isEmpty()) {
                     // 没有可求和/求均值的数值列：保住「源行数」这个唯一说得清的口径
@@ -708,9 +790,8 @@ public final class LayerGen {
         out.ddlSql = ddl.toString();
         out.transformSql = dml.toString();
         if (capped > 0) {
-            out.warnings.add("ads 有 " + capped + " 个指标超过每表 " + MAX_ADS_MEASURES
-                    + " 个上限未产聚合（已按金额/数量优先排序后截断）：" + join(cappedSample, "；")
-                    + "；可用映射里的显式指标清单补");
+            out.warnings.add("ads 有 " + capped + " 张领域目标表的指标数超过 " + ADS_MEASURE_WARN
+                    + " 个（" + join(cappedSample, "；") + "）：全部照产，交付 SQL 会比较长");
         }
         if (castMeasures > 0) {
             out.warnings.add("ads 有 " + castMeasures + " 个指标列的源类型是文本，"
@@ -744,10 +825,29 @@ public final class LayerGen {
         }
     }
 
-    /** 文本数值列的聚合取值：去千分位逗号与两端空白，空串按 NULL 计，再 CAST 成 DECIMAL。 */
+    /**
+     * 文本数值列的聚合取值：去千分位逗号与两端空白，**先按数字形状过滤**再 CAST。
+     *
+     * <p>为什么必须过滤：严格模式下 {@code CAST('待审核' AS DECIMAL)} 不是警告而是 1366 报错，
+     * 整条指标 INSERT 直接回滚（现场 27 条指标就是这么丢的）。REGEXP 挡掉非数字，值留 NULL
+     * 让 SUM/AVG/MAX 自己跳过；整列一个数字都没有时由 {@link #adsValue} 退成源行数。
+     */
     private static String castExpr(String field) {
-        return "CAST(NULLIF(REPLACE(REPLACE(TRIM(`" + field + "`), ',', ''), '，', ''), '')"
-                + " AS DECIMAL(38,6))";
+        String clean = "REPLACE(REPLACE(TRIM(`" + field + "`), ',', ''), '，', '')";
+        return "CAST(CASE WHEN " + clean + " REGEXP '^-?[0-9]+(\\.[0-9]+)?$' THEN " + clean
+                + " END AS DECIMAL(38,6))";
+    }
+
+    /**
+     * 指标取值表达式。文本指标整列都不是数字时（实测「模拟平均海拔1」这类值），
+     * 聚合结果会是 NULL——那等于这个指标没数，退成源行数 COUNT(*) 并保留待核标记。
+     */
+    private static String adsValue(Measure m) {
+        if (!m.cast) {
+            return m.agg + "(" + m.expr + ")";
+        }
+        return "CASE WHEN COUNT(" + m.expr + ") = 0 THEN COUNT(*) ELSE "
+                + m.agg + "(" + m.expr + ") END";
     }
 
     /**
@@ -809,7 +909,7 @@ public final class LayerGen {
                                     GenOptions o) {
         String json = "{\"dom\":\"" + domTable + "\"}";
         String idxCode = m == null ? theme : m.field;
-        String value = m == null ? "COUNT(*)" : m.agg + "(" + m.expr + ")";
+        String value = m == null ? "COUNT(*)" : "IFNULL(" + adsValue(m) + ", 0)";
         String unit = m == null ? "" : m.unit;
         String model = m == null ? "rowcount" : m.agg.toLowerCase() + "_" + m.field;
         String what = m == null ? "按源行数（模板）" : m.label + (m.unit.isEmpty() ? "" : "，" + m.unit);
@@ -829,8 +929,9 @@ public final class LayerGen {
           // 一条 GROUP BY 汇总多行，取本批最大的源主键值，口径待业务方核。
           .append("MAX(`src_batch_id`) AS `src_batch_id`, '")
           .append(o.batchId).append("' AS `etl_batch_id`, '待核' AS `quality_flag` ")
-          .append("FROM ").append(qualify(o.domDb, domTable)).append(" ")
-          .append("GROUP BY CURDATE();\n\n");
+          // 不带 GROUP BY：聚合查询对空表也返回一行（COUNT=0、SUM/AVG 为 NULL 已被 IFNULL 兜成 0），
+          // 早先写 GROUP BY CURDATE()，源表一行都没有时就一行不产，指标在主题层「消失」了
+          .append("FROM ").append(qualify(o.domDb, domTable)).append(";\n\n");
         return sb.toString();
     }
 
@@ -838,7 +939,7 @@ public final class LayerGen {
     private static void adsMaps(LayerOutput out, String target, String domTable, Measure m,
                                 GenOptions o) {
         String json = "{\"dom\":\"" + domTable + "\"}";
-        String value = m == null ? "COUNT(*)" : m.agg + "(" + m.expr + ")";
+        String value = m == null ? "COUNT(*)" : "IFNULL(" + adsValue(m) + ", 0)";
         for (String c : GOV_ADS) {
             MappingFile.FieldMap f = new MappingFile.FieldMap();
             f.srcTable = domTable; f.srcField = m == null ? "" : m.field;
@@ -884,12 +985,12 @@ public final class LayerGen {
             List<Infer.Column> trial = new ArrayList<Infer.Column>(cur);
             trial.add(c.copied());
             if (!cur.isEmpty() && !chunkFits(base, trial)) {
-                chunks.add(finishChunk(base, cur, out));
+                chunks.addAll(fitOrSplit(base, cur, out));
                 cur = new ArrayList<Infer.Column>();
             }
             cur.add(c.copied());
         }
-        if (!cur.isEmpty() || chunks.isEmpty()) { chunks.add(finishChunk(base, cur, out)); }
+        if (!cur.isEmpty() || chunks.isEmpty()) { chunks.addAll(fitOrSplit(base, cur, out)); }
         return chunks;
     }
 
@@ -899,7 +1000,38 @@ public final class LayerGen {
         List<Infer.Column> trial = new ArrayList<Infer.Column>();
         for (Infer.Column c : base) { trial.add(degradableCopy(c)); }
         for (Infer.Column c : business) { trial.add(degradableCopy(c)); }
-        return RowFit.rowPlan(trial, DOM_PAGE_SIZE).ok;
+        return RowFit.rowPlan(trial, DOM_PAGE_SIZE, keyMargin(base)).ok;
+    }
+
+    /**
+     * 落定一块并保证它真能建出来：体检后仍过不了线（列数/半页/行上限三条线怎么降都不行）
+     * 就对半拆成两块分别落，直到每块都过线。
+     *
+     * <p>为什么要有这一步：单源维表不经过 chunkFits 预检，一个源表自己就有 260 列，
+     * 生成出来的 DDL 能过工具自己的乐观估算、执行时被 MySQL 打回 1118（server 65535 或
+     * 半页 8126），整张维表连数据一起丢。宁可多拆一张表，也不能交出建不出来的 DDL。
+     */
+    private static List<List<Infer.Column>> fitOrSplit(List<Infer.Column> base,
+                                                       List<Infer.Column> business,
+                                                       LayerOutput out) {
+        List<List<Infer.Column>> res = new ArrayList<List<Infer.Column>>();
+        List<Infer.Column> cols = new ArrayList<Infer.Column>();
+        Set<String> keepType = new LinkedHashSet<String>();
+        for (Infer.Column c : base) {
+            cols.add(c.copied());
+            keepType.add(c.field);
+        }
+        for (Infer.Column c : business) { cols.add(c.copied()); }
+        RowFit.Fit f = RowFit.fit(cols, DOM_PAGE_SIZE, false, keepType, keyMargin(base));
+        if (f.refuse != null && business.size() > 1) {
+            int half = business.size() / 2;
+            res.addAll(fitOrSplit(base, business.subList(0, half), out));
+            res.addAll(fitOrSplit(base, business.subList(half, business.size()), out));
+            return res;
+        }
+        noteFit(out, f);
+        res.add(cols);
+        return res;
     }
 
     /**
@@ -920,7 +1052,7 @@ public final class LayerGen {
             keepType.add(c.field);
         }
         for (Infer.Column c : business) { cols.add(c.copied()); }
-        noteFit(out, RowFit.fit(cols, DOM_PAGE_SIZE, false, keepType));
+        noteFit(out, RowFit.fit(cols, DOM_PAGE_SIZE, false, keepType, keyMargin(base)));
         return cols;
     }
 
@@ -1097,7 +1229,7 @@ public final class LayerGen {
     }
 
     private static boolean isGovField(String field) {
-        return field != null && GOV_NAMES.contains(field);
+        return field != null && GOV_NAMES.contains(field.toLowerCase(java.util.Locale.ROOT));
     }
 
     private static List<Infer.Column> governanceCols(String[] names) {
