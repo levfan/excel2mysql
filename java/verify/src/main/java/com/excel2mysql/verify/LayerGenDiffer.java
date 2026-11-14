@@ -195,17 +195,30 @@ public final class LayerGenDiffer {
         }
 
         // 建表语句必须以分号终止：否则整层拼接后 splitStatements 粘连、交付 .sql 在 mysql 客户端跑不动
-        if (!dom.ddlSql.contains("COMMENT='dwd_proc_oil';") || !dom.ddlSql.contains("COMMENT='dwd_comp_tech';")) {
-            bad++; shown.add("dom DDL 建表语句未以分号终止");
+        // 表注释走中文业务话（2026-11-14 用户点名）：dom 取源表注释、obj 写维度名＋归集来源、
+        // ads 写指标匹配情况；不写英文表名、不带「待核/已核」字眼
+        if (!dom.ddlSql.contains("COMMENT='油料账';") || !dom.ddlSql.contains("COMMENT='人员表';")) {
+            bad++; shown.add("dom 表注释应取 ODS 源表中文注释并以分号终止");
         }
-        if (!obj.ddlSql.contains("COMMENT='dim_material';")) {
-            bad++; shown.add("obj DDL 建表语句未以分号终止");
+        if (dom.ddlSql.contains("COMMENT='dwd_proc_oil'") || dom.ddlSql.contains("COMMENT='dwd_comp_tech'")) {
+            bad++; shown.add("dom 表注释不许写英文表名（源表注释是中文）");
+        }
+        if (!obj.ddlSql.contains("COMMENT='物资对象维表（据油料账归集）';")
+                || !obj.ddlSql.contains("COMMENT='组织机构对象维表（本次未命中源表，仅建表结构）';")) {
+            bad++; shown.add("obj 表注释应是维度中文名＋归集来源（空维表注明仅建结构）并以分号终止");
+        }
+        if (obj.ddlSql.contains("COMMENT='dim_material'") || obj.ddlSql.contains("COMMENT='dim_person'")) {
+            bad++; shown.add("obj 表注释不许写英文表名");
         }
         if (!obj.ddlSql.startsWith("USE `obj`;")) {
             bad++; shown.add("obj DDL 缺 USE `obj`; 头（execute 的一致性校验/前置 USE 全靠它）");
         }
-        if (!ads.ddlSql.contains("（待核）';")) {
-            bad++; shown.add("ads DDL 建表语句未以分号终止");
+        if (!ads.ddlSql.contains("后勤综合主题指标汇总表（覆盖 2 张领域表，无可聚合数值指标，按源行数计）';")
+                || !ads.ddlSql.contains("决策分析主题指标汇总表（本次无领域表归入）';")) {
+            bad++; shown.add("ads 表注释应写指标匹配情况并以分号终止");
+        }
+        if (ads.ddlSql.contains("待核") || ads.ddlSql.contains("已核")) {
+            bad++; shown.add("ads 表注释不许带「待核/已核」字眼");
         }
 
         // 未绑定：映射里的表在源结构里找不到 → 记 unbound，不掀整轮
@@ -225,6 +238,9 @@ public final class LayerGenDiffer {
         if (mdom.tableCount != 1 || mdomT.fields.isEmpty()) {
             bad++; shown.add("多源 dom 没合并成一张 dwd_multi_oil 表数 " + mdom.tableCount + " 列 " + mdomT.fields.size());
         } else {
+            if (!mdom.ddlSql.contains("COMMENT='由油料账、油料出入库流水归集';")) {
+                bad++; shown.add("多源 dom 表注释应写「由…归集」（据 ODS 源表注释）");
+            }
             for (String need : new String[]{"id", "name", "log_id", "amount", "note", "entity_id"}) {
                 if (!mdomT.fields.contains(need)) { bad++; shown.add("多源 dom 合并缺列 " + need); }
             }

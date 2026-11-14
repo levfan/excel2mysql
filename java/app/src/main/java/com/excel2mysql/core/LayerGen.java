@@ -240,7 +240,8 @@ public final class LayerGen {
                 out.warnings.add("多源合并表 " + g.target + " 有源列名为 entity_id、与治理字段撞名："
                         + "主键 entity_id 将由 UUID() 生成并覆盖源值（待核，186 溯源）");
             }
-            ddl.append(Ddl.buildDdl(g.target, g.target, g.cols, true)).append(";\n\n");
+            ddl.append(Ddl.buildDdl(g.target, domTableComment(g.target, g.multi, g.sources, g.rows, g.cols),
+                    g.cols, true)).append(";\n\n");
             for (MappingFile.TableMap t : g.rows) {
                 SourceTable s = bind(t, map);
                 // dom 只由治理字段生成键：entity_id 由 UUID() 出，src_entity_id/src_code/std_code 回指源主键（条款 186）
@@ -436,6 +437,132 @@ public final class LayerGen {
         return sb.toString();
     }
 
+    // ---- 三层表的中文表注释（用户 2026-11-14 点名）------------------------------------
+    // 按来源/指标匹配情况与 ODS 表注释、字段注释组织一句话；英文表名只在整段没有任何
+    // 中文证据（ODS 注释本身就是英文或为空）时才放行；一律不带「待核/已核」字眼。
+
+    /** 有没有中文证据：出现汉字才算。 */
+    public static boolean hasCn(String s) {
+        if (s == null) { return false; }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= '\u4e00' && c <= '\u9fff') { return true; }
+        }
+        return false;
+    }
+
+    /** 表注释里剥掉「待核/已核」等核对状态字眼（含括号形态，长词先剥），压掉换行、收拾残留标点。 */
+    public static String scrubReview(String s) {
+        String out = s == null ? "" : s;
+        String[] words = {"（待核对）", "（已核对）", "（待核实）", "（已核实）",
+                "（待核）", "（已核）", "(待核对)", "(已核对)", "(待核实)", "(已核实)",
+                "(待核)", "(已核)", "待核对", "已核对", "待核实", "已核实", "待核", "已核"};
+        for (String w : words) { out = out.replace(w, ""); }
+        // ODS 字段注释可能是 Excel 多行格：换行进表注释会让 COMMENT 跨行，压掉
+        out = out.replaceAll("[ \\t]*\\r?\\n[ \\t]*", "");
+        out = out.replace("（）", "").replace("()", "");
+        out = out.replaceAll("^[；;、,，\\s]+", "").replaceAll("[；;、,，\\s]+$", "");
+        return out.trim();
+    }
+
+    /**
+     * dom 表注释：源表注释优先（一源一表就是那条注释，多源写「由…归集」），
+     * 其次映射表中文名，再次字段注释归纳；都没有中文证据才放行英文注释/表名。
+     */
+    public static String domTableComment(String target, boolean multi, List<SourceTable> sources,
+                                         List<MappingFile.TableMap> rows, List<Infer.Column> cols) {
+        List<String> cn = new ArrayList<String>();
+        for (SourceTable s : sources) {
+            String c = scrubReview(s.comment);
+            if (hasCn(c) && !cn.contains(c) && cn.size() < 3) { cn.add(c); }
+        }
+        if (!cn.isEmpty()) {
+            return multi ? "由" + join(cn, "、") + "归集" : cn.get(0);
+        }
+        if (rows != null) {
+            for (MappingFile.TableMap t : rows) {
+                String c = scrubReview(t.tableCn);
+                if (hasCn(c)) { return c; }
+            }
+        }
+        List<String> fc = new ArrayList<String>();
+        if (cols != null) {
+            for (Infer.Column c : cols) {
+                if (isGovField(c.field)) { continue; }
+                String cm = scrubReview(c.comment);
+                if (hasCn(cm) && !fc.contains(cm) && fc.size() < 3) { fc.add(cm); }
+            }
+        }
+        if (!fc.isEmpty()) { return "记录" + join(fc, "、") + " 等信息"; }
+        // 整段没有中文证据（ODS 注释就是英文或没注释、字段也没中文）：才放行英文注释/表名
+        List<String> en = new ArrayList<String>();
+        for (SourceTable s : sources) {
+            String c = scrubReview(s.comment);
+            if (!c.isEmpty() && !en.contains(c) && en.size() < 3) { en.add(c); }
+        }
+        return en.isEmpty() ? target : join(en, "; ");
+    }
+
+    /** obj 表注释：十类维度中文名 + 命中源表的注释；空维表也写中文，注明只建结构。 */
+    public static String objTableComment(String dim, List<SourceTable> sources, boolean empty) {
+        String base = Taxonomy.dimCn(dim) + "对象维表";
+        if (empty) { return base + "（本次未命中源表，仅建表结构）"; }
+        List<String> sc = new ArrayList<String>();
+        for (SourceTable s : sources) {
+            String c = scrubReview(s.comment);
+            if (hasCn(c) && !sc.contains(c) && sc.size() < 3) { sc.add(c); }
+        }
+        return sc.isEmpty() ? base : base + "（据" + join(sc, "、") + "归集）";
+    }
+
+    /**
+     * ads 表注释：主题名 + 指标匹配情况（覆盖几张领域表、几个指标、指标样例）。
+     * 指标样例优先取 ODS 字段注释（用户 2026-11-14 点名「字段注释」），列自己没注释才退到
+     * 指标的中文说明；不再把英文表名/列名写进注释。
+     */
+    public static String adsTableComment(String theme, Map<String, Integer> byDom,
+                                         Map<String, List<Infer.Column>> domCols,
+                                         Map<String, FieldClass.Ctx> domCtx) {
+        StringBuilder sb = new StringBuilder(theme).append("指标汇总表");
+        if (byDom == null || byDom.isEmpty()) {
+            return sb.append("（本次无领域表归入）").toString();
+        }
+        int meas = 0;
+        List<String> labels = new ArrayList<String>();
+        for (String domTable : byDom.keySet()) {
+            List<Infer.Column> cols = domCols == null ? null : domCols.get(domTable);
+            List<Measure> ms = measuresOf(cols, domCtx == null ? null : domCtx.get(domTable));
+            meas += ms.size();
+            for (Measure mm : ms) {
+                String lb = scrubReview(colCommentOf(cols, mm.field));
+                if (!hasCn(lb)) { lb = scrubReview(mm.label); }
+                if (hasCn(lb) && !labels.contains(lb) && labels.size() < 3) { labels.add(lb); }
+            }
+        }
+        sb.append("（覆盖 ").append(byDom.size()).append(" 张领域表");
+        if (meas == 0) {
+            sb.append("，无可聚合数值指标，按源行数计");
+        } else {
+            sb.append("、").append(meas).append(" 个指标");
+            if (!labels.isEmpty()) {
+                sb.append("：").append(join(labels, "、"));
+                if (meas > labels.size()) { sb.append("等"); }
+            }
+        }
+        return sb.append("）").toString();
+    }
+
+    /** 列的源注释：ads 表注释里的指标样例要的是它，不是分类器给的类名。 */
+    private static String colCommentOf(List<Infer.Column> cols, String field) {
+        if (cols == null || field == null) { return ""; }
+        for (Infer.Column c : cols) {
+            if (field.equals(c.field)) {
+                return c.comment == null ? "" : c.comment;
+            }
+        }
+        return "";
+    }
+
     /**
      * 多源合并表的主键：只认治理字段 entity_id，不并各源主键。
      * 顺手把类型收到 VARCHAR(64)——它是 UUID() 生成的 36 字符键，而当主键就要建索引，
@@ -523,7 +650,8 @@ public final class LayerGen {
                 plans = planObj(dim, pk, hit, out, used);
             }
             for (ObjPlan p : plans) {
-                ddl.append(Ddl.buildDdl(p.target, p.target, p.cols, true)).append(";\n\n");
+                ddl.append(Ddl.buildDdl(p.target, objTableComment(dim, p.sources, p.sources.isEmpty()),
+                        p.cols, true)).append(";\n\n");
                 if (!p.sources.isEmpty()) {
                     List<String> branches = new ArrayList<String>();
                     for (SourceTable s : p.sources) {
@@ -790,7 +918,8 @@ public final class LayerGen {
             String target = Taxonomy.themeTable(theme);
             List<Infer.Column> cols = new ArrayList<Infer.Column>();
             cols.addAll(governanceCols(GOV_ADS));
-            ddl.append(Ddl.buildDdl(target, "主题 " + theme + "（待核）", cols, true)).append(";\n\n");
+            ddl.append(Ddl.buildDdl(target, adsTableComment(theme, e.getValue(), domCols, domCtx),
+                    cols, true)).append(";\n\n");
             if (e.getValue().isEmpty()) {
                 out.warnings.add("主题 " + theme + " 没有领域目标表，未产聚合语句");
                 out.tableCount++;

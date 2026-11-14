@@ -649,6 +649,8 @@ public final class GuiMain {
                 import_run(problems);
                 // 分层入库预检的纯函数：DDL 类型解析、数值样本判定、源表与聚合识别
                 layer_gen_precheck(problems);
+                // 三层表注释口径：中文证据成句、不写英文表名、不带待核字眼
+                layer_table_comments(problems);
                 sql_run_connect_failure(problems);
                 // 子线程出意外时的兜底文案
                 task_crash(frame, problems);
@@ -9243,6 +9245,112 @@ public final class GuiMain {
         if (!com.excel2mysql.core.LayerGen.hasAggregate(
                 "INSERT INTO `ads_general` SELECT COUNT(*) AS `idx_value` FROM `dom`.`dwd_x`")) {
             problems.add("聚合语句没被识别，ads 的采样预检会做无用功");
+        }
+    }
+
+    /**
+     * 三层表注释的纯函数口径（用户 2026-11-14 点名）：中文证据组织成一句话、
+     * 不写英文表名、不带「待核/已核」字眼。夹具的源注释故意混中文/英文/空三种形状。
+     */
+    private static void layer_table_comments(List<String> problems) {
+        java.util.List<com.excel2mysql.core.Infer.Column> cols =
+                new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+        com.excel2mysql.core.Infer.Column fc = new com.excel2mysql.core.Infer.Column();
+        fc.field = "qty"; fc.comment = "库存量（吨）"; fc.type = "DECIMAL(18,4)";
+        cols.add(fc);
+        com.excel2mysql.core.Infer.Column gc = new com.excel2mysql.core.Infer.Column();
+        gc.field = "entity_id"; gc.comment = "实体唯一标识，每行由 UUID() 生成"; gc.type = "VARCHAR(64)";
+        cols.add(gc);
+        java.util.List<com.excel2mysql.core.LayerGen.SourceTable> one =
+                new java.util.ArrayList<com.excel2mysql.core.LayerGen.SourceTable>();
+        one.add(new com.excel2mysql.core.LayerGen.SourceTable("t_oil", "油料库存表（吨）", cols));
+        java.util.List<com.excel2mysql.core.MappingFile.TableMap> noRows =
+                new java.util.ArrayList<com.excel2mysql.core.MappingFile.TableMap>();
+        // 一源一表：注释就是 ODS 源表注释，不写英文表名
+        String d1 = com.excel2mysql.core.LayerGen.domTableComment(
+                "dwd_proc_oil", false, one, noRows, cols);
+        if (!"油料库存表（吨）".equals(d1)) {
+            problems.add("dom 一源一表的注释应取源表注释，实际：" + d1);
+        }
+        // 多源：由…归集，仍不写英文表名
+        java.util.List<com.excel2mysql.core.LayerGen.SourceTable> two =
+                new java.util.ArrayList<com.excel2mysql.core.LayerGen.SourceTable>(one);
+        two.add(new com.excel2mysql.core.LayerGen.SourceTable("t_oil_log", "油料出入库流水", cols));
+        String d2 = com.excel2mysql.core.LayerGen.domTableComment(
+                "dwd_multi_oil", true, two, noRows, cols);
+        if (!d2.contains("由") || !d2.contains("油料库存表") || !d2.contains("归集")
+                || d2.contains("dwd_multi_oil")) {
+            problems.add("dom 多源表的注释应写「由…归集」且不带英文表名，实际：" + d2);
+        }
+        // 源注释为空：用字段注释归纳，也不许落回英文表名
+        java.util.List<com.excel2mysql.core.LayerGen.SourceTable> bare =
+                new java.util.ArrayList<com.excel2mysql.core.LayerGen.SourceTable>();
+        bare.add(new com.excel2mysql.core.LayerGen.SourceTable("t_bare", "", cols));
+        String d3 = com.excel2mysql.core.LayerGen.domTableComment(
+                "dwd_bare", false, bare, noRows, cols);
+        if (!d3.contains("库存量") || d3.contains("dwd_bare") || d3.contains("t_bare")) {
+            problems.add("源注释为空时应用字段注释归纳中文注释，实际：" + d3);
+        }
+        // 源注释是英文、字段注释有中文：仍按中文证据出中文注释（字段注释归纳）
+        java.util.List<com.excel2mysql.core.LayerGen.SourceTable> en =
+                new java.util.ArrayList<com.excel2mysql.core.LayerGen.SourceTable>();
+        en.add(new com.excel2mysql.core.LayerGen.SourceTable("t_en", "Oil Stock", cols));
+        String d4 = com.excel2mysql.core.LayerGen.domTableComment(
+                "dwd_en", false, en, noRows, cols);
+        if (!d4.contains("库存量") || d4.contains("Oil Stock") || d4.contains("dwd_en")) {
+            problems.add("源注释英文但字段注释有中文时仍出中文注释，实际：" + d4);
+        }
+        // 整段无中文证据（源注释、字段注释全是英文）：才放行英文注释
+        java.util.List<com.excel2mysql.core.Infer.Column> enCols =
+                new java.util.ArrayList<com.excel2mysql.core.Infer.Column>();
+        com.excel2mysql.core.Infer.Column en1 = new com.excel2mysql.core.Infer.Column();
+        en1.field = "qty"; en1.comment = "stock qty"; en1.type = "DECIMAL(18,4)";
+        enCols.add(en1);
+        java.util.List<com.excel2mysql.core.LayerGen.SourceTable> enAll =
+                new java.util.ArrayList<com.excel2mysql.core.LayerGen.SourceTable>();
+        enAll.add(new com.excel2mysql.core.LayerGen.SourceTable("t_en2", "Oil Stock", enCols));
+        String d5 = com.excel2mysql.core.LayerGen.domTableComment(
+                "dwd_en2", false, enAll, noRows, enCols);
+        if (!"Oil Stock".equals(d5)) {
+            problems.add("整段无中文证据时放行英文源注释，实际：" + d5);
+        }
+        // obj：维度中文名 + 归集来源；空维表注明仅建结构；都不带英文表名
+        String o1 = com.excel2mysql.core.LayerGen.objTableComment("dim_material", one, false);
+        String o2 = com.excel2mysql.core.LayerGen.objTableComment("dim_org",
+                new java.util.ArrayList<com.excel2mysql.core.LayerGen.SourceTable>(), true);
+        if (!"物资对象维表（据油料库存表（吨）归集）".equals(o1)) {
+            problems.add("obj 表注释应是维度名＋归集来源，实际：" + o1);
+        }
+        if (!o2.contains("组织机构对象维表") || !o2.contains("仅建表结构") || o2.contains("dim_org")
+                || o2.contains("待核") || o2.contains("已核")) {
+            problems.add("obj 空维表注释应写中文且注明仅建结构，实际：" + o2);
+        }
+        // ads：主题名 + 指标匹配情况；「待核/已核」一律清洗
+        java.util.Map<String, Integer> byDom = new java.util.LinkedHashMap<String, Integer>();
+        byDom.put("dwd_proc_oil", Integer.valueOf(1));
+        java.util.Map<String, java.util.List<com.excel2mysql.core.Infer.Column>> dc =
+                new java.util.LinkedHashMap<String, java.util.List<com.excel2mysql.core.Infer.Column>>();
+        dc.put("dwd_proc_oil", cols);
+        java.util.Map<String, com.excel2mysql.core.FieldClass.Ctx> cx =
+                new java.util.LinkedHashMap<String, com.excel2mysql.core.FieldClass.Ctx>();
+        cx.put("dwd_proc_oil", com.excel2mysql.core.FieldClass.Ctx.of("t_oil", "油料库存表（吨）"));
+        String a1 = com.excel2mysql.core.LayerGen.adsTableComment("后勤保障主题", byDom, dc, cx);
+        if (!a1.contains("后勤保障主题指标汇总表") || !a1.contains("1 张领域表")
+                || !a1.contains("库存量") || a1.contains("dwd_proc_oil")
+                || a1.contains("待核") || a1.contains("已核")) {
+            problems.add("ads 表注释应写指标匹配情况（样例取字段注释）且不带英文表名/待核字眼，实际：" + a1);
+        }
+        String a2 = com.excel2mysql.core.LayerGen.adsTableComment("后勤综合主题",
+                new java.util.LinkedHashMap<String, Integer>(), dc, cx);
+        if (!a2.contains("本次无领域表归入")) {
+            problems.add("ads 空主题表注释应写明无领域表归入，实际：" + a2);
+        }
+        // 清洗：待核/已核（含括号形态）剥掉，换行压掉（Excel 多行格注释），其余原样
+        String s1 = com.excel2mysql.core.LayerGen.scrubReview("油料账（待核）");
+        String s2 = com.excel2mysql.core.LayerGen.scrubReview("已核对的预案表");
+        String s3 = com.excel2mysql.core.LayerGen.scrubReview("参考总价值\n（吨）");
+        if (!"油料账".equals(s1) || s2.contains("已核") || !"参考总价值（吨）".equals(s3)) {
+            problems.add("「待核/已核」与换行清洗不对：" + s1 + " / " + s2 + " / " + s3);
         }
     }
 
