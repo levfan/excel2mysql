@@ -85,6 +85,8 @@ _TEXTISH_RE = re.compile(r"^(TINYTEXT|MEDIUMTEXT|LONGTEXT|TEXT|TINYBLOB|"
                          r"MEDIUMBLOB|LONGBLOB|BLOB)\b")
 _VARCHAR_BYTES_RE = re.compile(r"^VARCHAR\((\d+)\)$")
 _CHAR_BYTES_RE = re.compile(r"^CHAR\((\d+)\)$")
+_VARBINARY_BYTES_RE = re.compile(r"^VARBINARY\((\d+)\)$")
+_BINARY_BYTES_RE = re.compile(r"^BINARY\((\d+)\)$")
 _DECIMAL_BYTES_RE = re.compile(r"^DECIMAL\((\d+)(?:,(\d+))?\)$")
 
 _FIELD_MAX_LEN = 30             # 字段名最长 30 字符；全拼超此则整列降级为首字母
@@ -1122,6 +1124,20 @@ def _varchar_n(col):
     return int(m.group(1)) if m else None
 
 
+def _char_n(col):
+    m = _CHAR_BYTES_RE.match(str(col.get("type") or "").strip().upper())
+    return int(m.group(1)) if m else None
+
+
+def _char_like(col):
+    """能不能按行上限降级：VARCHAR 与 CHAR 都是字符列，退成 TEXT 之后两条账都省。
+
+    与 Java `RowFit.charLike` 同口径。CHAR 也放开是因为迁移场景里一张表几十个
+    CHAR(200) 很常见，只降 VARCHAR 会走到"怎么降都不行、只能拆表"。
+    """
+    return _varchar_n(col) is not None or _char_n(col) is not None
+
+
 def _col_row_bytes(col):
     """这一列在两条行上限下各占多少字节，返回 (server 计入, InnoDB 本地计入)。
 
@@ -1136,6 +1152,15 @@ def _col_row_bytes(col):
     m = _CHAR_BYTES_RE.match(t)
     if m:
         inline = 4 * int(m.group(1))
+        return inline, inline
+    m = _VARBINARY_BYTES_RE.match(t)
+    if m:
+        inline = int(m.group(1))
+        inline += 2 if inline > 255 else 1
+        return inline, (inline if inline <= _INLINE_MAX_BYTES else _EXT_COLUMN_BYTES)
+    m = _BINARY_BYTES_RE.match(t)
+    if m:
+        inline = int(m.group(1))
         return inline, inline
     if _TEXTISH_RE.match(t):
         return _SERVER_BLOB_BYTES, _EXT_COLUMN_BYTES
@@ -1202,7 +1227,7 @@ def _degrade_once(cols, plan):
 
     best = None
     for i, c in enumerate(cols):
-        if "nullable" in c or c.get("primary_key") or _varchar_n(c) is None:
+        if "nullable" in c or c.get("primary_key") or not _char_like(c):
             continue                    # 结构定义里人工写的类型、主键、已经是 TEXT 的列都不动
         pair = _col_row_bytes(c)
         save = _degrade_gain(pair, _col_row_bytes({"type": "TEXT"}), viol_server, viol_local)
@@ -1261,33 +1286,61 @@ def _split_advice(cols, page_size):
 
 
 def _refuse_reason(cols, plan):
-    """说清楚为什么救不回来：是定长列堆满半页，还是需行外的列数本身就超半页。"""
-    fixed = 0
-    external = 0
+    """说清楚为什么救不回来：按"能降的都退成 TEXT"这一版账算，别拿降级前的数字解释。
+
+    以前拿现值解释，于是主键列顶着 VARCHAR(4000) 的表会报"全表行内字节仍超过 server 上限
+    （TEXT/BLOB 也省不出来了）"——其实 TEXT 一直能省 server，卡住的是退不动的主键。
+    数字对不上现场，现场就会以为工具没尽力。
+    """
+    server = local = 0
     for c in cols:
         pair = _col_row_bytes(c)
-        if pair[1] == _EXT_COLUMN_BYTES:
-            external += 1
-        else:
-            fixed += pair[1]
-    bitmap = -(-len(cols) // 8)
-    # 主键列不参与降级（见 _degrade_once），所以"还能再降"这句话是假的：
-    # 说明白是哪几列被保住，用户才不会以为工具没尽力
-    keys = [c for c in cols if c.get("primary_key") and _varchar_n(c) is not None]
+        if "nullable" in c or c.get("primary_key") or not _char_like(c):
+            server += pair[0]
+            local += pair[1]
+            continue
+        server += min(pair[0], _SERVER_BLOB_BYTES)
+        local += min(pair[1], _EXT_COLUMN_BYTES)
+    local_total = local + _INNODB_ROW_FIXED + -(-len(cols) // 8)
+    # 主键列不参与降级（见 _degrade_once），说明白是哪几列被保住，用户才不会以为工具没尽力
+    keys = [c for c in cols if c.get("primary_key") and _char_like(c)]
     note = ""
     if keys:
         note = ("（主键列 %s 没动：退成 TEXT 就当不了主键，降长度会截断键值，"
                 "只能靠拆表）" % "、".join("`%s`" % c["field"] for c in keys[:3]))
-    if fixed + _INNODB_ROW_FIXED + bitmap > plan["local_limit"]:
-        return ("定长列与短文本列（数值、日期、短 VARCHAR 这一类）行内已占 %d 字节，"
-                "超过 InnoDB 半页 %d —— 退成 TEXT 与降长度都救不回来，只能拆表或删列%s"
-                % (fixed, plan["local_limit"], note))
-    if plan["server"] > plan["server_limit"]:
-        return ("全表行内字节 %d 仍超过 server 上限 %d（TEXT/BLOB 也省不出来了）%s"
-                % (plan["server"], plan["server_limit"], note))
-    return ("需要整列走行外的列有 %d 个，每个至少占行内 %d 字节，"
-            "半页 %d 字节装不下，只能拆表%s"
-            % (external, _EXT_COLUMN_BYTES, plan["local_limit"], note))
+    if local_total > plan["local_limit"]:
+        return ("能降的都退成 TEXT 之后，行内仍要 %d 字节，超过 InnoDB 半页 %d%s%s"
+                % (local_total, plan["local_limit"],
+                   "" if note else "（不可降的列退不动）", note))
+    if server > plan["server_limit"]:
+        return ("能降的都退成 TEXT 之后，server 那一层仍要 %d 字节，超过上限 %d%s"
+                % (server, plan["server_limit"], note))
+    return "怎么降都过不了行上限%s" % note
+
+
+def _budget(cols):
+    """最乐观的一版字节账：(server, 行内退无可退的字节, 整列走行外的列数)。
+
+    canEverFit 与拦下理由共用这一份，免得出现"说全退 TEXT 也省不出来，其实是主键占着"
+    这种自相矛盾的话——旧版拿降级前的账去解释，数字对不上现场。
+    """
+    server = inline = 0
+    external = 0
+    for c in cols:
+        pair = _col_row_bytes(c)
+        degradable = ("nullable" not in c and not c.get("primary_key")
+                      and _char_like(c))
+        server += min(pair[0], _SERVER_BLOB_BYTES) if degradable else pair[0]
+        local = min(pair[1], _EXT_COLUMN_BYTES) if degradable else pair[1]
+        if local >= _EXT_COLUMN_BYTES:
+            external += 1
+        else:
+            inline += local
+    return server, inline, external
+
+
+def _local_total(inline, external, columns):
+    return inline + external * _EXT_COLUMN_BYTES + _INNODB_ROW_FIXED + -(-columns // 8)
 
 
 def _can_ever_fit(cols, plan):
@@ -1298,17 +1351,38 @@ def _can_ever_fit(cols, plan):
     而其实一开始就知道没救。极限值取「这一列能到的最小占用」：能降的列 server 取
     TEXT 的引用字节、行内取整列走行外的字节；结构定义与主键列不许动，按现值算。
     """
-    server = local = 0
-    for c in cols:
-        pair = _col_row_bytes(c)
-        if "nullable" in c or c.get("primary_key") or _varchar_n(c) is None:
-            server += pair[0]
-            local += pair[1]
-            continue
-        server += min(pair[0], _SERVER_BLOB_BYTES)
-        local += min(pair[1], _EXT_COLUMN_BYTES)
-    local_total = local + _INNODB_ROW_FIXED + -(-len(cols) // 8)
+    server, inline, external = _budget(cols)
+    local_total = _local_total(inline, external, len(cols))
     return server <= plan["server_limit"] and local_total <= plan["local_limit"]
+
+
+def _refuse_reason(cols, plan):
+    """说清楚为什么救不回来：定长列自己堆满半页，还是行外引用太多，还是 server 那层超了。
+
+    数字一律按"能降的都降成 TEXT"这一版账算。以前拿降级前的现值解释，于是主键列顶着
+    VARCHAR(4000) 的表会报"全表行内字节仍超过 server 上限（TEXT/BLOB 也省不出来了）"——
+    其实 TEXT 一直能省 server，卡住的是退不动的主键；数字对不上现场，就会被当成没尽力。
+    """
+    server, inline, external = _budget(cols)
+    overhead = _INNODB_ROW_FIXED + -(-len(cols) // 8)
+    note = ""
+    keys = [c for c in cols if c.get("primary_key") and _char_like(c)]
+    if keys:
+        note = ("（主键列 %s 没动：退成 TEXT 就当不了主键，降长度会截断键值，"
+                "只能靠拆表）" % "、".join("`%s`" % c["field"] for c in keys[:3]))
+    if inline + overhead > plan["local_limit"]:
+        return ("定长列与短文本列（数值、日期、短 VARCHAR 这一类）退 TEXT 之后仍在行内占 %d 字节，"
+                "超过 InnoDB 半页 %d —— 只能拆表或删列%s"
+                % (inline + overhead, plan["local_limit"], note))
+    local_total = _local_total(inline, external, len(cols))
+    if local_total > plan["local_limit"]:
+        return ("能降的都退成 TEXT 之后，仍有 %d 列各占行内 %d 字节引用（合计 %d），"
+                "超过 InnoDB 半页 %d —— 只能拆表%s"
+                % (external, _EXT_COLUMN_BYTES, local_total, plan["local_limit"], note))
+    if server > plan["server_limit"]:
+        return ("能降的都退成 TEXT 之后，server 那一层仍要 %d 字节，超过上限 %d%s"
+                % (server, plan["server_limit"], note))
+    return "怎么降都过不了行上限%s" % note
 
 
 def fit_row_limits(cols, page_size=16384):

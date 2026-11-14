@@ -201,6 +201,16 @@ public final class DmReader implements AutoCloseable {
         }
     }
 
+    /**
+     * 底层连接，只给数据搬运用（{@code DataMover} 要在这条连接上开游标 / 批量写）。
+     *
+     * <p>别拿它做业务查询：这一页读结构的口径全在上面那几个方法里，混着用会让"结构已读回"
+     * 与"数据正在搬"共用一条连接，异常时谁都说不清是谁把连接弄坏的。
+     */
+    public java.sql.Connection connection() {
+        return conn;
+    }
+
     /** 服务端版本串；读不到不报错（V$VERSION 在部分权限下不可见）。 */
     public String serverVersion() {
         try {

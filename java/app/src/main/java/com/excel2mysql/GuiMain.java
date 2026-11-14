@@ -127,8 +127,27 @@ public final class GuiMain {
                         problems.add("第五页没排在第 5 位或标题不对：共 "
                                 + frame.tabs().getTabCount() + " 页");
                     }
-                    if (dp.generateEnabled() || dp.saveEnabled()) {
-                        problems.add("还没读回达梦结构，第五页的生成与保存却可点");
+                    if (dp.generateEnabled() || dp.exportEnabled() || dp.writeEnabled()) {
+                        problems.add("还没读回达梦结构，第五页的导出/写入却可点");
+                    }
+                    if (!dp.nextHintText().contains("先点「连达梦并列表」")) {
+                        problems.add("空清单时没给出下一步：" + dp.nextHintText());
+                    }
+                    // 正向的达梦参数是"源"，连接前必须填 → 默认展开；收起的摘要也要写全
+                    if (!dp.dmParamsVisibleForSelftest()) {
+                        problems.add("正向默认没展开达梦连接参数（源参数必填）");
+                    }
+                    // 达梦卡片里面一行说清连哪儿：账号@地址 · 模式 · 口令状态（角色在卡片标题上）
+                    if (!dp.dmSummaryText().contains("SYSDBA@")
+                            || !dp.dmSummaryText().contains("模式")
+                            || !dp.dmSummaryText().contains("口令")) {
+                        problems.add("达梦卡片里的连接摘要不完整：" + dp.dmSummaryText());
+                    }
+                    // 视觉层级：写入是主操作（填色），生成是中间产物（描边）
+                    if (!"primary".equals(dp.writeButtonRole())
+                            || !"secondary".equals(dp.genButtonRole())) {
+                        problems.add("按钮层级不对：写入应为主操作、生成为次级（"
+                                + dp.writeButtonRole() + " / " + dp.genButtonRole() + "）");
                     }
                     dp.connectAndList();
                     if (!dp.logPanel().text().contains("模式名为空")) {
@@ -143,14 +162,40 @@ public final class GuiMain {
                         }
                     }
                     dm_ddl_selftest(problems);
-                    // 驱动那一格进页就得说话，不用点了连接才知道
-                    if (dp.driverText().isEmpty()
-                            || (com.excel2mysql.core.DmReader.driverPresent()
-                                ? !dp.driverText().startsWith("达梦驱动")
-                                : !dp.driverText().contains("缺达梦驱动")
-                                    || !dp.driverText().contains(
-                                            com.excel2mysql.core.DmReader.driverDir().getPath()))) {
-                        problems.add("驱动状态那一格没把话说全：" + dp.driverText());
+                    dm_rowfit_selftest(problems);
+                    // 驱动装好了就不许再占那一格（用户 2026-11-15 点名去掉"达梦驱动：N 个"）；
+                    // 缺了必须红字顶出来，整句路径在悬停与本页日志里
+                    if (com.excel2mysql.core.DmReader.driverPresent()) {
+                        if (!dp.driverText().isEmpty() || dp.driverVisibleForSelftest()) {
+                            problems.add("有达梦驱动时那一格还在显示：" + dp.driverText());
+                        }
+                    } else if (!dp.driverVisibleForSelftest()
+                            || !dp.driverText().contains("缺达梦驱动")
+                            || !dp.driverTipText().contains(
+                                    com.excel2mysql.core.DmReader.driverDir().getPath())) {
+                        problems.add("缺驱动时没当堂说清：" + dp.driverText()
+                                + " / " + dp.driverTipText());
+                    }
+                    // 再验一遍"装好了就不显示"：临时放一个假驱动进 drivers，刷新后那格必须空且藏起来。
+                    // 这台机器本身没有驱动，不放这一下的话"装好"那一支在自检里永远走不到
+                    java.io.File drvDir = com.excel2mysql.core.DmReader.driverDir();
+                    java.io.File fake = new java.io.File(drvDir, "__selftest_driver__.jar");
+                    boolean madeDir = drvDir.isDirectory() || drvDir.mkdirs();
+                    try {
+                        if (madeDir && fake.createNewFile()) {
+                            dp.refreshDriverStateForSelftest();
+                            if (!dp.driverText().isEmpty() || dp.driverVisibleForSelftest()) {
+                                problems.add("有驱动时那一格还在显示（应完全藏起来）："
+                                        + dp.driverText());
+                            }
+                        }
+                    } catch (java.io.IOException ioe) {
+                        problems.add("自检造不出假驱动：" + com.excel2mysql.core.LogText.describe(ioe));
+                    } finally {
+                        if (fake.exists()) {
+                            fake.delete();
+                        }
+                        dp.refreshDriverStateForSelftest();   // 还原成这台机器的真实状态
                     }
                     // 先把模式名填上：有没有随包驱动走的是两条分支，
                     // 灌结构前不填模式，摘要与保存名就各自少一截，判不出同一件事
@@ -162,24 +207,111 @@ public final class GuiMain {
                     three.add(dmFixtureNamed("T_PERSON", "人员花名册"));
                     dp.setTablesForSelftest(three);
                     if (dp.tableRowCount() != 3) {
-                        problems.add("灌进三份结构后第五页清单不是 3 行：" + dp.tableRowCount());
+                        problems.add("灌进三份结构后左边可选表不是 3 行：" + dp.tableRowCount());
                     }
                     if (!dp.summaryText().contains("已读回 3 张")
-                            || !dp.summaryText().contains("选中 0 张")
-                            || dp.summaryText().contains("显示")) {
-                        problems.add("未过滤时清单摘要不对：" + dp.summaryText());
+                            || !dp.summaryText().contains("待迁移 0 张")) {
+                        problems.add("没挑表时摘要不对：" + dp.summaryText());
+                    }
+                    // 穿梭框的口径：待迁移为空就是"没有可搬的"，不再有"一行不选＝全部"这条暗规则
+                    if (dp.generateEnabled() || dp.writeEnabled()) {
+                        problems.add("待迁移清单空着，生成/写入却可点");
+                    }
+                    if (!dp.leftRoleText().contains("达梦") || !dp.leftRoleText().startsWith("① 读自")
+                            || !dp.rightRoleText().contains("MySQL")
+                            || !dp.rightRoleText().startsWith("② 写入")) {
+                        problems.add("正向的两张卡片没说清读谁写谁：左「" + dp.leftRoleText()
+                                + "」右「" + dp.rightRoleText() + "」");
+                    }
+                    // ⇄ 真的能换向（用户点的那条路），换完清单清空——所以换完再灌一次结构
+                    dp.swapButton().doClick();
+                    if (dp.isDmToMysql() || !dp.leftRoleText().contains("MySQL")
+                            || !dp.rightRoleText().contains("达梦")) {
+                        problems.add("点 ⇄ 没换向：左「" + dp.leftRoleText()
+                                + "」右「" + dp.rightRoleText() + "」");
+                    }
+                    dp.swapButton().doClick();
+                    if (!dp.isDmToMysql() || !dp.leftRoleText().contains("达梦")) {
+                        problems.add("再点一次 ⇄ 没换回来：" + dp.leftRoleText());
+                    }
+                    dp.setTablesForSelftest(three);   // 换向会清清单，重新灌
+                    // 大小写是固定口径：写 MySQL 一律小写、写达梦一律大写（不设开关）
+                    if (!"（小写）".equals(dp.nameCaseText())) {
+                        problems.add("正向的大小写口径没写对小写：" + dp.nameCaseText());
+                    }
+                    // 添加 →：没选中任何行时什么都不该发生
+                    dp.addButton().doClick();
+                    if (dp.pickedCountForSelftest() != 0) {
+                        problems.add("左边没选中行，「添加 →」却搬走了表");
+                    }
+                    dp.selectRowForSelftest(1);
+                    dp.addButton().doClick();
+                    if (dp.pickedCountForSelftest() != 1 || dp.tableRowCount() != 2
+                            || dp.pickedIndexAtForSelftest(0) != 1) {
+                        problems.add("「添加 →」没把选中的表搬到右边：" + dp.pickedCountForSelftest()
+                                + " / 左边 " + dp.tableRowCount() + " 行 / 右边首行是第 "
+                                + dp.pickedIndexAtForSelftest(0) + " 张");
                     }
                     if (!dp.generateEnabled()) {
-                        problems.add("已读回结构，第五页「生成 MySQL DDL」却还是灰的");
+                        problems.add("挑好表之后「生成」还是灰的");
                     }
-                    // 过滤：视图行号与读回顺序不是一回事，选中范围全靠这层换算
+                    // 待迁移按源表顺序排：先挑第 3 张、再挑第 1 张，右边仍是 1、3
+                    dp.removeAllButton().doClick();
+                    if (dp.pickedCountForSelftest() != 0 || dp.tableRowCount() != 3) {
+                        problems.add("「← 全部」没把待迁移退回左边：" + dp.pickedCountForSelftest()
+                                + " / 左边 " + dp.tableRowCount() + " 行");
+                    }
+                    dp.doubleClickLeftForSelftest(2);
+                    dp.doubleClickLeftForSelftest(0);
+                    if (dp.pickedRowCountForSelftest() != 2
+                            || dp.pickedIndexAtForSelftest(0) != 0
+                            || dp.pickedIndexAtForSelftest(1) != 2) {
+                        problems.add("待迁移的顺序没按源表来：" + dp.pickedRowCountForSelftest()
+                                + " 行 / 首行第 " + dp.pickedIndexAtForSelftest(0) + " 张");
+                    }
+                    dp.removeAllButton().doClick();
+                    // 过滤只作用在左边：已经挑好的不受影响，「全部 →」只加看得见的那几张
+                    dp.doubleClickLeftForSelftest(2);          // 先把 T_PERSON 挑走
                     dp.filterForSelftest("item");
                     if (dp.tableRowCount() != 1 || dp.tableIndexAtRow(0) != 1
-                            || !dp.summaryText().contains("显示 1")
-                            || !dp.summaryText().contains("已读回 3 张")) {
+                            || !dp.summaryText().contains("可选 1")) {
                         problems.add("按表名过滤没筛对：" + dp.tableRowCount() + " 行 / 首行是第 "
                                 + dp.tableIndexAtRow(0) + " 张 / " + dp.summaryText());
                     }
+                    if (dp.pickedCountForSelftest() != 1) {
+                        problems.add("过滤把已挑好的表弄丢了：" + dp.pickedCountForSelftest());
+                    }
+                    dp.addAllButton().doClick();
+                    // 先挑走的是第 3 张（下标 2），再整批加的只有过滤后那 1 张（下标 1）；
+                    // 待迁移按源表顺序排，所以是 1、2
+                    if (dp.pickedCountForSelftest() != 2 || dp.pickedIndexAtForSelftest(0) != 1
+                            || dp.pickedIndexAtForSelftest(1) != 2) {
+                        problems.add("「全部 →」应当只加看得见的那 1 张，且顺序按源表："
+                                + dp.pickedCountForSelftest() + " 张 / 首行第 "
+                                + dp.pickedIndexAtForSelftest(0) + " 张");
+                    }
+                    dp.setTablesForSelftest(three);            // 换一份结构（用例复位）
+                    dp.clearFilterForSelftest();               // 上一条用例把过滤留成了 item
+                    if (dp.pickedCountForSelftest() != 0 || dp.tableRowCount() != 3) {
+                        problems.add("重读结构后待迁移没清空：" + dp.pickedCountForSelftest());
+                    }
+                    // 同一个会话里重连（改了口令再连一次）：按表名把挑好的接回来，别让人重挑
+                    dp.addAllButton().doClick();
+                    dp.rereadForSelftest(three);
+                    if (dp.pickedCountForSelftest() != 3) {
+                        problems.add("重连后按表名接回没生效，待迁移变成 "
+                                + dp.pickedCountForSelftest() + " 张");
+                    }
+                    java.util.List<com.excel2mysql.core.DmMysql.Table> fewer =
+                            new java.util.ArrayList<com.excel2mysql.core.DmMysql.Table>();
+                    fewer.add(three.get(0));
+                    fewer.add(three.get(2));
+                    dp.rereadForSelftest(fewer);
+                    if (dp.pickedCountForSelftest() != 2
+                            || !dp.logPanel().text().contains("已移出待迁移")) {
+                        problems.add("重读少了一张表，待迁移没跟着收：" + dp.pickedCountForSelftest());
+                    }
+                    dp.setTablesForSelftest(three);
                     // 过滤是这一页找表的唯一办法：400 张表下逐键重铺清单必须仍在几十毫秒级，
                     // 否则打字时界面会一顿一顿的（阈值按实测量级放宽一个数量级）
                     java.util.List<com.excel2mysql.core.DmMysql.Table> many =
@@ -215,30 +347,76 @@ public final class GuiMain {
                     if (dp.structureIsStale()) {
                         problems.add("重新灌入结构后脏标记没清掉");
                     }
+                    dp.addAllButton().doClick();       // 穿梭框：要先挑表才有得生成
+                    if (dp.pickedCountForSelftest() != 3) {
+                        problems.add("「全部 →」没把 3 张都加进待迁移");
+                    }
                     if (!dp.suggestedSaveName().startsWith("dm_to_mysql_SYSDBA_")
                             || !dp.suggestedSaveName().endsWith(".sql")) {
                         problems.add("默认保存名没带模式与时间：" + dp.suggestedSaveName());
                     }
-                    String dmSqlText = dp.generate() == null ? "" : dp.outputText();
+                    String dmSqlText = dp.generate() == null ? "" : dp.lastSqlForSelftest();
                     if (!dmSqlText.contains("CREATE TABLE `t_oil`")
                             || !dmSqlText.contains("PRIMARY KEY (`id`)")
                             || !dmSqlText.contains("COMMENT='油料保障台账'")) {
                         problems.add("第五页生成的 DDL 不像样：" + dmSqlText);
                     }
                     // 写入确认那句要把真正会动的表列出来（弹框由 confirmWrite=false 关掉）
-                    if (!dp.writeConfirmPreview().contains("T_OIL")
-                            || !dp.writeConfirmPreview().contains("T_PERSON")) {
-                        problems.add("写入确认里没列出要动的表：" + dp.writeConfirmPreview());
+                    // 确认框列的是目标表名（写坏的是那边）：正向默认折小写，所以是 t_oil/t_person
+                    if (!dp.writeConfirmPreview().contains("t_oil")
+                            || !dp.writeConfirmPreview().contains("t_person")) {
+                        problems.add("写入确认里没列出要动的目标表：" + dp.writeConfirmPreview());
                     }
-                    if (!dp.saveEnabled()) {
-                        problems.add("生成完「保存到 .sql」却还是灰的");
+                    if (!dp.exportEnabled()) {
+                        problems.add("挑好表之后「导出 .sql」还是灰的");
                     }
+                    if (!dp.exportTipText().contains(dp.exportDir().getAbsolutePath())) {
+                        problems.add("导出键的悬停没写清落到哪个目录：" + dp.exportTipText());
+                    }
+                    if (!dp.nextHintText().contains("想留一份 .sql 存档")) {
+                        problems.add("挑好表后没把下一步指到写入/导出：" + dp.nextHintText());
+                    }
+                    // 默认落点：jar 同级的 export 目录，不是当前工作目录
+                    if (!"export".equals(dp.exportDir().getName())
+                            || !dp.exportDir().isAbsolute()) {
+                        problems.add("导出目录不对（应落在 jar 同级 export）：" + dp.exportDir());
+                    }
+                    // 默认目录那条路：建目录 → 起名 → 落盘，同一秒再导一次不许覆盖上一份
+                    java.io.File auto = dp.exportDefaultForSelftest();
+                    if (auto == null || !auto.isFile()
+                            || !auto.getAbsolutePath().startsWith(
+                                    dp.exportDir().getAbsolutePath())) {
+                        problems.add("默认目录导出没落盘：" + auto);
+                    } else {
+                        java.io.File again = dp.exportDefaultForSelftest();
+                        if (again == null || again.getAbsolutePath().equals(auto.getAbsolutePath())) {
+                            problems.add("默认目录再导一次把上一份盖掉了：" + again);
+                        }
+                        if (again != null) {
+                            again.delete();
+                        }
+                        auto.delete();
+                    }
+                    // 导出：走界面同一条写文件路径（数据段关掉，自检不连源库）
                     java.io.File dmSql = java.io.File.createTempFile("selftest-dm-", ".sql");
                     dmSql.deleteOnExit();
-                    if (!dp.saveTo(dmSql) || dmSql.length() <= 0L) {
-                        problems.add("第五页保存 .sql 没落盘：" + dmSql.getPath());
+                    if (!dp.exportToForSelftest(dmSql) || dmSql.length() <= 0L) {
+                        problems.add("第五页导出 .sql 没落盘：" + dmSql.getPath());
+                    } else {
+                        String written = new String(java.nio.file.Files.readAllBytes(dmSql.toPath()),
+                                java.nio.charset.StandardCharsets.UTF_8);
+                        if (!dp.logPanel().text().contains("已写出 " + dmSql.getAbsolutePath())) {
+                            problems.add("导出后日志没写清落到哪个路径：" + dp.logPanel().text());
+                        }
+                        if (!written.contains("CREATE TABLE `t_oil`")
+                                || !written.contains("数据部分（逐表 INSERT）")
+                                || !written.contains("自检模式：没有连源库")) {
+                            problems.add("导出的 .sql 内容不对（抬头/建表/分段说明）：len="
+                                    + written.length() + " :: "
+                                    + written.substring(0, Math.min(160, written.length())));
+                        }
                     }
-                    // 反向（MySQL → DM8）：翻方向清清单、目标格与按钮跟着换、
+                    // 反向（MySQL → DM8）：翻方向清清单、摘要与说明跟着换、
                     // 生成的 DDL 是达梦形状（双引号标识符 + COMMENT ON + IDENTITY）
                     dp.setDirectionForSelftest(false);
                     if (dp.isDmToMysql()) {
@@ -247,21 +425,133 @@ public final class GuiMain {
                     if (!dp.suggestedSaveName().startsWith("mysql_to_dm_")) {
                         problems.add("反向的默认保存名没带方向前缀：" + dp.suggestedSaveName());
                     }
+                    if (!dp.summaryText().contains("未连接 MySQL")) {
+                        problems.add("反向的空清单摘要还写着达梦：" + dp.summaryText());
+                    }
+                    if (!"（大写）".equals(dp.nameCaseText())) {
+                        problems.add("反向的大小写口径没写对大写：" + dp.nameCaseText());
+                    }
+                    // 反向这排是写入目标，读结构用不上 → 默认收起，摘要里要把目标写全
+                    if (dp.dmParamsVisibleForSelftest()) {
+                        problems.add("反向默认没收起达梦连接参数");
+                    }
+                    if (!dp.rightRoleText().contains("写入 · 达梦")
+                            || !dp.dmSummaryText().contains("写入模式")
+                            || !dp.dmSummaryText().contains("口令")) {
+                        problems.add("反向时达梦卡片没写清它是写入端：" + dp.rightRoleText()
+                                + " / " + dp.dmSummaryText());
+                    }
+                    dp.dmToggleButton().doClick();
+                    if (!dp.dmParamsVisibleForSelftest()) {
+                        problems.add("点「连接参数」没展开");
+                    }
+                    dp.dmToggleButton().doClick();
+                    if (dp.dmParamsVisibleForSelftest()) {
+                        problems.add("再点一次「连接参数」没收起");
+                    }
+                    // 方向不再靠一句说明，靠两张卡片的标题：左=读自、右=写入，编号 ① ② 跟着位置走
+                    if (!dp.leftRoleText().startsWith("① 读自")
+                            || !dp.leftRoleText().contains("MySQL")
+                            || !dp.rightRoleText().startsWith("② 写入")
+                            || !dp.rightRoleText().contains("达梦")) {
+                        problems.add("反向的两张卡片没说清读谁写谁：左「" + dp.leftRoleText()
+                                + "」右「" + dp.rightRoleText() + "」");
+                    }
+                    if (dp.mysqlSourceText().isEmpty()) {
+                        problems.add("反向没有把「MySQL 源」写出来（顶部连接栏选中的那本库）");
+                    }
                     java.util.List<com.excel2mysql.core.DmMysql.Table> myTables =
                             new java.util.ArrayList<com.excel2mysql.core.DmMysql.Table>();
                     myTables.add(myFixture());
                     dp.setTablesForSelftest(myTables);
-                    String myDdl = dp.generate() == null ? "" : dp.outputText();
-                    if (!myDdl.contains("CREATE TABLE \"t_oil\"")
-                            || !myDdl.contains("\"id\" BIGINT IDENTITY(1,1) NOT NULL")
-                            || !myDdl.contains("\"name\" VARCHAR(200) NOT NULL")
-                            || !myDdl.contains("PRIMARY KEY (\"id\")")) {
+                    dp.addAllButton().doClick();
+                    String myDdl = dp.generate() == null ? "" : dp.lastSqlForSelftest();
+                    // 反向默认折大写：达梦把未加引号的标识符折成大写，建成大写之后
+                    // select * from t_oil 不带引号也查得到；保留小写就得处处写 "t_oil"
+                    if (!myDdl.contains("CREATE TABLE \"T_OIL\"")
+                            || !myDdl.contains("\"ID\" BIGINT IDENTITY(1,1) NOT NULL")
+                            || !myDdl.contains("\"NAME\" VARCHAR(200) NOT NULL")
+                            || !myDdl.contains("PRIMARY KEY (\"ID\")")) {
                         problems.add("反向生成的达梦 DDL 不像样：" + myDdl);
                     }
-                    if (!myDdl.contains("COMMENT ON TABLE \"t_oil\" IS '油料台账'")
-                            || !myDdl.contains("COMMENT ON COLUMN \"t_oil\".\"name\" IS '名称'")) {
+                    if (!myDdl.contains("COMMENT ON TABLE \"T_OIL\" IS '油料台账'")
+                            || !myDdl.contains("COMMENT ON COLUMN \"T_OIL\".\"NAME\" IS '名称'")) {
                         problems.add("达梦注释没走 COMMENT ON：" + myDdl);
                     }
+                    // 反向这排达梦参数是「写入目标」：填模式不该把已经读回的 MySQL 结构标脏
+                    // （2026-11-14 报的「根本没法用」根因：填完模式就再也生成不了）
+                    dp.schemaFieldForSelftest("SYSDBA");
+                    if (dp.structureIsStale()) {
+                        problems.add("反向改了写入模式却被当成源变了，结构被标脏（生成会一直被拦）");
+                    }
+                    if (dp.generate() == null) {
+                        problems.add("反向填完写入模式后生成被拦下了");
+                    }
+                    // 真正该标脏的是"顶部换库"：源换了，手上这份结构已经不是新库的
+                    String otherDb = frame.selectedDatabase() + "_selftest";
+                    dp.syncTargetDb(java.util.Arrays.asList("demo", otherDb), otherDb);
+                    if (!dp.structureIsStale() || !dp.summaryText().contains("MySQL 源换成了")) {
+                        problems.add("反向顶部换库后没标脏：" + dp.summaryText());
+                    }
+                    dp.setTablesForSelftest(myTables);
+                    dp.addAllButton().doClick();
+                    if (dp.structureIsStale()) {
+                        problems.add("重新灌入结构后反向的脏标记没清掉");
+                    }
+                    // 导出范围下拉：默认"表结构和数据"（建表 + INSERT），切到"导出数据"只出 INSERT
+                    if (!"结构+数据".equals(dp.exportModeText())) {
+                        problems.add("第五页导出范围默认值不对：" + dp.exportModeText());
+                    }
+                    if (!dp.genText().contains("建表") || !dp.dropVisibleForSelftest()
+                            || dp.clearVisibleForSelftest()) {
+                        problems.add("默认档的按钮/覆盖开关不对：" + dp.genText()
+                                + " / DROP " + dp.dropVisibleForSelftest()
+                                + " / 清空 " + dp.clearVisibleForSelftest());
+                    }
+                    dp.setExportModeForSelftest(1);
+                    if (!dp.genText().contains("导出数据") || dp.dropVisibleForSelftest()
+                            || !dp.clearVisibleForSelftest()) {
+                        problems.add("「导出数据」档的按钮/覆盖开关不对：" + dp.genText()
+                                + " / DROP " + dp.dropVisibleForSelftest()
+                                + " / 清空 " + dp.clearVisibleForSelftest());
+                    }
+                    // 反向的搬运计划：中文名保留、折大写，自增列要点出来
+                    java.util.List<String> revDump = dp.jobDumpForSelftest();
+                    if (revDump.size() != 1
+                            || !revDump.get(0).startsWith("t_oil→T_OIL(7列，自增[ID])")) {
+                        problems.add("反向的搬运计划不对：" + revDump);
+                    }
+                    // 正向：中文表名译不进 MySQL，整张跳过并记账（不是静默丢）
+                    dp.setDirectionForSelftest(true);
+                    if (!dp.dmParamsVisibleForSelftest()) {
+                        problems.add("切回正向没把达梦连接参数展开");
+                    }
+                    // 手动收起要按方向记住：换走再回来，仍是他选的那一档
+                    dp.dmToggleButton().doClick();
+                    if (dp.dmParamsVisibleForSelftest()) {
+                        problems.add("手动点「收起连接参数」没生效");
+                    }
+                    dp.setDirectionForSelftest(false);
+                    dp.setDirectionForSelftest(true);
+                    if (dp.dmParamsVisibleForSelftest()) {
+                        problems.add("切回正向把用户手动收起的连接参数又展开了（要按方向记住）");
+                    }
+                    dp.dmToggleButton().doClick();      // 复位成展开
+                    if (!dp.dmParamsVisibleForSelftest()) {
+                        problems.add("复位展开没生效");
+                    }
+                    java.util.List<com.excel2mysql.core.DmMysql.Table> mixed =
+                            new java.util.ArrayList<com.excel2mysql.core.DmMysql.Table>();
+                    mixed.add(myFixture());
+                    mixed.add(dmFixtureNamed("订单表", "中文表名"));
+                    dp.setTablesForSelftest(mixed);
+                    dp.addAllButton().doClick();
+                    java.util.List<String> fwdDump = dp.jobDumpForSelftest();
+                    if (fwdDump.size() != 2 || !fwdDump.get(0).startsWith("t_oil→t_oil(7列)")
+                            || !fwdDump.get(1).startsWith("!表「订单表」")) {
+                        problems.add("正向遇到中文表名应当整张跳过并记账：" + fwdDump);
+                    }
+                    data_render_selftest(problems);
                     mysql_dm_ddl_selftest(problems);
                     // 日志段：几百行也不许长高、不许白占版面（用户报「日志撑满整个工具」）
                     dm_log_bounded(frame, dp, problems);
@@ -773,6 +1063,8 @@ public final class GuiMain {
                 // 中途抛异常必须换成非 0 退出码：只把栈打在控制台上、闸门照样绿，比没闸门更糟
                 System.out.println("x [ERROR] GUI-SELFTEST | 自检中途抛异常："
                         + e.getClass().getName() + " " + e.getMessage());
+                // 栈跟着打：只报一句"Row index out of range"根本看不出是哪一行炸的
+                e.printStackTrace();
                 result[0] = 1;
             } finally {
                 done.countDown();
@@ -3314,6 +3606,88 @@ public final class GuiMain {
         return c;
     }
 
+    /**
+     * 数据面渲染的逐条断言（不连库）：假游标直接喂行，判 INSERT 的形状、转义、NULL 与二进制。
+     *
+     * <p>这一层最容易"看着对、跑起来炸"：转义多一层少一层、NULL 被写成一串 null、
+     * 二进制被当字符串转码，都只有到目标库执行时才暴露。用假游标把它摁在这里。
+     */
+    private static void data_render_selftest(List<String> problems) {
+        expectLiteral(problems, "a'b", true, "'a''b'");
+        expectLiteral(problems, "a'b", false, "'a''b'");
+        expectLiteral(problems, "a\\b", true, "'a\\\\b'");
+        expectLiteral(problems, "a\\b", false, "'a\\b'");
+        expectLiteral(problems, "a\nb", true, "'a\\nb'");
+        expectLiteral(problems, "a\nb", false, "'a'||CHR(10)||'b'");
+        expectLiteral(problems, new byte[]{0, (byte) 0xff}, true, "X'00FF'");
+        expectLiteral(problems, new byte[]{0, (byte) 0xff}, false, "HEXTORAW('00FF')");
+        expectLiteral(problems, new java.math.BigDecimal("12.30"), true, "12.30");
+        expectLiteral(problems, null, false, "NULL");
+        expectLiteral(problems, Boolean.TRUE, false, "1");
+
+        if (!"INSERT INTO `t` (`a`, `b`) VALUES (?, ?)".equals(
+                com.excel2mysql.core.DataMover.insertSql("t",
+                        java.util.Arrays.asList("a", "b"), true))) {
+            problems.add("MySQL 的 INSERT 头拼错了");
+        }
+        if (!"INSERT INTO \"T\" (\"A\") VALUES (?)".equals(
+                com.excel2mysql.core.DataMover.insertSql("T",
+                        java.util.Collections.singletonList("A"), false))) {
+            problems.add("达梦的 INSERT 头拼错了");
+        }
+
+        com.excel2mysql.core.DataMover.Job job = new com.excel2mysql.core.DataMover.Job(
+                "t_src", "T_DST", java.util.Arrays.asList("ID", "NAME", "BIN"),
+                java.util.Arrays.asList("ID", "NAME", "BIN"));
+        java.io.StringWriter w = new java.io.StringWriter();
+        long rows = 0L;
+        try {
+            rows = com.excel2mysql.core.DataMover.scriptRows(new FakeRows(new Object[][]{
+                    {Integer.valueOf(1), "x'y", null},
+                    {Integer.valueOf(2), "z", new byte[]{1, 2}}}), job, w, false, null, null);
+        } catch (Exception e) {
+            problems.add("假游标渲染抛了异常：" + com.excel2mysql.core.LogText.describe(e));
+        }
+        String text = w.toString();
+        if (rows != 2
+                || !text.contains("INSERT INTO \"T_DST\" (\"ID\", \"NAME\", \"BIN\") "
+                        + "VALUES (1, 'x''y', NULL);")
+                || !text.contains("VALUES (2, 'z', HEXTORAW('0102'));")) {
+            problems.add("数据脚本渲染不对（" + rows + " 行）：" + text);
+        }
+    }
+
+    private static void expectLiteral(List<String> problems, Object value, boolean mysql,
+                                      String want) {
+        String got = com.excel2mysql.core.DataMover.literal(value, mysql);
+        if (!want.equals(got)) {
+            problems.add("字面量渲染不对（" + (mysql ? "MySQL" : "达梦") + "）：期望 " + want
+                    + "，实际 " + got);
+        }
+    }
+
+    /** 假游标：从二维数组回行，不连库；用来判渲染这一层。 */
+    private static final class FakeRows implements com.excel2mysql.core.RowCursor {
+        private final Object[][] rows;
+        private int at = -1;
+
+        FakeRows(Object[][] rows) {
+            this.rows = rows;
+        }
+
+        @Override public boolean next() {
+            return ++at < rows.length;
+        }
+
+        @Override public Object get(int columnOneBased) {
+            return rows[at][columnOneBased - 1];
+        }
+
+        @Override public void close() {
+            // 假游标没有资源
+        }
+    }
+
     /** MySQL → 达梦的转换口径逐条断言：IDENTITY、4 倍字符长度、COMMENT ON、默认值收窄。 */
     private static void mysql_dm_ddl_selftest(List<String> problems) {
         List<String> warns = new ArrayList<String>();
@@ -3341,6 +3715,91 @@ public final class GuiMain {
         if (!warns.toString().contains("无符号") || !warns.toString().contains("不认识")) {
             problems.add("无符号与认不出的类型没记账：" + warns);
         }
+        // 转大写 + 先 DROP 那一档：达梦默认折大写，建大写之后不带引号也查得到；
+        // DROP 必须带 IF EXISTS，否则第一次跑或重跑都会先报一堆"表不存在"
+        com.excel2mysql.core.DmMysql.Output up = com.excel2mysql.core.MysqlDm.script(
+                java.util.Collections.singletonList(myFixture()), true, false, true);
+        if (!up.sql.contains("DROP TABLE IF EXISTS \"T_OIL\";")
+                || !up.sql.contains("CREATE TABLE \"T_OIL\" (")
+                || !up.sql.contains("\"ID\" BIGINT IDENTITY(1,1) NOT NULL")
+                || !up.sql.contains("PRIMARY KEY (\"ID\")")) {
+            problems.add("反向「转大写 + 先 DROP」写出来不对：" + up.sql);
+        }
+        // MySQL 的零值日期达梦不认：整条建表会因此失败，只能丢掉这条默认值并点名
+        com.excel2mysql.core.DmMysql.Table zero = new com.excel2mysql.core.DmMysql.Table();
+        zero.name = "t_zero";
+        zero.columns.add(myCol("id", "int", false, "", ""));
+        zero.columns.add(myCol("at", "datetime", true, "0000-00-00 00:00:00", "时间"));
+        List<String> zeroWarns = new ArrayList<String>();
+        String zeroDdl = com.excel2mysql.core.MysqlDm.ddl(zero, true, zeroWarns);
+        if (zeroDdl.contains("0000-00-00") || !zeroWarns.toString().contains("零值日期")) {
+            problems.add("MySQL 零值日期默认值没被拦下：" + zeroDdl + " / " + zeroWarns);
+        }
+        if (up.warnings.toString().contains("零值日期")) {
+            problems.add("转大写那一轮不该出现零值日期的提醒：" + up.warnings);
+        }
+    }
+
+    /**
+     * 宽表的行上限体检（tab5 从达梦往 MySQL 平移时撞的 1118）。
+     *
+     * <p>三个档位各判一次：短 VARCHAR 一多先把最长的退 TEXT；CHAR 宽表同口径（达梦侧
+     * CHAR(200) 几十个很常见）；怎么降都过不了线的表必须整张不生成，并给拆表建议——
+     * 交出去的 DDL 一张建不出来，比"少一张、说清为什么"糟得多。
+     */
+    private static void dm_rowfit_selftest(List<String> problems) {
+        List<String> w1 = new ArrayList<String>();
+        String wide = com.excel2mysql.core.DmMysql.ddl(dmWide("t_wide", "VARCHAR", 50, 45), true, w1);
+        if (wide == null) {
+            problems.add("45 个 VARCHAR(50) 的表被判建不出来：" + w1);
+        } else {
+            int text = countOf(wide, "TEXT");
+            if (text < 5) {
+                problems.add("宽表没退成 TEXT（只退了 " + text + " 列）");
+            }
+            if (!w1.toString().contains("行上限")) {
+                problems.add("退 TEXT 没记账：" + w1);
+            }
+            for (int i = 0; i < 45; i++) {
+                if (!wide.contains("`c" + i + "`")) {
+                    problems.add("宽表降级后少了列 c" + i);
+                    break;
+                }
+            }
+        }
+        List<String> w2 = new ArrayList<String>();
+        String chars = com.excel2mysql.core.DmMysql.ddl(dmWide("t_char", "CHAR", 200, 120), true, w2);
+        if (chars == null) {
+            problems.add("120 个 CHAR(200) 的表被判建不出来：" + w2);
+        } else if (!chars.contains("TEXT") || !w2.toString().contains("行上限")) {
+            problems.add("CHAR 宽表没按同一口径降级：" + w2);
+        }
+        // 1000 列 CHAR(255)：全退 TEXT 仍超半页 —— 必须整张不生成
+        List<String> w3 = new ArrayList<String>();
+        String huge = com.excel2mysql.core.DmMysql.ddl(dmWide("t_huge", "CHAR", 255, 1000), true, w3);
+        if (huge != null) {
+            problems.add("1000 列的表没被拦下，还是生成了 " + huge.length() + " 字符的 DDL");
+        }
+        if (!w3.toString().contains("行上限体检不通过")) {
+            problems.add("拦下理由没写清：" + w3);
+        }
+        System.out.println("- [INFO] DM-ROW-FIT | 宽表退 TEXT、CHAR 同口径、1000 列那张按预期拦下");
+    }
+
+    /** 造一张 N 列同类型的宽表：只给行上限体检用。 */
+    private static com.excel2mysql.core.DmMysql.Table dmWide(String name, String type, int len,
+                                                              int columns) {
+        com.excel2mysql.core.DmMysql.Table t = new com.excel2mysql.core.DmMysql.Table();
+        t.name = name;
+        for (int i = 0; i < columns; i++) {
+            com.excel2mysql.core.DmMysql.Column c = new com.excel2mysql.core.DmMysql.Column();
+            c.name = "c" + i;
+            c.type = type;
+            c.length = len;
+            c.nullable = true;
+            t.columns.add(c);
+        }
+        return t;
     }
 
     /** 一张覆盖面够宽的达梦表：主键、变长、定标数、大对象、时间戳、非法列名各来一样。 */
@@ -3519,7 +3978,8 @@ public final class GuiMain {
      */
     private static final String[] STATIC_TEXTS = {
             "中英表头建模，回写库", "解析建表语句，回写库", "执行脚本与临时语句",
-            "读 ods 建模 obj/dom/ads", "达梦 DM8 与 MySQL 互转建表语句（含表与字段注释）",
+            "读 ods 建模 obj/dom/ads",
+            "达梦 DM8 与 MySQL 互转：左边挑表，右边设参数，按「写入」或「导出 .sql」",
             "主机：", "端口：", "用户名：", "密码：", "目标库：",
             "命名规则：", "命名规则：", "表名前缀：", "表名前缀：",
             "SQL 文本", "执行结果", "还没有执行结果"};
@@ -6572,7 +7032,7 @@ public final class GuiMain {
     }
 
     /**
-     * 第五页日志区同理：清单 / DDL 正文 / 日志三段都在可拖分隔条里，日志段默认只有 4 行。
+     * 第五页日志区同理：挑表主区 / 日志两段在可拖分隔条里，日志段默认只有 4 行。
      * 之前它裸挂在 SOUTH 上没有滚动条，读一次达梦结构（几百张表）日志会一路撑到上万像素，
      * 把清单和正文全挤走——这是用户报的「撑满整个工具」的原始形态。
      */
@@ -6591,7 +7051,7 @@ public final class GuiMain {
         int loaded = dp.logSplit().getBottomComponent().getHeight();
         int table = dp.logSplit().getTopComponent().getHeight();
         if (table <= 0) {
-            problems.add("第五页日志过百行后 DDL 正文被压没了：高 " + table);
+            problems.add("第五页日志过百行后挑表主区被压没了：高 " + table);
         }
         if (Math.abs(loaded - quiet) > 2) {
             problems.add("第五页日志段跟着内容长高：" + quiet + " → " + loaded);
@@ -6601,6 +7061,38 @@ public final class GuiMain {
         }
         if (dp.logSplit().getDividerSize() != wantPx(6)) {
             problems.add("第五页日志分隔条不是 6px：" + dp.logSplit().getDividerSize());
+        }
+        // 分隔条照第一页那套：没拖过时日志压在最小高度；拖过之后按用户的来，窗口变尺寸也不抢回去
+        int minLog = dp.logMinForSelftest();
+        int quietLog = dp.logHeightForSelftest();
+        if (minLog < com.excel2mysql.gui.UiScale.px(60)) {
+            problems.add("第五页日志段最小高度太小（拖到底会成一条缝）：" + minLog);
+        }
+        if (quietLog > minLog + wantPx(8)) {
+            problems.add("第五页日志段没压在最小高度：高 " + quietLog + " / 最小 " + minLog);
+        }
+        // 真拖一遍（按下 → 拖动 → 松开，打进分隔条把手）：拖动这条路易用性全靠它
+        dp.dragLogDividerForSelftest(140);
+        frame.validate();
+        int dragged = dp.logHeightForSelftest();
+        if (dragged < quietLog + wantPx(100)) {
+            problems.add("第五页日志拖不大：" + quietLog + " → " + dragged);
+        }
+        // 窗口变高：多出来的高度进主区，日志保持用户拖的高度（resizeWeight=1）
+        com.excel2mysql.gui.Windows.clientSize(frame.getContentPane(), frame, 1100, 900);
+        frame.validate();
+        if (Math.abs(dp.logHeightForSelftest() - dragged) > wantPx(14)) {
+            problems.add("第五页窗口变高后日志被拉长/缩短了：" + dragged + " → "
+                    + dp.logHeightForSelftest());
+        }
+        com.excel2mysql.gui.Windows.clientSize(frame.getContentPane(), frame, 1100, 780);
+        frame.validate();
+        // 双击把手回到默认高度
+        dp.doubleClickLogDividerForSelftest();
+        frame.validate();
+        if (dp.logHeightForSelftest() > minLog + wantPx(10)) {
+            problems.add("第五页双击分隔条没把日志收回默认高度："
+                    + dp.logHeightForSelftest() + " / 最小 " + minLog);
         }
         frame.selectTab(0);
         frame.validate();

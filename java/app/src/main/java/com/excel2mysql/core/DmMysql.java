@@ -125,31 +125,41 @@ public final class DmMysql {
             }
         }
         Set<String> pkSet = new LinkedHashSet<String>(pk);
-        StringBuilder body = new StringBuilder();
+        // 第一遍只定名字与 MySQL 类型：行上限体检要在类型定下来之后、默认值之前跑
+        List<Mapped> cols = new ArrayList<Mapped>();
         for (Column c : t.columns) {
             String field = name(c.name, lower);
             if (field == null) {
                 warns.add("表「" + who + "」的字段「" + c.name + "」名不在允许范围，这一列没进建表语句");
                 continue;
             }
-            String type = mysqlType(c, who, warns);
-            boolean required = !c.nullable || pkSet.contains(field);
-            String def = mysqlDefault(c, type, who, warns);
-            StringBuilder line = new StringBuilder("  `").append(field).append("` ").append(type);
+            cols.add(new Mapped(field, mysqlType(c, who, warns), c));
+        }
+        if (cols.isEmpty()) {
+            warns.add("表「" + who + "」一个字段都没译出来，跳过不生成");
+            return null;
+        }
+        if (!fitRow(who, cols, pkSet, warns)) {
+            return null;
+        }
+        StringBuilder body = new StringBuilder();
+        for (Mapped m : cols) {
+            boolean required = !m.src.nullable || pkSet.contains(m.field);
+            // 默认值要按体检后的最终类型判：VARCHAR 退成 TEXT 之后，MySQL 不再收默认值
+            String def = mysqlDefault(m.src, m.type, who, warns);
+            StringBuilder line = new StringBuilder("  `").append(m.field).append("` ")
+                    .append(m.type);
             if (required) {
                 line.append(def == null ? " NOT NULL" : " NOT NULL DEFAULT " + def);
             } else {
                 line.append(def == null ? " DEFAULT NULL" : " DEFAULT " + def);
             }
-            line.append(" COMMENT '").append(comment(c.comment, who, field, warns)).append("'");
+            line.append(" COMMENT '").append(comment(m.src.comment, who, m.field, warns))
+                .append("'");
             if (body.length() > 0) {
                 body.append(",\n");
             }
             body.append(line);
-        }
-        if (body.length() == 0) {
-            warns.add("表「" + who + "」一个字段都没译出来，跳过不生成");
-            return null;
         }
         if (!pk.isEmpty()) {
             body.append(",\n  PRIMARY KEY (").append(join(pk)).append(")");
@@ -163,6 +173,69 @@ public final class DmMysql {
                 .append("COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC COMMENT='")
                 .append(comment(t.comment, who, "", warns)).append("'");
         return ddl.toString();
+    }
+
+    /** 一列在 MySQL 侧定下来的样子：目标字段名、类型（体检后可能被降级）、源列。 */
+    private static final class Mapped {
+        final String field;
+        String type;
+        final Column src;
+
+        Mapped(String field, String type, Column src) {
+            this.field = field;
+            this.type = type;
+            this.src = src;
+        }
+    }
+
+    /**
+     * 行上限体检：照搬 tab1（{@link RowFit}）那套，宽表先把最长的列退成 TEXT，
+     * 退不动再往下降长度档，直到两条硬上限都过；救不回来就整张不生成并给拆分建议。
+     *
+     * <p>为什么必须有这一步：达梦侧一张表几十个 VARCHAR(2000)/CHAR(200) 很常见，1:1 平移过去
+     * 就是 {@code ERROR 1118 Row size too large}（server 65535 与 InnoDB 半页 8126 两条线），
+     * 交出去的 DDL 一张也建不出来。tab1 已经在 Excel 那条线上把口径磨过了，这里不再另发明一套。
+     *
+     * @return 是否还能建：false 表示整张表已判"建不出来"，调用方按跳过处理
+     */
+    private static boolean fitRow(String who, List<Mapped> cols, Set<String> pkSet,
+                                  List<String> warns) {
+        List<Infer.Column> fitCols = new ArrayList<Infer.Column>();
+        for (Mapped m : cols) {
+            Infer.Column c = new Infer.Column();
+            c.field = m.field;
+            c.type = m.type;
+            c.primaryKey = pkSet.contains(m.field);
+            fitCols.add(c);
+        }
+        RowFit.Fit fit = RowFit.fit(fitCols, RowFit.DEFAULT_PAGE_SIZE, false, null,
+                RowFit.keyMargin(fitCols));
+        // 宽表一降就是几十上百列：逐列一条会把这一页的日志刷爆，压成每表一句、点名前三列
+        if (!fit.conversions.isEmpty()) {
+            StringBuilder sb = new StringBuilder("表「").append(who)
+                    .append("」为过 MySQL 行上限（server ").append(RowFit.SERVER_ROW_LIMIT)
+                    .append(" / 行内 ").append(fit.plan.localLimit).append("）改了 ")
+                    .append(fit.conversions.size()).append(" 列：");
+            for (int i = 0; i < fit.conversions.size() && i < 3; i++) {
+                String[] m = fit.conversions.get(i);
+                if (i > 0) {
+                    sb.append("、");
+                }
+                sb.append(m[1]).append(" ").append(m[2]).append("→").append(m[3]);
+            }
+            if (fit.conversions.size() > 3) {
+                sb.append(" 等");
+            }
+            warns.add(sb.toString());
+        }
+        if (fit.refuse != null) {
+            warns.add("表「" + who + "」整张没生成：" + RowFit.notice(fit.refuse));
+            return false;
+        }
+        for (int i = 0; i < cols.size(); i++) {
+            cols.get(i).type = fitCols.get(i).type;
+        }
+        return true;
     }
 
     private static String join(List<String> names) {

@@ -16,6 +16,16 @@ import java.util.regex.Pattern;
  */
 public final class RowFit {
 
+    /** 本地 InnoDB 16K 页：MySQL 8.0 默认页大小，两条上限都按它算。 */
+    public static final int DEFAULT_PAGE_SIZE = 16384;
+    /**
+     * 带主键的表在聚簇索引里要多留一份键与索引头，实测比同列不带主键的表少装约 205 字节
+     * （纯 VARCHAR(64) / 纯 TEXT 的翻转点都是不带主键 195 列、带主键 190 列，恒定差 5 列）。
+     * 再留 55 字节余量：模型按 41 字节/列估算，正好压线的那张表真建还是报 1118，
+     * 说明估算与实测之间有个位数字节的漂移，宁可早一步降级。
+     */
+    public static final long PK_LOCAL_MARGIN = 260L;
+
     /** server 级：不含 BLOB 的行最大字节数。 */
     public static final int SERVER_ROW_LIMIT = 65535;
     /** InnoDB 每表列数上限：1017 列过、1018 列报 1117 Too many columns，与类型无关。 */
@@ -49,6 +59,8 @@ public final class RowFit {
     }
     private static final Pattern VARCHAR = Pattern.compile("^VARCHAR\\((\\d+)\\)$");
     private static final Pattern CHAR = Pattern.compile("^CHAR\\((\\d+)\\)$");
+    private static final Pattern VARBINARY = Pattern.compile("^VARBINARY\\((\\d+)\\)$");
+    private static final Pattern BINARY = Pattern.compile("^BINARY\\((\\d+)\\)$");
     private static final Pattern DECIMAL = Pattern.compile("^DECIMAL\\((\\d+)(?:,(\\d+))?\\)$");
     private static final Pattern TEXTISH = Pattern.compile(
             "^(TINYTEXT|MEDIUMTEXT|LONGTEXT|TEXT|TINYBLOB|MEDIUMBLOB|LONGBLOB|BLOB)\\b");
@@ -110,6 +122,17 @@ public final class RowFit {
             long inline = 4L * Long.parseLong(m.group(1));
             return new long[]{inline, inline};
         }
+        m = VARBINARY.matcher(t);
+        if (m.matches()) {
+            long inline = Long.parseLong(m.group(1));
+            inline += inline > 255 ? 2 : 1;
+            return new long[]{inline, inline <= INLINE_MAX_BYTES ? inline : EXT_BYTES};
+        }
+        m = BINARY.matcher(t);
+        if (m.matches()) {
+            long inline = Long.parseLong(m.group(1));
+            return new long[]{inline, inline};
+        }
         if (TEXTISH.matcher(t).find()) {
             return new long[]{SERVER_BLOB_BYTES, EXT_BYTES};
         }
@@ -125,6 +148,17 @@ public final class RowFit {
             return new long[]{fixed.longValue(), fixed.longValue()};
         }
         return new long[]{SERVER_BLOB_BYTES, EXT_BYTES};
+    }
+
+    /** 这张表的列里，主键带来的额外行内开销（每颗主键一份）。 */
+    public static long keyMargin(List<Infer.Column> cols) {
+        int pk = 0;
+        for (Infer.Column c : cols) {
+            if (c.primaryKey) {
+                pk++;
+            }
+        }
+        return pk == 0 ? 0L : PK_LOCAL_MARGIN * pk;
     }
 
     public static Plan rowPlan(List<Infer.Column> cols, int pageSize) {
@@ -166,20 +200,63 @@ public final class RowFit {
      */
     private static boolean canEverFit(List<Infer.Column> cols, Plan plan, boolean onlyInferred,
                                       java.util.Set<String> keepType, long extraLocal) {
-        long server = 0;
-        long local = 0;
+        Budget b = budget(cols, onlyInferred, keepType);
+        long localTotal = b.local(cols.size(), extraLocal);
+        return b.server <= SERVER_ROW_LIMIT && localTotal <= plan.localLimit;
+    }
+
+    /**
+     * 最乐观的一版字节账：能降的列都按"退成 TEXT"算，降不动的列按现值算。
+     *
+     * <p>canEverFit 与拦下理由共用这一份，免得出现"说全退 TEXT 也省不出来，其实是主键占着"
+     * 这种自相矛盾的话——旧版拿降级前的账去解释，数字对不上现场。
+     */
+    private static final class Budget {
+        long server;
+        /** 退无可退、仍留在行内的字节（定长列与短字符串）。 */
+        long inline;
+        /** 整列走行外的列数：每列只留 41 字节的行内引用。 */
+        int external;
+
+        long local(int columns, long extraLocal) {
+            return inline + (long) external * EXT_BYTES + ROW_FIXED
+                    + ((columns + 7) / 8) + extraLocal;
+        }
+    }
+
+    private static Budget budget(List<Infer.Column> cols, boolean onlyInferred,
+                                 java.util.Set<String> keepType) {
+        Budget b = new Budget();
         for (Infer.Column c : cols) {
             long[] pair = colBytes(c.type);
-            if (locked(c, onlyInferred, keepType) || varcharN(c.type) == null) {
-                server += pair[0];
-                local += pair[1];
-                continue;
+            boolean degradable = !locked(c, onlyInferred, keepType) && charLike(c.type);
+            b.server += degradable ? Math.min(pair[0], SERVER_BLOB_BYTES) : pair[0];
+            long local = degradable ? Math.min(pair[1], EXT_BYTES) : pair[1];
+            if (local >= EXT_BYTES) {
+                b.external++;
+            } else {
+                b.inline += local;
             }
-            server += Math.min(pair[0], SERVER_BLOB_BYTES);
-            local += Math.min(pair[1], EXT_BYTES);
         }
-        long localTotal = local + ROW_FIXED + ((cols.size() + 7) / 8) + extraLocal;
-        return server <= SERVER_ROW_LIMIT && localTotal <= plan.localLimit;
+        return b;
+    }
+
+    /**
+     * 能不能按行上限降级：VARCHAR 与 CHAR 都是字符列，退成 TEXT 之后两条账都省。
+     *
+     * <p>CHAR 也放开是因为 migration 场景里一张表几十个 CHAR(200) 很常见（达梦侧尤其如此），
+     * 只降 VARCHAR 会走到"怎么降都不行、只能拆表"；tab1 的类型推断从不产 CHAR，放开口径不影响它。
+     */
+    private static boolean charLike(String type) {
+        return varcharN(type) != null || charN(type) != null;
+    }
+
+    static Integer charN(String type) {
+        if (type == null) {
+            return null;
+        }
+        Matcher m = CHAR.matcher(type.trim().toUpperCase());
+        return m.matches() ? Integer.valueOf(Integer.parseInt(m.group(1))) : null;
     }
 
     /**
@@ -243,7 +320,9 @@ public final class RowFit {
             f.plan = rowPlan(cols, pageSize, extraLocal);
         }
         if (!f.plan.ok) {
-            f.refuse = refuse(cols, f.plan, refuseReason(cols, f.plan), pageSize, extraLocal);
+            f.refuse = refuse(cols, f.plan,
+                    refuseReason(cols, f.plan, onlyInferred, keepType, extraLocal), pageSize,
+                    extraLocal);
         }
         return f;
     }
@@ -294,7 +373,7 @@ public final class RowFit {
         for (int i = 0; i < cols.size(); i++) {
             Infer.Column c = cols.get(i);
             // 主键列两条路都不动：TEXT 当不了主键（建表 1170），降长度会截断键值
-            if (locked(c, onlyInferred, keepType) || varcharN(c.type) == null) {
+            if (locked(c, onlyInferred, keepType) || !charLike(c.type)) {
                 continue;
             }
             long[] pair = colBytes(c.type);
@@ -354,29 +433,26 @@ public final class RowFit {
         return new String[]{"tier", c.field, from, bestTo};
     }
 
-    private static String refuseReason(List<Infer.Column> cols, Plan plan) {
-        long fixed = 0;
-        int external = 0;
-        for (Infer.Column c : cols) {
-            long[] pair = colBytes(c.type);
-            if (pair[1] == EXT_BYTES) {
-                external++;
-            } else {
-                fixed += pair[1];
-            }
+    private static String refuseReason(List<Infer.Column> cols, Plan plan, boolean onlyInferred,
+                                       java.util.Set<String> keepType, long extraLocal) {
+        Budget b = budget(cols, onlyInferred, keepType);
+        long overhead = ROW_FIXED + ((cols.size() + 7) / 8) + extraLocal;
+        String note = keyNote(cols);
+        if (b.inline + overhead > plan.localLimit) {
+            return "定长列与短文本列（数值、日期、短 VARCHAR 这一类）退 TEXT 之后仍在行内占 "
+                    + (b.inline + overhead) + " 字节，超过 InnoDB 半页 " + plan.localLimit
+                    + " —— 只能拆表或删列" + note;
         }
-        if (fixed + ROW_FIXED + ((cols.size() + 7) / 8) > plan.localLimit) {
-            return "定长列与短文本列（数值、日期、短 VARCHAR 这一类）行内已占 " + fixed
-                    + " 字节，超过 InnoDB 半页 "
-                    + plan.localLimit + " —— 退成 TEXT 与降长度都救不回来，只能拆表或删列"
-                    + keyNote(cols);
+        if (b.local(cols.size(), extraLocal) > plan.localLimit) {
+            return "能降的都退成 TEXT 之后，仍有 " + b.external + " 列各占行内 " + EXT_BYTES
+                    + " 字节引用（合计 " + b.local(cols.size(), extraLocal)
+                    + "），超过 InnoDB 半页 " + plan.localLimit + " —— 只能拆表" + note;
         }
-        if (plan.server > SERVER_ROW_LIMIT) {
-            return "全表行内字节 " + plan.server + " 仍超过 server 上限 " + SERVER_ROW_LIMIT
-                    + "（TEXT/BLOB 也省不出来了）" + keyNote(cols);
+        if (b.server > SERVER_ROW_LIMIT) {
+            return "能降的都退成 TEXT 之后，server 那一层仍要 " + b.server + " 字节，超过上限 "
+                    + SERVER_ROW_LIMIT + note;
         }
-        return "需要整列走行外的列有 " + external + " 个，每个至少占行内 " + EXT_BYTES
-                + " 字节，半页 " + plan.localLimit + " 字节装不下，只能拆表" + keyNote(cols);
+        return "怎么降都过不了行上限" + note;
     }
 
     /** 被保住的主键列要说出来：降级会跳过它们（见 degradeOnce），不说就是"没尽力"。 */
@@ -384,7 +460,7 @@ public final class RowFit {
         StringBuilder sb = new StringBuilder();
         int n = 0;
         for (Infer.Column c : cols) {
-            if (!c.primaryKey || varcharN(c.type) == null) {
+            if (!c.primaryKey || !charLike(c.type)) {
                 continue;
             }
             if (n == 0) {

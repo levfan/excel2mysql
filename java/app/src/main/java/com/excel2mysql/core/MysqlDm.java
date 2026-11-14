@@ -32,16 +32,26 @@ public final class MysqlDm {
     /**
      * 一组表 → 一份可原样执行的达梦脚本。
      *
-     * @param dropExisting 每个建表前加 DROP TABLE，用于重跑覆盖
+     * @param dropExisting 每个建表前加 DROP TABLE IF EXISTS，用于重跑覆盖
      * @param lower 表名与字段名转小写（MySQL 常是小写，达梦默认大写；转小写后靠引号保住）
      */
     public static DmMysql.Output script(List<DmMysql.Table> tables,
                                         boolean dropExisting, boolean lower) {
+        return script(tables, dropExisting, lower, false);
+    }
+
+    /**
+     * 同上，多一个"转大写"开关：达梦默认把未加引号的标识符折成大写，
+     * 所以 MySQL 的小写表名转成大写再建，之后 <code>select * from t_oil</code> 不带引号也查得到；
+     * 反之保留小写就必须处处写成 <code>"t_oil"</code>。两向互斥，upper 优先。
+     */
+    public static DmMysql.Output script(List<DmMysql.Table> tables,
+                                        boolean dropExisting, boolean lower, boolean upper) {
         DmMysql.Output out = new DmMysql.Output();
         StringBuilder sb = new StringBuilder();
         Set<String> taken = new LinkedHashSet<String>();
         for (DmMysql.Table t : tables) {
-            String one = ddl(t, taken, lower, out.warnings, dropExisting);
+            String one = ddl(t, taken, lower, upper, out.warnings, dropExisting);
             if (one == null) {
                 out.skipped.add(t.schema.isEmpty() ? t.name : t.schema + "." + t.name);
                 continue;
@@ -61,19 +71,19 @@ public final class MysqlDm {
 
     /** 一张表 → 一段达梦 DDL（CREATE + COMMENT ON，不带结尾分号），译不出字段时返回 null。 */
     public static String ddl(DmMysql.Table t, boolean lower, List<String> warns) {
-        return ddl(t, new LinkedHashSet<String>(), lower, warns, false);
+        return ddl(t, new LinkedHashSet<String>(), lower, false, warns, false);
     }
 
-    private static String ddl(DmMysql.Table t, Set<String> taken, boolean lower,
+    private static String ddl(DmMysql.Table t, Set<String> taken, boolean lower, boolean upper,
                               List<String> warns, boolean dropExisting) {
         String who = t.schema.isEmpty() ? t.name : t.schema + "." + t.name;
-        String table = name(t.name, lower);
+        String table = name(t.name, lower, upper);
         if (table == null) {
             warns.add("表「" + who + "」的表名为空或含换行/引号控制符，跳过不生成");
             return null;
         }
         if (!taken.add(table.toLowerCase(Locale.ROOT))) {
-            warns.add("表「" + who + "」转小写后与前面某张表撞名，这一张按原名保留");
+            warns.add("表「" + who + "」按同一套大小写折完与前面某张表撞名，这一张按原名保留");
             table = t.name == null ? "" : t.name.trim();
             if (table.isEmpty() || !taken.add(table.toLowerCase(Locale.ROOT))) {
                 warns.add("表「" + who + "」还是与前面的表同名，跳过不生成");
@@ -82,7 +92,7 @@ public final class MysqlDm {
         }
         List<String> pk = new ArrayList<String>();
         for (String k : t.primaryKeys) {
-            String key = name(k, lower);
+            String key = name(k, lower, upper);
             if (key != null) {
                 pk.add(key);
             }
@@ -91,7 +101,7 @@ public final class MysqlDm {
         StringBuilder body = new StringBuilder();
         List<String[]> comments = new ArrayList<String[]>();   // {列名, 注释}
         for (DmMysql.Column c : t.columns) {
-            String field = name(c.name, lower);
+            String field = name(c.name, lower, upper);
             if (field == null) {
                 warns.add("表「" + who + "」的字段「" + c.name + "」名为空或含换行/引号控制符，"
                         + "这一列没进建表语句");
@@ -129,7 +139,8 @@ public final class MysqlDm {
         }
         StringBuilder ddl = new StringBuilder();
         if (dropExisting) {
-            ddl.append("DROP TABLE ").append(q(table)).append(";\n");
+            // IF EXISTS 不能少：第一次跑、或上一轮中途失败时，裸 DROP 会让每条语句先报一次红
+            ddl.append("DROP TABLE IF EXISTS ").append(q(table)).append(";\n");
         }
         ddl.append("CREATE TABLE ").append(q(table)).append(" (\n").append(body).append("\n)");
         String tc = comment(t.comment, who, "", warns);
@@ -145,12 +156,20 @@ public final class MysqlDm {
 
     /**
      * 标识符：MySQL 的表名/字段名常带中文，达梦双引号标识符照收；只拦空名与换行，
-     * 引号翻倍转义。转小写由调用方决定（达梦默认大写，加引号才保得住小写）。
+     * 引号翻倍转义。大小写折叠由调用方决定（达梦默认大写，加引号才保得住别的写法）。
      */
     public static String name(String raw, boolean lower) {
+        return name(raw, lower, false);
+    }
+
+    /** 同上；upper 优先于 lower：两个都真时按大写折（调用方本不该这么传）。 */
+    public static String name(String raw, boolean lower, boolean upper) {
         String v = raw == null ? "" : raw.trim();
         if (v.isEmpty() || v.indexOf('\r') >= 0 || v.indexOf('\n') >= 0) {
             return null;
+        }
+        if (upper) {
+            return v.toUpperCase(Locale.ROOT);
         }
         return lower ? v.toLowerCase(Locale.ROOT) : v;
     }
@@ -341,6 +360,14 @@ public final class MysqlDm {
         if (d.indexOf('(') >= 0) {
             warns.add("表「" + who + "」字段「" + c.name + "」的默认值「" + d
                     + "」是表达式，达梦这版不照搬，没写默认值");
+            return null;
+        }
+        // MySQL 允许零值日期（0000-00-00），达梦会直接拒掉整条建表语句：
+        // 与其生成一条跑不过的 DDL，不如丢掉这条默认值并点名
+        if ((dmType.startsWith("TIMESTAMP") || dmType.startsWith("DATE"))
+                && (d.startsWith("0000-00-00") || d.startsWith("0000/00/00"))) {
+            warns.add("表「" + who + "」字段「" + c.name + "」的默认值「" + d
+                    + "」是 MySQL 的零值日期，达梦不接受，这条默认值没搬");
             return null;
         }
         boolean numericType = dmType.startsWith("DECIMAL") || dmType.startsWith("INT")
