@@ -9345,12 +9345,14 @@ public final class GuiMain {
         if (!a2.contains("本次无领域表归入")) {
             problems.add("ads 空主题表注释应写明无领域表归入，实际：" + a2);
         }
-        // 清洗：待核/已核（含括号形态）剥掉，换行压掉（Excel 多行格注释），其余原样
+        // 清洗：待核/已核/待赋（含括号形态）剥掉，换行压掉（Excel 多行格注释），其余原样
         String s1 = com.excel2mysql.core.LayerGen.scrubReview("油料账（待核）");
         String s2 = com.excel2mysql.core.LayerGen.scrubReview("已核对的预案表");
         String s3 = com.excel2mysql.core.LayerGen.scrubReview("参考总价值\n（吨）");
-        if (!"油料账".equals(s1) || s2.contains("已核") || !"参考总价值（吨）".equals(s3)) {
-            problems.add("「待核/已核」与换行清洗不对：" + s1 + " / " + s2 + " / " + s3);
+        String s4 = com.excel2mysql.core.LayerGen.scrubReview("标准代码，合成，待赋正式码");
+        if (!"油料账".equals(s1) || s2.contains("已核") || !"参考总价值（吨）".equals(s3)
+                || !"标准代码，合成".equals(s4)) {
+            problems.add("「待核/已核/待赋」与换行清洗不对：" + s1 + " / " + s2 + " / " + s3 + " / " + s4);
         }
     }
 

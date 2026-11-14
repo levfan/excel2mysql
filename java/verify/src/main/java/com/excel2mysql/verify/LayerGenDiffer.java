@@ -220,6 +220,31 @@ public final class LayerGenDiffer {
         if (ads.ddlSql.contains("待核") || ads.ddlSql.contains("已核")) {
             bad++; shown.add("ads 表注释不许带「待核/已核」字眼");
         }
+        // 字段一级同样不许悬而未决（2026-11-14 用户点名）：字段注释、DML 取值与字段映射 CSV 都算
+        if (dom.ddlSql.contains("待核") || dom.ddlSql.contains("已核") || dom.ddlSql.contains("待赋")
+                || obj.ddlSql.contains("待核") || obj.ddlSql.contains("已核") || obj.ddlSql.contains("待赋")) {
+            bad++; shown.add("obj/dom 字段注释仍带悬而未决字眼（待核/已核/待赋）");
+        }
+        if (obj.ddlSql.contains("dim_material 主键") || !obj.ddlSql.contains("COMMENT '物资主键'")) {
+            bad++; shown.add("obj 维度主键的注释应写中文维度名（物资主键），不写英文键");
+        }
+        if (!ads.transformSql.contains("'正常' AS `quality_flag`")
+                || !ads.transformSql.contains("'v1' AS `caliber_ver`")
+                || ads.transformSql.contains("'待核'") || ads.transformSql.contains("v1-待核")) {
+            bad++; shown.add("ads 取值不许落「待核」：quality_flag 应为「正常」、caliber_ver 应为 v1");
+        }
+        for (LayerGen.LayerOutput lo : new LayerGen.LayerOutput[]{dom, obj, ads}) {
+            for (MappingFile.FieldMap f : lo.fieldMapping) {
+                if ((f.status != null && (f.status.contains("待核") || f.status.contains("已核")))
+                        || (f.dataElemId != null && f.dataElemId.contains("待赋"))
+                        || (f.transformRule != null && (f.transformRule.contains("待核")
+                                || f.transformRule.contains("待赋")))) {
+                    bad++; shown.add(lo.layer + " 字段映射行仍带悬而未决字眼：" + f.dstField
+                            + " 状态=" + f.status + " 数据元=" + f.dataElemId + " 规则=" + f.transformRule);
+                    break;
+                }
+            }
+        }
 
         // 未绑定：映射里的表在源结构里找不到 → 记 unbound，不掀整轮
         List<LayerGen.SourceTable> partial = new ArrayList<LayerGen.SourceTable>();

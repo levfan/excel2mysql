@@ -142,7 +142,7 @@ public final class LayerGen {
     static {
         GOV_COMMENT.put("entity_id", "实体唯一标识，每行由 UUID() 生成");
         GOV_COMMENT.put("src_entity_id", "源表主键值（源表无主键时取首列），用于回溯源记录");
-        GOV_COMMENT.put("std_code", "标准代码，源表名加源主键（无主键时取首列）合成，待赋正式码");
+        GOV_COMMENT.put("std_code", "标准代码，源表名加源主键（无主键时取首列）合成");
         GOV_COMMENT.put("src_code", "源系统业务编码，取源表主键（无主键时取首列）");
         GOV_COMMENT.put("tags", "来源标签，记录本行来自哪张源表");
         GOV_COMMENT.put("data_level", "数据密级");
@@ -451,12 +451,13 @@ public final class LayerGen {
         return false;
     }
 
-    /** 表注释里剥掉「待核/已核」等核对状态字眼（含括号形态，长词先剥），压掉换行、收拾残留标点。 */
+    /** 注释（表注释与字段注释）里剥掉「待核/已核/待赋」等悬而未决字眼（含括号形态，长词先剥），压掉换行、收拾残留标点。 */
     public static String scrubReview(String s) {
         String out = s == null ? "" : s;
-        String[] words = {"（待核对）", "（已核对）", "（待核实）", "（已核实）",
-                "（待核）", "（已核）", "(待核对)", "(已核对)", "(待核实)", "(已核实)",
-                "(待核)", "(已核)", "待核对", "已核对", "待核实", "已核实", "待核", "已核"};
+        String[] words = {"（待核对）", "（已核对）", "（待核实）", "（已核实）", "（待赋正式码）", "（待赋码）",
+                "（待核）", "（已核）", "(待核对)", "(已核对)", "(待核实)", "(已核实)", "(待赋正式码)", "(待赋码)",
+                "(待核)", "(已核)", "待核对", "已核对", "待核实", "已核实", "待赋正式码", "待赋码", "待赋",
+                "待核", "已核"};
         for (String w : words) { out = out.replace(w, ""); }
         // ODS 字段注释可能是 Excel 多行格：换行进表注释会让 COMMENT 跨行，压掉
         out = out.replaceAll("[ \\t]*\\r?\\n[ \\t]*", "");
@@ -801,7 +802,8 @@ public final class LayerGen {
     /** 维表每张都要带的列：条款 183 建议主键 + 表 5-3 治理字段。 */
     private static List<Infer.Column> objBase(String dim, String pk) {
         List<Infer.Column> base = new ArrayList<Infer.Column>();
-        base.add(col(pk, "VARCHAR(64)", dim + " 主键", true));
+        // 维度主键的注释写中文维度名（组织机构主键），不把 dim_org 这类英文键写进注释
+        base.add(col(pk, "VARCHAR(64)", Taxonomy.dimCn(dim) + "主键", true));
         for (Infer.Column g : governanceCols(GOV_OBJ_DOM)) {
             if (!pk.equals(g.field)) { base.add(g); }
         }
@@ -1086,13 +1088,13 @@ public final class LayerGen {
           .append(value).append(" AS `idx_value`, ")
           .append("'").append(unit).append("' AS `idx_unit`, ")
           .append("'").append(target).append(".").append(model).append("' AS `calc_model_id`, ")
-          .append("'v1-待核' AS `caliber_ver`, ")
+          .append("'v1' AS `caliber_ver`, ")
           .append("COUNT(*) AS `src_row_cnt`, ")
           .append("0 AS `excluded_row_cnt`, ")
           // 主题层没有自己的「源表」，源批次号从 dom 明细的 src_batch_id（已是源表 id）聚合回填：
-          // 一条 GROUP BY 汇总多行，取本批最大的源主键值，口径待业务方核。
+          // 一条 GROUP BY 汇总多行，取本批最大的源主键值。
           .append("MAX(`src_batch_id`) AS `src_batch_id`, '")
-          .append(o.batchId).append("' AS `etl_batch_id`, '待核' AS `quality_flag` ")
+          .append(o.batchId).append("' AS `etl_batch_id`, '正常' AS `quality_flag` ")
           // 不带 GROUP BY：聚合查询对空表也返回一行（COUNT=0、SUM/AVG 为 NULL 已被 IFNULL 兜成 0），
           // 早先写 GROUP BY CURDATE()，源表一行都没有时就一行不产，指标在主题层「消失」了
           .append("FROM ").append(qualify(o.domDb, domTable)).append(";\n\n");
@@ -1109,7 +1111,7 @@ public final class LayerGen {
             f.srcTable = domTable; f.srcField = m == null ? "" : m.field;
             f.srcComment = m == null ? "源行数模板" : "指标 " + m.field + "（" + m.label + "）";
             f.dstTable = target; f.dstField = c; f.dstComment = GOV_COMMENT.get(c);
-            f.dataElemName = ""; f.dataElemId = "待赋码"; f.governance = true; f.status = "待核";
+            f.dataElemName = ""; f.dataElemId = ""; f.governance = true; f.status = "已映射";
             f.transformRule = adsRule(c, target, m, json, value, o);
             out.fieldMapping.add(f);
         }
@@ -1126,12 +1128,14 @@ public final class LayerGen {
         if ("calc_model_id".equals(field)) {
             return "'" + target + "." + (m == null ? "rowcount" : m.agg.toLowerCase() + "_" + m.field) + "'";
         }
-        if ("caliber_ver".equals(field)) { return "'v1-待核'"; }
+        if ("caliber_ver".equals(field)) { return "'v1'"; }
         if ("src_row_cnt".equals(field)) { return "COUNT(*)"; }
         if ("excluded_row_cnt".equals(field)) { return "0"; }
         if ("src_batch_id".equals(field)) { return "MAX(`src_batch_id`)"; }
         if ("etl_batch_id".equals(field)) { return "'" + o.batchId + "'"; }
-        return "'待核'";
+        // 质量标识与 obj/dom 同口径写「正常」：字段里不落「待核」这类悬而未决字眼（2026-11-14）
+        if ("quality_flag".equals(field)) { return "'正常'"; }
+        return "NULL";
     }
 
     // ---- 拆表 helpers：一张表装不下就按列切块，每块都过 MySQL 列数/行上限体检 ----
@@ -1314,6 +1318,9 @@ public final class LayerGen {
     private static Infer.Column copyCol(Infer.Column c, boolean pk, FieldClass.Ctx ctx) {
         Infer.Column n = c.copied();
         n.primaryKey = pk;
+        // 字段注释同样不带「待核/已核」这类悬而未决字眼（2026-11-14 用户点名），
+        // 先洗再判空：只剩标记的注释空出来，由 FieldClass 补一句能读的
+        n.comment = scrubReview(n.comment);
         if (n.comment == null || n.comment.trim().isEmpty()) {
             n.comment = FieldClass.commentOf(c, ctx);
         }
@@ -1329,6 +1336,7 @@ public final class LayerGen {
         Infer.Column n = c.copied();
         n.primaryKey = false;
         n.nullable = Boolean.TRUE;
+        n.comment = scrubReview(n.comment);
         if (n.comment == null || n.comment.trim().isEmpty()) {
             n.comment = FieldClass.commentOf(c, ctx);
         }
@@ -1476,7 +1484,7 @@ public final class LayerGen {
         for (Infer.Column c : cols) {
             MappingFile.FieldMap f = new MappingFile.FieldMap();
             f.dstTable = target; f.dstField = c.field; f.dstComment = c.comment;
-            f.dataElemName = ""; f.dataElemId = "待赋码"; f.status = "待核";
+            f.dataElemName = ""; f.dataElemId = ""; f.status = "已映射";
             // 表达式与转换 SQL 同源（ColExpr 一处生成），CSV 不再出现「SQL 发 UUID()、规则写 NULL」
             if (x.refsSource(c.field)) {
                 Infer.Column sc = srcByName.get(c.field);
