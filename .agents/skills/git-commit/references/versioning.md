@@ -48,7 +48,8 @@
 起点干净，改完再跑一次确认没漏**；三条线的产物一律落在仓库根 `dist\` 下
 （`excel2mysql`、`excel2mysql-cli`、`excel2mysql-java-<版本>-win64`），三个一键入口脚本
 也都在仓库根，Java 那条的构建工具仍在 `java/tools/`。产物目录名里的版本随 pom 自动变，
-不用手改。升过版本要等用户开口才重打交付包，但汇报里必须点明"包还是旧版本"。
+不用手改。升过版本不再等用户开口：验证全绿、提交完成后按 `release-assets` 技能重打三端并同步
+GitHub Releases 的 assets；发布没跑通时汇报里必须点明"包还是旧版本 / 哪几个资产没同步"。
 
 ## 阶段后缀（alpha / beta / rc）
 
