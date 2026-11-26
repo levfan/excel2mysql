@@ -8451,6 +8451,42 @@ check("T1 版本号是 X.Y.Z 语义化格式（可带 -alpha.N/-beta.N/-rc.N 阶
                     r"(-(?:alpha|beta|rc)[.][0-9]+)?", APP_VERSION) is not None, APP_VERSION)
 check("T2 appinfo 报的版本与 version.py 一致", _ai.build_info()["version"] == APP_VERSION)
 
+# 用户要求每次提交都升号：工作树有已跟踪改动时 APP_VERSION 必须与 HEAD 不同。
+# 只判"改了却没升"，不判升得对不对（档位归版本判档规则）；冻结态或仓库外跳过。
+def _head_app_version():
+    import subprocess
+    try:
+        r = subprocess.run(["git", "show", "HEAD:version.py"],
+                           cwd=os.path.dirname(os.path.abspath(__file__)),
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode:
+            return None
+        m = _re.search(r'APP_VERSION\s*=\s*"([^"]+)"', r.stdout)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _tracked_dirty():
+    import subprocess
+    try:
+        r = subprocess.run(["git", "status", "--porcelain", "-uno"],
+                           cwd=os.path.dirname(os.path.abspath(__file__)),
+                           capture_output=True, text=True, timeout=10)
+        return None if r.returncode else bool(r.stdout.strip())
+    except Exception:
+        return None
+
+
+_hv, _dirty = _head_app_version(), _tracked_dirty()
+if _hv is None or _dirty is None:
+    skip("T1b 每次提交都升版本号", "冻结态或仓库外，取不到 git 实况")
+elif not _dirty:
+    skip("T1b 每次提交都升版本号", "工作树干净，没有要提交的改动")
+else:
+    check("T1b 有已跟踪改动时版本号必须比 HEAD 新（每次提交都升号）",
+          APP_VERSION != _hv, "%s -> %s" % (_hv, APP_VERSION))
+
 # 版本号除了 version.py，还写死在三个 pom、构建脚本里的 jar 名、随包说明那句命令里。
 # 改版本漏一处就会出现"关于框 1.0.3、jar 还叫 1.0.2"这种交付事故，所以逐处核回来。
 # 每处都按整段取（含阶段后缀）：只截到 X.Y.Z 的话，"1.1.0-rc.1 vs 1.1.0"会判成一致。
