@@ -51,6 +51,11 @@ def version():
     return m.group(1)
 
 
+def is_major(ver):
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)", ver)
+    return bool(m) and m.group(2) == "0" and m.group(3) == "0"
+
+
 def git(*args):
     r = subprocess.run(["git"] + list(args), cwd=str(ROOT), text=True,
                        encoding="utf-8", errors="replace", capture_output=True)
@@ -306,11 +311,14 @@ def main():
     ap.add_argument("--skip-build", action="store_true", help="只压缩并发布现有 dist")
     ap.add_argument("--allow-dirty", action="store_true", help="允许工作区有已跟踪改动")
     ap.add_argument("--no-upload", action="store_true", help="只构建与压缩，不碰 GitHub")
+    ap.add_argument("--force", action="store_true", help="非 major 版本也执行，需用户明确要求")
     args = ap.parse_args()
     ver = version()
+    if not args.force and not is_major(ver):
+        raise RuntimeError("版本 %s 不是 major（X.0.0），发版链路未触发；确需发布加 --force" % ver)
     if not args.allow_dirty and git("status", "--porcelain", "--untracked-files=no"):
         raise RuntimeError("工作区有已跟踪改动：先提交再发布")
-    log("VERSION %s" % ver)
+    log("VERSION %s | major=%s" % (ver, is_major(ver)))
     if not args.skip_build:
         stage_old_dirs("v" + ver)
         for b in BATS:

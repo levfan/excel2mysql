@@ -3,6 +3,8 @@
 ## 触发判断
 
 - `version.py` 的 `APP_VERSION` 是唯一版本源；tag 固定为 `v` + 整段版本（含 `-rc.1` 这样的后缀）。
+- 自动触发只认 major：去掉后缀后必须形如 `X.0.0`（如 `7.0.0`、`7.0.0-rc.1`）；`6.4.0` 与 `6.3.1` 不触发。
+- 脚本用 `is_major()` 在打包前判闸，非 major 直接退出；用户明确要求给 minor/patch 发版才加 `--force`。
 - 同 tag 的 Release 已存在且三个资产尺寸、发布说明里的 SHA-256 都一致时，脚本只复核不重传。
 - 版本带 `-alpha.` / `-beta.` / `-rc.` 时创建为 prerelease；转正去后缀后号不变，Release 也跟着转正式。
 - 版本号未变时不要手动跑完整流程；`--skip-build` / `--no-upload` 只用于排障。

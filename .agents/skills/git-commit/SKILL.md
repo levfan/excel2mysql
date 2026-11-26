@@ -48,7 +48,7 @@ set -a; . ./.pt_env; set +a
 - 只是同一件事做得更对/更稳/更好看 → patch；老做法不能原样用了 → major
 - 只改测试、文档、构建脚本且不影响交付物 → 不升，但结论和一句理由要写进汇报
 - patch 一路升到 `x.y.9` 还要再升，先停下来重判：多半是把新增能力记成了修复
-- 改的是 `version.py` 与另外 9 处写死字符串；`README.md` 不写版本号；改完按 `release-assets` 同步资产
+- 改的是 `version.py` 与另外 9 处写死字符串；`README.md` 不写版本号；只有 major 才接 `release-assets`
 - 三档细则、9 处站点清单与 alpha/beta/rc 见 `references/versioning.md`
 
 ## 提交信息：主题 50 字，正文一行
@@ -76,4 +76,4 @@ set -a; . ./.pt_env; set +a
 
 - 用户当次明确指令 > 本技能 > 工作区级同名技能（以本项目为准）
 - 不可逆操作（删文件、`git reset --hard`、动远端分支、改 git config）一律先问用户
-- 版本升级后由 release-assets 自动打包上传；否则打包只在用户明说"打包"时做
+- 只有 major 升级才由 release-assets 自动打包上传；minor/patch 及非发版仍须用户明说
